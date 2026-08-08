@@ -140,7 +140,6 @@ const AI_CONTENT_REFERENCE_SEED_FORMATS = new Set<AiContentReferenceSeedFormat>(
   "card_news",
   "blog",
   "reel",
-  "marketing_content",
 ]);
 
 function exactKeys(value: Record<string, unknown>, keys: readonly string[]): boolean {

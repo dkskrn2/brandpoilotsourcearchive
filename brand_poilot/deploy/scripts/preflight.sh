@@ -16,6 +16,7 @@ MINIMUM_FREE_KIB=$((10 * 1024 * 1024))
 MANIFEST="$1"
 require_command flock
 require_command sync
+enforce_ai_content_roll_forward_floor "$ROOT"
 mkdir -p -- "$ROOT/state"
 if [[ "${BRAND_PILOT_PARENT_LOCK_FD:-}" == "9" && -e "/proc/$$/fd/9" ]]; then
   flock -n 9 || fail "deploy_lock_busy"
@@ -101,34 +102,38 @@ SHARED_ENV_DIR="$ROOT/shared/env"
   fail "required_directory_owner_invalid"
 status_ok "shared_env_directory"
 
-CODEX_HOME_PATH="$ROOT/shared/codex"
-[[ ! -L "$CODEX_HOME_PATH" ]] || fail "codex_home_symlink_forbidden"
-[[ -d "$CODEX_HOME_PATH" ]] || fail "codex_home_missing"
-[[ "$(realpath -e -- "$CODEX_HOME_PATH")" == "$CODEX_HOME_PATH" ]] ||
-  fail "codex_home_path_invalid"
-[[ "$(stat -c '%a' -- "$CODEX_HOME_PATH")" == "700" ]] ||
-  fail "codex_home_mode_invalid"
-[[ "$(stat -c '%U:%G' -- "$CODEX_HOME_PATH")" == "bpdeploy:bpdeploy" ]] ||
-  fail "codex_home_owner_invalid"
-AUTH_FILE="$CODEX_HOME_PATH/auth.json"
-[[ ! -L "$AUTH_FILE" ]] || fail "auth_file_symlink_forbidden"
-[[ -f "$AUTH_FILE" ]] || fail "auth_file_missing"
-[[ "$(realpath -e -- "$AUTH_FILE")" == "$AUTH_FILE" ]] ||
-  fail "auth_file_path_invalid"
-require_file_mode_600 "$AUTH_FILE" "bpdeploy"
-[[ "$(stat -c '%G' -- "$AUTH_FILE")" == "bpdeploy" ]] ||
-  fail "auth_file_group_invalid"
 CODEX_RUNTIME_UID="$(id -u bpdeploy)" || fail "codex_runtime_identity_invalid"
 CODEX_RUNTIME_GID="$(id -g bpdeploy)" || fail "codex_runtime_identity_invalid"
 [[ "$CODEX_RUNTIME_UID" =~ ^[0-9]+$ && "$CODEX_RUNTIME_GID" =~ ^[0-9]+$ ]] ||
   fail "codex_runtime_identity_invalid"
 (( CODEX_RUNTIME_UID > 0 && CODEX_RUNTIME_GID > 0 )) ||
   fail "codex_runtime_identity_invalid"
-[[ "$(stat -c '%u:%g' -- "$CODEX_HOME_PATH")" == "$CODEX_RUNTIME_UID:$CODEX_RUNTIME_GID" ]] ||
-  fail "codex_runtime_identity_mismatch"
-export CODEX_HOME_PATH CODEX_RUNTIME_UID CODEX_RUNTIME_GID
-status_ok "codex_home"
-status_ok "codex_auth_file"
+CODEX_ACCOUNT_POOL_ROOT_PATH="$ROOT/shared/codex-accounts"
+[[ ! -L "$CODEX_ACCOUNT_POOL_ROOT_PATH" && -d "$CODEX_ACCOUNT_POOL_ROOT_PATH" ]] ||
+  fail "codex_account_pool_missing"
+[[ "$(realpath -e -- "$CODEX_ACCOUNT_POOL_ROOT_PATH")" == "$CODEX_ACCOUNT_POOL_ROOT_PATH" ]] ||
+  fail "codex_account_pool_path_invalid"
+[[ "$(stat -c '%a' -- "$CODEX_ACCOUNT_POOL_ROOT_PATH")" == "700" ]] ||
+  fail "codex_account_pool_mode_invalid"
+[[ "$(stat -c '%u:%g' -- "$CODEX_ACCOUNT_POOL_ROOT_PATH")" == "$CODEX_RUNTIME_UID:$CODEX_RUNTIME_GID" ]] ||
+  fail "codex_account_pool_owner_invalid"
+for profile in primary secondary; do
+  profile_home="$CODEX_ACCOUNT_POOL_ROOT_PATH/$profile"
+  [[ ! -L "$profile_home" && -d "$profile_home" ]] || fail "codex_profile_missing"
+  [[ "$(realpath -e -- "$profile_home")" == "$profile_home" ]] || fail "codex_profile_path_invalid"
+  [[ "$(stat -c '%a' -- "$profile_home")" == "700" ]] || fail "codex_profile_mode_invalid"
+  [[ "$(stat -c '%u:%g' -- "$profile_home")" == "$CODEX_RUNTIME_UID:$CODEX_RUNTIME_GID" ]] ||
+    fail "codex_profile_owner_invalid"
+  auth_file="$profile_home/auth.json"
+  [[ ! -L "$auth_file" && -f "$auth_file" ]] || fail "auth_file_missing"
+  [[ "$(realpath -e -- "$auth_file")" == "$auth_file" ]] || fail "auth_file_path_invalid"
+  require_file_mode_600 "$auth_file" "bpdeploy"
+  [[ "$(stat -c '%g' -- "$auth_file")" == "$CODEX_RUNTIME_GID" ]] || fail "auth_file_group_invalid"
+done
+CODEX_HOME_PATH="$CODEX_ACCOUNT_POOL_ROOT_PATH/primary"
+export CODEX_ACCOUNT_POOL_ROOT_PATH CODEX_HOME_PATH CODEX_RUNTIME_UID CODEX_RUNTIME_GID
+status_ok "codex_account_pool"
+status_ok "codex_auth_files"
 
 API_ENV_FILE="$SHARED_ENV_DIR/api.env"
 DM_WORKER_1_ENV_FILE="$SHARED_ENV_DIR/dm-worker-1.env"
@@ -140,7 +145,7 @@ SUBJECT_ANALYSIS_WORKER_1_ENV_FILE="$SHARED_ENV_DIR/subject-analysis-worker-1.en
 IMAGE_WORKER_1_ENV_FILE="$SHARED_ENV_DIR/image-worker-1.env"
 CARD_NEWS_WORKER_1_ENV_FILE="$SHARED_ENV_DIR/card-news-worker-1.env"
 BLOG_WORKER_1_ENV_FILE="$SHARED_ENV_DIR/blog-worker-1.env"
-MARKETING_WORKER_1_ENV_FILE="$SHARED_ENV_DIR/marketing-worker-1.env"
+REEL_WORKER_1_ENV_FILE="$SHARED_ENV_DIR/reel-worker-1.env"
 [[ "${RELEASE_MANIFEST[API_ENV_FILE]}" == "$API_ENV_FILE" ]] ||
   fail "manifest_api_env_file_not_fixed"
 require_file_mode_600 "$API_ENV_FILE" "bpdeploy"
@@ -153,14 +158,14 @@ require_file_mode_600 "$SUBJECT_ANALYSIS_WORKER_1_ENV_FILE" "bpdeploy"
 require_file_mode_600 "$IMAGE_WORKER_1_ENV_FILE" "bpdeploy"
 require_file_mode_600 "$CARD_NEWS_WORKER_1_ENV_FILE" "bpdeploy"
 require_file_mode_600 "$BLOG_WORKER_1_ENV_FILE" "bpdeploy"
-require_file_mode_600 "$MARKETING_WORKER_1_ENV_FILE" "bpdeploy"
+require_file_mode_600 "$REEL_WORKER_1_ENV_FILE" "bpdeploy"
 status_ok "shared_env_files"
 
 require_exact_boolean "LOCAL_SCHEDULER_ENABLED" "false" "$API_ENV_FILE"
 require_exact_boolean "INSTAGRAM_PUBLISH_ENABLED" "true" "$API_ENV_FILE"
 require_exact_boolean "AI_CONTENT_ATTACHMENT_UPLOAD_SESSIONS_ENABLED" "true" "$API_ENV_FILE"
 require_exact_boolean "AUTOMATED_CONTENT_ENABLED" "false" "$API_ENV_FILE"
-require_exact_boolean "CONTENT_PROPOSALS_ENABLED" "false" "$API_ENV_FILE"
+require_exact_boolean "CONTENT_PROPOSALS_ENABLED" "true" "$API_ENV_FILE"
 require_exact_boolean "DM_WORKERS_ENABLED" "false" "$API_ENV_FILE"
 require_matching_env_secret \
   "CONTENT_PROPOSAL_WORKER_API_TOKEN" \
@@ -194,7 +199,7 @@ export SUBJECT_ANALYSIS_WORKER_IMAGE="${RELEASE_MANIFEST[SUBJECT_ANALYSIS_WORKER
 export IMAGE_WORKER_IMAGE="${RELEASE_MANIFEST[IMAGE_WORKER_IMAGE]}"
 export CARD_NEWS_WORKER_IMAGE="${RELEASE_MANIFEST[CARD_NEWS_WORKER_IMAGE]}"
 export BLOG_WORKER_IMAGE="${RELEASE_MANIFEST[BLOG_WORKER_IMAGE]}"
-export MARKETING_WORKER_IMAGE="${RELEASE_MANIFEST[MARKETING_WORKER_IMAGE]}"
+export REEL_WORKER_IMAGE="${RELEASE_MANIFEST[REEL_WORKER_IMAGE]}"
 docker compose -p brand-pilot \
   -f "$RELEASE_DIR/compose.production.yml" \
   --env-file "$MANIFEST" config --quiet >/dev/null
@@ -219,7 +224,7 @@ CODEX_WORKER_IMAGE_KEYS=(
   IMAGE_WORKER_IMAGE
   CARD_NEWS_WORKER_IMAGE
   BLOG_WORKER_IMAGE
-  MARKETING_WORKER_IMAGE
+  REEL_WORKER_IMAGE
 )
 for codex_worker_image_key in "${CODEX_WORKER_IMAGE_KEYS[@]}"; do
   codex_worker_image="${RELEASE_MANIFEST[$codex_worker_image_key]}"
@@ -245,22 +250,25 @@ for codex_worker_image_key in "${CODEX_WORKER_IMAGE_KEYS[@]}"; do
 done
 status_ok "codex_worker_runtime"
 
-if ! timeout --signal=TERM --kill-after=5s 30s \
-  docker run --rm --pull never \
-    --user "$CODEX_RUNTIME_UID:$CODEX_RUNTIME_GID" \
-    --read-only \
-    --cap-drop ALL \
-    --security-opt no-new-privileges \
-    --pids-limit 128 \
-    --tmpfs /tmp:size=64m,mode=1777 \
-    --mount "type=bind,src=$CODEX_HOME_PATH,dst=/codex" \
-    --env CODEX_HOME=/codex \
-    --entrypoint /bin/sh \
-    "${RELEASE_MANIFEST[BRAND_INTELLIGENCE_WORKER_IMAGE]}" \
-    -eu -c 'test -w /codex && test -w /codex/auth.json && exec codex login status' \
-    >/dev/null 2>&1; then
-  fail "codex_login_status_failed"
-fi
+for profile in primary secondary; do
+  profile_home="$CODEX_ACCOUNT_POOL_ROOT_PATH/$profile"
+  if ! timeout --signal=TERM --kill-after=5s 30s \
+    docker run --rm --pull never \
+      --user "$CODEX_RUNTIME_UID:$CODEX_RUNTIME_GID" \
+      --read-only \
+      --cap-drop ALL \
+      --security-opt no-new-privileges \
+      --pids-limit 128 \
+      --tmpfs /tmp:size=64m,mode=1777 \
+      --mount "type=bind,src=$profile_home,dst=/codex" \
+      --env CODEX_HOME=/codex \
+      --entrypoint /bin/sh \
+      "${RELEASE_MANIFEST[BRAND_INTELLIGENCE_WORKER_IMAGE]}" \
+      -eu -c 'test -w /codex && test -w /codex/auth.json && exec codex login status' \
+      >/dev/null 2>&1; then
+    fail "codex_login_status_failed"
+  fi
+done
 status_ok "codex_login"
 
 if ! timeout --signal=TERM --kill-after=5s 30s \

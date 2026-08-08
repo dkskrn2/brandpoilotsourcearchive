@@ -186,7 +186,7 @@ describe("Reel renderer", () => {
   });
 });
 
-describe("ai-content.v2 Reel renderer", () => {
+describe("Studio V3 Reel renderer", () => {
   function aiContentFixture(count: number, probeResult: ReelProbe = {
     width: 1080,
     height: 1920,
@@ -215,7 +215,7 @@ describe("ai-content.v2 Reel renderer", () => {
     expect(runPython).toHaveBeenCalledTimes(1);
     const args = runPython.mock.calls[0]![1];
     expect(args).toEqual(expect.arrayContaining([
-      "--contract-version", "ai-content.v2",
+      "--contract-version", "studio-reel.v3",
       "--seconds-per-scene", "4",
       "--fade-seconds", "0.25",
       "--fps", "30"

@@ -17,6 +17,7 @@ for command_name in cmp docker flock install mktemp sha256sum sync; do
   require_command "$command_name"
 done
 
+enforce_ai_content_roll_forward_floor "$ROOT"
 mkdir -p -- "$ROOT/releases" "$ROOT/state"
 exec 9>"$ROOT/state/deploy.lock"
 flock -n 9 || fail "deploy_lock_busy"
@@ -27,16 +28,34 @@ require_worker_image_manifest
 RELEASE_SHA="${RELEASE_MANIFEST[RELEASE_SHA]}"
 CANDIDATE_API_IMAGE="${RELEASE_MANIFEST[API_IMAGE]}"
 RELEASE_DIR="$ROOT/releases/$RELEASE_SHA"
+MARKETING_CUTOVER=false
+MARKETING_RETIREMENT_RECORD_SOURCE=""
+if [[ -v "RELEASE_MANIFEST[MARKETING_RETIREMENT_SHA256]" ]]; then
+  MARKETING_CUTOVER=true
+  MARKETING_RETIREMENT_RECORD_SOURCE="$(cd -- "$(dirname -- "$MANIFEST")" && pwd)/marketing-worker-retirement.json"
+fi
 
 CURRENT_SHA=""
 CURRENT_API_IMAGE="$CANDIDATE_API_IMAGE"
 CURRENT_CANARY_HOST=""
 CURRENT_PRIMARY_HOST=""
 if load_optional_state_sha "$ROOT/state/current" CURRENT_SHA; then
-  validate_release_directory "$ROOT/releases/$CURRENT_SHA" legacy-current
-  CURRENT_API_IMAGE="${RELEASE_MANIFEST[API_IMAGE]}"
-  CURRENT_CANARY_HOST="${RELEASE_MANIFEST[CANARY_HOST]}"
-  CURRENT_PRIMARY_HOST="${RELEASE_MANIFEST[PRIMARY_HOST]}"
+  if [[ "$MARKETING_CUTOVER" == "true" ]]; then
+    validate_legacy_marketing_cutover_source "$ROOT/releases/$CURRENT_SHA"
+    CURRENT_API_IMAGE="$(legacy_release_manifest_value "$ROOT/releases/$CURRENT_SHA/release.env" API_IMAGE)"
+    CURRENT_CANARY_HOST="$(legacy_release_manifest_value "$ROOT/releases/$CURRENT_SHA/release.env" CANARY_HOST)"
+    CURRENT_PRIMARY_HOST="$(legacy_release_manifest_value "$ROOT/releases/$CURRENT_SHA/release.env" PRIMARY_HOST)"
+    require_digest_image "$CURRENT_API_IMAGE"
+    require_hostname "$CURRENT_CANARY_HOST"
+    require_hostname "$CURRENT_PRIMARY_HOST"
+  else
+    validate_state_release_directory "$ROOT" "$CURRENT_SHA"
+    CURRENT_API_IMAGE="${RELEASE_MANIFEST[API_IMAGE]}"
+    CURRENT_CANARY_HOST="${RELEASE_MANIFEST[CANARY_HOST]}"
+    CURRENT_PRIMARY_HOST="${RELEASE_MANIFEST[PRIMARY_HOST]}"
+  fi
+elif [[ "$MARKETING_CUTOVER" == "true" ]]; then
+  fail "marketing_retirement_source_release_missing"
 fi
 
 PREVIOUS_CANDIDATE_SHA=""
@@ -66,6 +85,9 @@ else
   install -m 0755 "$DEPLOY_SOURCE_DIR"/scripts/*.sh "$STAGING_DIR/scripts/"
   install -m 0600 "$MANIFEST" "$STAGING_DIR/release.env"
   install -m 0600 "${MANIFEST}.sha256" "$STAGING_DIR/release.env.sha256"
+  if [[ "$MARKETING_CUTOVER" == "true" ]]; then
+    install -m 0400 "$MARKETING_RETIREMENT_RECORD_SOURCE" "$STAGING_DIR/marketing-worker-retirement.json"
+  fi
   generate_release_integrity "$STAGING_DIR"
   mv -- "$STAGING_DIR" "$RELEASE_DIR"
   trap - EXIT
@@ -98,7 +120,7 @@ export SUBJECT_ANALYSIS_WORKER_IMAGE="${RELEASE_MANIFEST[SUBJECT_ANALYSIS_WORKER
 export IMAGE_WORKER_IMAGE="${RELEASE_MANIFEST[IMAGE_WORKER_IMAGE]}"
 export CARD_NEWS_WORKER_IMAGE="${RELEASE_MANIFEST[CARD_NEWS_WORKER_IMAGE]}"
 export BLOG_WORKER_IMAGE="${RELEASE_MANIFEST[BLOG_WORKER_IMAGE]}"
-export MARKETING_WORKER_IMAGE="${RELEASE_MANIFEST[MARKETING_WORKER_IMAGE]}"
+export REEL_WORKER_IMAGE="${RELEASE_MANIFEST[REEL_WORKER_IMAGE]}"
 
 START_CADDY=false
 if [[ -z "$CURRENT_SHA" && -z "$PREVIOUS_CANDIDATE_SHA" ]]; then

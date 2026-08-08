@@ -90,7 +90,7 @@ function compareExact(results, label, entries) {
 const args = readArgs(process.argv.slice(2));
 const envRoot = path.resolve(args.get("env-root") ?? process.cwd());
 const processName = args.get("process") ?? "all";
-const supportedProcesses = new Set(["all", "api", "ui", "image-worker", "dm-worker", "card-news-worker", "blog-worker", "marketing-worker", "subject-analysis-worker", "brand-intelligence-worker"]);
+const supportedProcesses = new Set(["all", "api", "ui", "image-worker", "dm-worker", "card-news-worker", "blog-worker", "reel-worker", "subject-analysis-worker", "brand-intelligence-worker"]);
 if (!supportedProcesses.has(processName)) {
   console.error(`Unknown process: ${processName}`);
   process.exit(1);
@@ -103,7 +103,7 @@ const files = {
   dmWorker: path.join(envRoot, "workers", "brand-pilot-dm-worker", ".env"),
   cardNewsWorker: path.join(envRoot, "workers", "brand-pilot-card-news-worker", ".env"),
   blogWorker: path.join(envRoot, "workers", "brand-pilot-blog-worker", ".env"),
-  marketingWorker: path.join(envRoot, "workers", "brand-pilot-marketing-worker", ".env"),
+  reelWorker: path.join(envRoot, "workers", "brand-pilot-reel-worker", ".env"),
   subjectAnalysisWorker: path.join(envRoot, "workers", "brand-pilot-subject-analysis-worker", ".env"),
   brandIntelligenceWorker: path.join(envRoot, "workers", "brand-pilot-brand-intelligence-worker", ".env")
 };
@@ -121,7 +121,7 @@ const processEnvNames = {
   "dm-worker": ["dmWorker"],
   "card-news-worker": ["cardNewsWorker"],
   "blog-worker": ["blogWorker"],
-  "marketing-worker": ["marketingWorker"],
+  "reel-worker": ["reelWorker"],
   "subject-analysis-worker": ["subjectAnalysisWorker"],
   "brand-intelligence-worker": ["brandIntelligenceWorker"],
   all: Object.keys(envs)
@@ -163,7 +163,7 @@ if (processName === "dm-worker") {
 const dedicatedWorkers = {
   "card-news-worker": ["cardNewsWorker", "CARD_NEWS_CODEX_COMMAND"],
   "blog-worker": ["blogWorker", "BLOG_CODEX_COMMAND"],
-  "marketing-worker": ["marketingWorker", "MARKETING_CODEX_COMMAND"],
+  "reel-worker": ["reelWorker", "REEL_CODEX_PLAN_COMMAND", ["WORKER_API_TOKEN", "REEL_CODEX_PLAN_COMMAND"]],
   "subject-analysis-worker": ["subjectAnalysisWorker", "SUBJECT_ANALYSIS_CODEX_COMMAND", ["WORKER_API_TOKEN", "SUBJECT_ANALYSIS_CODEX_COMMAND"]],
   "brand-intelligence-worker": ["brandIntelligenceWorker", "BRAND_INTELLIGENCE_CODEX_COMMAND", ["WORKER_API_TOKEN", "BRAND_INTELLIGENCE_CODEX_COMMAND"]]
 };
@@ -197,7 +197,7 @@ const apiBaseCandidates = [
   get(envs.dmWorker, "BRAND_PILOT_API_URL"),
   get(envs.cardNewsWorker, "BRAND_PILOT_API_URL"),
   get(envs.blogWorker, "BRAND_PILOT_API_URL"),
-  get(envs.marketingWorker, "BRAND_PILOT_API_URL"),
+  get(envs.reelWorker, "BRAND_PILOT_API_URL"),
   get(envs.subjectAnalysisWorker, "BRAND_PILOT_API_URL"),
   get(envs.brandIntelligenceWorker, "BRAND_PILOT_API_URL")
 ].filter(Boolean);
@@ -209,7 +209,7 @@ compareExact(results, "local API base URL", [
   { name: "dm-worker BRAND_PILOT_API_URL", value: get(envs.dmWorker, "BRAND_PILOT_API_URL") },
   { name: "card-news-worker BRAND_PILOT_API_URL", value: get(envs.cardNewsWorker, "BRAND_PILOT_API_URL") },
   { name: "blog-worker BRAND_PILOT_API_URL", value: get(envs.blogWorker, "BRAND_PILOT_API_URL") },
-  { name: "marketing-worker BRAND_PILOT_API_URL", value: get(envs.marketingWorker, "BRAND_PILOT_API_URL") },
+  { name: "reel-worker BRAND_PILOT_API_URL", value: get(envs.reelWorker, "BRAND_PILOT_API_URL") },
   { name: "subject-analysis-worker BRAND_PILOT_API_URL", value: get(envs.subjectAnalysisWorker, "BRAND_PILOT_API_URL") },
   { name: "brand-intelligence-worker BRAND_PILOT_API_URL", value: get(envs.brandIntelligenceWorker, "BRAND_PILOT_API_URL") }
 ]);
@@ -220,7 +220,7 @@ compareExact(results, "WORKER_API_TOKEN", [
   { name: "dm-worker WORKER_API_TOKEN", value: get(envs.dmWorker, "WORKER_API_TOKEN") },
   { name: "card-news-worker WORKER_API_TOKEN", value: get(envs.cardNewsWorker, "WORKER_API_TOKEN") },
   { name: "blog-worker WORKER_API_TOKEN", value: get(envs.blogWorker, "WORKER_API_TOKEN") },
-  { name: "marketing-worker WORKER_API_TOKEN", value: get(envs.marketingWorker, "WORKER_API_TOKEN") },
+  { name: "reel-worker WORKER_API_TOKEN", value: get(envs.reelWorker, "WORKER_API_TOKEN") },
   { name: "subject-analysis-worker WORKER_API_TOKEN", value: get(envs.subjectAnalysisWorker, "WORKER_API_TOKEN") },
   { name: "brand-intelligence-worker WORKER_API_TOKEN", value: get(envs.brandIntelligenceWorker, "WORKER_API_TOKEN") }
 ]);

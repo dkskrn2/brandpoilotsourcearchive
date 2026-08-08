@@ -1,66 +1,169 @@
-import type {
-  ApprovedBrandCoreSnapshotV2,
-  ApprovedProductSnapshotV2,
-  ContentChannelTargetV2,
-  ContentOutputFormatV2,
-  ContentProposalV2,
-  ContentPurposeV2,
-  FrozenReferenceSnapshotV2,
-  ResearchEvidenceSnapshotV1,
-} from "@brand-pilot/worker-runtime";
+import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import {
+  CONTENT_PLANNER_MODEL_ID,
+  CONTENT_PROPOSAL_CONTRACT_VERSIONS,
+  CONTENT_PROPOSAL_PROMPT_VERSION,
+  RESEARCH_EVIDENCE_VERSION,
+  parseContentProposalRequestV2,
+  parseContentProposalSetV2 as parseCanonicalContentProposalSetV2,
+  parseProposalBaseInputSnapshotV2,
+  parseProposalInputSnapshotV2,
+  parseResearchEvidenceSnapshotV1,
+  type ContentProposalRequestV2,
+  type ContentProposalSetV2,
+  type ContentProposalV2,
+  type ProposalBaseInputSnapshotV2,
+  type ProposalInputSnapshotV2,
+  type ResearchEvidenceSnapshotV1,
+} from "@brand-pilot/content-contracts";
 
 export type {
+  ContentProposalRequestV2,
+  ContentProposalSetV2,
   ContentProposalV2,
+  ProposalBaseInputSnapshotV2,
+  ProposalInputSnapshotV2,
   ResearchEvidenceSnapshotV1,
 };
 
-type ProposalSubjectV2 =
-  | { kind: "topic_text"; title: string }
-  | {
-    kind: "topic_url";
-    requestedUrl: string;
-    canonicalUrl: string;
-    title: string | null;
-    text: string;
-    contentHash: string;
-    capturedAt: string;
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const SHA256 = /^[0-9a-f]{64}$/;
+const EXPECTED_CATALOG_SHA256 = "41ac04e76adf0fd9746ea7535b36f6c1ea314ec4890253a2cd56a9f215f7cdbe";
+
+export const CONTENT_PROPOSAL_OUTPUT_SCHEMA_PATH = fileURLToPath(import.meta.resolve(
+  "@brand-pilot/content-contracts/generated/content-proposal-v2.schema.json",
+));
+const outputSchemaBytes = readFileSync(CONTENT_PROPOSAL_OUTPUT_SCHEMA_PATH);
+export const CONTENT_PROPOSAL_OUTPUT_SCHEMA_SHA256 = createHash("sha256")
+  .update(outputSchemaBytes)
+  .digest("hex");
+const catalogPath = fileURLToPath(import.meta.resolve(
+  "@brand-pilot/content-contracts/generated/content-catalog.json",
+));
+const catalogBytes = readFileSync(catalogPath);
+const catalogSha256 = createHash("sha256").update(catalogBytes).digest("hex");
+if (catalogSha256 !== EXPECTED_CATALOG_SHA256) {
+  throw new Error("content_contract_catalog_hash_mismatch");
+}
+const catalog = JSON.parse(catalogBytes.toString("utf8")) as {
+  contractSourceHash: string;
+  proposalContracts: {
+    requestVersion: string;
+    baseInputVersion: string;
+    outputVersion: string;
+    promptVersion: string;
+    outputSchemaSha256: string;
+  };
+  researchEvidence: { version: string };
+};
+if (CONTENT_PROPOSAL_OUTPUT_SCHEMA_SHA256 !== catalog.proposalContracts.outputSchemaSha256) {
+  throw new Error("content_proposal_output_schema_hash_mismatch");
+}
+
+export class ContentProposalContractError extends Error {
+  readonly retryable = false;
+
+  constructor(code: string) {
+    super(code);
+    this.name = "ContentProposalContractError";
   }
-  | { kind: "reference"; referenceIds: string[] };
-
-export type ContentFamily = "informational" | "marketing";
-export type OutputFormat = "card_news" | "blog" | "single_image" | "channel_text";
-export type ContentChannelTarget =
-  | "instagram" | "threads" | "x" | "linkedin" | "youtube" | "tiktok" | "blog_export";
-export type MessageStrategy =
-  | "problem_solution" | "how_to" | "comparison" | "faq" | "insight"
-  | "benefit" | "social_proof" | "brand_story" | "cta";
-
-export interface ContentProposalRequestV1 {
-  contractVersion: "content-proposal-request.v1";
-  contentFamily: ContentFamily;
-  subjectInput: Record<string, unknown>;
-  channelTargets: ContentChannelTarget[];
-  outputFormats: OutputFormat[];
-  sourceSnapshotIds: string[];
-  performanceSnapshotIds: string[];
-  performanceEvidence: Array<{
-    snapshotId: string;
-    channelOutputId: string;
-    snapshotDate: string;
-    metrics: Record<string, unknown>;
-    collectedAt: string;
-  }>;
 }
 
-export interface FrozenSourceSnapshot {
-  sourceId: string;
-  url: string;
-  crawledAt: string;
-  contentHash: string;
-  summary: string;
+function fail(code = "content_proposal_job_invalid"): never {
+  throw new ContentProposalContractError(code);
 }
 
-interface ContentProposalJobBase {
+function record(value: unknown, code = "content_proposal_job_invalid"): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) fail(code);
+  return value as Record<string, unknown>;
+}
+
+function exact(
+  value: unknown,
+  keys: readonly string[],
+  code = "content_proposal_job_invalid",
+): Record<string, unknown> {
+  const source = record(value, code);
+  const actual = Object.keys(source).sort();
+  const expected = [...keys].sort();
+  if (actual.length !== expected.length || actual.some((key, index) => key !== expected[index])) fail(code);
+  return source;
+}
+
+function string(value: unknown, code = "content_proposal_job_invalid"): string {
+  if (typeof value !== "string" || value.length === 0) fail(code);
+  return value;
+}
+
+function uuid(value: unknown): string {
+  const normalized = string(value).toLowerCase();
+  if (!UUID.test(normalized)) fail();
+  return normalized;
+}
+
+function sha(value: unknown): string {
+  const normalized = string(value).toLowerCase();
+  if (!SHA256.test(normalized)) fail();
+  return normalized;
+}
+
+function positiveInteger(value: unknown): number {
+  if (!Number.isSafeInteger(value) || Number(value) < 1) fail();
+  return Number(value);
+}
+
+function nonNegativeInteger(value: unknown): number {
+  if (!Number.isSafeInteger(value) || Number(value) < 0) fail();
+  return Number(value);
+}
+
+function timestamp(value: unknown): string {
+  const input = string(value);
+  const date = new Date(input);
+  if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/.test(input)
+    || Number.isNaN(date.getTime()) || date.toISOString() !== input.replace(/Z$/, input.includes(".") ? "Z" : ".000Z")) {
+    fail();
+  }
+  return input;
+}
+
+export function canonicalProposalJson(value: unknown): string {
+  const normalize = (current: unknown): unknown => {
+    if (Array.isArray(current)) return current.map(normalize);
+    if (!current || typeof current !== "object") return current;
+    return Object.fromEntries(
+      Object.entries(current as Record<string, unknown>)
+        .sort(([left], [right]) => left.localeCompare(right))
+        .map(([key, child]) => [key, normalize(child)]),
+    );
+  };
+  return JSON.stringify(normalize(value));
+}
+
+export function proposalSha256(value: unknown): string {
+  return createHash("sha256").update(canonicalProposalJson(value)).digest("hex");
+}
+
+export type ContentProposalJobContract = {
+  id: string;
+  requestContractVersion: string;
+  baseInputContractVersion: string;
+  researchContractVersion: string;
+  proposalContractVersion: string;
+  proposalPromptVersion: string;
+  proposalOutputSchemaSha256: string;
+  modelId: string;
+  commandDescriptorSha256: string;
+  requestSha256: string;
+  baseInputSha256: string;
+  contractSourceSha256: string;
+  catalogSha256: string;
+  enqueueContractSha256: string;
+};
+
+type ContentProposalJobCommon = {
   id: string;
   workspaceId: string;
   brandId: string;
@@ -72,861 +175,378 @@ interface ContentProposalJobBase {
   leaseToken: string;
   leaseExpiresAt: string;
   availableAt: string;
-}
-
-export interface ContentProposalJobV1 extends ContentProposalJobBase {
-  request: ContentProposalRequestV1;
-  sourceSnapshots: FrozenSourceSnapshot[];
-}
-
-export interface ContentProposalRequestV2 {
-  contractVersion: "content-proposal-request.v2";
-  purpose: ContentPurposeV2;
-  outputFormat: ContentOutputFormatV2;
-  channelTargets: [ContentChannelTargetV2];
-  requestFingerprint: string;
-}
-
-export interface ProposalBaseInputSnapshotV2 {
-  contractVersion: "proposal-base-input.v2";
-  brandCore: ApprovedBrandCoreSnapshotV2;
-  subject: ProposalSubjectV2;
-  contentInstruction: string | null;
-  product: ApprovedProductSnapshotV2 | null;
-  references: FrozenReferenceSnapshotV2[];
-  outputSettings: {
-    outputFormat: ContentOutputFormatV2;
-    channelTargets: [ContentChannelTargetV2];
-    aspectRatio: "1:1" | "4:5" | "16:9" | "9:16" | null;
-    outputCount: 1;
-    purpose: ContentPurposeV2;
-  };
-  capturedAt: string;
-}
-
-export interface ProposalInputSnapshotV2 extends Omit<ProposalBaseInputSnapshotV2, "contractVersion"> {
-  contractVersion: "proposal-input.v2";
-  researchEvidence: ResearchEvidenceSnapshotV1;
-}
-
-export interface ContentProposalJobV2 extends ContentProposalJobBase {
   request: ContentProposalRequestV2;
-  sourceSnapshots: [];
-  inputSnapshot: ProposalBaseInputSnapshotV2 | ProposalInputSnapshotV2;
-  researchEvidence?: ResearchEvidenceSnapshotV1;
-}
+  contract: ContentProposalJobContract;
+};
 
-export type ContentProposalJob = ContentProposalJobV1 | ContentProposalJobV2;
+export type ContentProposalResearchJob = ContentProposalJobCommon & {
+  stage: "research_required";
+  researchAttemptId: string;
+  researchAttemptNumber: number;
+  baseInput: ProposalBaseInputSnapshotV2;
+};
 
-export interface ContentProposalSetV2 {
-  contractVersion: "content-proposal.v2";
-  proposals: [ContentProposalV2, ContentProposalV2, ContentProposalV2];
-}
+export type ContentProposalCompositionJob = ContentProposalJobCommon & {
+  stage: "composition_ready";
+  modelAttemptId: string;
+  modelAttemptNumber: number;
+  compositionId: string;
+  composedInput: ProposalInputSnapshotV2;
+  evidenceSetSha256: string;
+  composedInputSha256: string;
+  finalInvocationAggregateSha256: string;
+  modelSha256: string;
+};
 
-export interface ContentProposalV1 {
-  contractVersion: "content-proposal.v1";
-  title: string;
-  reasonToCreateNow: string;
-  contentFamily: ContentFamily;
-  topic: string;
-  target: Record<string, unknown>;
-  messageStrategy: MessageStrategy;
-  hook: string;
-  keyMessage: string;
-  evidence: Array<{ sourceSnapshotId: string; summary: string }>;
-  outline: Array<{ heading: string; purpose: string }>;
-  outputFormat: OutputFormat;
-  channelTargets: ContentChannelTarget[];
-  recommendedReferenceQuery: {
-    strategies: MessageStrategy[];
-    formats: OutputFormat[];
-    tags: string[];
-  };
-}
+export type ContentProposalJob = ContentProposalResearchJob | ContentProposalCompositionJob;
 
-export interface ContentProposalWorkerClient {
-  heartbeatWorker(workerId: string): Promise<void>;
-  claim(workerId: string, leaseSeconds: number): Promise<ContentProposalJob | null>;
-  heartbeat(job: ContentProposalJob, leaseSeconds: number): Promise<void>;
-  completeResearch(
-    job: ContentProposalJobV2,
-    evidence: ResearchEvidenceSnapshotV1,
-  ): Promise<ProposalInputSnapshotV2>;
-  complete(
-    job: ContentProposalJob,
-    proposals: ContentProposalV1[] | ContentProposalSetV2,
-  ): Promise<void>;
-  fail(job: ContentProposalJob, input: {
-    errorCode: string;
-    errorMessage: string;
-    retryable: boolean;
-  }): Promise<void>;
-}
-
-export class ContentProposalContractError extends Error {
-  readonly retryable = false;
-
-  constructor(message: string) {
-    super(message);
-    this.name = "ContentProposalContractError";
-  }
-}
-
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-const SHA_256 = /^[0-9a-f]{64}$/i;
-const UTC_TIMESTAMP = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,9}))?Z$/;
-const families = ["informational", "marketing"] as const;
-const formats = ["card_news", "blog", "single_image", "channel_text"] as const;
-const channels = ["instagram", "threads", "x", "linkedin", "youtube", "tiktok", "blog_export"] as const;
-const strategies = [
-  "problem_solution", "how_to", "comparison", "faq", "insight",
-  "benefit", "social_proof", "brand_story", "cta",
+const commonKeys = [
+  "id", "workspaceId", "brandId", "batchId", "status", "stage", "attemptCount", "maxAttempts",
+  "workerId", "leaseToken", "leaseExpiresAt", "availableAt", "request", "contract",
 ] as const;
-const v2Formats = ["card_news", "blog", "reel", "marketing_content"] as const;
-const v2Axes = ["target", "situation", "question", "appeal", "narrative", "informational_type"] as const;
-const informationalTypes = [
-  "problem_solution", "how_to", "checklist", "comparison", "trend_insight", "q_and_a", "myth_fact",
+const contractKeys = [
+  "id", "requestContractVersion", "baseInputContractVersion", "researchContractVersion",
+  "proposalContractVersion", "proposalPromptVersion", "proposalOutputSchemaSha256", "modelId",
+  "commandDescriptorSha256", "requestSha256", "baseInputSha256", "contractSourceSha256",
+  "catalogSha256", "enqueueContractSha256",
 ] as const;
-const v2Ratios = ["1:1", "4:5", "16:9", "9:16"] as const;
-const referenceRoles = ["planning", "copy_pattern", "visual_composition"] as const;
 
-function fail(code: string): never {
-  throw new ContentProposalContractError(code);
-}
-
-function record(value: unknown, code: string): Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) fail(code);
-  return value as Record<string, unknown>;
-}
-
-function exact(value: unknown, keys: readonly string[], code: string): Record<string, unknown> {
-  const source = record(value, code);
-  const actual = Object.keys(source);
-  if (actual.length !== keys.length || actual.some((key) => !keys.includes(key))) fail(code);
-  return source;
-}
-
-function text(value: unknown, code: string, max = 2_000): string {
-  if (typeof value !== "string") fail(code);
-  const normalized = value.trim();
-  if (!normalized || normalized.length > max) fail(code);
-  return normalized;
-}
-
-function textAllowEmpty(value: unknown, code: string, max = 2_000): string {
-  if (typeof value !== "string") fail(code);
-  const normalized = value.trim();
-  if (normalized.length > max) fail(code);
-  return normalized;
-}
-
-function uuid(value: unknown, code: string): string {
-  const normalized = text(value, code, 36);
-  if (!UUID.test(normalized)) fail(code);
-  return normalized.toLowerCase();
-}
-
-function timestamp(value: unknown, code: string): string {
-  const normalized = text(value, code, 50);
-  if (Number.isNaN(Date.parse(normalized))) fail(code);
-  return normalized;
-}
-
-function utcTimestamp(value: unknown, code: string): string {
-  const normalized = text(value, code, 40);
-  const match = UTC_TIMESTAMP.exec(normalized);
-  if (!match) fail(code);
-  const [, yearText, monthText, dayText, hourText, minuteText, secondText, fraction = ""] = match;
-  const year = Number(yearText);
-  const month = Number(monthText);
-  const day = Number(dayText);
-  const hour = Number(hourText);
-  const minute = Number(minuteText);
-  const second = Number(secondText);
-  const millisecond = Number(fraction.padEnd(3, "0").slice(0, 3));
-  const parsed = new Date(normalized);
-  if (year === 0
-    || Number.isNaN(parsed.getTime())
-    || parsed.getUTCFullYear() !== year
-    || parsed.getUTCMonth() + 1 !== month
-    || parsed.getUTCDate() !== day
-    || parsed.getUTCHours() !== hour
-    || parsed.getUTCMinutes() !== minute
-    || parsed.getUTCSeconds() !== second
-    || parsed.getUTCMilliseconds() !== millisecond) fail(code);
-  return normalized;
-}
-
-function sha256(value: unknown, code: string): string {
-  const normalized = text(value, code, 64);
-  if (!SHA_256.test(normalized)) fail(code);
-  return normalized.toLowerCase();
-}
-
-function integer(value: unknown, code: string): number {
-  if (!Number.isSafeInteger(value) || Number(value) < 0) fail(code);
-  return Number(value);
-}
-
-function uniqueStrings<T extends string>(
-  value: unknown,
-  allowed: readonly T[] | null,
-  code: string,
-  maximum = 50,
-): T[] {
-  if (!Array.isArray(value) || value.length > maximum) fail(code);
-  const parsed = value.map((item) => text(item, code, 500) as T);
-  if (new Set(parsed).size !== parsed.length || (allowed && parsed.some((item) => !allowed.includes(item)))) {
-    fail(code);
-  }
-  return parsed;
-}
-
-function boundedStrings(
-  value: unknown,
-  code: string,
-  minimum: number,
-  maximum: number,
-  itemMaximum = 2_000,
-): string[] {
-  if (!Array.isArray(value) || value.length < minimum || value.length > maximum) fail(code);
-  return value.map((item) => text(item, code, itemMaximum));
-}
-
-function unique<T>(values: readonly T[], code: string): void {
-  if (new Set(values).size !== values.length) fail(code);
-}
-
-function nullableText(value: unknown, code: string, max = 2_000): string | null {
-  if (value === null) return null;
-  return text(value, code, max);
-}
-
-function parseBrandCore(value: unknown): ApprovedBrandCoreSnapshotV2 {
-  const code = "content_proposal_job_invalid";
-  const source = exact(value, [
-    "versionId", "companyOverview", "businessDescription", "primaryCategory",
-    "detailedCategory", "primaryTarget", "differentiator", "coreAppeal",
-  ], code);
-  return {
-    versionId: uuid(source.versionId, code),
-    companyOverview: text(source.companyOverview, code, 10_000),
-    businessDescription: text(source.businessDescription, code, 10_000),
-    primaryCategory: text(source.primaryCategory, code, 500),
-    detailedCategory: text(source.detailedCategory, code, 500),
-    primaryTarget: text(source.primaryTarget, code, 2_000),
-    differentiator: text(source.differentiator, code, 4_000),
-    coreAppeal: text(source.coreAppeal, code, 4_000),
+function parseContract(value: unknown): ContentProposalJobContract {
+  const source = exact(value, contractKeys);
+  const contract: ContentProposalJobContract = {
+    id: uuid(source.id),
+    requestContractVersion: string(source.requestContractVersion),
+    baseInputContractVersion: string(source.baseInputContractVersion),
+    researchContractVersion: string(source.researchContractVersion),
+    proposalContractVersion: string(source.proposalContractVersion),
+    proposalPromptVersion: string(source.proposalPromptVersion),
+    proposalOutputSchemaSha256: sha(source.proposalOutputSchemaSha256),
+    modelId: string(source.modelId),
+    commandDescriptorSha256: sha(source.commandDescriptorSha256),
+    requestSha256: sha(source.requestSha256),
+    baseInputSha256: sha(source.baseInputSha256),
+    contractSourceSha256: sha(source.contractSourceSha256),
+    catalogSha256: sha(source.catalogSha256),
+    enqueueContractSha256: sha(source.enqueueContractSha256),
   };
-}
-
-function httpUrl(value: unknown, code: string): string {
-  const normalized = text(value, code, 2_000);
-  try {
-    if (!["http:", "https:"].includes(new URL(normalized).protocol)) fail(code);
-  } catch { fail(code); }
-  return normalized;
-}
-
-function parseSubject(value: unknown): ProposalSubjectV2 {
-  const code = "content_proposal_job_invalid";
-  const source = record(value, code);
-  if (source.kind === "topic_text") {
-    const exactSource = exact(source, ["kind", "title"], code);
-    return { kind: "topic_text", title: text(exactSource.title, code, 500) };
-  }
-  if (source.kind === "topic_url") {
-    const exactSource = exact(source, [
-      "kind", "requestedUrl", "canonicalUrl", "title", "text", "contentHash", "capturedAt",
-    ], code);
-    return {
-      kind: "topic_url",
-      requestedUrl: httpUrl(exactSource.requestedUrl, code),
-      canonicalUrl: httpUrl(exactSource.canonicalUrl, code),
-      title: nullableText(exactSource.title, code, 500),
-      text: text(exactSource.text, code, 50_000),
-      contentHash: sha256(exactSource.contentHash, code),
-      capturedAt: utcTimestamp(exactSource.capturedAt, code),
-    };
-  }
-  const exactSource = exact(source, ["kind", "referenceIds"], code);
-  if (exactSource.kind !== "reference") fail(code);
-  const referenceIds = boundedStrings(exactSource.referenceIds, code, 1, 5, 100)
-    .map((id) => uuid(id, code));
-  unique(referenceIds, code);
-  return { kind: "reference", referenceIds };
-}
-
-function parseProduct(value: unknown): ApprovedProductSnapshotV2 | null {
-  if (value === null) return null;
-  const code = "content_proposal_job_invalid";
-  const source = exact(value, [
-    "id", "versionId", "kind", "name", "description", "features", "benefits", "cautions",
-    "evergreenPurchaseInfo", "images",
-  ], code);
-  if (source.kind !== "product" && source.kind !== "service") fail(code);
-  if (!Array.isArray(source.images) || source.images.length > 20) fail(code);
-  const images = source.images.map((value) => {
-    const image = exact(value, [
-      "assetId", "role", "storageUrl", "storagePath", "mimeType", "checksum",
-    ], code);
-    if (image.role !== "hero" && image.role !== "detail") fail(code);
-    const role: "hero" | "detail" = image.role;
-    const mimeType = text(image.mimeType, code, 100);
-    if (!mimeType.startsWith("image/")) fail(code);
-    return {
-      assetId: uuid(image.assetId, code), role,
-      storageUrl: httpUrl(image.storageUrl, code), storagePath: text(image.storagePath, code, 2_000),
-      mimeType, checksum: sha256(image.checksum, code),
-    };
+  if (contract.requestContractVersion !== CONTENT_PROPOSAL_CONTRACT_VERSIONS.request
+    || contract.baseInputContractVersion !== CONTENT_PROPOSAL_CONTRACT_VERSIONS.baseInput
+    || contract.researchContractVersion !== RESEARCH_EVIDENCE_VERSION
+    || contract.proposalContractVersion !== CONTENT_PROPOSAL_CONTRACT_VERSIONS.output
+    || contract.proposalPromptVersion !== CONTENT_PROPOSAL_PROMPT_VERSION
+    || contract.proposalOutputSchemaSha256 !== catalog.proposalContracts.outputSchemaSha256
+    || contract.modelId !== CONTENT_PLANNER_MODEL_ID
+    || contract.contractSourceSha256 !== catalog.contractSourceHash
+    || contract.catalogSha256 !== EXPECTED_CATALOG_SHA256) fail("content_proposal_claim_contract_mismatch");
+  const expectedCommand = proposalSha256({
+    runner: "codex-exec",
+    model: CONTENT_PLANNER_MODEL_ID,
+    promptVersion: contract.proposalPromptVersion,
+    outputSchemaSha256: contract.proposalOutputSchemaSha256,
+    requestContractVersion: contract.requestContractVersion,
+    baseInputContractVersion: contract.baseInputContractVersion,
+    researchContractVersion: contract.researchContractVersion,
+    proposalContractVersion: contract.proposalContractVersion,
   });
-  unique(images.map((image) => image.assetId), code);
-  return {
-    id: uuid(source.id, code),
-    versionId: uuid(source.versionId, code),
-    kind: source.kind,
-    name: text(source.name, code, 500),
-    description: text(source.description, code, 10_000),
-    features: boundedStrings(source.features, code, 0, 50),
-    benefits: boundedStrings(source.benefits, code, 0, 50),
-    cautions: boundedStrings(source.cautions, code, 0, 50),
-    evergreenPurchaseInfo: textAllowEmpty(source.evergreenPurchaseInfo, code, 4_000),
-    images,
+  if (contract.commandDescriptorSha256 !== expectedCommand) fail("content_proposal_claim_contract_mismatch");
+  return contract;
+}
+
+function parseCommon(source: Record<string, unknown>): ContentProposalJobCommon {
+  let request: ContentProposalRequestV2;
+  try { request = parseContentProposalRequestV2(source.request); }
+  catch { fail(); }
+  const contract = parseContract(source.contract);
+  const common: ContentProposalJobCommon = {
+    id: uuid(source.id), workspaceId: uuid(source.workspaceId), brandId: uuid(source.brandId),
+    batchId: uuid(source.batchId), status: source.status === "processing" ? source.status : fail(),
+    attemptCount: nonNegativeInteger(source.attemptCount), maxAttempts: positiveInteger(source.maxAttempts),
+    workerId: string(source.workerId), leaseToken: uuid(source.leaseToken),
+    leaseExpiresAt: timestamp(source.leaseExpiresAt), availableAt: timestamp(source.availableAt),
+    request, contract,
   };
+  if (common.attemptCount > common.maxAttempts
+    || proposalSha256(request) !== contract.requestSha256
+    || contract.enqueueContractSha256 !== proposalSha256({
+      jobId: common.id,
+      batchId: common.batchId,
+      workspaceId: common.workspaceId,
+      brandId: common.brandId,
+      requestSha256: contract.requestSha256,
+      baseInputSha256: contract.baseInputSha256,
+      commandDescriptorSha256: contract.commandDescriptorSha256,
+      contractSourceSha256: contract.contractSourceSha256,
+      catalogSha256: contract.catalogSha256,
+    })) fail("content_proposal_claim_contract_mismatch");
+  return common;
 }
 
-function parseReferences(value: unknown): FrozenReferenceSnapshotV2[] {
-  const code = "content_proposal_job_invalid";
-  if (!Array.isArray(value) || value.length > 5) fail(code);
-  const parsed = value.map((item) => {
-    const source = exact(item, [
-      "referenceItemId", "snapshotId", "roles", "title", "sourceUrl", "capturedAt",
-      "contentHash", "text", "image",
-    ], code);
-    const roles = uniqueStrings(source.roles, referenceRoles, code, 3);
-    if (roles.length === 0) fail(code);
-    let image: FrozenReferenceSnapshotV2["image"] = null;
-    if (source.image !== null) {
-      const rawImage = exact(source.image, ["storageUrl", "storagePath", "mimeType", "checksum"], code);
-      if (!["image/png", "image/jpeg", "image/webp"].includes(String(rawImage.mimeType))) fail(code);
-      image = {
-        storageUrl: httpUrl(rawImage.storageUrl, code), storagePath: text(rawImage.storagePath, code, 2_000),
-        mimeType: rawImage.mimeType as "image/png" | "image/jpeg" | "image/webp",
-        checksum: sha256(rawImage.checksum, code),
-      };
-    }
-    return {
-      referenceItemId: uuid(source.referenceItemId, code), snapshotId: uuid(source.snapshotId, code), roles,
-      title: text(source.title, code, 500), sourceUrl: httpUrl(source.sourceUrl, code),
-      capturedAt: utcTimestamp(source.capturedAt, code), contentHash: sha256(source.contentHash, code),
-      text: text(source.text, code, 50_000), image,
-    };
-  });
-  unique(parsed.map((item) => item.referenceItemId), code);
-  return parsed;
+function baseFromComposed(composed: ProposalInputSnapshotV2): ProposalBaseInputSnapshotV2 {
+  const { contractVersion: _version, researchEvidence: _evidence, ...fields } = composed;
+  try { return parseProposalBaseInputSnapshotV2({ ...fields, contractVersion: CONTENT_PROPOSAL_CONTRACT_VERSIONS.baseInput }); }
+  catch { fail(); }
 }
 
-function parseResearchEvidence(value: unknown): ResearchEvidenceSnapshotV1 {
-  const code = "content_proposal_job_invalid";
-  const source = exact(value, ["contractVersion", "decision", "reason", "queries", "capturedAt", "items"], code);
-  if (source.contractVersion !== "research-evidence.v1"
-    || (source.decision !== "searched" && source.decision !== "not_needed")
-    || !Array.isArray(source.items) || source.items.length > 8) fail(code);
-  const queries = boundedStrings(source.queries, code, 0, 8, 500);
-  const items = source.items.map((value) => {
-    const item = exact(value, [
-      "id", "title", "url", "publisher", "publishedAt", "capturedAt", "claimSummary", "contentHash",
-    ], code);
-    return {
-      id: uuid(item.id, code), title: text(item.title, code, 500), url: httpUrl(item.url, code),
-      publisher: nullableText(item.publisher, code, 500),
-      publishedAt: item.publishedAt === null ? null : utcTimestamp(item.publishedAt, code),
-      capturedAt: utcTimestamp(item.capturedAt, code), claimSummary: text(item.claimSummary, code, 4_000),
-      contentHash: sha256(item.contentHash, code),
-    };
-  });
-  unique(items.map((item) => item.id), code);
-  if (source.decision === "not_needed" && (queries.length !== 0 || items.length !== 0)) fail(code);
-  return {
-    contractVersion: "research-evidence.v1", decision: source.decision,
-    reason: text(source.reason, code, 4_000), queries, capturedAt: utcTimestamp(source.capturedAt, code), items,
-  };
-}
-
-function parseV2InputSnapshot(value: unknown): ProposalBaseInputSnapshotV2 | ProposalInputSnapshotV2 {
-  const code = "content_proposal_job_invalid";
-  const source = record(value, code);
-  const composed = source.contractVersion === "proposal-input.v2";
-  if (!composed && source.contractVersion !== "proposal-base-input.v2") fail(code);
-  const exactSource = exact(source, [
-    "contractVersion", "brandCore", "subject", "contentInstruction", "product", "references",
-    ...(composed ? ["researchEvidence"] : []), "outputSettings", "capturedAt",
-  ], code);
-  const settings = exact(exactSource.outputSettings, [
-    "outputFormat", "channelTargets", "aspectRatio", "outputCount", "purpose",
-  ], code);
-  if (!v2Formats.includes(settings.outputFormat as ContentOutputFormatV2)
-    || !families.includes(settings.purpose as ContentPurposeV2)
-    || !Array.isArray(settings.channelTargets) || settings.channelTargets.length !== 1
-    || !channels.includes(settings.channelTargets[0] as ContentChannelTarget)
-    || settings.outputCount !== 1
-    || (settings.aspectRatio !== null && !v2Ratios.includes(settings.aspectRatio as never))) fail(code);
-  const outputFormat = settings.outputFormat as ContentOutputFormatV2;
-  const channelTarget = settings.channelTargets[0] as ContentChannelTargetV2;
-  if ((outputFormat === "blog") !== (channelTarget === "blog_export")
-    || (outputFormat === "blog" && settings.aspectRatio !== null)
-    || (outputFormat === "reel" && settings.aspectRatio !== "9:16")
-    || (outputFormat !== "blog" && settings.aspectRatio === null)) fail(code);
-  const product = parseProduct(exactSource.product);
-  if ((settings.purpose === "informational" && product !== null)
-    || (settings.purpose === "marketing" && product === null)) fail(code);
-  const references = parseReferences(exactSource.references);
-  const subject = parseSubject(exactSource.subject);
-  if (subject.kind === "reference") {
-    const frozen = new Set(references.map((reference) => reference.referenceItemId));
-    if (subject.referenceIds.some((id) => !frozen.has(id))) fail(code);
+function assertInputBinding(
+  request: ContentProposalRequestV2,
+  input: ProposalBaseInputSnapshotV2 | ProposalInputSnapshotV2,
+): void {
+  const settings = input.outputSettings;
+  const formatBindingValid = settings.outputFormat === "blog"
+    ? settings.channelTargets[0] === "blog_export" && settings.aspectRatio === null
+    : settings.channelTargets[0] === "instagram"
+      && settings.aspectRatio === (settings.outputFormat === "reel" ? "9:16" : "1:1");
+  if (request.purpose !== settings.purpose
+    || request.outputFormat !== input.outputSettings.outputFormat
+    || request.channelTargets.length !== 1
+    || settings.channelTargets.length !== 1
+    || request.channelTargets[0] !== settings.channelTargets[0]
+    || !formatBindingValid
+    || (request.purpose === "informational" ? input.product !== null : input.product === null)
+    || ("researchEvidence" in input && request.purpose === "informational"
+      && (input.researchEvidence.decision !== "searched" || input.researchEvidence.items.length === 0))) {
+    fail("content_proposal_claim_contract_mismatch");
   }
-  const researchEvidence = composed ? parseResearchEvidence(exactSource.researchEvidence) : undefined;
-  if (settings.purpose === "informational" && researchEvidence
-    && (researchEvidence.decision !== "searched" || researchEvidence.items.length === 0)) fail(code);
-  const base = {
-    brandCore: parseBrandCore(exactSource.brandCore), subject,
-    contentInstruction: nullableText(exactSource.contentInstruction, code, 4_000), product, references,
-    outputSettings: {
-      outputFormat,
-      channelTargets: [channelTarget] as [ContentChannelTargetV2],
-      aspectRatio: settings.aspectRatio as ProposalBaseInputSnapshotV2["outputSettings"]["aspectRatio"],
-      outputCount: 1 as const, purpose: settings.purpose as ContentPurposeV2,
-    }, capturedAt: utcTimestamp(exactSource.capturedAt, code),
-  };
-  return composed
-    ? { contractVersion: "proposal-input.v2", ...base, researchEvidence: researchEvidence! }
-    : { contractVersion: "proposal-base-input.v2", ...base };
-}
-
-export function parseProposalInputSnapshotV2(value: unknown): ProposalInputSnapshotV2 {
-  const snapshot = parseV2InputSnapshot(value);
-  if (snapshot.contractVersion !== "proposal-input.v2") fail("content_proposal_job_invalid");
-  return snapshot;
-}
-
-function parseV2Request(value: unknown): ContentProposalRequestV2 {
-  const code = "content_proposal_job_invalid";
-  const source = exact(value, [
-    "contractVersion", "purpose", "outputFormat", "channelTargets", "requestFingerprint",
-  ], code);
-  if (source.contractVersion !== "content-proposal-request.v2"
-    || !families.includes(source.purpose as ContentPurposeV2)
-    || !v2Formats.includes(source.outputFormat as ContentOutputFormatV2)
-    || !Array.isArray(source.channelTargets) || source.channelTargets.length !== 1
-    || !channels.includes(source.channelTargets[0] as ContentChannelTarget)) fail(code);
-  return {
-    contractVersion: "content-proposal-request.v2", purpose: source.purpose as ContentPurposeV2,
-    outputFormat: source.outputFormat as ContentOutputFormatV2,
-    channelTargets: [source.channelTargets[0] as ContentChannelTargetV2],
-    requestFingerprint: text(source.requestFingerprint, code, 500),
-  };
-}
-
-function parseRequest(value: unknown): ContentProposalRequestV1 {
-  const source = exact(value, [
-    "contractVersion", "contentFamily", "subjectInput", "channelTargets", "outputFormats",
-    "sourceSnapshotIds", "performanceSnapshotIds", "performanceEvidence",
-  ], "content_proposal_job_invalid");
-  if (source.contractVersion !== "content-proposal-request.v1"
-    || !families.includes(source.contentFamily as ContentFamily)) {
-    fail("content_proposal_job_invalid");
-  }
-  const sourceSnapshotIds = uniqueStrings(source.sourceSnapshotIds, null, "content_proposal_job_invalid");
-  const performanceSnapshotIds = uniqueStrings(
-    source.performanceSnapshotIds,
-    null,
-    "content_proposal_job_invalid",
-  );
-  if (!Array.isArray(source.performanceEvidence)
-    || source.performanceEvidence.length !== performanceSnapshotIds.length) {
-    fail("content_proposal_job_snapshot_mismatch");
-  }
-  const performanceEvidence = source.performanceEvidence.map((item) => {
-    const evidence = exact(item, [
-      "snapshotId", "channelOutputId", "snapshotDate", "metrics", "collectedAt",
-    ], "content_proposal_job_invalid");
-    return {
-      snapshotId: text(evidence.snapshotId, "content_proposal_job_invalid"),
-      channelOutputId: text(evidence.channelOutputId, "content_proposal_job_invalid"),
-      snapshotDate: text(evidence.snapshotDate, "content_proposal_job_invalid", 50),
-      metrics: record(evidence.metrics, "content_proposal_job_invalid"),
-      collectedAt: timestamp(evidence.collectedAt, "content_proposal_job_invalid"),
-    };
-  });
-  if (new Set(performanceEvidence.map(({ snapshotId }) => snapshotId)).size !== performanceEvidence.length
-    || performanceEvidence.some(({ snapshotId }) => !performanceSnapshotIds.includes(snapshotId))) {
-    fail("content_proposal_job_snapshot_mismatch");
-  }
-  return {
-    contractVersion: "content-proposal-request.v1",
-    contentFamily: source.contentFamily as ContentFamily,
-    subjectInput: record(source.subjectInput, "content_proposal_job_invalid"),
-    channelTargets: uniqueStrings(source.channelTargets, channels, "content_proposal_job_invalid"),
-    outputFormats: uniqueStrings(source.outputFormats, formats, "content_proposal_job_invalid"),
-    sourceSnapshotIds,
-    performanceSnapshotIds,
-    performanceEvidence,
-  };
-}
-
-function parseContentProposalJobV1(value: unknown): ContentProposalJobV1 {
-  const source = exact(value, [
-    "id", "workspaceId", "brandId", "batchId", "status", "request", "sourceSnapshots",
-    "attemptCount", "maxAttempts", "workerId", "leaseToken", "leaseExpiresAt", "availableAt",
-  ], "content_proposal_job_invalid");
-  if (source.status !== "processing") fail("content_proposal_job_invalid");
-  const request = parseRequest(source.request);
-  if (!Array.isArray(source.sourceSnapshots)) fail("content_proposal_job_invalid");
-  const sourceSnapshots = source.sourceSnapshots.map((item) => {
-    const snapshot = exact(
-      item,
-      ["sourceId", "url", "crawledAt", "contentHash", "summary"],
-      "content_proposal_job_invalid",
-    );
-    return {
-      sourceId: text(snapshot.sourceId, "content_proposal_job_invalid"),
-      url: text(snapshot.url, "content_proposal_job_invalid"),
-      crawledAt: timestamp(snapshot.crawledAt, "content_proposal_job_invalid"),
-      contentHash: text(snapshot.contentHash, "content_proposal_job_invalid"),
-      summary: typeof snapshot.summary === "string"
-        ? snapshot.summary.slice(0, 20_000)
-        : fail("content_proposal_job_invalid"),
-    };
-  });
-  const frozenIds = sourceSnapshots.map(({ sourceId }) => sourceId);
-  if (new Set(frozenIds).size !== frozenIds.length
-    || request.sourceSnapshotIds.length !== frozenIds.length
-    || request.sourceSnapshotIds.some((id) => !frozenIds.includes(id))) {
-    fail("content_proposal_job_snapshot_mismatch");
-  }
-  const attemptCount = integer(source.attemptCount, "content_proposal_job_invalid");
-  const maxAttempts = integer(source.maxAttempts, "content_proposal_job_invalid");
-  if (attemptCount < 1 || maxAttempts < attemptCount) fail("content_proposal_job_invalid");
-  return {
-    id: uuid(source.id, "content_proposal_job_invalid"),
-    workspaceId: uuid(source.workspaceId, "content_proposal_job_invalid"),
-    brandId: uuid(source.brandId, "content_proposal_job_invalid"),
-    batchId: uuid(source.batchId, "content_proposal_job_invalid"),
-    status: "processing",
-    request,
-    sourceSnapshots,
-    attemptCount,
-    maxAttempts,
-    workerId: text(source.workerId, "content_proposal_job_invalid", 200),
-    leaseToken: uuid(source.leaseToken, "content_proposal_job_invalid"),
-    leaseExpiresAt: timestamp(source.leaseExpiresAt, "content_proposal_job_invalid"),
-    availableAt: timestamp(source.availableAt, "content_proposal_job_invalid"),
-  };
-}
-
-function parseContentProposalJobV2(value: unknown): ContentProposalJobV2 {
-  const sourceRecord = record(value, "content_proposal_job_invalid");
-  const composed = record(sourceRecord.inputSnapshot, "content_proposal_job_invalid").contractVersion
-    === "proposal-input.v2";
-  const source = exact(value, [
-    "id", "workspaceId", "brandId", "batchId", "status", "request", "sourceSnapshots",
-    "inputSnapshot", ...(composed ? ["researchEvidence"] : []),
-    "attemptCount", "maxAttempts", "workerId", "leaseToken", "leaseExpiresAt", "availableAt",
-  ], "content_proposal_job_invalid");
-  if (source.status !== "processing" || !Array.isArray(source.sourceSnapshots)
-    || source.sourceSnapshots.length !== 0) fail("content_proposal_job_invalid");
-  const request = parseV2Request(source.request);
-  const inputSnapshot = parseV2InputSnapshot(source.inputSnapshot);
-  if (inputSnapshot.outputSettings.purpose !== request.purpose
-    || inputSnapshot.outputSettings.outputFormat !== request.outputFormat
-    || inputSnapshot.outputSettings.channelTargets[0] !== request.channelTargets[0]) {
-    fail("content_proposal_job_snapshot_mismatch");
-  }
-  let researchEvidence: ResearchEvidenceSnapshotV1 | undefined;
-  if (inputSnapshot.contractVersion === "proposal-input.v2") {
-    researchEvidence = parseResearchEvidence(source.researchEvidence);
-    if (JSON.stringify(researchEvidence) !== JSON.stringify(inputSnapshot.researchEvidence)) {
-      fail("content_proposal_job_snapshot_mismatch");
-    }
-    if (request.purpose === "informational"
-      && (researchEvidence.decision !== "searched" || researchEvidence.items.length === 0)) {
-      fail("content_proposal_job_snapshot_mismatch");
-    }
-  }
-  const attemptCount = integer(source.attemptCount, "content_proposal_job_invalid");
-  const maxAttempts = integer(source.maxAttempts, "content_proposal_job_invalid");
-  if (attemptCount < 1 || maxAttempts < attemptCount) fail("content_proposal_job_invalid");
-  return {
-    id: uuid(source.id, "content_proposal_job_invalid"),
-    workspaceId: uuid(source.workspaceId, "content_proposal_job_invalid"),
-    brandId: uuid(source.brandId, "content_proposal_job_invalid"),
-    batchId: uuid(source.batchId, "content_proposal_job_invalid"),
-    status: "processing", request, sourceSnapshots: [], inputSnapshot,
-    ...(researchEvidence ? { researchEvidence } : {}),
-    attemptCount, maxAttempts,
-    workerId: text(source.workerId, "content_proposal_job_invalid", 200),
-    leaseToken: uuid(source.leaseToken, "content_proposal_job_invalid"),
-    leaseExpiresAt: utcTimestamp(source.leaseExpiresAt, "content_proposal_job_invalid"),
-    availableAt: utcTimestamp(source.availableAt, "content_proposal_job_invalid"),
-  };
 }
 
 export function parseContentProposalJob(value: unknown): ContentProposalJob {
-  const source = record(value, "content_proposal_job_invalid");
-  const request = record(source.request, "content_proposal_job_invalid");
-  if (request.contractVersion === "content-proposal-request.v1") return parseContentProposalJobV1(value);
-  if (request.contractVersion === "content-proposal-request.v2") return parseContentProposalJobV2(value);
-  fail("content_proposal_job_invalid");
-}
-
-function parseProposal(value: unknown, job: ContentProposalJobV1): ContentProposalV1 {
-  const source = exact(value, [
-    "contractVersion", "title", "reasonToCreateNow", "contentFamily", "topic", "target",
-    "messageStrategy", "hook", "keyMessage", "evidence", "outline", "outputFormat",
-    "channelTargets", "recommendedReferenceQuery",
-  ], "content_proposal_result_invalid");
-  if (source.contractVersion !== "content-proposal.v1"
-    || source.contentFamily !== job.request.contentFamily
-    || !strategies.includes(source.messageStrategy as MessageStrategy)
-    || !job.request.outputFormats.includes(source.outputFormat as OutputFormat)) {
-    fail("content_proposal_result_invalid");
-  }
-  if (!Array.isArray(source.evidence) || !Array.isArray(source.outline) || source.outline.length === 0) {
-    fail("content_proposal_result_invalid");
-  }
-  const evidence = source.evidence.map((item) => {
-    const entry = exact(item, ["sourceSnapshotId", "summary"], "content_proposal_result_invalid");
-    const sourceSnapshotId = text(entry.sourceSnapshotId, "content_proposal_result_invalid");
-    if (!job.request.sourceSnapshotIds.includes(sourceSnapshotId)) fail("content_proposal_result_invalid");
+  const initial = record(value);
+  if (initial.stage === "research_required") {
+    const source = exact(initial, [...commonKeys, "researchAttemptId", "researchAttemptNumber", "baseInput"]);
+    const common = parseCommon(source);
+    let baseInput: ProposalBaseInputSnapshotV2;
+    try { baseInput = parseProposalBaseInputSnapshotV2(source.baseInput); }
+    catch { fail(); }
+    assertInputBinding(common.request, baseInput);
+    if (proposalSha256(baseInput) !== common.contract.baseInputSha256) fail("content_proposal_claim_contract_mismatch");
     return {
-      sourceSnapshotId,
-      summary: text(entry.summary, "content_proposal_result_invalid"),
+      ...common, stage: "research_required", researchAttemptId: uuid(source.researchAttemptId),
+      researchAttemptNumber: positiveInteger(source.researchAttemptNumber), baseInput,
     };
-  });
-  const outline = source.outline.map((item) => {
-    const entry = exact(item, ["heading", "purpose"], "content_proposal_result_invalid");
+  }
+  if (initial.stage === "composition_ready") {
+    const source = exact(initial, [
+      ...commonKeys, "modelAttemptId", "modelAttemptNumber", "compositionId", "composedInput",
+      "evidenceSetSha256", "composedInputSha256", "finalInvocationAggregateSha256", "modelSha256",
+    ]);
+    const common = parseCommon(source);
+    const modelAttemptNumber = positiveInteger(source.modelAttemptNumber);
+    if (common.attemptCount < 1 || common.attemptCount !== modelAttemptNumber) {
+      fail("content_proposal_claim_contract_mismatch");
+    }
+    let composedInput: ProposalInputSnapshotV2;
+    try { composedInput = parseProposalInputSnapshotV2(source.composedInput); }
+    catch { fail(); }
+    assertInputBinding(common.request, composedInput);
+    const baseInput = baseFromComposed(composedInput);
+    const evidenceSetSha256 = sha(source.evidenceSetSha256);
+    const composedInputSha256 = sha(source.composedInputSha256);
+    const finalInvocationAggregateSha256 = sha(source.finalInvocationAggregateSha256);
+    const modelSha256 = sha(source.modelSha256);
+    if (proposalSha256(baseInput) !== common.contract.baseInputSha256
+      || modelSha256 !== proposalSha256({ modelId: common.contract.modelId })
+      || finalInvocationAggregateSha256 !== proposalSha256({
+        enqueueContractSha256: common.contract.enqueueContractSha256,
+        modelId: common.contract.modelId,
+        commandDescriptorSha256: common.contract.commandDescriptorSha256,
+        proposalOutputSchemaSha256: common.contract.proposalOutputSchemaSha256,
+        evidenceSetSha256,
+        composedInputSha256,
+      })) fail("content_proposal_claim_contract_mismatch");
     return {
-      heading: text(entry.heading, "content_proposal_result_invalid", 500),
-      purpose: text(entry.purpose, "content_proposal_result_invalid"),
-    };
-  });
-  const referenceQuery = exact(
-    source.recommendedReferenceQuery,
-    ["strategies", "formats", "tags"],
-    "content_proposal_result_invalid",
-  );
-  const channelTargets = uniqueStrings(
-    source.channelTargets,
-    channels,
-    "content_proposal_result_invalid",
-  );
-  if (channelTargets.length === 0
-    || channelTargets.some((channel) => !job.request.channelTargets.includes(channel))) {
-    fail("content_proposal_result_invalid");
-  }
-  return {
-    contractVersion: "content-proposal.v1",
-    title: text(source.title, "content_proposal_result_invalid", 500),
-    reasonToCreateNow: text(source.reasonToCreateNow, "content_proposal_result_invalid"),
-    contentFamily: job.request.contentFamily,
-    topic: text(source.topic, "content_proposal_result_invalid", 500),
-    target: record(source.target, "content_proposal_result_invalid"),
-    messageStrategy: source.messageStrategy as MessageStrategy,
-    hook: text(source.hook, "content_proposal_result_invalid"),
-    keyMessage: text(source.keyMessage, "content_proposal_result_invalid"),
-    evidence,
-    outline,
-    outputFormat: source.outputFormat as OutputFormat,
-    channelTargets,
-    recommendedReferenceQuery: {
-      strategies: uniqueStrings(referenceQuery.strategies, strategies, "content_proposal_result_invalid"),
-      formats: uniqueStrings(referenceQuery.formats, formats, "content_proposal_result_invalid"),
-      tags: uniqueStrings(referenceQuery.tags, null, "content_proposal_result_invalid"),
-    },
-  };
-}
-
-export function parseContentProposalResult(value: unknown, job: ContentProposalJobV1): ContentProposalV1[] {
-  if (!Array.isArray(value) || value.length < 2 || value.length > 3) {
-    fail("content_proposal_result_invalid");
-  }
-  const proposals = value.map((item) => parseProposal(item, job));
-  const fingerprints = proposals.map(({ title, topic, messageStrategy, hook, keyMessage, outputFormat }) => (
-    JSON.stringify([title, topic, messageStrategy, hook, keyMessage, outputFormat])
-  ));
-  if (new Set(fingerprints).size !== proposals.length) fail("content_proposal_result_not_distinct");
-  return proposals;
-}
-
-export function isContentProposalJobV2(job: ContentProposalJob): job is ContentProposalJobV2 {
-  return job.request.contractVersion === "content-proposal-request.v2";
-}
-
-function parseV2Proposal(value: unknown, job: ContentProposalJobV2): ContentProposalV2 {
-  if (job.inputSnapshot.contractVersion !== "proposal-input.v2") fail("content_proposal_result_invalid");
-  const code = "content_proposal_result_invalid";
-  const source = exact(value, [
-    "conceptKey", "title", "informationalType", "oneLineIntent", "differentiator",
-    "differentiationAxes", "target", "customerContext", "keyMessage", "hook",
-    "selectionReason", "evidenceIds", "referenceIds", "outputFormat", "channelTargets",
-    "assetCount", "outline", "purposeDetails",
-  ], code);
-  if (source.outputFormat !== job.inputSnapshot.outputSettings.outputFormat
-    || !Array.isArray(source.channelTargets) || source.channelTargets.length !== 1
-    || source.channelTargets[0] !== job.inputSnapshot.outputSettings.channelTargets[0]
-    || !Array.isArray(source.outline) || source.outline.length === 0) fail(code);
-  const evidenceIds = uniqueStrings(source.evidenceIds, null, code, 8).map((id) => uuid(id, code));
-  const allowedEvidenceIds = new Set(job.inputSnapshot.researchEvidence.items.map((item) => item.id));
-  if (evidenceIds.some((id) => !allowedEvidenceIds.has(id))) fail(code);
-  const referenceIds = uniqueStrings(source.referenceIds, null, code, 5).map((id) => uuid(id, code));
-  const allowedReferenceIds = new Set(job.inputSnapshot.references.map((item) => item.referenceItemId));
-  if (referenceIds.some((id) => !allowedReferenceIds.has(id))) fail(code);
-  const axes = uniqueStrings(source.differentiationAxes, v2Axes, code, v2Axes.length);
-  if (axes.length === 0) fail(code);
-  const outline = source.outline.map((value, offset) => {
-    const item = exact(value, ["index", "role", "headline", "purpose"], code);
-    if (item.index !== offset + 1) fail(code);
-    return {
-      index: offset + 1, role: text(item.role, code, 200), headline: text(item.headline, code, 500),
-      purpose: text(item.purpose, code, 2_000),
-    };
-  });
-  let assetCount: number | null;
-  if (source.outputFormat === "blog") {
-    if (source.assetCount !== null) fail(code);
-    assetCount = null;
-  } else {
-    if (!Number.isSafeInteger(source.assetCount) || Number(source.assetCount) < 1
-      || Number(source.assetCount) > 5 || Number(source.assetCount) !== outline.length) fail(code);
-    assetCount = Number(source.assetCount);
-  }
-  const details = record(source.purposeDetails, code);
-  let purposeDetails: ContentProposalV2["purposeDetails"];
-  let informationalType: ContentProposalV2["informationalType"];
-  if (job.inputSnapshot.outputSettings.purpose === "informational") {
-    const parsed = exact(details, ["kind", "question", "value", "whyNow", "learningPoints"], code);
-    if (parsed.kind !== "informational"
-      || !informationalTypes.includes(source.informationalType as never)) fail(code);
-    const learningPoints = uniqueStrings(parsed.learningPoints, null, code, 20);
-    if (learningPoints.length === 0) fail(code);
-    informationalType = source.informationalType as ContentProposalV2["informationalType"];
-    purposeDetails = {
-      kind: "informational", question: text(parsed.question, code), value: text(parsed.value, code),
-      whyNow: text(parsed.whyNow, code), learningPoints,
-    };
-  } else {
-    const parsed = exact(details, [
-      "kind", "campaignObjective", "situationAndNeed", "productId", "targetSegment",
-      "strengths", "limitations", "appeal", "buyingBarriers", "cta",
-    ], code);
-    if (parsed.kind !== "marketing" || source.informationalType !== null
-      || !job.inputSnapshot.product || uuid(parsed.productId, code) !== job.inputSnapshot.product.id) fail(code);
-    const strengths = uniqueStrings(parsed.strengths, null, code, 20);
-    const limitations = uniqueStrings(parsed.limitations, null, code, 20);
-    const buyingBarriers = uniqueStrings(parsed.buyingBarriers, null, code, 20);
-    if (strengths.length === 0 || limitations.length === 0 || buyingBarriers.length === 0) fail(code);
-    informationalType = null;
-    purposeDetails = {
-      kind: "marketing", campaignObjective: text(parsed.campaignObjective, code),
-      situationAndNeed: text(parsed.situationAndNeed, code), productId: job.inputSnapshot.product.id,
-      targetSegment: text(parsed.targetSegment, code), strengths, limitations,
-      appeal: text(parsed.appeal, code), buyingBarriers, cta: text(parsed.cta, code),
+      ...common, stage: "composition_ready", modelAttemptId: uuid(source.modelAttemptId),
+      modelAttemptNumber, compositionId: uuid(source.compositionId),
+      composedInput, evidenceSetSha256, composedInputSha256, finalInvocationAggregateSha256, modelSha256,
     };
   }
-  return {
-    conceptKey: text(source.conceptKey, code, 200), title: text(source.title, code, 500), informationalType,
-    oneLineIntent: text(source.oneLineIntent, code), differentiator: text(source.differentiator, code),
-    differentiationAxes: axes, target: text(source.target, code),
-    customerContext: text(source.customerContext, code), keyMessage: text(source.keyMessage, code),
-    hook: text(source.hook, code), selectionReason: text(source.selectionReason, code), evidenceIds,
-    referenceIds, outputFormat: source.outputFormat as ContentOutputFormatV2,
-    channelTargets: [source.channelTargets[0] as ContentChannelTargetV2], assetCount, outline, purposeDetails,
-  };
+  fail();
 }
 
-function sortedSet(value: readonly string[]): string {
-  return JSON.stringify([...value].sort());
+export function isContentProposalResearchJob(job: ContentProposalJob): job is ContentProposalResearchJob {
+  return job.stage === "research_required";
 }
 
-function substantiveFingerprint(proposal: ContentProposalV2): string {
-  return JSON.stringify({
+export function isContentProposalCompositionJob(job: ContentProposalJob): job is ContentProposalCompositionJob {
+  return job.stage === "composition_ready";
+}
+
+function sortedSet(values: readonly string[]): string {
+  return JSON.stringify([...values].sort());
+}
+
+function semanticFingerprint(proposal: ContentProposalV2): string {
+  return canonicalProposalJson({
     informationalType: proposal.informationalType,
     target: proposal.target,
     customerContext: proposal.customerContext,
     keyMessage: proposal.keyMessage,
     hook: proposal.hook,
-    evidenceIds: [...proposal.evidenceIds].sort(),
-    referenceIds: [...proposal.referenceIds].sort(),
     assetCount: proposal.assetCount,
     outline: proposal.outline,
     purposeDetails: proposal.purposeDetails,
   });
 }
 
-function proposalDifferentiationValue(
-  proposal: ContentProposalV2,
-  axis: ContentProposalV2["differentiationAxes"][number],
-): string | null {
+function axisValue(proposal: ContentProposalV2, axis: ContentProposalV2["differentiationAxes"][number]): string | null {
   switch (axis) {
-    case "target":
-      return proposal.target;
-    case "situation":
-      return proposal.customerContext;
-    case "question":
-      return proposal.purposeDetails.kind === "informational"
-        ? proposal.purposeDetails.question
-        : proposal.hook;
-    case "appeal":
-      return proposal.purposeDetails.kind === "marketing"
-        ? proposal.purposeDetails.appeal
-        : proposal.keyMessage;
-    case "narrative":
-      return JSON.stringify({
-        oneLineIntent: proposal.oneLineIntent,
-        hook: proposal.hook,
-        outline: proposal.outline,
-      });
-    case "informational_type":
-      return proposal.informationalType;
-  }
-}
-
-function validateSubstantiveDifferentiation(proposals: ContentProposalV2[]): void {
-  for (let leftIndex = 0; leftIndex < proposals.length; leftIndex += 1) {
-    for (let rightIndex = leftIndex + 1; rightIndex < proposals.length; rightIndex += 1) {
-      const left = proposals[leftIndex];
-      const right = proposals[rightIndex];
-      if (!left || !right) fail("content_proposal_result_not_distinct");
-      const declaredAxes = new Set([...left.differentiationAxes, ...right.differentiationAxes]);
-      const differs = [...declaredAxes].some((axis) => (
-        proposalDifferentiationValue(left, axis) !== proposalDifferentiationValue(right, axis)
-      ));
-      if (!differs) fail("content_proposal_result_not_distinct");
-    }
+    case "target": return proposal.target;
+    case "situation": return proposal.customerContext;
+    case "question": return proposal.purposeDetails.kind === "informational" ? proposal.purposeDetails.question : proposal.hook;
+    case "appeal": return proposal.purposeDetails.kind === "marketing" ? proposal.purposeDetails.appeal : proposal.keyMessage;
+    case "narrative": return canonicalProposalJson({ intent: proposal.oneLineIntent, hook: proposal.hook, outline: proposal.outline });
+    case "informational_type": return proposal.informationalType;
   }
 }
 
 export function parseContentProposalSetV2(
   value: unknown,
-  job: ContentProposalJobV2,
+  job: ContentProposalCompositionJob,
 ): ContentProposalSetV2 {
-  const source = exact(value, ["contractVersion", "proposals"], "content_proposal_result_invalid");
-  if (source.contractVersion !== "content-proposal.v2"
-    || !Array.isArray(source.proposals) || source.proposals.length !== 3) {
-    fail("content_proposal_result_invalid");
+  let set: ContentProposalSetV2;
+  try { set = parseCanonicalContentProposalSetV2(value); }
+  catch { fail("content_proposal_result_invalid"); }
+  const input = job.composedInput;
+  const settings = input.outputSettings;
+  const evidenceIds = new Set(input.researchEvidence.items.map((item) => item.id));
+  const referenceIds = new Set(input.references.map((item) => item.referenceItemId));
+  for (const proposal of set.proposals) {
+    if (proposal.outputFormat !== settings.outputFormat
+      || proposal.channelTargets.length !== 1 || proposal.channelTargets[0] !== settings.channelTargets[0]
+      || proposal.purposeDetails.kind !== settings.purpose
+      || proposal.evidenceIds.some((id) => !evidenceIds.has(id))
+      || proposal.referenceIds.some((id) => !referenceIds.has(id))
+      || (settings.outputFormat === "blog" ? proposal.assetCount !== null : proposal.assetCount !== proposal.outline.length)
+      || proposal.outline.some((item, index) => item.index !== index + 1)
+      || (settings.purpose === "informational" && (input.product !== null || proposal.informationalType === null))
+      || (settings.purpose === "marketing" && (input.product === null || proposal.informationalType !== null
+        || proposal.purposeDetails.kind !== "marketing" || proposal.purposeDetails.productId !== input.product.id))) {
+      fail("content_proposal_result_invalid");
+    }
   }
-  const proposals = source.proposals.map((proposal) => parseV2Proposal(proposal, job));
-  if (new Set(proposals.map((proposal) => proposal.conceptKey)).size !== 3
-    || new Set(proposals.map(substantiveFingerprint)).size !== 3) {
+  if (new Set(set.proposals.map((proposal) => proposal.conceptKey)).size !== 3
+    || new Set(set.proposals.map(semanticFingerprint)).size !== 3
+    || new Set(set.proposals.map((proposal) => sortedSet(proposal.evidenceIds))).size !== 1
+    || new Set(set.proposals.map((proposal) => sortedSet(proposal.referenceIds))).size !== 1) {
     fail("content_proposal_result_not_distinct");
   }
-  validateSubstantiveDifferentiation(proposals);
-  const evidenceSets = new Set(proposals.map((proposal) => sortedSet(proposal.evidenceIds)));
-  const referenceSets = new Set(proposals.map((proposal) => sortedSet(proposal.referenceIds)));
-  if (evidenceSets.size !== 1 || referenceSets.size !== 1) fail("content_proposal_result_invalid");
-  return {
-    contractVersion: "content-proposal.v2",
-    proposals: proposals as [ContentProposalV2, ContentProposalV2, ContentProposalV2],
-  };
+  for (let leftIndex = 0; leftIndex < set.proposals.length; leftIndex += 1) {
+    for (let rightIndex = leftIndex + 1; rightIndex < set.proposals.length; rightIndex += 1) {
+      const left = set.proposals[leftIndex]!;
+      const right = set.proposals[rightIndex]!;
+      const axes = new Set([...left.differentiationAxes, ...right.differentiationAxes]);
+      if (![...axes].some((axis) => axisValue(left, axis) !== axisValue(right, axis))) {
+        fail("content_proposal_result_not_distinct");
+      }
+    }
+  }
+  return set;
+}
+
+export type ContentProposalResearchSeal = {
+  jobId: string;
+  batchId: string;
+  compositionId: string;
+  composedInput: ProposalInputSnapshotV2;
+  evidenceSetSha256: string;
+  composedInputSha256: string;
+  finalInvocationAggregateSha256: string;
+  status: "queued";
+};
+
+export type InvocationOrdinal = 1 | 2;
+export type InvocationTerminalInput =
+  | {
+      eventType: "invocation_completed";
+      transcriptSha256: string;
+      outputSha256: string;
+      parserSha256: string;
+      parserValid: false;
+    }
+  | {
+      eventType: "invocation_failed" | "invocation_indeterminate";
+      transcriptSha256: string | null;
+      outputSha256: null;
+      parserSha256: null;
+      parserValid: null;
+    };
+
+export type ContentProposalCompletionInput = {
+  transcriptSha256: string;
+  outputSha256: string;
+  parserSha256: string;
+  proposalSet: ContentProposalSetV2;
+};
+
+export type ContentProposalCompletion = {
+  jobId: string;
+  batchId: string;
+  status: "completed";
+  invocationEventSha256: string;
+  attemptEventSha256: string;
+};
+
+export interface ContentProposalWorkerClient {
+  heartbeatWorker(workerId: string): Promise<void>;
+  claim(workerId: string, leaseSeconds: number): Promise<ContentProposalJob | null>;
+  heartbeat(job: ContentProposalJob, leaseSeconds: number): Promise<void>;
+  completeResearch(job: ContentProposalResearchJob, evidence: ResearchEvidenceSnapshotV1): Promise<ContentProposalResearchSeal>;
+  startInvocation(job: ContentProposalCompositionJob, ordinal: InvocationOrdinal): Promise<{ eventSha256: string }>;
+  recordInvocationTerminal(
+    job: ContentProposalCompositionJob,
+    ordinal: InvocationOrdinal,
+    input: InvocationTerminalInput,
+  ): Promise<{
+    eventSha256: string;
+    status: "queued" | "processing" | "failed" | "manual_review_required";
+  }>;
+  complete(
+    job: ContentProposalCompositionJob,
+    ordinal: InvocationOrdinal,
+    input: ContentProposalCompletionInput,
+  ): Promise<ContentProposalCompletion>;
+  fail(job: ContentProposalJob, input: {
+    stage: ContentProposalJob["stage"];
+    attemptId: string;
+    errorCode: string;
+    errorMessage: string;
+    retryable: boolean;
+  }): Promise<void>;
+}
+
+export function parseResearchSeal(
+  value: unknown,
+  job: ContentProposalResearchJob,
+  evidence: ResearchEvidenceSnapshotV1,
+): ContentProposalResearchSeal {
+  const source = exact(value, [
+    "jobId", "batchId", "compositionId", "composedInput", "evidenceSetSha256",
+    "composedInputSha256", "finalInvocationAggregateSha256", "status",
+  ], "content_proposal_research_seal_invalid");
+  let composedInput: ProposalInputSnapshotV2;
+  try { composedInput = parseProposalInputSnapshotV2(source.composedInput); }
+  catch { fail("content_proposal_research_seal_invalid"); }
+  if (source.status !== "queued") fail("content_proposal_research_seal_invalid");
+  const seal = {
+    jobId: uuid(source.jobId), batchId: uuid(source.batchId), compositionId: uuid(source.compositionId),
+    composedInput, evidenceSetSha256: sha(source.evidenceSetSha256),
+    composedInputSha256: sha(source.composedInputSha256),
+    finalInvocationAggregateSha256: sha(source.finalInvocationAggregateSha256), status: "queued",
+  } as const;
+  if (seal.jobId !== job.id || seal.batchId !== job.batchId
+    || proposalSha256(baseFromComposed(seal.composedInput)) !== job.contract.baseInputSha256
+    || canonicalProposalJson(seal.composedInput.researchEvidence) !== canonicalProposalJson(evidence)
+    || seal.finalInvocationAggregateSha256 !== proposalSha256({
+      enqueueContractSha256: job.contract.enqueueContractSha256,
+      modelId: job.contract.modelId,
+      commandDescriptorSha256: job.contract.commandDescriptorSha256,
+      proposalOutputSchemaSha256: job.contract.proposalOutputSchemaSha256,
+      evidenceSetSha256: seal.evidenceSetSha256,
+      composedInputSha256: seal.composedInputSha256,
+    })) fail("content_proposal_research_seal_invalid");
+  return seal;
+}
+
+export function parseResearchEvidence(value: unknown): ResearchEvidenceSnapshotV1 {
+  try { return parseResearchEvidenceSnapshotV1(value); }
+  catch { fail("content_proposal_research_invalid"); }
 }

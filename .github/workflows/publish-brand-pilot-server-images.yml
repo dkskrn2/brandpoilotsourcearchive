@@ -71,6 +71,12 @@ jobs:
           if [[ "$GITHUB_EVENT_NAME" == "pull_request" ]]; then
             git fetch --no-tags origin "$GITHUB_BASE_REF"
             base_sha="$(git merge-base "origin/$GITHUB_BASE_REF" "$GITHUB_SHA")"
+            if [[ -n "$PRODUCTION_RELEASE_SHA" ]] \
+              && [[ "$PRODUCTION_RELEASE_SHA" =~ ^[0-9a-f]{40}$ ]] \
+              && git cat-file -e "${PRODUCTION_RELEASE_SHA}^{commit}" 2>/dev/null \
+              && git merge-base --is-ancestor "$PRODUCTION_RELEASE_SHA" "$GITHUB_SHA"; then
+              base_sha="$PRODUCTION_RELEASE_SHA"
+            fi
             impact_json="$(node scripts/release-impact.mjs --base "$base_sha" --head "$GITHUB_SHA")"
             bootstrap=false
           elif [[ -z "$PRODUCTION_RELEASE_SHA" || "$SCHEMA2_READY" != "true" ]]; then
@@ -91,7 +97,7 @@ jobs:
             { component: "imageWorker", dockerfile: "workers/brand-pilot-image-worker/Dockerfile", imageKeys: ["IMAGE_WORKER_IMAGE"], repositories: ["brand-pilot-image-worker"] },
             { component: "cardNewsWorker", dockerfile: "workers/brand-pilot-card-news-worker/Dockerfile", imageKeys: ["CARD_NEWS_WORKER_IMAGE"], repositories: ["brand-pilot-card-news-worker"] },
             { component: "blogWorker", dockerfile: "workers/brand-pilot-blog-worker/Dockerfile", imageKeys: ["BLOG_WORKER_IMAGE"], repositories: ["brand-pilot-blog-worker"] },
-            { component: "marketingWorker", dockerfile: "workers/brand-pilot-marketing-worker/Dockerfile", imageKeys: ["MARKETING_WORKER_IMAGE"], repositories: ["brand-pilot-marketing-worker"] },
+            { component: "reelWorker", dockerfile: "workers/brand-pilot-reel-worker/Dockerfile", imageKeys: ["REEL_WORKER_IMAGE"], repositories: ["brand-pilot-reel-worker"] },
           ];
           const include = specs.filter((entry) => impact.components[entry.component]);
           const out = {
@@ -138,14 +144,47 @@ jobs:
         if: needs.impact.outputs.migration_changed == 'true'
         working-directory: brand_poilot
         run: |
+          node --test scripts/migrate.test.mjs
           node --test scripts/migrationRunner.test.mjs
+          node --test scripts/ai-content-three-format-cutover.postgres.integration.test.mjs
+          AI_CONTENT_074_ENFORCE_BENCHMARK=false node --test scripts/ai-content-074.postgres.integration.test.mjs
           npm run test:migrations
           echo "migration_approval_required"
       - name: Verify API
         if: fromJSON(needs.impact.outputs.components).api
         working-directory: brand_poilot
         run: |
-          npm run test --workspace @brand-pilot/api
+          npm run pretest --workspace @brand-pilot/api
+          npm exec --workspace @brand-pilot/api -- vitest run \
+            src/aiContentFixedInputAssembler.test.ts \
+            src/aiContentGenerationInput.test.ts \
+            src/aiContentGenerationInputV3.test.ts \
+            src/aiContentGenerationOperations.test.ts \
+            src/aiContentMaintenance.test.ts \
+            src/aiContentManifest.test.ts \
+            src/aiContentMigration075.test.ts \
+            src/aiContentPlanContracts.test.ts \
+            src/aiContentProposalV2Service.test.ts \
+            src/aiContentPublish.test.ts \
+            src/aiContentPublishTargets.test.ts \
+            src/aiContentRenderJobs.test.ts \
+            src/aiContentRepositoryV3BoundaryContracts.test.ts \
+            src/aiContentRepositoryV3Contracts.test.ts \
+            src/aiContentRepositoryV3Retry.test.ts \
+            src/aiContentRepositoryV3Runtime.test.ts \
+            src/aiContentRepositoryV3Start.test.ts \
+            src/aiContentSeedResolver.test.ts \
+            src/aiContentUpload.test.ts \
+            src/contentOrchestration.test.ts \
+            src/contentProposalJobs.test.ts \
+            src/repository.aiContentPool.test.ts \
+            src/repository.dmWiki.test.ts \
+            src/server.aiContentCustomer.test.ts \
+            src/server.aiContentRenderWorker.test.ts \
+            src/server.aiContentV2Customer.test.ts \
+            src/server.aiContentWorker.test.ts \
+            src/server.contentProposalWorker.test.ts \
+            --maxWorkers=4
           npm run build --workspace @brand-pilot/api
       - name: Verify customer UI
         if: fromJSON(needs.impact.outputs.components).customerUi
@@ -183,10 +222,10 @@ jobs:
         if: fromJSON(needs.impact.outputs.components).blogWorker
         working-directory: brand_poilot
         run: npm run test --workspace @brand-pilot/blog-worker && npm run build --workspace @brand-pilot/blog-worker
-      - name: Verify marketing worker
-        if: fromJSON(needs.impact.outputs.components).marketingWorker
+      - name: Verify reel worker
+        if: fromJSON(needs.impact.outputs.components).reelWorker
         working-directory: brand_poilot
-        run: npm run test --workspace @brand-pilot/marketing-worker && npm run build --workspace @brand-pilot/marketing-worker
+        run: npm run test --workspace @brand-pilot/reel-worker && npm run build --workspace @brand-pilot/reel-worker
 
   publish:
     needs: [impact, verify]

@@ -1,7 +1,17 @@
 import { createHash } from "node:crypto";
 import { EventEmitter } from "node:events";
+import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
 import { runControlledSearch } from "./controlledSearch.js";
+
+it("imports controlled-search content types directly from the canonical contract package", () => {
+  const source = readFileSync(new URL("./controlledSearch.ts", import.meta.url), "utf8");
+
+  expect(source).toMatch(
+    /import type \{ ContentPurpose, ResearchEvidenceSnapshotV1 \} from "@brand-pilot\/content-contracts";/,
+  );
+  expect(source).not.toMatch(/from "\.\/aiContentV3\.js"/);
+});
 
 const searchedResult = (url = "https://source.example/article") => JSON.stringify({
   type: "item.completed",

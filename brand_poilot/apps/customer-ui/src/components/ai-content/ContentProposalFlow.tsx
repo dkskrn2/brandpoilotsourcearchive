@@ -121,7 +121,7 @@ export function ContentProposalFlow({
   const [products, setProducts] = useState<Awaited<ReturnType<ContentLibraries["listProductServices"]>>>([]);
   const [loadingSubjects, setLoadingSubjects] = useState(false);
   const [format, setFormat] = useState<ContentOutputFormatV2>(
-    initialSetup?.format === "card_news" || initialSetup?.format === "blog" || initialSetup?.format === "reel" || initialSetup?.format === "marketing_content"
+    initialSetup?.format === "card_news" || initialSetup?.format === "blog" || initialSetup?.format === "reel"
       ? initialSetup.format
       : "card_news",
   );
@@ -196,7 +196,7 @@ export function ContentProposalFlow({
       else setContentInstruction("");
       setSelectedProductId(typeof request.productId === "string" ? request.productId : null);
       const settings = requestRecord(request.outputSettings);
-      if (settings.outputFormat === "card_news" || settings.outputFormat === "blog" || settings.outputFormat === "reel" || settings.outputFormat === "marketing_content") {
+      if (settings.outputFormat === "card_news" || settings.outputFormat === "blog" || settings.outputFormat === "reel") {
         setFormat(settings.outputFormat);
       }
       if (Array.isArray(settings.channelTargets) && typeof settings.channelTargets[0] === "string") {
@@ -209,7 +209,7 @@ export function ContentProposalFlow({
       if (typeof subjectInput.topic === "string") setTopic(subjectInput.topic);
       if (subjectInput.mode === "product_service" && typeof subjectInput.productServiceId === "string") setSelectedProductId(subjectInput.productServiceId);
       const outputFormat = Array.isArray(request.outputFormats) ? request.outputFormats[0] : null;
-      if (outputFormat === "card_news" || outputFormat === "blog" || outputFormat === "reel" || outputFormat === "marketing_content") setFormat(outputFormat);
+      if (outputFormat === "card_news" || outputFormat === "blog" || outputFormat === "reel") setFormat(outputFormat);
       if (Array.isArray(request.channelTargets) && typeof request.channelTargets[0] === "string") setChannel(request.channelTargets[0] as ContentChannelTarget);
       if (typeof request.brief === "string") setContentInstruction(request.brief);
     }

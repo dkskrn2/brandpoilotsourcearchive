@@ -1,0 +1,124 @@
+{
+  "catalogVersion": "content-catalog.v1",
+  "claimSlugs": {
+    "blog": "blog",
+    "card_news": "card_news",
+    "reel": "reel"
+  },
+  "contractSourceHash": "02760a1e006eb5920980a4b9c5b268cf53b3595543c5f909f2d66be53393c660",
+  "formats": [
+    "card_news",
+    "blog",
+    "reel"
+  ],
+  "imageEnvKeys": {
+    "blog": "BLOG_WORKER_IMAGE",
+    "card_news": "CARD_NEWS_WORKER_IMAGE",
+    "reel": "REEL_WORKER_IMAGE"
+  },
+  "manifestContractVersion": "ai-content.v3",
+  "planContractVersions": {
+    "blog": "blog-plan.v2",
+    "card_news": "card-news-plan.v2",
+    "reel": "reel-plan.v2"
+  },
+  "plannerModels": {
+    "blog": "gpt-5.6-terra",
+    "card_news": "gpt-5.6-terra",
+    "reel": "gpt-5.6-terra"
+  },
+  "promptBinding": {
+    "schemaSha256": "b78786d0becf415eeb5943e29b9e2f2e4908ae0109c2c85536910dda1c9644f2",
+    "version": "content-prompt-binding.v1"
+  },
+  "proposalContracts": {
+    "baseInputSchemaSha256": "723296e25ef184e23569858a2f0ad541d1029564339e1f240e6617f334fbc702",
+    "baseInputVersion": "proposal-base-input.v2",
+    "composedInputSchemaSha256": "a8b8ad8123d2f6ed3845d969f4e294410fa1902b4640f9ef6aeb1763862ec935",
+    "composedInputVersion": "proposal-input.v2",
+    "outputSchemaSha256": "54bf063cf32926874af6b098272df08d41a9e7d7f578ee6560debe44428cf5f3",
+    "outputVersion": "content-proposal.v2",
+    "promptVersion": "proposal.writer.v2",
+    "requestSchemaSha256": "a061a9290fc852f7f2200bdd6efb28ebe542afce78f3489b78678a4f45052bd2",
+    "requestVersion": "content-proposal-request.v2"
+  },
+  "purposes": [
+    "informational",
+    "marketing"
+  ],
+  "releaseComponentKeys": {
+    "blog": "blogWorker",
+    "card_news": "cardNewsWorker",
+    "reel": "reelWorker"
+  },
+  "researchEvidence": {
+    "schemaSha256": "b797488d25354aebe601dcf9c775f9f67ab0ebd9bffa1c30896c0b2a306c2ff3",
+    "version": "research-evidence.v1"
+  },
+  "schemas": {
+    "aiContentV3": {
+      "filename": "ai-content-v3.schema.json",
+      "sha256": "ba78eed317b6c6a0d06f6e7039b56be0560217262c15b510cade7b62105ead65"
+    },
+    "contentGenerationInputV3": {
+      "filename": "content-generation-input-v3.schema.json",
+      "sha256": "5f0123a5649ff04b93c49f5ec8a4e3a8cf501f5442ca915adcf1dd3fd64b6b00"
+    },
+    "contentOrchestrationV2": {
+      "filename": "content-orchestration-v2.schema.json",
+      "sha256": "22b0cbfed3818df92f8f53fc4dc0c2cb32d218173302cbc98b82f2d956b860d7"
+    },
+    "contentPromptBindingV1": {
+      "filename": "content-prompt-binding-v1.schema.json",
+      "sha256": "b78786d0becf415eeb5943e29b9e2f2e4908ae0109c2c85536910dda1c9644f2"
+    },
+    "contentProposalRequestV2": {
+      "filename": "content-proposal-request-v2.schema.json",
+      "sha256": "a061a9290fc852f7f2200bdd6efb28ebe542afce78f3489b78678a4f45052bd2"
+    },
+    "contentProposalV2": {
+      "filename": "content-proposal-v2.schema.json",
+      "sha256": "54bf063cf32926874af6b098272df08d41a9e7d7f578ee6560debe44428cf5f3"
+    },
+    "imageGenerationPackageV1": {
+      "filename": "image-generation-package-v1.schema.json",
+      "sha256": "10f20d3a7aca1f4cd1ed5e22b03f85aaf3e177c2856a30151793a3e343155f0e"
+    },
+    "plans": {
+      "blog": {
+        "filename": "blog-plan-v2.schema.json",
+        "sha256": "03ceeed94fdda02f3935a37868a5c159a456d467200486236ecc968163794c82"
+      },
+      "card_news": {
+        "filename": "card-news-plan-v2.schema.json",
+        "sha256": "00efc6f4fad458f598e40add213e5543ac950cd8c8df96323a97821f8238277b"
+      },
+      "reel": {
+        "filename": "reel-plan-v2.schema.json",
+        "sha256": "bcefb5d1810d43c8e6d36561000711240783892cb79ac8b62c64936fb49f55aa"
+      }
+    },
+    "proposalBaseInputV2": {
+      "filename": "proposal-base-input-v2.schema.json",
+      "sha256": "723296e25ef184e23569858a2f0ad541d1029564339e1f240e6617f334fbc702"
+    },
+    "proposalInputV2": {
+      "filename": "proposal-input-v2.schema.json",
+      "sha256": "a8b8ad8123d2f6ed3845d969f4e294410fa1902b4640f9ef6aeb1763862ec935"
+    },
+    "researchEvidenceV1": {
+      "filename": "research-evidence-v1.schema.json",
+      "sha256": "b797488d25354aebe601dcf9c775f9f67ab0ebd9bffa1c30896c0b2a306c2ff3"
+    }
+  },
+  "services": {
+    "blog": "blog-worker-1",
+    "card_news": "card-news-worker-1",
+    "reel": "reel-worker-1"
+  },
+  "workspaces": {
+    "blog": "@brand-pilot/blog-worker",
+    "card_news": "@brand-pilot/card-news-worker",
+    "reel": "@brand-pilot/reel-worker"
+  }
+}

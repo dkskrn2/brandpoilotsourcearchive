@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { execFile, spawn, type ChildProcess } from "node:child_process";
-import type { ContentPurposeV2, ResearchEvidenceSnapshotV1 } from "./aiContentV3.js";
+import type { ContentPurpose, ResearchEvidenceSnapshotV1 } from "@brand-pilot/content-contracts";
 
 const OUTPUT_LIMIT_BYTES = 1024 * 1024;
 const DEFAULT_TIMEOUT_MS = 120_000;
@@ -30,14 +30,14 @@ export interface ControlledSearchDependencies {
 }
 
 export interface ControlledSearchInput {
-  purpose: ContentPurposeV2;
+  purpose: ContentPurpose;
   mode: "required" | "automatic" | "blog_supplement";
   publicResearchContext: PublicResearchContext;
   signal?: AbortSignal;
 }
 
 export interface PublicResearchContext {
-  purpose: ContentPurposeV2;
+  purpose: ContentPurpose;
   subjectKind: "topic_text" | "topic_url" | "reference";
   subjectTitle: string | null;
   contentInstruction: string | null;
@@ -249,7 +249,7 @@ function publicText(value: unknown, maximum: number, nullable = false): string |
   return normalized;
 }
 
-function parsePublicResearchContext(value: unknown, purpose: ContentPurposeV2): PublicResearchContext {
+function parsePublicResearchContext(value: unknown, purpose: ContentPurpose): PublicResearchContext {
   const source = exactRecord(value, [
     "purpose", "subjectKind", "subjectTitle", "contentInstruction", "primaryCategory",
     "detailedCategory", "selectedProduct",

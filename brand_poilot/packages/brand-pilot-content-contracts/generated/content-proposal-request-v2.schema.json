@@ -1,0 +1,86 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "channelTargets": {
+      "items": {
+        "anyOf": [
+          {
+            "const": "instagram",
+            "type": "string"
+          },
+          {
+            "const": "threads",
+            "type": "string"
+          },
+          {
+            "const": "x",
+            "type": "string"
+          },
+          {
+            "const": "linkedin",
+            "type": "string"
+          },
+          {
+            "const": "youtube",
+            "type": "string"
+          },
+          {
+            "const": "tiktok",
+            "type": "string"
+          },
+          {
+            "const": "blog_export",
+            "type": "string"
+          }
+        ]
+      },
+      "maxItems": 1,
+      "minItems": 1,
+      "type": "array"
+    },
+    "contractVersion": {
+      "const": "content-proposal-request.v2",
+      "type": "string"
+    },
+    "outputFormat": {
+      "anyOf": [
+        {
+          "const": "card_news",
+          "type": "string"
+        },
+        {
+          "const": "blog",
+          "type": "string"
+        },
+        {
+          "const": "reel",
+          "type": "string"
+        }
+      ]
+    },
+    "purpose": {
+      "anyOf": [
+        {
+          "const": "informational",
+          "type": "string"
+        },
+        {
+          "const": "marketing",
+          "type": "string"
+        }
+      ]
+    },
+    "requestFingerprint": {
+      "pattern": "^[0-9a-f]{64}$",
+      "type": "string"
+    }
+  },
+  "required": [
+    "contractVersion",
+    "purpose",
+    "outputFormat",
+    "channelTargets",
+    "requestFingerprint"
+  ],
+  "type": "object"
+}

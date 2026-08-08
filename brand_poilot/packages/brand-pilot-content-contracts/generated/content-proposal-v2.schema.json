@@ -1,0 +1,403 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "contractVersion": {
+      "const": "content-proposal.v2",
+      "type": "string"
+    },
+    "proposals": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "assetCount": {
+            "anyOf": [
+              {
+                "maximum": 5,
+                "minimum": 1,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "channelTargets": {
+            "items": {
+              "anyOf": [
+                {
+                  "const": "instagram",
+                  "type": "string"
+                },
+                {
+                  "const": "threads",
+                  "type": "string"
+                },
+                {
+                  "const": "x",
+                  "type": "string"
+                },
+                {
+                  "const": "linkedin",
+                  "type": "string"
+                },
+                {
+                  "const": "youtube",
+                  "type": "string"
+                },
+                {
+                  "const": "tiktok",
+                  "type": "string"
+                },
+                {
+                  "const": "blog_export",
+                  "type": "string"
+                }
+              ]
+            },
+            "maxItems": 1,
+            "minItems": 1,
+            "type": "array"
+          },
+          "conceptKey": {
+            "maxLength": 200,
+            "minLength": 1,
+            "type": "string"
+          },
+          "customerContext": {
+            "maxLength": 4000,
+            "minLength": 1,
+            "type": "string"
+          },
+          "differentiationAxes": {
+            "items": {
+              "anyOf": [
+                {
+                  "const": "target",
+                  "type": "string"
+                },
+                {
+                  "const": "situation",
+                  "type": "string"
+                },
+                {
+                  "const": "question",
+                  "type": "string"
+                },
+                {
+                  "const": "appeal",
+                  "type": "string"
+                },
+                {
+                  "const": "narrative",
+                  "type": "string"
+                },
+                {
+                  "const": "informational_type",
+                  "type": "string"
+                }
+              ]
+            },
+            "maxItems": 6,
+            "minItems": 1,
+            "type": "array"
+          },
+          "differentiator": {
+            "maxLength": 4000,
+            "minLength": 1,
+            "type": "string"
+          },
+          "evidenceIds": {
+            "items": {
+              "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$",
+              "type": "string"
+            },
+            "maxItems": 8,
+            "type": "array"
+          },
+          "hook": {
+            "maxLength": 4000,
+            "minLength": 1,
+            "type": "string"
+          },
+          "informationalType": {
+            "anyOf": [
+              {
+                "anyOf": [
+                  {
+                    "const": "problem_solution",
+                    "type": "string"
+                  },
+                  {
+                    "const": "how_to",
+                    "type": "string"
+                  },
+                  {
+                    "const": "checklist",
+                    "type": "string"
+                  },
+                  {
+                    "const": "comparison",
+                    "type": "string"
+                  },
+                  {
+                    "const": "trend_insight",
+                    "type": "string"
+                  },
+                  {
+                    "const": "q_and_a",
+                    "type": "string"
+                  },
+                  {
+                    "const": "myth_fact",
+                    "type": "string"
+                  }
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "keyMessage": {
+            "maxLength": 4000,
+            "minLength": 1,
+            "type": "string"
+          },
+          "oneLineIntent": {
+            "maxLength": 4000,
+            "minLength": 1,
+            "type": "string"
+          },
+          "outline": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "headline": {
+                  "maxLength": 500,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "index": {
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                "purpose": {
+                  "maxLength": 4000,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "role": {
+                  "maxLength": 200,
+                  "minLength": 1,
+                  "type": "string"
+                }
+              },
+              "required": [
+                "index",
+                "role",
+                "headline",
+                "purpose"
+              ],
+              "type": "object"
+            },
+            "maxItems": 100,
+            "minItems": 1,
+            "type": "array"
+          },
+          "outputFormat": {
+            "anyOf": [
+              {
+                "const": "card_news",
+                "type": "string"
+              },
+              {
+                "const": "blog",
+                "type": "string"
+              },
+              {
+                "const": "reel",
+                "type": "string"
+              }
+            ]
+          },
+          "purposeDetails": {
+            "anyOf": [
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "kind": {
+                    "const": "informational",
+                    "type": "string"
+                  },
+                  "learningPoints": {
+                    "items": {
+                      "maxLength": 2000,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "maxItems": 20,
+                    "minItems": 1,
+                    "type": "array"
+                  },
+                  "question": {
+                    "maxLength": 4000,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "value": {
+                    "maxLength": 4000,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "whyNow": {
+                    "maxLength": 4000,
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "question",
+                  "value",
+                  "whyNow",
+                  "learningPoints"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "appeal": {
+                    "maxLength": 4000,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "buyingBarriers": {
+                    "items": {
+                      "maxLength": 2000,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "maxItems": 20,
+                    "type": "array"
+                  },
+                  "campaignObjective": {
+                    "maxLength": 4000,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "cta": {
+                    "maxLength": 4000,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "kind": {
+                    "const": "marketing",
+                    "type": "string"
+                  },
+                  "limitations": {
+                    "items": {
+                      "maxLength": 2000,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "maxItems": 20,
+                    "type": "array"
+                  },
+                  "productId": {
+                    "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$",
+                    "type": "string"
+                  },
+                  "situationAndNeed": {
+                    "maxLength": 4000,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "strengths": {
+                    "items": {
+                      "maxLength": 2000,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "maxItems": 20,
+                    "type": "array"
+                  },
+                  "targetSegment": {
+                    "maxLength": 4000,
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "campaignObjective",
+                  "situationAndNeed",
+                  "productId",
+                  "targetSegment",
+                  "strengths",
+                  "limitations",
+                  "appeal",
+                  "buyingBarriers",
+                  "cta"
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          "referenceIds": {
+            "items": {
+              "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$",
+              "type": "string"
+            },
+            "maxItems": 5,
+            "type": "array"
+          },
+          "selectionReason": {
+            "maxLength": 4000,
+            "minLength": 1,
+            "type": "string"
+          },
+          "target": {
+            "maxLength": 4000,
+            "minLength": 1,
+            "type": "string"
+          },
+          "title": {
+            "maxLength": 500,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "conceptKey",
+          "title",
+          "informationalType",
+          "oneLineIntent",
+          "differentiator",
+          "differentiationAxes",
+          "target",
+          "customerContext",
+          "keyMessage",
+          "hook",
+          "selectionReason",
+          "evidenceIds",
+          "referenceIds",
+          "outputFormat",
+          "channelTargets",
+          "assetCount",
+          "outline",
+          "purposeDetails"
+        ],
+        "type": "object"
+      },
+      "maxItems": 3,
+      "minItems": 3,
+      "type": "array"
+    }
+  },
+  "required": [
+    "contractVersion",
+    "proposals"
+  ],
+  "type": "object"
+}

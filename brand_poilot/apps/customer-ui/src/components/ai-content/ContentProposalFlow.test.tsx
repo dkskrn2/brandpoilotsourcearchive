@@ -54,7 +54,7 @@ const capabilities: ChannelCapability[] = [
     enabled: true,
     connectionStatus: "connected",
     canGenerate: true,
-    generationFormats: ["card_news", "reel", "marketing_content"],
+    generationFormats: ["card_news", "reel"],
     exportModes: ["image"],
     publishModes: ["instagram_feed_carousel", "instagram_feed_single", "instagram_story"],
     readiness: "ready",
@@ -146,8 +146,6 @@ function renderFlow(options: {
   const updateFinalizationDraft = vi.fn(async () => ({} as never));
   const startGenerationV2 = vi.fn(async () => ({} as never));
   Object.assign(gateway, { updateFinalizationDraft, startGenerationV2 });
-  const updateGeneration = vi.spyOn(gateway, "updateGeneration");
-  const startGeneration = vi.spyOn(gateway, "startGeneration");
   const uploadAttachment = vi.spyOn(gateway, "uploadAttachment").mockImplementation(async (_brandId, _generationId, attachment) => ({
     ...attachment,
     id: "one-time-receipt-1",
@@ -237,7 +235,7 @@ function renderFlow(options: {
   const rendered = render(view(options.brandId ?? "brand-demo"));
   return {
     gateway, create, getBatch, listReferences, listReferenceSeeds, libraries,
-    selectProposal, updateGeneration, startGeneration, uploadAttachment,
+    selectProposal, uploadAttachment,
     updateFinalizationDraft, startGenerationV2, getRules, getReference,
     rerenderBrand: (brandId: string) => rendered.rerender(view(brandId)),
   };
@@ -662,7 +660,7 @@ describe("ContentProposalFlow", () => {
   it("updates only the V2 finalization draft and starts one sealed package", async () => {
     const user = userEvent.setup();
     const {
-      updateFinalizationDraft, startGenerationV2, updateGeneration, startGeneration,
+      updateFinalizationDraft, startGenerationV2,
     } = renderFlow({ initialBatchId: "batch-1" });
 
     await user.click(await screen.findByRole("button", { name: "구성안 선택: 여름 피부 3단계 관리" }));
@@ -681,8 +679,6 @@ describe("ContentProposalFlow", () => {
       },
     ));
     expect(startGenerationV2).toHaveBeenCalledWith("brand-demo", expect.any(String), expect.any(String));
-    expect(updateGeneration).not.toHaveBeenCalled();
-    expect(startGeneration).not.toHaveBeenCalled();
     expect(JSON.stringify(startGenerationV2.mock.calls)).not.toMatch(/outputCount|wiki|faq|logo|avatarSnapshot|referenceIds|product|proposal/i);
   });
 

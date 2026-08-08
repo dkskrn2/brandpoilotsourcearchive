@@ -1,4 +1,4 @@
-import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -51,7 +51,7 @@ describe("AiContentGenerationPage", () => {
     renderGeneration("generation-card-complete");
 
     expect(await screen.findByRole("heading", { name: "생성 결과 상세" })).toBeVisible();
-    expect(screen.getByText("유형: 카드뉴스 · 여름 추천 카드뉴스")).toBeVisible();
+    expect(screen.getByText("형식: 카드뉴스 · 여름 추천 카드뉴스")).toBeVisible();
     expect(screen.getByText("Instagram OAuth 게시 계정 미연결")).toBeVisible();
     expect(screen.getAllByRole("link", { name: "연결하기" })[0]).toHaveAttribute("href", expect.stringContaining("/auth/meta/start"));
 
@@ -100,9 +100,12 @@ describe("AiContentGenerationPage", () => {
     expect(gateway.downloadOutput).toHaveBeenCalledTimes(1);
   });
 
-  it("shows failed output reason and retry control updates output state after reasoned retry", async () => {
+  it("keeps the failed attempt and opens the queued child generation after a reasoned retry", async () => {
     const user = userEvent.setup();
-    renderGeneration("generation-partial");
+    const { gateway } = renderGeneration("generation-partial", false, (configuredGateway) => {
+      configuredGateway.getGeneration = vi.fn(configuredGateway.getGeneration.bind(configuredGateway));
+      configuredGateway.retryOutput = vi.fn(configuredGateway.retryOutput.bind(configuredGateway));
+    });
 
     const outputRows = await screen.findAllByRole("listitem");
     const failedOutputRow = outputRows[1];
@@ -116,9 +119,18 @@ describe("AiContentGenerationPage", () => {
     expect(retryButton).toBeEnabled();
 
     await user.click(retryButton);
-    expect(await within(failedOutputRow).findByText("대기")).toBeVisible();
-    expect(within(failedOutputRow).queryByRole("button", { name: /결과 2 다시 생성/ })).not.toBeInTheDocument();
-    expect(within(failedOutputRow).queryByText("실패 사유: 이미지 생성 실패")).not.toBeInTheDocument();
+    expect(gateway.retryOutput).toHaveBeenCalledWith(
+      "00000000-0000-4000-8000-000000000100",
+      "output-marketing-2",
+      "이미지 구성 요소를 재생성해 주세요.",
+    );
+    await waitFor(() => {
+      expect(gateway.getGeneration).toHaveBeenCalledWith(
+        "00000000-0000-4000-8000-000000000100",
+        expect.stringMatching(/^generation-partial-retry-/),
+      );
+    });
+    expect(await screen.findByText("대기")).toBeVisible();
   });
 
   it("shows the localized retry deadline and form before attachment retention expires", async () => {
@@ -272,8 +284,7 @@ describe("AiContentGenerationPage", () => {
 
     const rows = await screen.findAllByRole("listitem");
     const failedRow = rows[1];
-    const publishSelection = screen.getByRole("checkbox", { name: "게시물" });
-    await user.click(publishSelection);
+    expect(screen.queryByRole("region", { name: "SNS에 바로 게시" })).not.toBeInTheDocument();
     await user.type(within(failedRow).getByLabelText("문제 해결형 다시 생성 사유"), "다시 생성");
     await user.click(within(failedRow).getByRole("button", { name: /결과 2 다시 생성/ }));
 
@@ -281,8 +292,7 @@ describe("AiContentGenerationPage", () => {
     expect(within(failedRow).queryByRole("button", { name: /결과 2 다시 생성/ })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "혜택 강조형 결과 ZIP 다운로드" })).toBeEnabled();
     expect(screen.getByRole("button", { name: "전체 ZIP" })).toBeEnabled();
-    expect(publishSelection).toBeChecked();
-    expect(screen.getByRole("button", { name: "선택한 1개 유형 게시" })).toBeEnabled();
+    expect(screen.queryByRole("region", { name: "SNS에 바로 게시" })).not.toBeInTheDocument();
     expect(gateway.retryOutput).toHaveBeenCalledTimes(1);
   });
 
@@ -291,7 +301,7 @@ describe("AiContentGenerationPage", () => {
     renderGeneration("generation-completed");
 
     expect(await screen.findByRole("heading", { name: "생성 결과 상세" })).toBeVisible();
-    expect(screen.getByText("유형: 블로그 · 고객이 저장하는 운영 가이드")).toBeVisible();
+    expect(screen.getByText("형식: 블로그 · 고객이 저장하는 운영 가이드")).toBeVisible();
     expect(screen.queryByRole("button", { name: "게시 관리로 보내기" })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "운영 가이드 결과 ZIP 다운로드" })).toBeEnabled();
     expect(screen.getByTitle("블로그 미리보기")).toBeVisible();
@@ -304,10 +314,10 @@ describe("AiContentGenerationPage", () => {
     expect(await screen.findByText("기획 중")).toBeVisible();
   });
 
-  it("shows marketing contracts with selected and all ZIP actions", async () => {
+  it("shows reel contracts with selected and all ZIP actions", async () => {
     renderGeneration("generation-partial");
 
-    expect(await screen.findByText("유형: 마케팅 소재 · 신제품 출시 마케팅 소재")).toBeVisible();
+    expect(await screen.findByText("형식: 릴스 · 신제품 출시 마케팅 소재")).toBeVisible();
 
     const outputRows = screen.getAllByRole("listitem");
     expect(within(outputRows[0]).getByRole("button", { name: "혜택 강조형 결과 ZIP 다운로드" })).toBeEnabled();
@@ -369,7 +379,7 @@ describe("AiContentGenerationPage", () => {
     });
 
     expect(await screen.findByRole("tab", { name: "기획 근거" })).toHaveAttribute("aria-selected", "true");
-    expect(screen.getByRole("tab", { name: "카피" })).toBeVisible();
+    expect(screen.queryByRole("tab", { name: "카피" })).not.toBeInTheDocument();
     expect(screen.getByRole("tab", { name: "완성본" })).toBeVisible();
     expect(screen.getByRole("tab", { name: "게시" })).toBeVisible();
     expect(screen.getByText("여름 피부 관리")).toBeVisible();
@@ -378,9 +388,8 @@ describe("AiContentGenerationPage", () => {
     expect(screen.getByText(/동결된 레퍼런스 제목/)).toBeVisible();
     expect(screen.getByText("동결된 브랜드 모델")).toBeVisible();
 
-    await user.click(screen.getByRole("tab", { name: "카피" }));
-    expect(screen.getByText("핵심 메시지: 여름 캠페인 시작")).toBeVisible();
     await user.click(screen.getByRole("tab", { name: "완성본" }));
+    expect(screen.getByText("핵심 메시지: 여름 캠페인 시작")).toBeVisible();
     expect(screen.getByRole("button", { name: "카드뉴스 표지 결과 ZIP 다운로드" })).toBeEnabled();
     await user.click(screen.getByRole("tab", { name: "게시" }));
     expect(screen.getByText("Instagram OAuth 게시 계정 미연결")).toBeVisible();
@@ -423,9 +432,8 @@ describe("AiContentGenerationPage", () => {
     expect(screen.queryByText(/기존 생성 건에는 orchestration snapshot이 없어/)).not.toBeInTheDocument();
   });
 
-  it("edits and saves structured copy separately from worker-backed regeneration", async () => {
-    const user = userEvent.setup();
-    const { gateway } = renderGeneration("generation-card-complete", false, (configuredGateway) => {
+  it("does not expose the retired save-copy contract even when stale output metadata advertises it", async () => {
+    renderGeneration("generation-card-complete", false, (configuredGateway) => {
       const getGeneration = configuredGateway.getGeneration.bind(configuredGateway);
       configuredGateway.getGeneration = vi.fn(async (brandId, generationId) => {
         const result = await getGeneration(brandId, generationId);
@@ -441,58 +449,21 @@ describe("AiContentGenerationPage", () => {
               caption: "저장 전 캡션",
               hashtags: ["기존", "태그"],
             },
-            revisionCapabilities: [
-              "save_copy",
-              "regenerate_hook",
-              "regenerate_copy",
-            ] as NonNullable<typeof output.revisionCapabilities>,
+            revisionCapabilities: ["save_copy"] as Array<"save_copy">,
           })),
-        };
-      });
-      configuredGateway.saveOutputCopy = vi.fn(async (_brandId, _outputId, input) => {
-        const result = await getGeneration("brand-1", "generation-card-complete");
-        return {
-          ...result.outputs[0],
-          copy: {
-            hook: "",
-            keyMessage: "",
-            body: "",
-            cta: "",
-            caption: "",
-            hashtags: [],
-            ...input.fields,
-          },
         };
       });
     });
 
-    await user.click(await screen.findByRole("tab", { name: "카피" }));
-    expect(screen.getByDisplayValue("저장 전 훅")).toBeVisible();
-    expect(screen.getByDisplayValue("저장 전 핵심 메시지")).toBeVisible();
-    expect(screen.getByDisplayValue("저장 전 본문")).toBeVisible();
-    expect(screen.getByDisplayValue("저장 전 CTA")).toBeVisible();
-    expect(screen.getByDisplayValue("저장 전 캡션")).toBeVisible();
-    expect(screen.getByDisplayValue("기존, 태그")).toBeVisible();
-    expect(screen.getByRole("button", { name: "훅 다시 생성" })).toBeVisible();
-
-    const cta = screen.getByLabelText("카드뉴스 표지 CTA");
-    await user.clear(cta);
-    await user.type(cta, "지금 확인");
-    await user.click(screen.getByRole("button", { name: "카드뉴스 표지 카피 저장" }));
-
-    expect(gateway.saveOutputCopy).toHaveBeenCalledWith(
-      "00000000-0000-4000-8000-000000000100",
-      "output-card-news",
-      expect.objectContaining({
-        fields: expect.objectContaining({ cta: "지금 확인" }),
-        idempotencyKey: expect.any(String),
-      }),
-    );
-    expect(await screen.findByText("카피를 저장했습니다.")).toBeVisible();
+    expect(await screen.findByRole("tab", { name: "완성본" })).toBeVisible();
+    expect(screen.queryByRole("tab", { name: "카피" })).not.toBeInTheDocument();
+    expect(screen.queryByDisplayValue("저장 전 훅")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /카피 저장/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /다시 생성/ })).not.toBeInTheDocument();
   });
 
-  it("hides unsupported revision and publish actions for a legacy Reel result", async () => {
-    renderGeneration("generation-card-complete", true, (gateway) => {
+  it("hides unsupported revision and publish actions for a V3 reel result", async () => {
+    renderGeneration("generation-partial", true, (gateway) => {
       const getGeneration = gateway.getGeneration.bind(gateway);
       gateway.getGeneration = vi.fn(async (brandId, generationId) => {
         const result = await getGeneration(brandId, generationId);
@@ -500,53 +471,15 @@ describe("AiContentGenerationPage", () => {
           ...result,
           outputs: result.outputs.map((output) => ({
             ...output,
-            legacyReadOnly: true,
             revisionCapabilities: [],
-            artifact: output.artifact
-              ? { ...output.artifact, deliveryFormat: "instagram_reel" as const }
-              : null,
           })),
         };
       });
     });
 
-    expect(await screen.findByText("과거 Reel 결과는 읽기 전용입니다.")).toBeVisible();
+    expect(await screen.findByRole("button", { name: "혜택 강조형 결과 ZIP 다운로드" })).toBeEnabled();
     expect(screen.queryByRole("button", { name: /훅.*재생성|카피.*재생성|카드.*재생성/ })).not.toBeInTheDocument();
     expect(screen.queryByRole("region", { name: "SNS에 바로 게시" })).not.toBeInTheDocument();
-  });
-
-  it("queues supported hook, copy, and individual-card revisions from review", async () => {
-    const user = userEvent.setup();
-    const { gateway } = renderGeneration("generation-card-complete", false, (configuredGateway) => {
-      const getGeneration = configuredGateway.getGeneration.bind(configuredGateway);
-      configuredGateway.getGeneration = vi.fn(async (brandId, generationId) => {
-        const result = await getGeneration(brandId, generationId);
-        return {
-          ...result,
-          outputs: result.outputs.map((output) => ({
-            ...output,
-            revisionCapabilities: [
-              "regenerate_hook",
-              "regenerate_copy",
-              "regenerate_card",
-            ] as Array<"regenerate_hook" | "regenerate_copy" | "regenerate_card">,
-          })),
-        };
-      });
-      configuredGateway.reviseOutput = vi.fn(configuredGateway.reviseOutput);
-    });
-
-    await user.click(await screen.findByRole("button", { name: "1번 카드 다시 생성" }));
-
-    expect(gateway.reviseOutput).toHaveBeenCalledWith(
-      "00000000-0000-4000-8000-000000000100",
-      "output-card-news",
-      expect.objectContaining({
-        action: "regenerate_card",
-        cardIndex: 1,
-        idempotencyKey: expect.any(String),
-      }),
-    );
   });
 
   it("keeps completed outputs untouched while retrying only a failed output from review", async () => {

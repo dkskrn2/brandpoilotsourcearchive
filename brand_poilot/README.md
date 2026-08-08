@@ -15,7 +15,7 @@
 - `workers/brand-pilot-brand-intelligence-worker`: URL·업로드 근거를 사용하는 브랜드 온보딩 분석 워커
 - `workers/brand-pilot-subject-analysis-worker`: 제품·서비스 분석과 소구점 생성 워커
 - `workers/brand-pilot-content-proposal-worker`: 콘텐츠 제안 생성 워커
-- `workers/brand-pilot-card-news-worker`, `brand-pilot-blog-worker`, `brand-pilot-marketing-worker`: 산출물 유형별 생성 워커
+- `workers/brand-pilot-card-news-worker`, `brand-pilot-blog-worker`, `brand-pilot-reel-worker`: 산출물 유형별 생성 워커
 - `db`: PostgreSQL 마이그레이션, 스모크 테스트, 로컬 DB 안내
 - `docs`: 제품 명세, 배포·운영 절차, 출시 체크리스트
 
@@ -122,8 +122,8 @@ npm run dev:blog-worker
 npm run blog-worker:once
 
 # 마케팅 이미지와 카피
-npm run dev:marketing-worker
-npm run marketing-worker:once
+npm run dev:reel-worker
+npm run reel-worker:once
 ```
 
 각 워커의 `.env.example`을 같은 디렉터리의 `.env`로 복사하고 `BRAND_PILOT_API_URL`, `WORKER_API_TOKEN`, `BLOB_READ_WRITE_TOKEN`, 유형별 Codex 명령을 설정합니다. `npm run dev:*`의 사전 검사는 해당 프로세스에 필요한 환경 파일만 확인하므로 UI 실행이 워커 비밀값 때문에 차단되지 않습니다.

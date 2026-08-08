@@ -1,5 +1,6 @@
 import { useEffect } from "react";
 import { FileCode2 } from "lucide-react";
+import { CONTENT_FORMAT_CATALOG, CONTENT_OUTPUT_FORMATS } from "@brand-pilot/content-contracts";
 import type {
   ContentChannelTarget,
   ContentOutputFormatV2,
@@ -10,12 +11,10 @@ import {
 } from "../../features/channels/channelCapabilityGateway";
 import { ChannelLogo } from "../channels/ChannelLogo";
 
-const formatLabels: Array<[ContentOutputFormatV2, string]> = [
-  ["card_news", "카드뉴스"],
-  ["blog", "블로그"],
-  ["reel", "릴스(세로 이미지)"],
-  ["marketing_content", "마케팅 콘텐츠"],
-];
+const formatLabels: Array<[ContentOutputFormatV2, string]> = CONTENT_OUTPUT_FORMATS.map((format) => [
+  format,
+  CONTENT_FORMAT_CATALOG[format].koreanLabel,
+]);
 
 const channelLabels = {
   instagram: "Instagram",

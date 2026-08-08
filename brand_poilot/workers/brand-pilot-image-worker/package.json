@@ -16,6 +16,7 @@
     "verify:reel": "node scripts/verify-reel.mjs"
   },
   "dependencies": {
+    "@brand-pilot/content-contracts": "0.1.0",
     "@brand-pilot/worker-runtime": "0.1.0",
     "@vercel/blob": "^2.6.1",
     "cheerio": "^1.2.0",

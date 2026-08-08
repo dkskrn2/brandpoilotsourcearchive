@@ -1,4 +1,5 @@
 import { parseContentOrchestrationV1 } from "./contentOrchestration.js";
+import type { ApprovedBrandRulesSnapshotV1 } from "@brand-pilot/content-contracts";
 
 export type AiContentType = "card_news" | "blog" | "marketing";
 export type ContentFamily = "informational" | "marketing";
@@ -13,7 +14,7 @@ export type ContentChannelTarget =
   | "blog_export";
 
 export type ContentPurposeV2 = "informational" | "marketing";
-export type ContentOutputFormatV2 = "card_news" | "blog" | "reel" | "marketing_content";
+export type ContentOutputFormatV2 = "card_news" | "blog" | "reel";
 export type ContentChannelV2 = ContentChannelTarget;
 export type ContentReferenceRoleV2 = "planning" | "copy_pattern" | "visual_composition";
 export type ContentRatioV2 = "1:1" | "4:5" | "16:9" | "9:16";
@@ -257,6 +258,7 @@ export interface ContentGenerationInputV3 {
   contractVersion: "content-generation-input.v3";
   generationId: string;
   brandCore: ApprovedBrandCoreSnapshotV2;
+  brandRules: ApprovedBrandRulesSnapshotV1;
   subject: ProposalSubjectV2;
   contentInstruction: string | null;
   product: ApprovedProductSnapshotV2 | null;
@@ -334,37 +336,6 @@ export interface ContentOrchestrationV1 {
     id: string;
     snapshot: Record<string, unknown>;
   };
-}
-
-export interface ContentProposalV1 {
-  contractVersion: "content-proposal.v1";
-  title: string;
-  reasonToCreateNow: string;
-  contentFamily: ContentFamily;
-  topic: string;
-  target: Record<string, unknown>;
-  messageStrategy: MessageStrategy;
-  hook: string;
-  keyMessage: string;
-  evidence: Array<{ sourceSnapshotId: string; summary: string }>;
-  outline: Array<{ heading: string; purpose: string }>;
-  outputFormat: OutputFormat;
-  channelTargets: ContentChannelTarget[];
-  recommendedReferenceQuery: {
-    strategies: MessageStrategy[];
-    formats: OutputFormat[];
-    tags: string[];
-  };
-}
-
-export interface ContentProposalRequestV1 {
-  contractVersion: "content-proposal-request.v1";
-  contentFamily: ContentFamily;
-  subjectInput: Record<string, unknown>;
-  channelTargets: string[];
-  outputFormats: OutputFormat[];
-  sourceSnapshotIds: string[];
-  performanceSnapshotIds: string[];
 }
 
 export type AiContentJobType = "analyze" | "generate";
@@ -486,6 +457,12 @@ export interface ContentGenerationStartV2 {
   idempotencyKey: string;
 }
 
+export interface ContentGenerationRetryV1 {
+  contractVersion: "content-generation-retry.v1";
+  idempotencyKey: string;
+  reason: string;
+}
+
 export type AiContentAttachmentRole = "product" | "person" | "scale" | "visual_reference" | "document";
 
 export interface AttachmentUploadTokenInput {
@@ -549,10 +526,7 @@ export interface CompleteAiContentPlanningJobInput extends CompleteAiContentJobB
   plan: import("./aiContentPlanContracts.js").ContentPlanResultV2;
 }
 
-export type CompleteAiContentJobInput =
-  | CompleteAiContentAnalysisJobInput
-  | CompleteAiContentGenerationJobInput
-  | CompleteAiContentPlanningJobInput;
+export type CompleteAiContentJobInput = CompleteAiContentPlanningJobInput;
 
 export interface FailAiContentJobInput {
   jobId: string;
@@ -670,6 +644,18 @@ export function parseStartAiContentGenerationInput(value: unknown): StartAiConte
   return {
     idempotencyKey: requiredString(source.idempotencyKey, "ai_content_idempotency_key_invalid", 200),
     outputCount: source.outputCount,
+  };
+}
+
+export function parseContentGenerationRetryV1(value: unknown): ContentGenerationRetryV1 {
+  const source = exactObject(value, ["contractVersion", "idempotencyKey", "reason"], "ai_content_generation_retry_invalid");
+  if (source.contractVersion !== "content-generation-retry.v1") {
+    fail("ai_content_contract_version_unsupported");
+  }
+  return {
+    contractVersion: "content-generation-retry.v1",
+    idempotencyKey: requiredString(source.idempotencyKey, "ai_content_generation_retry_invalid", 200),
+    reason: requiredString(source.reason, "ai_content_generation_retry_invalid", 4_000),
   };
 }
 

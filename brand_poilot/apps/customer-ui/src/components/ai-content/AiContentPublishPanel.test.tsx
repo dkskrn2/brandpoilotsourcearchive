@@ -19,7 +19,7 @@ describe("AiContentPublishPanel", () => {
   it("submits selected feed and static Story without exposing Reel generation", async () => {
     const user = userEvent.setup();
     const onPublish = vi.fn(async () => undefined);
-    render(<AiContentPublishPanel type="card_news" assetCount={3} channels={channels} publishing={false} results={[]} onPublish={onPublish} />);
+    render(<AiContentPublishPanel manifestVersion="ai-content.v3" outputFormat="card_news" assetCount={3} channels={channels} publishing={false} results={[]} onPublish={onPublish} />);
 
     expect(screen.getByText("Instagram")).toBeVisible();
     expect(screen.getByText("Threads OAuth 게시 계정 미연결")).toBeVisible();
@@ -38,28 +38,10 @@ describe("AiContentPublishPanel", () => {
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   });
 
-  it("uses the existing feed-single target for a one-image v2 card", async () => {
+  it("keeps the card-news carousel contract even when one asset is visible", async () => {
     const user = userEvent.setup();
     const onPublish = vi.fn(async () => undefined);
-    render(<AiContentPublishPanel type="card_news" manifestVersion="ai-content.v2" outputFormat="card_news" assetCount={1} channels={channels} publishing={false} results={[]} onPublish={onPublish} />);
-
-    const feed = screen.getByRole("checkbox", { name: "게시물" });
-    expect(feed).toBeEnabled();
-    await user.click(feed);
-    await user.click(screen.getByRole("button", { name: "선택한 1개 유형 게시" }));
-
-    expect(onPublish).toHaveBeenCalledWith([
-      { channel: "instagram", deliveryFormat: "instagram_feed_single" },
-    ]);
-    expect(onPublish).not.toHaveBeenCalledWith([
-      { channel: "instagram", deliveryFormat: "instagram_feed_carousel" },
-    ]);
-  });
-
-  it("uses the existing card carousel adapter for multi-image v2 marketing content", async () => {
-    const user = userEvent.setup();
-    const onPublish = vi.fn(async () => undefined);
-    render(<AiContentPublishPanel type="marketing" manifestVersion="ai-content.v2" outputFormat="marketing_content" assetCount={3} channels={channels} publishing={false} results={[]} onPublish={onPublish} />);
+    render(<AiContentPublishPanel manifestVersion="ai-content.v3" outputFormat="card_news" assetCount={1} channels={channels} publishing={false} results={[]} onPublish={onPublish} />);
 
     const feed = screen.getByRole("checkbox", { name: "게시물" });
     expect(feed).toBeEnabled();
@@ -68,22 +50,6 @@ describe("AiContentPublishPanel", () => {
 
     expect(onPublish).toHaveBeenCalledWith([
       { channel: "instagram", deliveryFormat: "instagram_feed_carousel" },
-    ]);
-    expect(onPublish).not.toHaveBeenCalledWith([
-      { channel: "instagram", deliveryFormat: "instagram_feed_single" },
-    ]);
-  });
-
-  it("preserves the existing feed-single adapter for one-image v2 marketing content", async () => {
-    const user = userEvent.setup();
-    const onPublish = vi.fn(async () => undefined);
-    render(<AiContentPublishPanel type="marketing" manifestVersion="ai-content.v2" outputFormat="marketing_content" assetCount={1} channels={channels} publishing={false} results={[]} onPublish={onPublish} />);
-
-    await user.click(screen.getByRole("checkbox", { name: "게시물" }));
-    await user.click(screen.getByRole("button", { name: "선택한 1개 유형 게시" }));
-
-    expect(onPublish).toHaveBeenCalledWith([
-      { channel: "instagram", deliveryFormat: "instagram_feed_single" },
     ]);
   });
 
@@ -91,13 +57,14 @@ describe("AiContentPublishPanel", () => {
     const user = userEvent.setup();
     const onPublish = vi.fn(async () => undefined);
     render(<AiContentPublishPanel
-      type="marketing"
+      manifestVersion="ai-content.v3"
+      outputFormat="card_news"
       assetCount={1}
       channels={channels}
       publishing={false}
       results={[{
         channel: "instagram",
-        deliveryFormat: "instagram_feed_single",
+        deliveryFormat: "instagram_feed_carousel",
         channelOutputId: "output-1",
         queueId: "queue-1",
         status: "failed",
@@ -108,7 +75,7 @@ describe("AiContentPublishPanel", () => {
     />);
 
     await user.click(screen.getByRole("button", { name: "다시 시도" }));
-    expect(onPublish).toHaveBeenCalledWith([{ channel: "instagram", deliveryFormat: "instagram_feed_single" }]);
+    expect(onPublish).toHaveBeenCalledWith([{ channel: "instagram", deliveryFormat: "instagram_feed_carousel" }]);
   });
 
   it.each([
@@ -121,7 +88,8 @@ describe("AiContentPublishPanel", () => {
     ["instagram_public_url_required", "Instagram에서 결과물 이미지에 접근하지 못했습니다. 공개 이미지 주소를 확인해 주세요."],
   ])("shows an actionable message for %s", (errorCode, message) => {
     render(<AiContentPublishPanel
-      type="marketing"
+      manifestVersion="ai-content.v3"
+      outputFormat="card_news"
       assetCount={1}
       channels={channels}
       publishing={false}
@@ -142,14 +110,14 @@ describe("AiContentPublishPanel", () => {
 
   it("shows pending connection feedback for channels without OAuth routes", async () => {
     const user = userEvent.setup();
-    render(<AiContentPublishPanel type="marketing" assetCount={1} channels={[]} publishing={false} results={[]} onPublish={vi.fn()} />);
+    render(<AiContentPublishPanel manifestVersion="ai-content.v3" outputFormat="card_news" assetCount={1} channels={[]} publishing={false} results={[]} onPublish={vi.fn()} />);
     const rows = screen.getAllByText("연결하기");
     await user.click(rows[1]);
     expect(screen.getByText("연결 준비 중")).toBeVisible();
   });
 
-  it.each(["reel", "blog"] as const)("does not expose remote publish actions for v2 %s results", (outputFormat) => {
-    render(<AiContentPublishPanel type={outputFormat === "blog" ? "blog" : "marketing"} outputFormat={outputFormat} assetCount={2} channels={channels} publishing={false} results={[]} onPublish={vi.fn()} />);
+  it.each(["reel", "blog"] as const)("does not expose remote publish actions for V3 %s results", (outputFormat) => {
+    render(<AiContentPublishPanel manifestVersion="ai-content.v3" outputFormat={outputFormat} assetCount={2} channels={channels} publishing={false} results={[]} onPublish={vi.fn()} />);
 
     expect(screen.queryByRole("region", { name: "SNS에 바로 게시" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /게시/ })).not.toBeInTheDocument();

@@ -107,7 +107,133 @@ require_digest_image() {
     fail "image_must_be_digest_pinned"
 }
 
+declare -g MARKETING_RETIREMENT_SOURCE_SCHEMA=""
+declare -g MARKETING_RETIREMENT_SOURCE_RELEASE_SHA=""
+declare -g MARKETING_RETIREMENT_SOURCE_MANIFEST_SHA256=""
+declare -g MARKETING_RETIREMENT_BASELINE_MANIFEST_SHA256=""
+declare -g MARKETING_RETIREMENT_LEGACY_IMAGE=""
+declare -g MARKETING_RETIREMENT_LEGACY_SOURCE_SHA=""
+
+validate_marketing_retirement_record() {
+  local record_file="$1"
+  local line
+  local record_pattern
+  local -a record_lines=()
+  [[ -f "$record_file" && ! -L "$record_file" ]] ||
+    fail "marketing_retirement_record_missing"
+  mapfile -t record_lines < "$record_file"
+  [[ "${#record_lines[@]}" -eq 1 ]] || fail "marketing_retirement_record_invalid"
+  line="${record_lines[0]}"
+  [[ "$line" != *$'\r'* ]] || fail "marketing_retirement_record_invalid"
+  record_pattern='^\{"contractVersion":"marketing-worker-retirement\.v1","action":"stop_remove","service":"marketing-worker-1","restartAllowed":false,"sourceReleaseSchema":"[12]","sourceReleaseSha":"[a-f0-9]{40}","sourceManifestSha256":"[a-f0-9]{64}","baselineManifestSha256":"[a-f0-9]{64}","legacyImage":"[a-zA-Z0-9._@:/-]+","legacySourceSha":"[a-f0-9]{40}"\}$'
+  [[ "$line" =~ $record_pattern ]] || fail "marketing_retirement_record_invalid"
+
+  MARKETING_RETIREMENT_SOURCE_SCHEMA="$(sed -E 's/^.*"sourceReleaseSchema":"([12])".*$/\1/' <<<"$line")"
+  MARKETING_RETIREMENT_SOURCE_RELEASE_SHA="$(sed -E 's/^.*"sourceReleaseSha":"([a-f0-9]{40})".*$/\1/' <<<"$line")"
+  MARKETING_RETIREMENT_SOURCE_MANIFEST_SHA256="$(sed -E 's/^.*"sourceManifestSha256":"([a-f0-9]{64})".*$/\1/' <<<"$line")"
+  MARKETING_RETIREMENT_BASELINE_MANIFEST_SHA256="$(sed -E 's/^.*"baselineManifestSha256":"([a-f0-9]{64})".*$/\1/' <<<"$line")"
+  MARKETING_RETIREMENT_LEGACY_IMAGE="$(sed -E 's/^.*"legacyImage":"([^"]+)".*$/\1/' <<<"$line")"
+  MARKETING_RETIREMENT_LEGACY_SOURCE_SHA="$(sed -E 's/^.*"legacySourceSha":"([a-f0-9]{40})".*$/\1/' <<<"$line")"
+  require_release_sha "$MARKETING_RETIREMENT_SOURCE_RELEASE_SHA"
+  require_release_sha "$MARKETING_RETIREMENT_LEGACY_SOURCE_SHA"
+  require_digest_image "$MARKETING_RETIREMENT_LEGACY_IMAGE"
+}
+
+legacy_release_manifest_value() {
+  local manifest="$1"
+  local key="$2"
+  local -a values=()
+  [[ "$key" =~ ^[A-Z][A-Z0-9_]*$ ]] || fail "legacy_manifest_key_invalid"
+  mapfile -t values < <(sed -n "s/^${key}=//p" "$manifest")
+  [[ "${#values[@]}" -eq 1 && -n "${values[0]}" && "${values[0]}" != *$'\r'* ]] ||
+    fail "legacy_manifest_value_invalid"
+  printf '%s' "${values[0]}"
+}
+
+validate_legacy_marketing_cutover_source() {
+  local release_directory="$1"
+  local manifest="$release_directory/release.env"
+  local actual_manifest_sha256
+  local legacy_schema
+  local legacy_release_sha
+  local legacy_image
+  local legacy_source_sha
+  [[ -n "$MARKETING_RETIREMENT_SOURCE_RELEASE_SHA" ]] ||
+    fail "marketing_retirement_record_not_loaded"
+  [[ -d "$release_directory" && ! -L "$release_directory" ]] ||
+    fail "legacy_release_directory_invalid"
+  [[ "$(basename -- "$release_directory")" == "$MARKETING_RETIREMENT_SOURCE_RELEASE_SHA" ]] ||
+    fail "marketing_retirement_source_release_mismatch"
+  validate_release_integrity "$release_directory" legacy-current
+  validate_release_manifest_checksum "$manifest"
+  actual_manifest_sha256="$(sha256sum -- "$manifest" | awk '{print $1}')"
+  [[ "$actual_manifest_sha256" == "$MARKETING_RETIREMENT_SOURCE_MANIFEST_SHA256" ]] ||
+    fail "marketing_retirement_source_manifest_mismatch"
+
+  legacy_schema="$(legacy_release_manifest_value "$manifest" RELEASE_SCHEMA)"
+  legacy_release_sha="$(legacy_release_manifest_value "$manifest" RELEASE_SHA)"
+  legacy_image="$(legacy_release_manifest_value "$manifest" MARKETING_WORKER_IMAGE)"
+  [[ "$legacy_schema" == "$MARKETING_RETIREMENT_SOURCE_SCHEMA" ]] ||
+    fail "marketing_retirement_source_schema_mismatch"
+  [[ "$legacy_release_sha" == "$MARKETING_RETIREMENT_SOURCE_RELEASE_SHA" ]] ||
+    fail "marketing_retirement_source_release_mismatch"
+  [[ "$legacy_image" == "$MARKETING_RETIREMENT_LEGACY_IMAGE" ]] ||
+    fail "marketing_retirement_legacy_image_mismatch"
+  if [[ "$legacy_schema" == "2" ]]; then
+    legacy_source_sha="$(legacy_release_manifest_value "$manifest" MARKETING_WORKER_SOURCE_SHA)"
+  else
+    legacy_source_sha="$legacy_release_sha"
+  fi
+  [[ "$legacy_source_sha" == "$MARKETING_RETIREMENT_LEGACY_SOURCE_SHA" ]] ||
+    fail "marketing_retirement_legacy_source_mismatch"
+}
+
+retire_legacy_marketing_worker() {
+  local release_directory="$1"
+  local running_image
+  local -a container_ids=()
+  local -a legacy_compose=(
+    docker compose -p brand-pilot
+    -f "$release_directory/compose.production.yml"
+    --env-file "$release_directory/release.env"
+    --profile marketing-worker-1
+  )
+  validate_legacy_marketing_cutover_source "$release_directory"
+  "${legacy_compose[@]}" config --quiet >/dev/null ||
+    fail "marketing_retirement_compose_invalid"
+  mapfile -t container_ids < <("${legacy_compose[@]}" ps -a -q marketing-worker-1)
+  if [[ "${#container_ids[@]}" -eq 0 ]]; then
+    printf '%s\n' "marketing_worker_retirement=already_absent"
+    return 0
+  fi
+  [[ "${#container_ids[@]}" -eq 1 && "${container_ids[0]}" =~ ^[0-9a-f]{12,64}$ ]] ||
+    fail "marketing_retirement_container_identity_invalid"
+  running_image="$(docker inspect --format '{{.Config.Image}}' "${container_ids[0]}")" ||
+    fail "marketing_retirement_container_inspect_failed"
+  [[ "$running_image" == "$MARKETING_RETIREMENT_LEGACY_IMAGE" ]] ||
+    fail "marketing_retirement_running_image_mismatch"
+  "${legacy_compose[@]}" stop --timeout 30 marketing-worker-1 >/dev/null ||
+    fail "marketing_retirement_stop_failed"
+  "${legacy_compose[@]}" rm -f marketing-worker-1 >/dev/null ||
+    fail "marketing_retirement_remove_failed"
+  mapfile -t container_ids < <("${legacy_compose[@]}" ps -a -q marketing-worker-1)
+  [[ "${#container_ids[@]}" -eq 0 ]] || fail "marketing_retirement_remove_unverified"
+  printf '%s\n' "marketing_worker_retirement=ok"
+}
+
 readonly -a WORKER_IMAGE_KEYS=(
+  DM_WORKER_IMAGE
+  WIKI_WORKER_IMAGE
+  CONTENT_PROPOSAL_WORKER_IMAGE
+  BRAND_INTELLIGENCE_WORKER_IMAGE
+  SUBJECT_ANALYSIS_WORKER_IMAGE
+  IMAGE_WORKER_IMAGE
+  CARD_NEWS_WORKER_IMAGE
+  BLOG_WORKER_IMAGE
+  REEL_WORKER_IMAGE
+)
+readonly -a RELEASE_IMAGE_KEYS=(API_IMAGE "${WORKER_IMAGE_KEYS[@]}")
+readonly -a LEGACY_WORKER_IMAGE_KEYS=(
   DM_WORKER_IMAGE
   WIKI_WORKER_IMAGE
   CONTENT_PROPOSAL_WORKER_IMAGE
@@ -118,7 +244,7 @@ readonly -a WORKER_IMAGE_KEYS=(
   BLOG_WORKER_IMAGE
   MARKETING_WORKER_IMAGE
 )
-readonly -a RELEASE_IMAGE_KEYS=(API_IMAGE "${WORKER_IMAGE_KEYS[@]}")
+readonly -a LEGACY_RELEASE_IMAGE_KEYS=(API_IMAGE "${LEGACY_WORKER_IMAGE_KEYS[@]}")
 readonly LEGACY_RELEASE_SHA="02aa2bcae3f66d494f16a26bec9055cac17464f9"
 
 component_manifest_prefix() {
@@ -131,7 +257,8 @@ release_image_source_revision() {
   local image_key="$1"
   local prefix
   prefix="$(component_manifest_prefix "$image_key")"
-  if [[ "${RELEASE_MANIFEST[RELEASE_SCHEMA]}" == "2" ]]; then
+  if [[ "${RELEASE_MANIFEST[RELEASE_SCHEMA]}" == "2" ||
+    "${RELEASE_MANIFEST[RELEASE_SCHEMA]}" == "3" ]]; then
     printf '%s' "${RELEASE_MANIFEST[${prefix}_SOURCE_SHA]}"
   else
     printf '%s' "${RELEASE_MANIFEST[RELEASE_SHA]}"
@@ -142,7 +269,8 @@ release_image_changed() {
   local image_key="$1"
   local prefix
   prefix="$(component_manifest_prefix "$image_key")"
-  if [[ "${RELEASE_MANIFEST[RELEASE_SCHEMA]}" == "2" ]]; then
+  if [[ "${RELEASE_MANIFEST[RELEASE_SCHEMA]}" == "2" ||
+    "${RELEASE_MANIFEST[RELEASE_SCHEMA]}" == "3" ]]; then
     [[ "${RELEASE_MANIFEST[${prefix}_CHANGED]}" == "true" ]]
   else
     return 0
@@ -242,23 +370,49 @@ declare -gA RELEASE_MANIFEST=()
 
 parse_release_manifest() {
   local manifest="$1"
+  local validation_role="${2:-candidate}"
   local line
   local key
   local value
   local required_key
-  local optional_image_key
+  local release_image_key
+  local prefix
+  local source_key
+  local changed_key
+  local -a role_image_keys=()
+  local -A allowed_keys=()
   [[ -f "$manifest" ]] || fail "release_manifest_missing"
+  case "$validation_role" in
+    candidate) role_image_keys=("${RELEASE_IMAGE_KEYS[@]}") ;;
+    legacy-current) role_image_keys=("${LEGACY_RELEASE_IMAGE_KEYS[@]}") ;;
+    *) fail "release_validation_role_invalid" ;;
+  esac
+  for key in RELEASE_SCHEMA RELEASE_SHA CADDY_IMAGE CANARY_HOST PRIMARY_HOST ACME_EMAIL API_ENV_FILE; do
+    allowed_keys["$key"]=1
+  done
+  if [[ "$validation_role" == "candidate" ]]; then
+    allowed_keys[MARKETING_RETIREMENT_SHA256]=1
+  fi
+  for release_image_key in "${role_image_keys[@]}"; do
+    prefix="$(component_manifest_prefix "$release_image_key")"
+    allowed_keys["$release_image_key"]=1
+    allowed_keys["${prefix}_SOURCE_SHA"]=1
+    allowed_keys["${prefix}_CHANGED"]=1
+  done
   RELEASE_MANIFEST=()
+  MARKETING_RETIREMENT_SOURCE_SCHEMA=""
+  MARKETING_RETIREMENT_SOURCE_RELEASE_SHA=""
+  MARKETING_RETIREMENT_SOURCE_MANIFEST_SHA256=""
+  MARKETING_RETIREMENT_BASELINE_MANIFEST_SHA256=""
+  MARKETING_RETIREMENT_LEGACY_IMAGE=""
+  MARKETING_RETIREMENT_LEGACY_SOURCE_SHA=""
   while IFS= read -r line || [[ -n "$line" ]]; do
     [[ -z "$line" ]] && continue
     [[ "$line" != *$'\r'* ]] || fail "manifest_malformed_line"
     [[ "$line" =~ ^([A-Z][A-Z0-9_]*)=(.*)$ ]] || fail "manifest_malformed_line"
     key="${BASH_REMATCH[1]}"
     value="${BASH_REMATCH[2]}"
-    case "$key" in
-      RELEASE_SCHEMA|RELEASE_SHA|API_IMAGE|API_SOURCE_SHA|API_CHANGED|DM_WORKER_IMAGE|DM_WORKER_SOURCE_SHA|DM_WORKER_CHANGED|WIKI_WORKER_IMAGE|WIKI_WORKER_SOURCE_SHA|WIKI_WORKER_CHANGED|CONTENT_PROPOSAL_WORKER_IMAGE|CONTENT_PROPOSAL_WORKER_SOURCE_SHA|CONTENT_PROPOSAL_WORKER_CHANGED|BRAND_INTELLIGENCE_WORKER_IMAGE|BRAND_INTELLIGENCE_WORKER_SOURCE_SHA|BRAND_INTELLIGENCE_WORKER_CHANGED|SUBJECT_ANALYSIS_WORKER_IMAGE|SUBJECT_ANALYSIS_WORKER_SOURCE_SHA|SUBJECT_ANALYSIS_WORKER_CHANGED|IMAGE_WORKER_IMAGE|IMAGE_WORKER_SOURCE_SHA|IMAGE_WORKER_CHANGED|CARD_NEWS_WORKER_IMAGE|CARD_NEWS_WORKER_SOURCE_SHA|CARD_NEWS_WORKER_CHANGED|BLOG_WORKER_IMAGE|BLOG_WORKER_SOURCE_SHA|BLOG_WORKER_CHANGED|MARKETING_WORKER_IMAGE|MARKETING_WORKER_SOURCE_SHA|MARKETING_WORKER_CHANGED|CADDY_IMAGE|CANARY_HOST|PRIMARY_HOST|ACME_EMAIL|API_ENV_FILE) ;;
-      *) fail "manifest_unknown_key" ;;
-    esac
+    [[ -v "allowed_keys[$key]" ]] || fail "manifest_unknown_key"
     [[ ! -v "RELEASE_MANIFEST[$key]" ]] || fail "manifest_duplicate_key"
     [[ -n "$value" ]] || fail "manifest_value_missing"
     RELEASE_MANIFEST["$key"]="$value"
@@ -270,19 +424,32 @@ parse_release_manifest() {
     [[ -v "RELEASE_MANIFEST[$required_key]" ]] || fail "manifest_required_key_missing"
   done
 
-  [[ "${RELEASE_MANIFEST[RELEASE_SCHEMA]}" == "1" ||
-    "${RELEASE_MANIFEST[RELEASE_SCHEMA]}" == "2" ]] || fail "release_schema_unsupported"
+  if [[ "$validation_role" == "candidate" ]]; then
+    [[ "${RELEASE_MANIFEST[RELEASE_SCHEMA]}" == "3" ]] || fail "candidate_release_schema_required"
+  else
+    [[ "${RELEASE_MANIFEST[RELEASE_SCHEMA]}" == "1" ||
+      "${RELEASE_MANIFEST[RELEASE_SCHEMA]}" == "2" ]] || fail "legacy_release_schema_required"
+  fi
   require_release_sha "${RELEASE_MANIFEST[RELEASE_SHA]}"
-  require_digest_image "${RELEASE_MANIFEST[API_IMAGE]}"
-  for optional_image_key in "${WORKER_IMAGE_KEYS[@]}"; do
-    if [[ -v "RELEASE_MANIFEST[$optional_image_key]" ]]; then
-      require_digest_image "${RELEASE_MANIFEST[$optional_image_key]}"
-    fi
+  for release_image_key in "${role_image_keys[@]}"; do
+    [[ -v "RELEASE_MANIFEST[$release_image_key]" ]] || fail "component_image_missing"
+    require_digest_image "${RELEASE_MANIFEST[$release_image_key]}"
   done
   require_digest_image "${RELEASE_MANIFEST[CADDY_IMAGE]}"
-  if [[ "${RELEASE_MANIFEST[RELEASE_SCHEMA]}" == "2" ]]; then
-    local release_image_key prefix source_key changed_key
-    for release_image_key in "${RELEASE_IMAGE_KEYS[@]}"; do
+  if [[ -v "RELEASE_MANIFEST[MARKETING_RETIREMENT_SHA256]" ]]; then
+    local retirement_file retirement_checksum
+    [[ "${RELEASE_MANIFEST[MARKETING_RETIREMENT_SHA256]}" =~ ^[a-f0-9]{64}$ ]] ||
+      fail "marketing_retirement_checksum_invalid"
+    retirement_file="$(dirname -- "$manifest")/marketing-worker-retirement.json"
+    [[ -f "$retirement_file" && ! -L "$retirement_file" ]] ||
+      fail "marketing_retirement_record_missing"
+    retirement_checksum="$(sha256sum -- "$retirement_file" | awk '{print $1}')"
+    [[ "$retirement_checksum" == "${RELEASE_MANIFEST[MARKETING_RETIREMENT_SHA256]}" ]] ||
+      fail "marketing_retirement_checksum_mismatch"
+    validate_marketing_retirement_record "$retirement_file"
+  fi
+  if [[ "${RELEASE_MANIFEST[RELEASE_SCHEMA]}" == "2" || "$validation_role" == "candidate" ]]; then
+    for release_image_key in "${role_image_keys[@]}"; do
       prefix="$(component_manifest_prefix "$release_image_key")"
       source_key="${prefix}_SOURCE_SHA"
       changed_key="${prefix}_CHANGED"
@@ -297,6 +464,13 @@ parse_release_manifest() {
           fail "component_source_revision_mismatch"
       fi
     done
+  else
+    for release_image_key in "${role_image_keys[@]}"; do
+      prefix="$(component_manifest_prefix "$release_image_key")"
+      [[ ! -v "RELEASE_MANIFEST[${prefix}_SOURCE_SHA]" &&
+        ! -v "RELEASE_MANIFEST[${prefix}_CHANGED]" ]] ||
+        fail "legacy_schema1_provenance_forbidden"
+    done
   fi
   require_hostname "${RELEASE_MANIFEST[CANARY_HOST]}"
   require_hostname "${RELEASE_MANIFEST[PRIMARY_HOST]}"
@@ -308,7 +482,7 @@ parse_release_manifest() {
     fail "manifest_api_env_file_invalid"
 }
 
-validate_release_manifest() {
+validate_release_manifest_checksum() {
   local manifest="$1"
   local checksum_file="${manifest}.sha256"
   local checksum_line
@@ -325,7 +499,13 @@ validate_release_manifest() {
   expected_checksum="${BASH_REMATCH[1]}"
   actual_checksum="$(sha256sum -- "$manifest" | awk '{print $1}')"
   [[ "$actual_checksum" == "$expected_checksum" ]] || fail "release_checksum_mismatch"
-  parse_release_manifest "$manifest"
+}
+
+validate_release_manifest() {
+  local manifest="$1"
+  local validation_role="${2:-candidate}"
+  validate_release_manifest_checksum "$manifest"
+  parse_release_manifest "$manifest" "$validation_role"
 }
 
 validate_release_directory() {
@@ -333,7 +513,7 @@ validate_release_directory() {
   local validation_role="${2:-candidate}"
   [[ -d "$release_directory" && ! -L "$release_directory" ]] || fail "release_directory_invalid"
   validate_release_integrity "$release_directory" "$validation_role"
-  validate_release_manifest "$release_directory/release.env"
+  validate_release_manifest "$release_directory/release.env" "$validation_role"
   [[ "$(basename -- "$release_directory")" == "${RELEASE_MANIFEST[RELEASE_SHA]}" ]] ||
     fail "release_directory_sha_mismatch"
 }
@@ -345,10 +525,22 @@ validate_state_release_directory() {
   local release_manifest="$root/releases/$release_sha/release.env"
   require_release_sha "$release_sha"
   if [[ "$release_sha" == "$LEGACY_RELEASE_SHA" ]] ||
-     [[ -f "$release_manifest" && "$(grep -Ec '^RELEASE_SCHEMA=1$' "$release_manifest")" == "1" ]]; then
+     [[ -f "$release_manifest" && "$(grep -Ec '^RELEASE_SCHEMA=[12]$' "$release_manifest")" == "1" ]]; then
     validation_role="legacy-current"
   fi
   validate_release_directory "$root/releases/$release_sha" "$validation_role"
+}
+
+validate_normal_rollback_target() {
+  local root="$1"
+  local release_sha="$2"
+  local release_directory="$root/releases/$release_sha"
+  local manifest="$release_directory/release.env"
+  require_release_sha "$release_sha"
+  if [[ -f "$manifest" ]] && grep -Eq '^RELEASE_SCHEMA=[12]$' "$manifest"; then
+    fail "legacy_release_rollback_forbidden"
+  fi
+  validate_release_directory "$release_directory" candidate
 }
 
 release_file_specs() {
@@ -366,14 +558,27 @@ release_file_specs() {
     "755 scripts/verify-canary.sh" \
     "755 scripts/promote.sh" \
     "755 scripts/rollback.sh"
+  if [[ -f "$release_directory/release.env" ]] &&
+     grep -Eq '^MARKETING_RETIREMENT_SHA256=[a-f0-9]{64}$' "$release_directory/release.env"; then
+    printf '%s\n' "400 marketing-worker-retirement.json"
+  fi
   if [[ "$validation_role" != "legacy-current" ]]; then
     printf '%s\n' \
       "755 scripts/rollout-workers.sh" \
       "755 scripts/backup-state.sh" \
-      "755 scripts/restore-state.sh"
+      "755 scripts/restore-state.sh" \
+      "755 scripts/ai-content-cutover.sh" \
+      "755 scripts/verify-ai-content-cutover.sh" \
+      "755 scripts/stage-ai-content-release.sh" \
+      "755 scripts/preflight-ai-content.sh" \
+      "755 scripts/rollout-ai-content-cutover.sh" \
+      "755 scripts/collect-ai-content-backend-evidence.sh"
   else
     local optional_path
-    for optional_path in scripts/rollout-workers.sh scripts/backup-state.sh scripts/restore-state.sh; do
+    for optional_path in scripts/rollout-workers.sh scripts/backup-state.sh scripts/restore-state.sh \
+      scripts/ai-content-cutover.sh scripts/verify-ai-content-cutover.sh \
+      scripts/stage-ai-content-release.sh scripts/preflight-ai-content.sh \
+      scripts/rollout-ai-content-cutover.sh scripts/collect-ai-content-backend-evidence.sh; do
       if [[ -f "$release_directory/release-integrity.sha256" ]] &&
          grep -Eq "^[a-f0-9]{64}  755  ${optional_path}$" "$release_directory/release-integrity.sha256"; then
         printf '755 %s\n' "$optional_path"
@@ -440,6 +645,263 @@ require_secure_state_file() {
   [[ -f "$path" && ! -L "$path" ]] || fail "state_file_invalid"
   [[ "$(stat -c '%a' -- "$path")" == "600" ]] || fail "state_file_mode_invalid"
   [[ "$(stat -c '%U' -- "$path")" == "bpdeploy" ]] || fail "state_file_owner_invalid"
+}
+
+require_secure_state_directory() {
+  local path="$1"
+  [[ -d "$path" && ! -L "$path" ]] || fail "state_directory_invalid"
+  [[ "$(stat -c '%a' -- "$path")" == "700" ]] || fail "state_directory_mode_invalid"
+  [[ "$(stat -c '%U' -- "$path")" == "bpdeploy" ]] || fail "state_directory_owner_invalid"
+}
+
+resolve_ai_content_floor_probe_image() {
+  local root="$1"
+  local script_release_directory
+  local state_file
+  local release_sha=""
+  local -a state_files=("$root/state/candidate" "$root/state/current")
+
+  script_release_directory="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
+  if [[ -f "$script_release_directory/release.env" ]]; then
+    validate_release_directory "$script_release_directory" candidate
+    verify_release_image_revision \
+      "${RELEASE_MANIFEST[API_IMAGE]}" "$(release_image_source_revision API_IMAGE)"
+    printf '%s\n' "${RELEASE_MANIFEST[API_IMAGE]}"
+    return 0
+  fi
+
+  for state_file in "${state_files[@]}"; do
+    if load_optional_state_sha "$state_file" release_sha; then
+      validate_state_release_directory "$root" "$release_sha"
+      verify_release_image_revision \
+        "${RELEASE_MANIFEST[API_IMAGE]}" "$(release_image_source_revision API_IMAGE)"
+      printf '%s\n' "${RELEASE_MANIFEST[API_IMAGE]}"
+      return 0
+    fi
+  done
+  return 1
+}
+
+resolve_ai_content_floor_database_input() {
+  local root="$1"
+  local output_file_variable="$2"
+  local output_kind_variable="$3"
+  local owner="${AI_CONTENT_CUTOVER_FILE_OWNER:-bpdeploy}"
+  local operator_file="${AI_CONTENT_CUTOVER_OPERATOR_DATABASE_URL_FILE:-$root/shared/secrets/ai-content-operator-database-url}"
+  local api_env_file="$root/shared/env/api.env"
+
+  if [[ -e "$operator_file" || -L "$operator_file" ]]; then
+    require_file_mode_600 "$operator_file" "$owner"
+    printf -v "$output_file_variable" '%s' "$operator_file"
+    printf -v "$output_kind_variable" '%s' "operator"
+    return 0
+  fi
+  require_file_mode_600 "$api_env_file" "$owner"
+  printf -v "$output_file_variable" '%s' "$api_env_file"
+  printf -v "$output_kind_variable" '%s' "env"
+}
+
+resolve_ai_content_floor_tls_environment() {
+  local root="$1"
+  local owner="${AI_CONTENT_CUTOVER_FILE_OWNER:-bpdeploy}"
+  local env_file="$root/shared/env/api.env"
+  local line ca_line="" ca_count=0
+  require_file_mode_600 "$env_file" "$owner"
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    if [[ "$line" == DB_SSL_CA_BASE64=* ]]; then
+      ca_count="$((ca_count + 1))"
+      [[ "$line" =~ ^DB_SSL_CA_BASE64=[A-Za-z0-9+/]+={0,2}$ ]] ||
+        fail "ai_content_database_ca_invalid"
+      ca_line="$line"
+    fi
+  done < "$env_file"
+  [[ "$ca_count" == "1" ]] || fail "ai_content_database_ca_invalid"
+  printf '%s\0' --env "$ca_line"
+}
+
+probe_ai_content_075_marker() {
+  local root="$1"
+  local database_input=""
+  local database_input_kind=""
+  local api_image
+  local output
+  local -a tls_environment=()
+  require_command docker
+  require_command id
+  resolve_ai_content_floor_database_input \
+    "$root" database_input database_input_kind
+  mapfile -d '' -t tls_environment < <(resolve_ai_content_floor_tls_environment "$root")
+  api_image="$(resolve_ai_content_floor_probe_image "$root")" || return 1
+  if ! output="$(docker run --rm --pull never --read-only \
+    --user "$(id -u):$(id -g)" --cap-drop ALL --security-opt no-new-privileges \
+    --tmpfs /tmp:rw,nosuid,nodev,noexec,size=16m "${tls_environment[@]}" --entrypoint node \
+    --mount "type=bind,src=$database_input,dst=/run/secrets/ai-content-floor-database-input,readonly" \
+    "$api_image" /app/scripts/ai-content-cutover-floor-probe.mjs \
+    --input-file /run/secrets/ai-content-floor-database-input \
+    --input-kind "$database_input_kind")"; then
+    return 1
+  fi
+  [[ "$output" == "true" || "$output" == "false" ]] || return 1
+  printf '%s\n' "$output"
+}
+
+ai_content_cutover_marker_present() {
+  local marker
+  if ! marker="$(probe_ai_content_075_marker "$1")"; then
+    return 2
+  fi
+  [[ "$marker" == "true" ]] && return 0
+  [[ "$marker" == "false" ]] && return 1
+  return 2
+}
+
+declare -g AI_CONTENT_COMPLETED_EVIDENCE_FILE=""
+
+find_ai_content_completed_evidence() {
+  local root="$1"
+  local base="$root/state/ai-content-cutovers"
+  local nullglob_was_set=false
+  local -a evidence_files=()
+  AI_CONTENT_COMPLETED_EVIDENCE_FILE=""
+  if [[ ! -e "$base" && ! -L "$base" ]]; then
+    return 1
+  fi
+  require_secure_state_directory "$base"
+  if shopt -q nullglob; then
+    nullglob_was_set=true
+  fi
+  shopt -s nullglob
+  evidence_files=("$base"/*/finalize-post-075/completed/evidence.json)
+  if [[ "$nullglob_was_set" == "false" ]]; then
+    shopt -u nullglob
+  fi
+  [[ "${#evidence_files[@]}" -le 1 ]] || fail "ai_content_cutover_completed_evidence_ambiguous"
+  [[ "${#evidence_files[@]}" -eq 1 ]] || return 1
+  AI_CONTENT_COMPLETED_EVIDENCE_FILE="${evidence_files[0]}"
+}
+
+query_ai_content_cutover_status() {
+  local root="$1"
+  local cutover_id="$2"
+  local operator_database_file="${AI_CONTENT_CUTOVER_OPERATOR_DATABASE_URL_FILE:-$root/shared/secrets/ai-content-operator-database-url}"
+  local current_sha=""
+  local api_image
+  local output
+  local -a tls_environment=()
+  require_command docker
+  require_command id
+  require_file_mode_600 "$operator_database_file" "${AI_CONTENT_CUTOVER_FILE_OWNER:-bpdeploy}"
+  load_required_state_sha "$root/state/current" current_sha
+  validate_state_release_directory "$root" "$current_sha"
+  api_image="${RELEASE_MANIFEST[API_IMAGE]}"
+  verify_release_image_revision "$api_image" "$(release_image_source_revision API_IMAGE)"
+  mapfile -d '' -t tls_environment < <(resolve_ai_content_floor_tls_environment "$root")
+  if ! output="$(docker run --rm --pull never --read-only \
+    --user "$(id -u):$(id -g)" --cap-drop ALL --security-opt no-new-privileges \
+    --tmpfs /tmp:rw,nosuid,nodev,noexec,size=16m "${tls_environment[@]}" --entrypoint node \
+    --mount "type=bind,src=$operator_database_file,dst=/run/secrets/operator-database-url,readonly" \
+    "$api_image" /app/scripts/ai-content-cutover-control.mjs --status \
+    --database-url-file /run/secrets/operator-database-url --cutover-id "$cutover_id")"; then
+    return 1
+  fi
+  [[ -n "$output" && "$output" != *$'\n'* ]] || return 1
+  printf '%s\n' "$output"
+}
+
+validate_ai_content_completed_floor() {
+  local root="$1"
+  local evidence_file
+  local completed_directory
+  local finalize_directory
+  local cutover_directory
+  local cutover_id
+  local evidence_line
+  local evidence_timestamp
+  local evidence_cleanup_sha
+  local current_sha=""
+  local database_status
+  local database_timestamp
+  local database_cleanup_sha
+  local evidence_pattern
+  local database_pattern
+
+  find_ai_content_completed_evidence "$root" || return 1
+  evidence_file="$AI_CONTENT_COMPLETED_EVIDENCE_FILE"
+  completed_directory="$(dirname -- "$evidence_file")"
+  finalize_directory="$(dirname -- "$completed_directory")"
+  cutover_directory="$(dirname -- "$finalize_directory")"
+  cutover_id="$(basename -- "$cutover_directory")"
+  [[ "$cutover_id" =~ ^[a-f0-9]{8}-[a-f0-9]{4}-[1-5][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$ ]] ||
+    fail "ai_content_cutover_completed_evidence_invalid"
+  require_secure_state_directory "$cutover_directory"
+  require_secure_state_directory "$finalize_directory"
+  require_secure_state_directory "$completed_directory"
+  require_secure_state_file "$evidence_file"
+  evidence_line="$(<"$evidence_file")"
+  [[ -n "$evidence_line" && "$evidence_line" != *$'\n'* && "$evidence_line" != *$'\r'* ]] ||
+    fail "ai_content_cutover_completed_evidence_invalid"
+  evidence_pattern='^\{"cleanupCredentialRevokedAt":"([0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{3}Z)","cleanupRevocationEvidenceSha256":"([a-f0-9]{64})","cutoverId":"([a-f0-9-]{36})","eventSha256":"[a-f0-9]{64}","evidenceSha256":"[a-f0-9]{64}","maintenanceEnabled":false,"markerPresent":true,"status":"completed"\}$'
+  [[ "$evidence_line" =~ $evidence_pattern ]] || fail "ai_content_cutover_completed_evidence_invalid"
+  evidence_timestamp="${BASH_REMATCH[1]}"
+  evidence_cleanup_sha="${BASH_REMATCH[2]}"
+  [[ "${BASH_REMATCH[3]}" == "$cutover_id" ]] || fail "ai_content_cutover_completed_evidence_invalid"
+
+  load_required_state_sha "$root/state/current" current_sha
+  validate_state_release_directory "$root" "$current_sha"
+  [[ "${RELEASE_MANIFEST[RELEASE_SCHEMA]}" == "3" ]] ||
+    fail "ai_content_cutover_completed_current_schema_invalid"
+
+  if ! database_status="$(query_ai_content_cutover_status "$root" "$cutover_id")"; then
+    fail "ai_content_cutover_floor_query_failed"
+  fi
+  database_pattern='^\{"activeCutoverCount":0,"activeCutoverId":null,"cleanupCredentialRevokedAt":"([0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{3}Z)","cleanupRevocationEvidenceSha256":"([a-f0-9]{64})","cutoverId":"([a-f0-9-]{36})","maintenanceCutoverId":null,"maintenanceEnabled":false,"markerPresent":true,"status":"completed"\}$'
+  [[ "$database_status" =~ $database_pattern ]] ||
+    fail "ai_content_cutover_completed_database_status_invalid"
+  database_timestamp="${BASH_REMATCH[1]}"
+  database_cleanup_sha="${BASH_REMATCH[2]}"
+  [[ "${BASH_REMATCH[3]}" == "$cutover_id" &&
+    "$database_timestamp" == "$evidence_timestamp" &&
+    "$database_cleanup_sha" == "$evidence_cleanup_sha" ]] ||
+    fail "ai_content_cutover_completed_database_status_invalid"
+}
+
+enforce_ai_content_roll_forward_floor() {
+  local root="$1"
+  local active_file="$root/state/ai-content-cutover-id"
+  local marker_status
+  local active_cutover_id=""
+
+  if ai_content_cutover_marker_present "$root"; then
+    marker_status=0
+  else
+    marker_status="$?"
+  fi
+  [[ "$marker_status" -eq 0 || "$marker_status" -eq 1 ]] ||
+    fail "ai_content_cutover_floor_query_failed"
+
+  if [[ -e "$active_file" || -L "$active_file" ]]; then
+    require_secure_state_file "$active_file"
+    active_cutover_id="$(<"$active_file")"
+    [[ "$active_cutover_id" =~ ^[a-f0-9]{8}-[a-f0-9]{4}-[1-5][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$ ]] ||
+      fail "ai_content_cutover_active_id_invalid"
+  fi
+
+  if [[ "$marker_status" -eq 0 && -n "$active_cutover_id" ]]; then
+    fail "ai_content_cutover_roll_forward_only"
+  fi
+  if [[ "$marker_status" -eq 1 && -n "$active_cutover_id" ]]; then
+    fail "ai_content_cutover_abort_pre_marker_required"
+  fi
+  if [[ "$marker_status" -eq 1 ]]; then
+    if find_ai_content_completed_evidence "$root"; then
+      fail "ai_content_cutover_marker_status_invalid"
+    fi
+    return 0
+  fi
+  if validate_ai_content_completed_floor "$root"; then
+    return 0
+  fi
+  fail "ai_content_cutover_completed_evidence_required"
 }
 
 load_optional_state_sha() {
@@ -627,12 +1089,33 @@ reconcile_transition() {
   local restore_directory=""
   local -a restore_compose=()
 
+  local transition_retirement_source_sha=""
+  validate_state_release_directory "$root" "${TRANSITION_JOURNAL[TO_RELEASE]}"
+  target_canary_host="${RELEASE_MANIFEST[CANARY_HOST]}"
+  target_primary_host="${RELEASE_MANIFEST[PRIMARY_HOST]}"
+  if [[ -v "RELEASE_MANIFEST[MARKETING_RETIREMENT_SHA256]" ]]; then
+    transition_retirement_source_sha="$MARKETING_RETIREMENT_SOURCE_RELEASE_SHA"
+  fi
+
   if [[ "$from_current" != "NONE" ]]; then
-    validate_state_release_directory "$root" "$from_current"
-    current_api_image="${RELEASE_MANIFEST[API_IMAGE]}"
-    current_caddy_image="${RELEASE_MANIFEST[CADDY_IMAGE]}"
-    current_canary_host="${RELEASE_MANIFEST[CANARY_HOST]}"
-    current_primary_host="${RELEASE_MANIFEST[PRIMARY_HOST]}"
+    if [[ -n "$transition_retirement_source_sha" && "$from_current" == "$transition_retirement_source_sha" ]]; then
+      validate_state_release_directory "$root" "${TRANSITION_JOURNAL[TO_RELEASE]}"
+      validate_legacy_marketing_cutover_source "$root/releases/$from_current"
+      current_api_image="$(legacy_release_manifest_value "$root/releases/$from_current/release.env" API_IMAGE)"
+      current_caddy_image="$(legacy_release_manifest_value "$root/releases/$from_current/release.env" CADDY_IMAGE)"
+      current_canary_host="$(legacy_release_manifest_value "$root/releases/$from_current/release.env" CANARY_HOST)"
+      current_primary_host="$(legacy_release_manifest_value "$root/releases/$from_current/release.env" PRIMARY_HOST)"
+      require_digest_image "$current_api_image"
+      require_digest_image "$current_caddy_image"
+      require_hostname "$current_canary_host"
+      require_hostname "$current_primary_host"
+    else
+      validate_state_release_directory "$root" "$from_current"
+      current_api_image="${RELEASE_MANIFEST[API_IMAGE]}"
+      current_caddy_image="${RELEASE_MANIFEST[CADDY_IMAGE]}"
+      current_canary_host="${RELEASE_MANIFEST[CANARY_HOST]}"
+      current_primary_host="${RELEASE_MANIFEST[PRIMARY_HOST]}"
+    fi
   fi
   if [[ "$from_candidate" != "NONE" ]]; then
     validate_state_release_directory "$root" "$from_candidate"
@@ -642,7 +1125,12 @@ reconcile_transition() {
     candidate_primary_host="${RELEASE_MANIFEST[PRIMARY_HOST]}"
   fi
   if [[ "$from_previous" != "NONE" ]]; then
-    validate_state_release_directory "$root" "$from_previous"
+    if [[ -n "$transition_retirement_source_sha" && "$from_previous" == "$transition_retirement_source_sha" ]]; then
+      validate_state_release_directory "$root" "${TRANSITION_JOURNAL[TO_RELEASE]}"
+      validate_legacy_marketing_cutover_source "$root/releases/$from_previous"
+    else
+      validate_state_release_directory "$root" "$from_previous"
+    fi
   fi
   validate_state_release_directory "$root" "${TRANSITION_JOURNAL[TO_RELEASE]}"
   target_canary_host="${RELEASE_MANIFEST[CANARY_HOST]}"
@@ -738,6 +1226,7 @@ reconcile_transition() {
 }
 
 reconcile_transition_or_fail() {
+  enforce_ai_content_roll_forward_floor "$1"
   if ! (reconcile_transition "$@"); then
     printf 'error=recovery_failed\n' >&2
     exit 70

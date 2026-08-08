@@ -49,7 +49,23 @@ describe("buildPerformanceInsights", () => {
     expect(result.experiments[0]).toMatchObject({
       kind: "experiment",
       performanceSnapshotIds: ["1", "2", "3"],
+      evidenceVersion: expect.stringMatching(/^[0-9a-f]{64}$/),
     });
+  });
+
+  it("changes the evidence version when mutable authoritative evidence changes", () => {
+    const original = [snapshot("1", "24h", 100), snapshot("2", "72h", 250), snapshot("3", "7d", 600)];
+    const first = buildPerformanceInsights({ brandId, period: "30d", snapshots: original });
+    const second = buildPerformanceInsights({
+      brandId,
+      period: "30d",
+      snapshots: original.map((item, index) => index === 1
+        ? { ...item, rawMetrics: { likes: 99 }, updatedAt: "2026-07-29T03:00:00.000Z" }
+        : item),
+    });
+
+    expect(first.experiments[0]?.id).toMatch(/^[0-9a-f-]{36}$/);
+    expect(second.experiments[0]?.evidenceVersion).not.toBe(first.experiments[0]?.evidenceVersion);
   });
 
   it("reports insufficient data without presenting an improvement conclusion", () => {

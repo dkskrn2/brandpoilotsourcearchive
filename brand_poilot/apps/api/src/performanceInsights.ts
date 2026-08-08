@@ -1,9 +1,11 @@
 import type { Channel, PerformanceInsightsDto } from "./types.js";
+import { proposalSha256 } from "./aiContentProposalV2Service.js";
 
 export type PerformanceWindow = "24h" | "72h" | "7d";
 
 export interface PerformanceInsightSnapshot {
   id: string;
+  workspaceId?: string;
   brandId: string;
   publishQueueId: string;
   title: string;
@@ -14,11 +16,64 @@ export interface PerformanceInsightSnapshot {
   rawMetrics: Record<string, unknown>;
   contentFeatures: Record<string, unknown>;
   collectedAt: string;
+  updatedAt?: string;
+  publishedAt?: string | null;
+  contentHash?: string;
   externalUrl?: string | null;
 }
 
 const performanceWindows: readonly PerformanceWindow[] = ["24h", "72h", "7d"];
 const minimumSampleSize = 3;
+
+export const PERFORMANCE_EXPERIMENT_DEFINITION = Object.freeze({
+  id: "6f7772c4-7c03-4e2a-86f4-7c6bf3f65ef1",
+  version: "reuse-performing-pattern.v2",
+  title: "성과 패턴을 활용한 다음 구성안",
+  hypothesis: "관측된 메시지 구조를 새 주제에 적용하면 초기 노출을 개선할 수 있습니다.",
+  purpose: "informational" as const,
+  channelTargets: ["instagram"] as const,
+  outputFormats: ["card_news"] as const,
+});
+
+export function normalizePerformanceExternalUrl(value: string | null | undefined): string | null {
+  if (!value) return null;
+  try {
+    const url = new URL(value);
+    if (url.protocol !== "https:" || !url.hostname || url.username || url.password) return null;
+    url.hash = "";
+    return url.toString();
+  } catch {
+    return null;
+  }
+}
+
+export function performanceEvidenceProjection(snapshots: PerformanceInsightSnapshot[]) {
+  return snapshots
+    .filter((snapshot) => snapshot.exposureCount !== null && Number.isFinite(snapshot.exposureCount))
+    .map((snapshot) => ({
+      id: snapshot.id,
+      publishQueueId: snapshot.publishQueueId,
+      channel: snapshot.channel,
+      deliveryFormat: snapshot.deliveryFormat,
+      measurementWindow: snapshot.measurementWindow,
+      exposureCount: snapshot.exposureCount,
+      rawMetrics: snapshot.rawMetrics,
+      contentFeatures: snapshot.contentFeatures,
+      collectedAt: snapshot.collectedAt,
+      updatedAt: snapshot.updatedAt ?? snapshot.collectedAt,
+      publishedAt: snapshot.publishedAt ?? null,
+      externalUrl: normalizePerformanceExternalUrl(snapshot.externalUrl),
+      contentHash: snapshot.contentHash ?? null,
+    }))
+    .sort((left, right) => left.id.localeCompare(right.id));
+}
+
+export function performanceEvidenceVersion(snapshots: PerformanceInsightSnapshot[]): string {
+  return proposalSha256({
+    experimentDefinitionVersion: PERFORMANCE_EXPERIMENT_DEFINITION.version,
+    snapshots: performanceEvidenceProjection(snapshots),
+  });
+}
 
 export function buildPerformanceInsights(input: {
   brandId: string;
@@ -55,7 +110,7 @@ export function buildPerformanceInsights(input: {
         : null,
     };
   });
-  const evidenceSnapshotIds = measured.map((snapshot) => snapshot.id);
+  const evidenceSnapshotIds = measured.map((snapshot) => snapshot.id).sort();
   const strongestWindow = windows
     .filter((window) => window.averageExposure !== null)
     .sort((left, right) => (right.averageExposure ?? 0) - (left.averageExposure ?? 0))[0] ?? null;
@@ -116,14 +171,15 @@ export function buildPerformanceInsights(input: {
     }
   }
   const experiments: PerformanceInsightsDto["experiments"] = dataStatus === "sufficient" ? [{
-    id: "reuse-performing-pattern",
+    id: PERFORMANCE_EXPERIMENT_DEFINITION.id,
     kind: "experiment",
-    title: "성과 패턴을 활용한 다음 구성안",
-    hypothesis: "관측된 메시지 구조를 새 주제에 적용하면 초기 노출을 개선할 수 있습니다.",
-    contentFamily: "informational",
-    channelTargets: ["instagram"],
-    outputFormats: ["card_news"],
+    title: PERFORMANCE_EXPERIMENT_DEFINITION.title,
+    hypothesis: PERFORMANCE_EXPERIMENT_DEFINITION.hypothesis,
+    contentFamily: PERFORMANCE_EXPERIMENT_DEFINITION.purpose,
+    channelTargets: [...PERFORMANCE_EXPERIMENT_DEFINITION.channelTargets],
+    outputFormats: [...PERFORMANCE_EXPERIMENT_DEFINITION.outputFormats],
     performanceSnapshotIds: evidenceSnapshotIds,
+    evidenceVersion: performanceEvidenceVersion(measured),
   }] : [];
 
   const topContents = [...latestByQueue.values()]

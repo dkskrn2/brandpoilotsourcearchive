@@ -45,10 +45,9 @@ async function expectFailedWorkspaceCleanup(
 
 describe("blog production runtime", () => {
   it("emits production JavaScript and imports the shared runtime package", async () => {
-    const [packageJson, tsconfig, promptBuilder, worker] = await Promise.all([
+    const [packageJson, tsconfig, worker] = await Promise.all([
       read("../package.json"),
       read("../tsconfig.json"),
-      read("./promptBuilder.ts"),
       read("./worker.ts"),
     ]);
 
@@ -63,66 +62,9 @@ describe("blog production runtime", () => {
       outDir: "dist",
     });
     expect(JSON.parse(tsconfig).exclude).toContain("src/**/*.test.ts");
-    expect(promptBuilder).toContain('from "@brand-pilot/worker-runtime"');
-    expect(promptBuilder).not.toContain("brand-pilot-worker-runtime/src");
+    expect(worker).toContain('from "@brand-pilot/worker-runtime"');
+    expect(worker).not.toContain("brand-pilot-worker-runtime/src");
     expect(worker).toMatch(/path\.join\(os\.tmpdir\(\),\s*"brand-pilot-blog-"/);
-  });
-
-  it("runs Codex in the job workspace with a secret-free environment", async () => {
-    const runnerUrl = new URL("../scripts/run-codex-blog.mjs", import.meta.url).href;
-    const runner = await import(runnerUrl) as {
-      buildCodexArgs(outputDir: string): string[];
-      codexChildEnv(source: NodeJS.ProcessEnv): NodeJS.ProcessEnv;
-      codexSpawnOptions(outputDir: string, source: NodeJS.ProcessEnv): {
-        cwd: string;
-        env: NodeJS.ProcessEnv;
-        shell: boolean;
-      };
-    };
-    const outputDir = path.resolve("job-output");
-    const source = {
-      PATH: "/usr/bin",
-      CODEX_HOME: "/codex",
-      HOME: "/home/node",
-      LANG: "C.UTF-8",
-      WORKER_API_TOKEN: "worker-secret",
-      DATABASE_URL: "database-secret",
-      BLOB_READ_WRITE_TOKEN: "blob-secret",
-      OPENAI_API_KEY: "api-secret",
-    };
-
-    const args = runner.buildCodexArgs(outputDir);
-    expect(args).toEqual(expect.arrayContaining(["--strict-config", "-C", outputDir]));
-    expect(args).toContain("--ignore-user-config");
-    expect(args).not.toContain("--sandbox");
-    expect(args).not.toContain("danger-full-access");
-    expect(args).toEqual(expect.arrayContaining(["-c", 'default_permissions="worker"']));
-    expect(args).toEqual(expect.arrayContaining([
-      "-c",
-      'permissions.worker.filesystem={":minimal"="read","/codex"="deny","/codex/generated_images"="read",":workspace_roots"={"."="write"}}',
-    ]));
-    expect(args.join(" ")).not.toContain('permissions.worker.filesystem.":workspace_roots"');
-    expect(args).toEqual(expect.arrayContaining([
-      "-c",
-      "permissions.worker.network.enabled=false",
-    ]));
-    expect(args.join(" ")).toContain('":minimal"="read"');
-    expect(args.join(" ")).toContain('"/codex"="deny"');
-    expect(args.join(" ")).toContain('"/codex/generated_images"="read"');
-    expect(args.join(" ")).toContain("--enable image_generation");
-    expect(args.join(" ")).toContain("--enable shell_tool");
-    expect(args.join(" ")).toContain("--disable shell_snapshot");
-    expect(runner.codexChildEnv(source)).toEqual({
-      PATH: "/usr/bin",
-      CODEX_HOME: "/codex",
-      HOME: "/home/node",
-      LANG: "C.UTF-8",
-    });
-    expect(runner.codexSpawnOptions(outputDir, source)).toMatchObject({
-      cwd: outputDir,
-      shell: false,
-      env: runner.codexChildEnv(source),
-    });
   });
 
   it("runs the v3 HTML planner with an exact schema and no network, file, shell, or image tools", async () => {
@@ -132,7 +74,7 @@ describe("blog production runtime", () => {
     const prompt = runner.buildCodexPrompt("writer input");
     const schema = JSON.parse(await read("../scripts/blog-plan-v2.schema.json")) as Record<string, unknown>;
     expect(args.join(" ")).toContain("permissions.writer.network.enabled=false");
-    expect(args.join(" ")).toContain('permissions.writer.filesystem={":minimal"="read","/codex"="deny",":workspace_roots"={"."="deny"}}');
+    expect(args.join(" ")).toContain('permissions.writer.filesystem={":minimal"="read","/codex"="deny","/codex-accounts"="deny",":workspace_roots"={"."="deny"}}');
     for (const feature of ["shell_tool", "image_generation", "shell_snapshot"]) expect(args).toEqual(expect.arrayContaining(["--disable", feature]));
     expect(args.join(" ")).not.toContain("--search");
     expect(prompt).toContain("파일이나 웹을 조회하지 마세요");
@@ -193,10 +135,11 @@ describe("blog production runtime", () => {
     expect(dockerfile).toContain("ca-certificates");
     expect(dockerfile).toContain("bubblewrap");
     expect(dockerfile).toContain("@openai/codex@0.145.0");
-    expect(dockerfile).toContain("CODEX_HOME=/codex");
-    expect(dockerfile).toContain("run-codex-blog.mjs");
+    expect(dockerfile).toContain("CODEX_HOME=/codex-accounts/primary");
+    expect(dockerfile).toContain("CODEX_ACCOUNT_POOL_ROOT=/codex-accounts");
+    expect(dockerfile).not.toMatch(/COPY[^\n]*run-codex-blog\.mjs/);
     expect(dockerfile).toContain("run-codex-blog-v2-plan.mjs");
-    expect(dockerfile).toContain("blog-plan-v2.schema.json");
+    expect(dockerfile).toContain("content-contracts/generated");
     expect(dockerfile).toContain("blog-writer/SKILL.md");
     expect(dockerfile).toContain("workers/brand-pilot-blog-worker/dist/index.js");
     expect(dockerfile).toMatch(/^USER node$/m);

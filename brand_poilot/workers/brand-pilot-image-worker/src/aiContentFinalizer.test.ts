@@ -5,11 +5,21 @@ import type { AiContentPackageFinalizeJob, AiContentRenderedAsset } from "./aiCo
 
 const uid = (n: number) => `40000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 
-function finalInput(format: "card_news" | "blog" | "reel" | "marketing_content") {
+function finalInput(format: "card_news" | "blog" | "reel") {
   const count = format === "blog" ? null : 2;
   return {
     contractVersion: "content-generation-input.v3", generationId: uid(2),
     brandCore: { versionId: uid(10), companyOverview: "Overview", businessDescription: "Business", primaryCategory: "Food", detailedCategory: "Tea", primaryTarget: "Adults", differentiator: "Simple", coreAppeal: "Calm" },
+    brandRules: {
+      versionId: uid(11), version: 1,
+      content: {
+        contractVersion: "brand-rules.v1", requiredPhrases: [], forbiddenPhrases: [], exaggerationRules: [],
+        ctaRules: { defaultCta: "", allowed: [] }, channelRules: {},
+        designRules: { colors: [], fonts: [], notes: [], referenceImages: [] },
+        autoApprovalRules: { enabled: false, conditions: [] },
+      },
+      contentSha256: "b".repeat(64),
+    },
     subject: { kind: "topic_text", title: "Tea" }, contentInstruction: null, product: null,
     researchEvidence: { contractVersion: "research-evidence.v1", decision: "searched", reason: "required", queries: ["tea"], capturedAt: "2026-07-31T00:00:00Z", items: [{ id: uid(30), title: "Evidence", url: "https://evidence.example/tea", publisher: null, publishedAt: null, capturedAt: "2026-07-31T00:00:00Z", claimSummary: "Tea evidence", contentHash: "a".repeat(64) }] },
     references: { selected: [], brandStyleImages: [], avatarStyleImageId: null, attachments: [] },
@@ -25,7 +35,7 @@ function rendered(index: number): AiContentRenderedAsset {
   return { index, url: `https://blob.example/assets/${String(index).padStart(2, "0")}.png`, storagePath: `ai-content/${uid(5)}/${uid(2)}/${uid(3)}/assets/${String(index).padStart(2, "0")}.png`, mimeType: "image/png", width: 1080, height: 1080, checksum: createHash("sha256").update(bytes).digest("hex") };
 }
 
-function imagePackage(format: "card_news" | "blog" | "reel" | "marketing_content", count: number) {
+function imagePackage(format: "card_news" | "blog" | "reel", count: number) {
   return {
     contractVersion: "image-generation-package.v1", generationId: uid(2), outputFormat: format, purpose: "informational",
     assetCount: count, aspectRatio: format === "reel" ? "9:16" : "1:1", channelTargets: [format === "blog" ? "blog_export" : "instagram"],
@@ -35,7 +45,7 @@ function imagePackage(format: "card_news" | "blog" | "reel" | "marketing_content
   };
 }
 
-function job(format: "card_news" | "blog" | "reel" | "marketing_content", plan: Record<string, unknown>, assets: AiContentRenderedAsset[]): AiContentPackageFinalizeJob {
+function job(format: "card_news" | "blog" | "reel", plan: Record<string, unknown>, assets: AiContentRenderedAsset[]): AiContentPackageFinalizeJob {
   return {
     id: uid(1), generationId: uid(2), outputId: uid(3), workspaceId: uid(4), brandId: uid(5), jobKind: "package_finalize", assetIndex: null, leaseToken: "lease", attemptCount: 1,
     payload: { contractVersion: "ai-content-render-job.v1", jobKind: "package_finalize", generationId: uid(2), outputId: uid(3), plan, finalInput: finalInput(format), supplementalResearch: null, assets },
@@ -58,7 +68,7 @@ describe("V3 non-Reel package finalizer", () => {
     const result = await finalizeAiContentPackage(target, blob);
 
     expect(result.manifest).toMatchObject({
-      version: "ai-content.v2", type: "card_news", purpose: "informational", outputFormat: "card_news", title: "Tea guide",
+      version: "ai-content.v3", purpose: "informational", outputFormat: "card_news", title: "Tea guide",
       content: plan.content,
       assets: [expect.objectContaining({ index: 1, role: "slide" }), expect.objectContaining({ index: 2, role: "slide" })],
     });
@@ -93,7 +103,7 @@ describe("V3 non-Reel package finalizer", () => {
   });
 
   it("reuses successful scenes in index order, uses scene one as cover, and uploads one deterministic silent MP4", async () => {
-    const plan = { contractVersion: "marketing-plan.v2", outputFormat: "reel", content: { caption: "Caption", hashtags: [], cta: "CTA" }, imagePackage: imagePackage("reel", 2) };
+    const plan = { contractVersion: "reel-plan.v2", outputFormat: "reel", content: { caption: "Caption", hashtags: [], cta: "CTA" }, imagePackage: imagePackage("reel", 2) };
     const blob = storage();
     const reelRenderer = { render: vi.fn(async ({ scenes }: { scenes: Array<{ bytes: Buffer }> }) => ({
       cover: { bytes: scenes[0]!.bytes, mimeType: "image/png" as const, width: 1080 as const, height: 1920 as const },
@@ -112,7 +122,7 @@ describe("V3 non-Reel package finalizer", () => {
       bytes: Buffer.from("mp4"), durationSeconds: 8, audioCodec: null
     }));
     expect(result.manifest).toMatchObject({
-      version: "ai-content.v2", type: "marketing", outputFormat: "reel",
+      version: "ai-content.v3", outputFormat: "reel",
       assets: [
         { role: "scene", index: 1, url: one.url },
         { role: "scene", index: 2, url: two.url },
@@ -123,7 +133,7 @@ describe("V3 non-Reel package finalizer", () => {
   });
 
   it("fails only the Reel finalizer when FFmpeg fails and keeps successful scene assets untouched", async () => {
-    const plan = { contractVersion: "marketing-plan.v2", outputFormat: "reel", content: { caption: "Caption", hashtags: [], cta: "CTA" }, imagePackage: imagePackage("reel", 1) };
+    const plan = { contractVersion: "reel-plan.v2", outputFormat: "reel", content: { caption: "Caption", hashtags: [], cta: "CTA" }, imagePackage: imagePackage("reel", 1) };
     const blob = storage();
     const reelRenderer = { render: vi.fn(async () => { throw new Error("ffmpeg_failed:1"); }) };
     const scene = { ...rendered(1), width: 1080, height: 1920 };
@@ -137,7 +147,7 @@ describe("V3 non-Reel package finalizer", () => {
   });
 
   it("rejects staged scene bytes that do not match the successful asset checksum", async () => {
-    const plan = { contractVersion: "marketing-plan.v2", outputFormat: "reel", content: { caption: "Caption", hashtags: [], cta: "CTA" }, imagePackage: imagePackage("reel", 1) };
+    const plan = { contractVersion: "reel-plan.v2", outputFormat: "reel", content: { caption: "Caption", hashtags: [], cta: "CTA" }, imagePackage: imagePackage("reel", 1) };
     const blob = storage();
     blob.readOwned.mockResolvedValueOnce(Buffer.from("tampered"));
     const reelRenderer = { render: vi.fn() };
@@ -154,7 +164,7 @@ describe("V3 non-Reel package finalizer", () => {
     ["output", `ai-content/${uid(5)}/${uid(2)}/${uid(99)}/assets/01.png`],
     ["index", `ai-content/${uid(5)}/${uid(2)}/${uid(3)}/assets/02.png`]
   ])("rejects a scene storage path with the wrong %s before reading it", async (_field, storagePath) => {
-    const plan = { contractVersion: "marketing-plan.v2", outputFormat: "reel", content: { caption: "Caption", hashtags: [], cta: "CTA" }, imagePackage: imagePackage("reel", 1) };
+    const plan = { contractVersion: "reel-plan.v2", outputFormat: "reel", content: { caption: "Caption", hashtags: [], cta: "CTA" }, imagePackage: imagePackage("reel", 1) };
     const blob = storage();
     const reelRenderer = { render: vi.fn() };
     const scene = { ...rendered(1), width: 1080, height: 1920, storagePath };
@@ -165,7 +175,7 @@ describe("V3 non-Reel package finalizer", () => {
   });
 
   it("does not upload video or manifest after Reel rendering is cancelled", async () => {
-    const plan = { contractVersion: "marketing-plan.v2", outputFormat: "reel", content: { caption: "Caption", hashtags: [], cta: "CTA" }, imagePackage: imagePackage("reel", 1) };
+    const plan = { contractVersion: "reel-plan.v2", outputFormat: "reel", content: { caption: "Caption", hashtags: [], cta: "CTA" }, imagePackage: imagePackage("reel", 1) };
     const blob = storage();
     const controller = new AbortController();
     const reelRenderer = { render: vi.fn((_input: unknown, signal?: AbortSignal) => new Promise<never>((_resolve, reject) => {

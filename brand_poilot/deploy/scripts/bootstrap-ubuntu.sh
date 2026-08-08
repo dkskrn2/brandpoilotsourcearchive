@@ -31,6 +31,11 @@ managed_paths=(
   "$ROOT/shared"
   "$ROOT/shared/env"
   "$ROOT/shared/codex"
+  "$ROOT/shared/codex-accounts"
+  "$ROOT/shared/codex-accounts/primary"
+  "$ROOT/shared/codex-accounts/secondary"
+  "$ROOT/shared/codex-accounts/primary/generated_images"
+  "$ROOT/shared/codex-accounts/secondary/generated_images"
 )
 
 for path in "${managed_paths[@]}"; do
@@ -48,5 +53,10 @@ install -d -m 0700 -o bpdeploy -g bpdeploy "$ROOT/state"
 install -d -m 0700 -o bpdeploy -g bpdeploy "$ROOT/shared"
 install -d -m 0700 -o bpdeploy -g bpdeploy "$ROOT/shared/env"
 install -d -m 0700 -o bpdeploy -g bpdeploy "$ROOT/shared/codex"
+install -d -m 0700 -o bpdeploy -g bpdeploy "$ROOT/shared/codex-accounts"
+install -d -m 0700 -o bpdeploy -g bpdeploy "$ROOT/shared/codex-accounts/primary"
+install -d -m 0700 -o bpdeploy -g bpdeploy "$ROOT/shared/codex-accounts/secondary"
+install -d -m 0700 -o bpdeploy -g bpdeploy "$ROOT/shared/codex-accounts/primary/generated_images"
+install -d -m 0700 -o bpdeploy -g bpdeploy "$ROOT/shared/codex-accounts/secondary/generated_images"
 
 printf 'bootstrap_ok:%s\n' "$ROOT"

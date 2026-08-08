@@ -1,5 +1,4 @@
 import { useEffect, useRef, useState } from "react";
-import { Link } from "react-router-dom";
 import { Alert } from "../ui/Alert";
 import { InlineSpinner } from "../ui/LoadingState";
 import {
@@ -127,10 +126,10 @@ export function ProductServiceEditor({
         <button className="button" type="button" onClick={onCancelCreate}>취소</button>
       </header>
       <Alert title="실제 분석 흐름" variant="info">
-        URL·문서·이미지 또는 직접 입력은 기존 subject analysis에서 처리합니다. 분석이 완료되면 이 보관함으로 자동으로 돌아옵니다.
+        제품·서비스 전용 분석 경로를 준비 중입니다. 현재는 직접 입력으로 초안을 만들 수 있습니다.
       </Alert>
       <div className="library-analysis-actions">
-        <Link className="button primary" to="/ai-content/new?type=card_news&returnTo=product-library">AI 분석 열기</Link>
+        <button className="button primary" type="button" disabled>AI 분석 준비 중</button>
       </div>
       <button className="button quiet" type="button" onClick={() => setMode("manual")}>AI 없이 직접 입력</button>
       {error ? <Alert title="가져오지 못했습니다" variant="warn">{error}</Alert> : null}

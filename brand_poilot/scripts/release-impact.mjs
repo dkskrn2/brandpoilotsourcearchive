@@ -10,10 +10,27 @@ export const SERVER_COMPONENTS = Object.freeze([
   "imageWorker",
   "cardNewsWorker",
   "blogWorker",
-  "marketingWorker",
+  "reelWorker",
 ]);
 
 const COMPONENTS = Object.freeze(["customerUi", ...SERVER_COMPONENTS]);
+
+export const AI_CONTENT_THREE_FORMAT_CUTOVER_PROFILE = "ai-content-three-format-cutover";
+const AI_CONTENT_CUTOVER_SERVER_COMPONENTS = Object.freeze([
+  "api",
+  "contentProposalWorker",
+  "imageWorker",
+  "cardNewsWorker",
+  "blogWorker",
+  "reelWorker",
+]);
+
+const AI_CONTENT_ACCOUNT_POOL_RUNTIME_PATHS = new Set([
+  "workers/brand-pilot-worker-runtime/src/codexAccountPool.test.ts",
+  "workers/brand-pilot-worker-runtime/src/codexAccountPool.ts",
+  "workers/brand-pilot-worker-runtime/src/index.test.ts",
+  "workers/brand-pilot-worker-runtime/src/index.ts",
+]);
 
 const WORKER_PATHS = Object.freeze([
   ["workers/brand-pilot-dm-worker/", "dmWikiWorker"],
@@ -23,7 +40,7 @@ const WORKER_PATHS = Object.freeze([
   ["workers/brand-pilot-image-worker/", "imageWorker"],
   ["workers/brand-pilot-card-news-worker/", "cardNewsWorker"],
   ["workers/brand-pilot-blog-worker/", "blogWorker"],
-  ["workers/brand-pilot-marketing-worker/", "marketingWorker"],
+  ["workers/brand-pilot-reel-worker/", "reelWorker"],
 ]);
 
 const RELEASE_TOOLING_TEST_PATHS = new Set([
@@ -42,7 +59,111 @@ const enableAllServer = (components) => {
   for (const component of SERVER_COMPONENTS) components[component] = true;
 };
 
-export function classifyChangedPaths(values) {
+const enableAiContentCutoverServer = (components) => {
+  for (const component of AI_CONTENT_CUTOVER_SERVER_COMPONENTS) components[component] = true;
+};
+
+const CUTOVER_WORKER_PATHS = Object.freeze([
+  ["workers/brand-pilot-content-proposal-worker/", "contentProposalWorker"],
+  ["workers/brand-pilot-image-worker/", "imageWorker"],
+  ["workers/brand-pilot-card-news-worker/", "cardNewsWorker"],
+  ["workers/brand-pilot-blog-worker/", "blogWorker"],
+  ["workers/brand-pilot-reel-worker/", "reelWorker"],
+]);
+
+const CUTOVER_API_SCRIPT_PATHS = Object.freeze([
+  "scripts/ai-content-cutover-control.mjs",
+  "scripts/ai-content-cutover-evidence.mjs",
+  "scripts/ai-content-cutover-floor-probe.mjs",
+  "scripts/ai-content-database-catalog.mjs",
+  "scripts/ai-content-database-roles.mjs",
+  "scripts/ai-content-provider-artifacts.mjs",
+  "scripts/collect-ai-content-prepare-evidence.mjs",
+  "scripts/migrate.mjs",
+  "scripts/migrationRunner.mjs",
+]);
+
+const CUTOVER_PROPOSAL_SCRIPT_PATHS = Object.freeze([
+  "scripts/ai-content-proposal-schema-preflight.mjs",
+]);
+
+const CUTOVER_TOOLING_PATHS = Object.freeze([
+  "scripts/ai-content-smoke.mjs",
+  "scripts/ai-content-subject-smoke.mjs",
+  "scripts/assemble-release-manifest.mjs",
+  "scripts/convert-legacy-release-manifest.mjs",
+  "scripts/release-impact.mjs",
+  "scripts/check-local-env.mjs",
+  "scripts/three-format-cutover-static-check.mjs",
+]);
+
+function classifyAiContentCutoverPath(path, components) {
+  if (path.startsWith("docs/") || path === "README.md" || path.endsWith(".md")) {
+    return { known: true, documentation: true };
+  }
+  if (path.startsWith("apps/customer-ui/")) {
+    components.customerUi = true;
+    return { known: true };
+  }
+  if (path.startsWith("apps/api/")) {
+    components.api = true;
+    return { known: true };
+  }
+  if (path.startsWith("db/migrations/")) {
+    components.api = true;
+    return { known: true, migration: true };
+  }
+  if (path.startsWith("deploy/")) return { known: true, deployBundle: true };
+  if (path.startsWith("../.github/workflows/") || path.startsWith(".github/workflows/")) {
+    return { known: true, deployBundle: true };
+  }
+  if (path === "package.json" || path === "package-lock.json" || path === ".dockerignore") {
+    enableAiContentCutoverServer(components);
+    if (path !== ".dockerignore") components.customerUi = true;
+    return { known: true };
+  }
+  if (path.startsWith("packages/brand-pilot-content-contracts/")) {
+    enableAiContentCutoverServer(components);
+    components.customerUi = true;
+    return { known: true };
+  }
+  if (path.startsWith("workers/brand-pilot-worker-runtime/")) {
+    for (const component of AI_CONTENT_CUTOVER_SERVER_COMPONENTS) {
+      if (component !== "api") components[component] = true;
+    }
+    return { known: true };
+  }
+  const worker = CUTOVER_WORKER_PATHS.find(([prefix]) => path.startsWith(prefix));
+  if (worker) {
+    components[worker[1]] = true;
+    return { known: true };
+  }
+  if (path.startsWith("workers/brand-pilot-marketing-worker/")) {
+    components.reelWorker = true;
+    return { known: true, deployBundle: true };
+  }
+  if (CUTOVER_API_SCRIPT_PATHS.some((value) => path === value || path === `${value.slice(0, -4)}.test.mjs`)) {
+    components.api = true;
+    return { known: true, migration: path === "scripts/migrate.mjs" || path === "scripts/migrationRunner.mjs" };
+  }
+  if (CUTOVER_PROPOSAL_SCRIPT_PATHS.some((value) => path === value || path === `${value.slice(0, -4)}.test.mjs`)) {
+    components.contentProposalWorker = true;
+    return { known: true };
+  }
+  if (CUTOVER_TOOLING_PATHS.includes(path)
+    || path.endsWith(".test.mjs")
+    || path.startsWith("scripts/customer-ui-")
+    || path.startsWith("scripts/ai-content-07")) {
+    return { known: true, deployBundle: !path.endsWith(".test.mjs") };
+  }
+  return { known: false };
+}
+
+export function classifyChangedPaths(values, options = {}) {
+  const profile = options.profile ?? "default";
+  if (!["default", AI_CONTENT_THREE_FORMAT_CUTOVER_PROFILE].includes(profile)) {
+    throw new Error("release_impact_profile_invalid");
+  }
   const originalPaths = [...new Set(values.map((value) => String(value ?? "").trim()).filter(Boolean))];
   if (originalPaths.length === 0) throw new Error("changed_paths_required");
 
@@ -55,6 +176,31 @@ export function classifyChangedPaths(values) {
   let migrationChanged = false;
   let deployBundleChanged = false;
   let nonDocumentationChange = false;
+
+  if (profile === AI_CONTENT_THREE_FORMAT_CUTOVER_PROFILE) {
+    for (let index = 0; index < paths.length; index += 1) {
+      const path = paths[index];
+      const originalPath = originalPaths[index] ?? path;
+      const result = classifyAiContentCutoverPath(path, components);
+      if (result.documentation) continue;
+      nonDocumentationChange = true;
+      if (result.migration) migrationChanged = true;
+      if (result.deployBundle) deployBundleChanged = true;
+      if (!result.known) unknownPaths.push(originalPath);
+    }
+    return {
+      profile,
+      paths,
+      components,
+      buildAllServer: false,
+      migrationChanged,
+      productionDeployAllowed: !migrationChanged && unknownPaths.length === 0,
+      deployBundleChanged,
+      docsOnly: !nonDocumentationChange,
+      verifiedScope: unknownPaths.length === 0,
+      unknownPaths,
+    };
+  }
 
   for (let index = 0; index < paths.length; index += 1) {
     const path = paths[index];
@@ -80,6 +226,10 @@ export function classifyChangedPaths(values) {
       deployBundleChanged = true;
       continue;
     }
+    if (AI_CONTENT_ACCOUNT_POOL_RUNTIME_PATHS.has(path)) {
+      enableAiContentCutoverServer(components);
+      continue;
+    }
     if (path === "package.json" || path === "package-lock.json" || path === ".dockerignore" || path.startsWith("workers/brand-pilot-worker-runtime/")) {
       buildAllServer = true;
       enableAllServer(components);
@@ -93,14 +243,13 @@ export function classifyChangedPaths(values) {
       continue;
     }
 
-    if (RELEASE_TOOLING_TEST_PATHS.has(path)) continue;
+    if (RELEASE_TOOLING_TEST_PATHS.has(path) || (path.startsWith("scripts/") && path.endsWith(".test.mjs"))) continue;
     if (path === "scripts/release-impact.mjs" || path === "scripts/assemble-release-manifest.mjs") {
       deployBundleChanged = true;
       continue;
     }
     if (path.startsWith("../.github/workflows/") || path.startsWith(".github/workflows/")) {
-      buildAllServer = true;
-      enableAllServer(components);
+      deployBundleChanged = true;
       continue;
     }
 
@@ -110,6 +259,7 @@ export function classifyChangedPaths(values) {
   }
 
   return {
+    profile,
     paths,
     components,
     buildAllServer,
@@ -117,12 +267,13 @@ export function classifyChangedPaths(values) {
     productionDeployAllowed: !migrationChanged,
     deployBundleChanged,
     docsOnly: !nonDocumentationChange,
+    verifiedScope: unknownPaths.length === 0,
     unknownPaths,
   };
 }
 
 function readGitPaths(base, head) {
-  return execFileSync("git", ["diff", "--name-only", "--diff-filter=ACMRTUXB", `${base}...${head}`], {
+  return execFileSync("git", ["diff", "--name-only", "--diff-filter=ACDMRTUXB", `${base}...${head}`], {
     encoding: "utf8",
     stdio: ["ignore", "pipe", "inherit"],
   }).split(/\r?\n/).filter(Boolean);
@@ -131,10 +282,16 @@ function readGitPaths(base, head) {
 function runCli(argv) {
   const baseIndex = argv.indexOf("--base");
   const headIndex = argv.indexOf("--head");
+  const profileIndex = argv.indexOf("--profile");
   if (baseIndex < 0 || headIndex < 0 || !argv[baseIndex + 1] || !argv[headIndex + 1]) {
     throw new Error("usage_release_impact_base_head");
   }
-  process.stdout.write(`${JSON.stringify(classifyChangedPaths(readGitPaths(argv[baseIndex + 1], argv[headIndex + 1])))}\n`);
+  const profile = profileIndex < 0 ? "default" : argv[profileIndex + 1];
+  if (!profile) throw new Error("release_impact_profile_invalid");
+  process.stdout.write(`${JSON.stringify(classifyChangedPaths(
+    readGitPaths(argv[baseIndex + 1], argv[headIndex + 1]),
+    { profile },
+  ))}\n`);
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {

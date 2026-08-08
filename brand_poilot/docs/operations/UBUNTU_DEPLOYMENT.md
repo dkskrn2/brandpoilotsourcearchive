@@ -293,6 +293,11 @@ Expected directories:
 /opt/brand-pilot/shared               0700 bpdeploy:bpdeploy
 /opt/brand-pilot/shared/env           0700 bpdeploy:bpdeploy
 /opt/brand-pilot/shared/codex         0700 bpdeploy:bpdeploy
+/opt/brand-pilot/shared/codex-accounts 0700 bpdeploy:bpdeploy
+/opt/brand-pilot/shared/codex-accounts/primary   0700 bpdeploy:bpdeploy
+/opt/brand-pilot/shared/codex-accounts/secondary 0700 bpdeploy:bpdeploy
+/opt/brand-pilot/shared/codex-accounts/primary/generated_images   0700 bpdeploy:bpdeploy
+/opt/brand-pilot/shared/codex-accounts/secondary/generated_images 0700 bpdeploy:bpdeploy
 ```
 
 ## 6. Source and production environment
@@ -556,17 +561,41 @@ longer required.
 ### [bpdeploy Tailscale SSH] 7.1 Persist and verify the ChatGPT login
 
 Every production AI path uses `@openai/codex@0.145.0` in its immutable worker
-image. There is no direct OpenAI API key path. The single ChatGPT login lives
-outside Git and release directories at `/opt/brand-pilot/shared/codex`; all
-worker containers mount that writable directory at `/codex`.
+image. There is no direct OpenAI API key path. Manual content proposal, image,
+card-news, blog, and reel workers use the two persisted aliases `primary` and
+`secondary` under `/opt/brand-pilot/shared/codex-accounts`. Those five workers
+mount the parent at `/codex-accounts` and automatically try `secondary` only
+when `primary` returns a verified usage-exhaustion failure before producing any
+accepted output. Other workers keep their existing single `/codex` contract.
 
-The directory must be `bpdeploy:bpdeploy` mode `700`. Its `auth.json` must be a
-regular, non-symlink file owned by `bpdeploy:bpdeploy` with mode `600`. The
-container runs with the same numeric UID/GID so Codex can refresh login state.
-Never copy `auth.json` into an image, archive, release, ticket, chat, or log.
+The pool and both profile directories must be `bpdeploy:bpdeploy` mode `700`.
+Each `auth.json` must be a regular, non-symlink file owned by
+`bpdeploy:bpdeploy` with mode `600`. Containers run with the same numeric
+UID/GID so Codex can refresh login state. Never copy `auth.json` into an image,
+archive, release, ticket, chat, or log. Never put account email addresses in
+source, configuration, or logs.
 
 After the verified manifest is present and its private GHCR login is active,
-run the interactive login only when the persisted login is missing or expired:
+perform the one-time non-overwriting transition before running the new bootstrap.
+Existing containers keep their already-open bind mount; do not restart unrelated
+workers during this transition:
+
+```bash
+legacy_home=/opt/brand-pilot/shared/codex
+account_pool=/opt/brand-pilot/shared/codex-accounts
+test -d "$legacy_home"
+test ! -L "$legacy_home"
+test ! -e "$account_pool"
+install -d -m 0700 -o bpdeploy -g bpdeploy "$account_pool"
+test ! -e "$account_pool/primary"
+mv -- "$legacy_home" "$account_pool/primary"
+install -d -m 0700 -o bpdeploy -g bpdeploy "$account_pool/secondary"
+install -d -m 0700 -o bpdeploy -g bpdeploy "$account_pool/primary/generated_images"
+install -d -m 0700 -o bpdeploy -g bpdeploy "$account_pool/secondary/generated_images"
+```
+
+The guards stop instead of overwriting either profile. Run the interactive login
+only for a profile whose persisted login is missing or expired:
 
 ```bash
 release_manifest=/opt/brand-pilot/incoming/release.env
@@ -577,17 +606,20 @@ docker pull --quiet "$brand_intelligence_image" >/dev/null
 
 runtime_uid="$(id -u bpdeploy)"
 runtime_gid="$(id -g bpdeploy)"
-docker run --rm -it --network host \
-  --user "$runtime_uid:$runtime_gid" \
-  --read-only \
-  --cap-drop ALL \
-  --security-opt no-new-privileges \
-  --pids-limit 128 \
-  --tmpfs /tmp:size=64m,mode=1777 \
-  --mount type=bind,src=/opt/brand-pilot/shared/codex,dst=/codex \
-  --env CODEX_HOME=/codex \
-  --entrypoint codex \
-  "$brand_intelligence_image" login
+for profile in primary secondary; do
+  profile_home="/opt/brand-pilot/shared/codex-accounts/$profile"
+  docker run --rm -it --network host \
+    --user "$runtime_uid:$runtime_gid" \
+    --read-only \
+    --cap-drop ALL \
+    --security-opt no-new-privileges \
+    --pids-limit 128 \
+    --tmpfs /tmp:size=64m,mode=1777 \
+    --mount "type=bind,src=$profile_home,dst=/codex" \
+    --env CODEX_HOME=/codex \
+    --entrypoint codex \
+    "$brand_intelligence_image" login
+done
 ```
 
 Complete the ChatGPT/Google flow in Ubuntu Chrome. Then restore and verify the
@@ -596,25 +628,30 @@ fixed metadata without reading the credential:
 ```bash
 runtime_uid="$(id -u bpdeploy)"
 runtime_gid="$(id -g bpdeploy)"
-chmod 700 /opt/brand-pilot/shared/codex
-chmod 600 /opt/brand-pilot/shared/codex/auth.json
-test "$(stat -c '%U:%G %a' /opt/brand-pilot/shared/codex)" = "bpdeploy:bpdeploy 700"
-test "$(stat -c '%U:%G %a' /opt/brand-pilot/shared/codex/auth.json)" = "bpdeploy:bpdeploy 600"
+chmod 700 /opt/brand-pilot/shared/codex-accounts
+for profile in primary secondary; do
+  profile_home="/opt/brand-pilot/shared/codex-accounts/$profile"
+  auth_file="$profile_home/auth.json"
+  chmod 700 "$profile_home"
+  chmod 600 "$auth_file"
+  test "$(stat -c '%U:%G %a' "$profile_home")" = "bpdeploy:bpdeploy 700"
+  test "$(stat -c '%U:%G %a' "$auth_file")" = "bpdeploy:bpdeploy 600"
 
-if ! docker run --rm --pull never \
-  --user "$runtime_uid:$runtime_gid" \
-  --read-only \
-  --cap-drop ALL \
-  --security-opt no-new-privileges \
-  --pids-limit 128 \
-  --tmpfs /tmp:size=64m,mode=1777 \
-  --mount type=bind,src=/opt/brand-pilot/shared/codex,dst=/codex \
-  --env CODEX_HOME=/codex \
-  --entrypoint codex \
-  "$brand_intelligence_image" login status >/dev/null 2>&1; then
-  printf '%s\n' 'codex_login_status=failed' >&2
-  exit 1
-fi
+  if ! docker run --rm --pull never \
+    --user "$runtime_uid:$runtime_gid" \
+    --read-only \
+    --cap-drop ALL \
+    --security-opt no-new-privileges \
+    --pids-limit 128 \
+    --tmpfs /tmp:size=64m,mode=1777 \
+    --mount "type=bind,src=$profile_home,dst=/codex" \
+    --env CODEX_HOME=/codex \
+    --entrypoint codex \
+    "$brand_intelligence_image" login status >/dev/null 2>&1; then
+    printf '%s\n' 'codex_login_status=failed' >&2
+    exit 1
+  fi
+done
 printf '%s\n' 'codex_login_status=ok'
 ```
 
@@ -1284,10 +1321,11 @@ API release is current, Section 7.1 login checks pass, the remote/legacy worker
 owner is known, and the rollback target is recorded. `COMPOSE_PROFILES` remains
 unset so preflight can prove that a normal deploy cannot auto-start workers.
 
-All worker root filesystems are read-only. `/opt/brand-pilot/shared/codex` is the
-one persistent writable bind mount at `/codex`; the image worker additionally
-overlays `/codex/generated_images` with a mode-0700, 512MB tmpfs so generated
-PNGs do not persist beside `auth.json`.
+All worker root filesystems are read-only. The five manual-content workers mount
+`/opt/brand-pilot/shared/codex-accounts` at `/codex-accounts`; generated-image
+directories for both profiles are mode-0700, 512MB tmpfs mounts so generated
+PNGs do not persist beside either `auth.json`. Unrelated workers retain the
+single-profile `/codex` mount.
 
 ### [bpdeploy Tailscale SSH] Prepare the immutable Compose command
 
@@ -1298,7 +1336,8 @@ release_sha="$(cat /opt/brand-pilot/state/current)"
 release_dir="/opt/brand-pilot/releases/$release_sha"
 test -d "$release_dir"
 
-export CODEX_HOME_PATH=/opt/brand-pilot/shared/codex
+export CODEX_ACCOUNT_POOL_ROOT_PATH=/opt/brand-pilot/shared/codex-accounts
+export CODEX_HOME_PATH="$CODEX_ACCOUNT_POOL_ROOT_PATH/primary"
 export CODEX_RUNTIME_UID="$(id -u bpdeploy)"
 export CODEX_RUNTIME_GID="$(id -g bpdeploy)"
 

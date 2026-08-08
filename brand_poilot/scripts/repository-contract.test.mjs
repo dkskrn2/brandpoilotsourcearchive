@@ -30,9 +30,9 @@ const assertExactSqlValues = (body, expected) => {
 test("AI 콘텐츠 저장소 계약은 중앙 ApiRepository에 모두 노출된다", async () => {
   const types = await readFile("apps/api/src/types.ts", "utf8");
   const requiredMethods = [
-    "createAiContentAnalysis",
-    "updateAiContentDraft",
-    "startAiContentGeneration",
+    "getAiContentBrandContext",
+    "updateAiContentFinalizationDraft",
+    "startAiContentGenerationV3",
     "listAiContentGenerations",
     "getAiContentGeneration",
     "listAiContentUsage",
@@ -161,7 +161,7 @@ test("루트 패키지는 비공개 워크스페이스와 공통 빌드·테스�
   const packageJson = await readJson("package.json");
 
   assert.equal(packageJson.private, true);
-  assert.deepEqual(packageJson.workspaces, ["apps/*", "workers/*"]);
+  assert.deepEqual(packageJson.workspaces, ["packages/*", "apps/*", "workers/*"]);
   assert.equal(
     packageJson.scripts.build,
     "npm run build --workspaces --if-present",
@@ -294,7 +294,7 @@ test("API 패키지는 타입 검사와 tsup 빌드 및 배포 시작 명령을 
   assert.equal(packageJson.scripts.start, "node dist/index.js");
 });
 
-test("데이터베이스 마이그레이션 registry는 콘텐츠 생성 pipeline 073까지 포함한다", async () => {
+test("데이터베이스 마이그레이션 registry는 콘텐츠 생성 cutover 075까지 포함한다", async () => {
   const migrationFiles = (await readdir("db/migrations"))
     .filter((file) => file.endsWith(".sql"))
     .sort();
@@ -374,6 +374,9 @@ test("데이터베이스 마이그레이션 registry는 콘텐츠 생성 pipelin
     "071_brand_intelligence_onboarding_worker_v2.sql",
     "072_faq_suggestion_worker.sql",
     "073_ai_content_generation_v2_render_pipeline.sql",
+    "073a_legacy_trigger_function_search_path.sql",
+    "074_ai_content_maintenance_write_fence.sql",
+    "075_ai_content_three_format_cutover.sql",
   ]);
   assert.ok(reservedProgramMigrations.filter((file) => file.startsWith("059_")).length <= 1);
   assert.ok(reservedProgramMigrations.filter((file) => file.startsWith("060_")).length <= 1);
@@ -1012,43 +1015,19 @@ test("자동 크롤링은 지원하지 않는 Vercel Cron 대신 외부 또는 �
   assert.match(envExample, /^LOCAL_SCHEDULER_ENABLED=false$/m);
 });
 
-test("D-hybrid 콘텐츠 smoke는 legacy v2와 optional orchestration을 함께 검증한다", async () => {
-  const [smoke, inputContract, workerContracts] = await Promise.all([
-    readFile("scripts/ai-content-smoke.mjs", "utf8"),
-    readFile("apps/api/src/aiContentGenerationInput.ts", "utf8"),
-    Promise.all([
-      "workers/brand-pilot-card-news-worker/src/contracts.ts",
-      "workers/brand-pilot-blog-worker/src/contracts.ts",
-      "workers/brand-pilot-marketing-worker/src/contracts.ts",
-    ].map((path) => readFile(path, "utf8"))),
-  ]);
-  assert.match(inputContract, /content-generation-input\.v2/);
-  assert.match(smoke, /content-orchestration\.v1/);
-  assert.match(smoke, /AI_CONTENT_SMOKE_ORCHESTRATION/);
-  assert.match(smoke, /assertLegacyGeneration/);
-  assert.match(smoke, /assertOrchestratedGeneration/);
-  assert.match(smoke, /video|reel/i);
-  assert.match(inputContract, /orchestration:\s*ContentOrchestrationV1\s*\|\s*null/);
-  assert.match(inputContract, /source\.orchestration\s*===\s*undefined\s*\|\|\s*source\.orchestration\s*===\s*null/);
-  for (const contract of workerContracts) {
-    assert.match(contract, /orchestration:[^;]*\|\s*null/);
-    assert.match(contract, /parseWorkerContentOrchestration\(input\.orchestration/);
-  }
-});
-
-test("subject smoke는 확인되지 않은 주장을 verified fact에서 배제한다", async () => {
-  const smoke = await readFile("scripts/ai-content-subject-smoke.mjs", "utf8");
-  assert.match(smoke, /unsupported claim/i);
-  assert.match(smoke, /verifiedFacts/);
-  assert.match(smoke, /doesNotMatch|includes/);
-});
-
-test("자동 crawl smoke 계약은 OFF와 ON proposal-only를 모두 고정한다", async () => {
+test("legacy 콘텐츠 smoke는 제거된 V1 경로를 호출하지 않고 fail-closed 한다", async () => {
   const smoke = await readFile("scripts/ai-content-smoke.mjs", "utf8");
-  assert.match(smoke, /AI_CONTENT_PROPOSAL_SCHEDULER_ENABLED/);
-  assert.match(smoke, /proposal-only/);
-  assert.match(smoke, /scheduled_crawl/);
-  assert.match(smoke, /generation/i);
+  assert.match(smoke, /ai_content_smoke_replaced_by_authenticated_browser_canary/);
+  assert.match(smoke, /zero_writes/);
+  assert.doesNotMatch(smoke, /content-orchestration\.v1|analysis_ready|ai-content\.v1|marketing-worker/);
+});
+
+test("subject smoke도 legacy generation host를 만들지 않고 fail-closed 한다", async () => {
+  const smoke = await readFile("scripts/ai-content-subject-smoke.mjs", "utf8");
+  assert.match(smoke, /subject_smoke_generation_id_required/);
+  assert.match(smoke, /existing proposal-v2 generation/);
+  assert.match(smoke, /zero_writes/);
+  assert.doesNotMatch(smoke, /method:\s*"POST"[\s\S]{0,300}?\/ai-content\/generations|analysis_ready|ai-content\.v1/);
 });
 
 test("D-hybrid 브라우저 사양은 계획의 13개 흐름과 영상 생성 차단을 명시한다", async () => {

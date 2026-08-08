@@ -1,10 +1,15 @@
 import { spawn, type SpawnOptions } from "node:child_process";
 import { createHash } from "node:crypto";
-import { chmod, copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { access, chmod, copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import sharp from "sharp";
-import type { ContentAspectRatioV2 } from "@brand-pilot/worker-runtime";
+import type { ContentAspectRatio } from "@brand-pilot/content-contracts";
+import {
+  codexAccountFailure,
+  codexAccountSuccess,
+  type CodexAccountPool,
+} from "@brand-pilot/worker-runtime";
 import { buildImageWorkerChildEnvironment } from "./childEnvironment.mjs";
 import { signalProcessTree } from "./processTermination.mjs";
 import { buildAiContentAssetPrompt, type StagedAiContentAssetInputs } from "./aiContentAssetPrompt.js";
@@ -30,7 +35,7 @@ export type AiContentAssetChildRunner = (input: {
   signal: AbortSignal;
 }) => Promise<void>;
 
-export function dimensionsForAspectRatio(ratio: ContentAspectRatioV2): { width: number; height: number } {
+export function dimensionsForAspectRatio(ratio: ContentAspectRatio): { width: number; height: number } {
   switch (ratio) {
     case "4:5": return { width: 1080, height: 1350 };
     case "16:9": return { width: 1920, height: 1080 };
@@ -55,6 +60,7 @@ async function makeReadOnly(filePath: string): Promise<void> {
 
 type AiContentAssetChild = {
   pid?: number;
+  stderr?: NodeJS.ReadableStream | null;
   kill(signal?: NodeJS.Signals): unknown;
   once(event: "error", listener: (error: Error) => void): unknown;
   once(event: "exit", listener: (code: number | null) => void): unknown;
@@ -62,20 +68,45 @@ type AiContentAssetChild = {
 
 type SpawnAiContentAssetChild = (command: string, args: string[], options: SpawnOptions) => AiContentAssetChild;
 
-export async function runAiContentAssetChildProcess(input: {
+type AiContentAssetProcessInput = {
   command: string;
   args: string[];
   cwd: string;
   env: NodeJS.ProcessEnv;
+  accountPool?: CodexAccountPool;
+  outputFile?: string;
   signal: AbortSignal;
   timeoutMs: number;
-}, dependencies: {
+};
+
+type AiContentAssetProcessDependencies = {
   spawnProcess?: SpawnAiContentAssetChild;
   signalTree?: (child: AiContentAssetChild, signal: NodeJS.Signals) => Promise<void>;
   platform?: NodeJS.Platform;
   terminationGraceMs?: number;
   hardKillWaitMs?: number;
-} = {}): Promise<void> {
+};
+
+class AiContentAssetProcessError extends Error {
+  readonly diagnostic!: string;
+
+  constructor(message: string, diagnostic: string) {
+    super(message);
+    this.name = "AiContentAssetProcessError";
+    Object.defineProperty(this, "diagnostic", {
+      configurable: false,
+      enumerable: false,
+      value: diagnostic,
+      writable: false,
+    });
+  }
+}
+
+async function runAiContentAssetChildAttempt(
+  input: AiContentAssetProcessInput,
+  dependencies: AiContentAssetProcessDependencies,
+  captureDiagnostic: boolean,
+): Promise<void> {
   if (input.signal.aborted) throw input.signal.reason instanceof Error ? input.signal.reason : new Error("ai_content_asset_render_aborted");
   await new Promise<void>((resolve, reject) => {
     const child = (dependencies.spawnProcess ?? spawn as SpawnAiContentAssetChild)(input.command, input.args, {
@@ -83,7 +114,7 @@ export async function runAiContentAssetChildProcess(input: {
       windowsHide: true,
       cwd: input.cwd,
       detached: (dependencies.platform ?? process.platform) !== "win32",
-      stdio: "inherit",
+      stdio: captureDiagnostic ? ["inherit", "inherit", "pipe"] : "inherit",
       env: input.env,
     });
     const platform = dependencies.platform ?? process.platform;
@@ -92,6 +123,7 @@ export async function runAiContentAssetChildProcess(input: {
     let stopError: Error | null = null;
     let gracefulTimer: ReturnType<typeof setTimeout> | undefined;
     let hardKillTimer: ReturnType<typeof setTimeout> | undefined;
+    let diagnostic = "";
     const commandTimer = setTimeout(
       () => requestStop(new Error("ai_content_asset_render_timeout")),
       input.timeoutMs,
@@ -136,16 +168,59 @@ export async function runAiContentAssetChildProcess(input: {
     }
     const abort = () => requestStop(input.signal.reason instanceof Error ? input.signal.reason : new Error("ai_content_asset_render_aborted"));
     input.signal.addEventListener("abort", abort, { once: true });
+    if (captureDiagnostic) {
+      child.stderr?.setEncoding("utf8");
+      child.stderr?.on("data", (chunk) => {
+        if (diagnostic.length < 8_192) {
+          diagnostic += String(chunk).slice(0, 8_192 - diagnostic.length);
+        }
+      });
+    }
     child.once("error", (error) => finish(stopError ?? error));
     child.once("exit", (code) => {
       if (stopError) finish(stopError);
-      else code === 0 ? finish() : finish(new Error(`ai_content_asset_render_failed:${code ?? "unknown"}`));
+      else code === 0
+        ? finish()
+        : finish(captureDiagnostic
+          ? new AiContentAssetProcessError(`ai_content_asset_render_failed:${code ?? "unknown"}`, diagnostic)
+          : new Error(`ai_content_asset_render_failed:${code ?? "unknown"}`));
     });
     if (input.signal.aborted) abort();
   });
 }
 
+export async function runAiContentAssetChildProcess(
+  input: AiContentAssetProcessInput,
+  dependencies: AiContentAssetProcessDependencies = {},
+): Promise<void> {
+  if (!input.accountPool) {
+    await runAiContentAssetChildAttempt(input, dependencies, false);
+    return;
+  }
+  await input.accountPool.run(async (profile) => {
+    try {
+      await runAiContentAssetChildAttempt({
+        ...input,
+        accountPool: undefined,
+        env: buildImageWorkerChildEnvironment({
+          ...input.env,
+          CODEX_HOME: profile.home,
+          CODEX_GENERATED_IMAGES_DIR: path.join(profile.home, "generated_images"),
+        }),
+      }, dependencies, true);
+      return codexAccountSuccess(undefined);
+    } catch (error) {
+      if (!(error instanceof AiContentAssetProcessError)) throw error;
+      const acceptedOutput = input.outputFile
+        ? await access(input.outputFile).then(() => true, () => false)
+        : true;
+      return codexAccountFailure(error, error.diagnostic, acceptedOutput);
+    }
+  });
+}
+
 async function defaultChildRunner(input: {
+  accountPool: CodexAccountPool;
   workerRoot: string;
   timeoutMs: number;
   workspaceDir: string;
@@ -157,6 +232,7 @@ async function defaultChildRunner(input: {
   const jobFile = path.join(input.workspaceDir, "asset-job.json");
   await writeFile(jobFile, JSON.stringify({ prompt: input.prompt, selectedAssetCount: 1 }), { encoding: "utf8", mode: 0o444 });
   await runAiContentAssetChildProcess({
+    accountPool: input.accountPool,
     command: process.execPath,
     args: [
       path.join(input.workerRoot, "scripts", "run-codex-ai-content-asset.mjs"),
@@ -164,6 +240,7 @@ async function defaultChildRunner(input: {
     ],
     cwd: input.workspaceDir,
     env: buildImageWorkerChildEnvironment(process.env),
+    outputFile: input.outputFile,
     signal: input.signal,
     timeoutMs: input.timeoutMs,
   });
@@ -215,11 +292,13 @@ async function normalizedVerticalPng(bytes: Buffer): Promise<{ bytes: Buffer; wi
 }
 
 export function createAiContentAssetRenderer({
+  accountPool,
   workerRoot,
   readOwned,
   runChild,
   timeoutMs = 20 * 60_000,
 }: {
+  accountPool?: CodexAccountPool;
   workerRoot: string;
   readOwned(storagePath: string): Promise<Buffer>;
   runChild?: AiContentAssetChildRunner;
@@ -277,7 +356,11 @@ export function createAiContentAssetRenderer({
         if (imagePackage.avatarStyleImageId !== null && staged.styleImages.filter((item) => item.avatar).length !== 1) throw new Error("ai_content_avatar_stage_invalid");
 
         const prompt = buildAiContentAssetPrompt({ imagePackage, assetIndex: job.assetIndex, staged });
-        await (runChild ?? ((input) => defaultChildRunner({ ...input, workerRoot, timeoutMs })))({ workspaceDir, outputFile, prompt, signal });
+        const childRunner = runChild ?? (accountPool
+          ? ((input) => defaultChildRunner({ ...input, accountPool, workerRoot, timeoutMs }))
+          : undefined);
+        if (!childRunner) throw new Error("codex_account_pool_required");
+        await childRunner({ workspaceDir, outputFile, prompt, signal });
         const outputBytes = await readFile(outputFile);
         const rendered = imagePackage.outputFormat === "blog"
           ? await preservedPng(outputBytes)

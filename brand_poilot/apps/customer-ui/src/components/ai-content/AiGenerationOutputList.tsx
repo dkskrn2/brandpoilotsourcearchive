@@ -5,7 +5,7 @@ import type {
   AiContentGeneration,
   AiContentPublishTargetInput,
   AiContentPublishTargetResult,
-  AiContentType,
+  ContentOutputFormatV2,
 } from "../../features/ai-content/types";
 import type { ChannelConnection } from "../../types";
 import { AiContentArtifactPreview } from "./AiContentArtifactPreview";
@@ -17,24 +17,18 @@ interface AiGenerationOutputListProps {
   selectedForZip: ReadonlySet<string>;
   channels: readonly ChannelConnection[];
   retryingOutputId: string | null;
-  revisingOutputId: string | null;
   publishingOutputIds: ReadonlySet<string>;
   publishResults: Readonly<Record<string, readonly AiContentPublishTargetResult[]>>;
   onRetry(outputId: string, reason: string): Promise<void>;
-  onRevise(
-    outputId: string,
-    action: "regenerate_hook" | "regenerate_copy" | "regenerate_card",
-    cardIndex?: number,
-  ): Promise<void>;
   onDownload(key: string): Promise<void>;
   onPublish(outputId: string, targets: AiContentPublishTargetInput[]): Promise<void>;
   onToggleSelection(outputId: string): void;
 }
 
-const typeLabels: Record<AiContentType, string> = {
+const formatLabels: Record<ContentOutputFormatV2, string> = {
   card_news: "카드뉴스",
   blog: "블로그",
-  marketing: "마케팅 소재"
+  reel: "릴스",
 };
 
 const generationStatus: Record<AiContentGeneration["status"], string> = {
@@ -136,18 +130,16 @@ export function AiGenerationOutputList({
   selectedForZip,
   channels,
   retryingOutputId,
-  revisingOutputId,
   publishingOutputIds,
   publishResults,
   onRetry,
-  onRevise,
   onDownload,
   onPublish,
   onToggleSelection
 }: AiGenerationOutputListProps) {
   const [retryReason, setRetryReason] = useState<Record<string, string>>({});
   const completedCount = generation.outputs.filter((output) => output.status === "completed").length;
-  const type = generation.type;
+  const outputFormat = generation.outputFormat;
   const retryRetention = useRetryRetentionState(generation.retryableUntil);
 
   return (
@@ -155,7 +147,7 @@ export function AiGenerationOutputList({
       <div className="ai-generation-overview">
         <div>
           <h2 id="ai-generation-result-title">생성 결과 상세</h2>
-          <p className="small muted">유형: {typeLabels[generation.type]} · {generation.title}</p>
+          <p className="small muted">형식: {formatLabels[outputFormat]} · {generation.title}</p>
         </div>
         <div className="ai-generation-status">
           <strong>{generationStatus[generation.status]}</strong>
@@ -175,57 +167,12 @@ export function AiGenerationOutputList({
             {output.failureReason ? <p className="muted small">실패 사유: {output.failureReason}</p> : null}
 
             <div className="ai-generation-output-list__preview">
-              <AiContentArtifactPreview type={type} output={output} />
+              <AiContentArtifactPreview output={output} />
             </div>
 
-            {output.legacyReadOnly ? (
-              <p className="small muted" role="status">과거 Reel 결과는 읽기 전용입니다.</p>
-            ) : null}
-
-            {!output.legacyReadOnly && output.status === "completed" && output.revisionCapabilities?.length ? (
-              <div className="ai-generation-output-list__revision-actions" aria-label={`${output.title} 부분 재생성`}>
-                {output.revisionCapabilities.includes("regenerate_hook") ? (
-                  <button
-                    type="button"
-                    className="button"
-                    disabled={revisingOutputId === output.id}
-                    onClick={() => void onRevise(output.id, "regenerate_hook")}
-                  >
-                    훅 다시 생성
-                  </button>
-                ) : null}
-                {output.revisionCapabilities.includes("regenerate_copy") ? (
-                  <button
-                    type="button"
-                    className="button"
-                    disabled={revisingOutputId === output.id}
-                    onClick={() => void onRevise(output.id, "regenerate_copy")}
-                  >
-                    카피 다시 생성
-                  </button>
-                ) : null}
-                {output.revisionCapabilities.includes("regenerate_card")
-                  ? (output.artifact?.assets ?? []).map((_asset, cardIndex) => (
-                    <button
-                      key={cardIndex}
-                      type="button"
-                      className="button"
-                      disabled={revisingOutputId === output.id}
-                      onClick={() => void onRevise(output.id, "regenerate_card", cardIndex + 1)}
-                    >
-                      {cardIndex + 1}번 카드 다시 생성
-                    </button>
-                  ))
-                  : null}
-              </div>
-            ) : null}
-
             {output.status === "completed"
-              && (output.publishSupported ?? (type !== "blog" && output.outputFormat !== "reel"))
-              && !output.legacyReadOnly
-              && output.artifact?.deliveryFormat !== "instagram_reel" ? (
+              && output.publishSupported ? (
               <AiContentPublishPanel
-                type={type}
                 manifestVersion={output.manifestVersion}
                 outputFormat={output.outputFormat}
                 assetCount={output.artifact?.assets.length ?? 0}
@@ -236,7 +183,7 @@ export function AiGenerationOutputList({
               />
             ) : null}
 
-            {type === "marketing" ? (
+            {outputFormat === "reel" ? (
               <label className="ai-generation-output-list__select">
                 <input
                   type="checkbox"
@@ -266,13 +213,13 @@ export function AiGenerationOutputList({
               })()}
             </div>
 
-            {!output.legacyReadOnly && output.status === "failed" && retryRetention.expired ? (
+            {output.status === "failed" && retryRetention.expired ? (
               <div className="ai-generation-output-list__retry-expired" role="status">
                 <p>첨부파일 보관 기간이 만료되어 이 결과를 다시 생성할 수 없습니다.</p>
                 <p className="small muted">새 콘텐츠 생성 후 파일을 다시 업로드해 주세요.</p>
                 <Link className="button" to="/ai-content/new">새 콘텐츠 생성</Link>
               </div>
-            ) : !output.legacyReadOnly && output.status === "failed" ? (
+            ) : output.status === "failed" ? (
               <div className="ai-generation-output-list__retry">
                 <label htmlFor={`retry-reason-${output.id}`}>다시 생성 사유</label>
                 {retryRetention.deadline !== null ? (
@@ -311,7 +258,7 @@ export function AiGenerationOutputList({
       </ul>
 
       <footer className="ai-generation-output-list__downloads">
-        {type === "marketing" ? (
+        {outputFormat === "reel" ? (
           <>
             <button
               type="button"

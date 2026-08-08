@@ -1,13 +1,32 @@
 import { EventEmitter } from "node:events";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import path from "node:path";
+import { PassThrough } from "node:stream";
 import sharp from "sharp";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { createCodexAccountPool, type CodexAccountPool } from "@brand-pilot/worker-runtime";
 import { createAiContentAssetRenderer, dimensionsForAspectRatio, runAiContentAssetChildProcess } from "./aiContentAssetRenderer.js";
 import type { AiContentImageAssetJob } from "./aiContentRenderClient.js";
 
 const uid = (n: number) => `30000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 const sha = (c: string) => c.repeat(64);
+const accountRoots: string[] = [];
+
+async function testAccountPool(): Promise<CodexAccountPool> {
+  const root = await mkdtemp(path.join(tmpdir(), "image-asset-accounts-"));
+  accountRoots.push(root);
+  for (const alias of ["primary", "secondary"]) {
+    const home = path.join(root, alias);
+    await mkdir(home);
+    await writeFile(path.join(home, "auth.json"), "{}");
+  }
+  return createCodexAccountPool({ root, aliases: ["primary", "secondary"] });
+}
+
+afterEach(async () => {
+  await Promise.all(accountRoots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
+});
 
 function job(): AiContentImageAssetJob {
   return {
@@ -89,6 +108,7 @@ describe("V3 single asset renderer", () => {
 class FakeRenderChild extends EventEmitter {
   pid = 1234;
   kill = vi.fn(() => true);
+  stderr = new PassThrough();
 }
 
 describe("V3 asset child termination", () => {
@@ -132,5 +152,104 @@ describe("V3 asset child termination", () => {
     await expect(running).rejects.toThrow("lease_lost");
     await vi.waitFor(() => expect(settlements).toBe(1));
     expect(signalTree.mock.calls.map((call) => call[1])).toEqual(["SIGTERM", "SIGKILL"]);
+  });
+
+  it("retries under secondary after primary usage exhaustion without output", async () => {
+    const accountPool = await testAccountPool();
+    const workDir = await mkdtemp(path.join(tmpdir(), "image-asset-child-"));
+    const outputFile = path.join(workDir, "asset.png");
+    const primary = new FakeRenderChild();
+    const secondary = new FakeRenderChild();
+    const spawnProcess = vi.fn()
+      .mockReturnValueOnce(primary)
+      .mockReturnValueOnce(secondary);
+    try {
+      const running = runAiContentAssetChildProcess({
+        accountPool,
+        command: "node",
+        args: ["runner.mjs"],
+        cwd: workDir,
+        env: {},
+        outputFile,
+        signal: new AbortController().signal,
+        timeoutMs: 60_000,
+      }, { spawnProcess, platform: "linux" });
+
+      await vi.waitFor(() => expect(spawnProcess).toHaveBeenCalledTimes(1));
+      primary.stderr.write("You've hit your usage limit");
+      primary.emit("exit", 1);
+      await vi.waitFor(() => expect(spawnProcess).toHaveBeenCalledTimes(2));
+      await writeFile(outputFile, "png");
+      secondary.emit("exit", 0);
+
+      await expect(running).resolves.toBeUndefined();
+      expect(spawnProcess.mock.calls.map((call) => call[2]?.env?.CODEX_HOME)).toEqual([
+        accountPool.profiles[0]?.home,
+        accountPool.profiles[1]?.home,
+      ]);
+    } finally {
+      await rm(workDir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not retry a usage failure after an output file exists", async () => {
+    const accountPool = await testAccountPool();
+    const workDir = await mkdtemp(path.join(tmpdir(), "image-asset-child-"));
+    const outputFile = path.join(workDir, "asset.png");
+    const primary = new FakeRenderChild();
+    const spawnProcess = vi.fn(() => primary);
+    try {
+      const running = runAiContentAssetChildProcess({
+        accountPool,
+        command: "node",
+        args: ["runner.mjs"],
+        cwd: workDir,
+        env: {},
+        outputFile,
+        signal: new AbortController().signal,
+        timeoutMs: 60_000,
+      }, { spawnProcess, platform: "linux" });
+      const assertion = expect(running).rejects.toThrow("ai_content_asset_render_failed:1");
+
+      await writeFile(outputFile, "partial");
+      primary.stderr.write("usage limit");
+      primary.emit("exit", 1);
+
+      await assertion;
+      expect(spawnProcess).toHaveBeenCalledTimes(1);
+    } finally {
+      await rm(workDir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not retry a generic image child failure", async () => {
+    const accountPool = await testAccountPool();
+    const workDir = await mkdtemp(path.join(tmpdir(), "image-asset-child-"));
+    const primary = new FakeRenderChild();
+    const spawnProcess = vi.fn(() => primary);
+    try {
+      const running = runAiContentAssetChildProcess({
+        accountPool,
+        command: "node",
+        args: ["runner.mjs"],
+        cwd: workDir,
+        env: {},
+        outputFile: path.join(workDir, "asset.png"),
+        signal: new AbortController().signal,
+        timeoutMs: 60_000,
+      }, { spawnProcess, platform: "linux" });
+      const assertion = expect(running).rejects.toThrow("ai_content_asset_render_failed:1");
+
+      primary.stderr.write("image tool failed ACCOUNT_SECRET");
+      primary.emit("exit", 1);
+
+      await assertion;
+      const error = await running.catch((caught: unknown) => caught);
+      expect(JSON.stringify(error)).not.toContain("ACCOUNT_SECRET");
+      expect(Object.keys(error as object)).not.toContain("diagnostic");
+      expect(spawnProcess).toHaveBeenCalledTimes(1);
+    } finally {
+      await rm(workDir, { recursive: true, force: true });
+    }
   });
 });

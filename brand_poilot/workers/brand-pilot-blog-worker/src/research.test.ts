@@ -1,5 +1,9 @@
-import { describe, expect, it, vi } from "vitest";
-import type { ContentGenerationInputV3 } from "@brand-pilot/worker-runtime";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import type { ContentGenerationInputV3 } from "@brand-pilot/content-contracts";
+import { createCodexAccountPool } from "@brand-pilot/worker-runtime";
 import { assessBlogResearchNeed, runBlogSupplementalSearch } from "./research.js";
 
 const input = {
@@ -12,6 +16,12 @@ const input = {
   researchEvidence: { items: [] },
 } as never;
 
+const roots: string[] = [];
+
+afterEach(async () => {
+  await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
+});
+
 describe("blog supplemental research", () => {
   it("assesses need with network, file, shell, and image access disabled", async () => {
     const runChild = vi.fn(async ({ args, prompt }: { args: string[]; prompt: string }) => {
@@ -22,6 +32,37 @@ describe("blog supplemental research", () => {
       return '{"decision":"not_needed","reason":"기존 근거가 충분합니다"}';
     });
     await expect(assessBlogResearchNeed(input, { runChild })).resolves.toEqual({ decision: "not_needed", reason: "기존 근거가 충분합니다" });
+  });
+
+  it("shares the worker account pool for assessment failover", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "blog-research-accounts-"));
+    roots.push(root);
+    for (const alias of ["primary", "secondary"]) {
+      const home = path.join(root, alias);
+      await mkdir(home);
+      await writeFile(path.join(home, "auth.json"), "{}");
+    }
+    const accountPool = await createCodexAccountPool({
+      root,
+      aliases: ["primary", "secondary"],
+    });
+    const attempted: Array<string | undefined> = [];
+    const runChild = vi.fn(async ({ profile }: { profile?: { alias: string } }) => {
+      attempted.push(profile?.alias);
+      if (profile?.alias !== "secondary") {
+        throw Object.assign(new Error("blog_research_assessment_failed:1"), {
+          diagnostic: "You've hit your usage limit",
+          acceptedOutput: false,
+        });
+      }
+      return '{"decision":"not_needed","reason":"secondary available"}';
+    });
+
+    await expect(assessBlogResearchNeed(input, { accountPool, runChild })).resolves.toEqual({
+      decision: "not_needed",
+      reason: "secondary available",
+    });
+    expect(attempted).toEqual(["primary", "secondary"]);
   });
 
   it("runs the existing controlled search exactly once in blog_supplement mode for either purpose", async () => {

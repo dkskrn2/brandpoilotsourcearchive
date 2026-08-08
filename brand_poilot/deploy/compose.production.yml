@@ -8,11 +8,15 @@ services:
     environment:
       LOCAL_SCHEDULER_ENABLED: "false"
       AI_CONTENT_ATTACHMENT_UPLOAD_SESSIONS_ENABLED: "true"
+      AI_CONTENT_DATABASE_URL_FILE: /run/secrets/ai_content_application_database_url
     restart: unless-stopped
     init: true
+    user: "${CODEX_RUNTIME_UID:?CODEX_RUNTIME_UID is required}:${CODEX_RUNTIME_GID:?CODEX_RUNTIME_GID is required}"
     read_only: true
     tmpfs:
       - /tmp:size=64m,mode=1777
+    volumes:
+      - ${AI_CONTENT_APPLICATION_DATABASE_URL_FILE:-/opt/brand-pilot/shared/secrets/ai-content-application-database-url}:/run/secrets/ai_content_application_database_url:ro
     cap_drop:
       - ALL
     security_opt:
@@ -39,11 +43,15 @@ services:
     environment:
       LOCAL_SCHEDULER_ENABLED: "false"
       AI_CONTENT_ATTACHMENT_UPLOAD_SESSIONS_ENABLED: "true"
+      AI_CONTENT_DATABASE_URL_FILE: /run/secrets/ai_content_application_database_url
     restart: unless-stopped
     init: true
+    user: "${CODEX_RUNTIME_UID:?CODEX_RUNTIME_UID is required}:${CODEX_RUNTIME_GID:?CODEX_RUNTIME_GID is required}"
     read_only: true
     tmpfs:
       - /tmp:size=64m,mode=1777
+    volumes:
+      - ${AI_CONTENT_APPLICATION_DATABASE_URL_FILE:-/opt/brand-pilot/shared/secrets/ai-content-application-database-url}:/run/secrets/ai_content_application_database_url:ro
     cap_drop:
       - ALL
     security_opt:
@@ -166,7 +174,9 @@ services:
     env_file:
       - ${CONTENT_PROPOSAL_WORKER_1_ENV_FILE:-/opt/brand-pilot/shared/env/content-proposal-worker-1.env}
     environment:
-      CODEX_HOME: /codex
+      CODEX_HOME: /codex-accounts/primary
+      CODEX_ACCOUNT_POOL_ROOT: /codex-accounts
+      CODEX_ACCOUNT_PROFILES: primary,secondary
       WORKER_ID: content-proposal-worker-1
       CONTENT_PROPOSAL_WORKER_ID: content-proposal-worker-1
     user: "${CODEX_RUNTIME_UID:?CODEX_RUNTIME_UID is required}:${CODEX_RUNTIME_GID:?CODEX_RUNTIME_GID is required}"
@@ -174,7 +184,7 @@ services:
     init: true
     read_only: true
     volumes:
-      - ${CODEX_HOME_PATH:-/opt/brand-pilot/shared/codex}:/codex
+      - ${CODEX_ACCOUNT_POOL_ROOT_PATH:-/opt/brand-pilot/shared/codex-accounts}:/codex-accounts
     tmpfs:
       - /tmp:size=64m,mode=1777
     cap_drop:
@@ -260,17 +270,20 @@ services:
     env_file:
       - ${IMAGE_WORKER_1_ENV_FILE:-/opt/brand-pilot/shared/env/image-worker-1.env}
     environment:
-      CODEX_HOME: /codex
+      CODEX_HOME: /codex-accounts/primary
+      CODEX_ACCOUNT_POOL_ROOT: /codex-accounts
+      CODEX_ACCOUNT_PROFILES: primary,secondary
       WORKER_ID: image-worker-1
     user: "${CODEX_RUNTIME_UID:?CODEX_RUNTIME_UID is required}:${CODEX_RUNTIME_GID:?CODEX_RUNTIME_GID is required}"
     restart: unless-stopped
     init: true
     read_only: true
     volumes:
-      - ${CODEX_HOME_PATH:-/opt/brand-pilot/shared/codex}:/codex
+      - ${CODEX_ACCOUNT_POOL_ROOT_PATH:-/opt/brand-pilot/shared/codex-accounts}:/codex-accounts
     tmpfs:
       - /tmp:size=64m,mode=1777
-      - /codex/generated_images:rw,size=512m,mode=0700,uid=${CODEX_RUNTIME_UID:?CODEX_RUNTIME_UID is required},gid=${CODEX_RUNTIME_GID:?CODEX_RUNTIME_GID is required}
+      - /codex-accounts/primary/generated_images:rw,size=512m,mode=0700,uid=${CODEX_RUNTIME_UID:?CODEX_RUNTIME_UID is required},gid=${CODEX_RUNTIME_GID:?CODEX_RUNTIME_GID is required}
+      - /codex-accounts/secondary/generated_images:rw,size=512m,mode=0700,uid=${CODEX_RUNTIME_UID:?CODEX_RUNTIME_UID is required},gid=${CODEX_RUNTIME_GID:?CODEX_RUNTIME_GID is required}
     cap_drop:
       - ALL
     security_opt:
@@ -292,17 +305,20 @@ services:
     env_file:
       - ${CARD_NEWS_WORKER_1_ENV_FILE:-/opt/brand-pilot/shared/env/card-news-worker-1.env}
     environment:
-      CODEX_HOME: /codex
+      CODEX_HOME: /codex-accounts/primary
+      CODEX_ACCOUNT_POOL_ROOT: /codex-accounts
+      CODEX_ACCOUNT_PROFILES: primary,secondary
       CARD_NEWS_WORKER_ID: card-news-worker-1
     user: "${CODEX_RUNTIME_UID:?CODEX_RUNTIME_UID is required}:${CODEX_RUNTIME_GID:?CODEX_RUNTIME_GID is required}"
     restart: unless-stopped
     init: true
     read_only: true
     volumes:
-      - ${CODEX_HOME_PATH:-/opt/brand-pilot/shared/codex}:/codex
+      - ${CODEX_ACCOUNT_POOL_ROOT_PATH:-/opt/brand-pilot/shared/codex-accounts}:/codex-accounts
     tmpfs:
       - /tmp:size=64m,mode=1777
-      - /codex/generated_images:rw,size=512m,mode=0700,uid=${CODEX_RUNTIME_UID:?CODEX_RUNTIME_UID is required},gid=${CODEX_RUNTIME_GID:?CODEX_RUNTIME_GID is required}
+      - /codex-accounts/primary/generated_images:rw,size=512m,mode=0700,uid=${CODEX_RUNTIME_UID:?CODEX_RUNTIME_UID is required},gid=${CODEX_RUNTIME_GID:?CODEX_RUNTIME_GID is required}
+      - /codex-accounts/secondary/generated_images:rw,size=512m,mode=0700,uid=${CODEX_RUNTIME_UID:?CODEX_RUNTIME_UID is required},gid=${CODEX_RUNTIME_GID:?CODEX_RUNTIME_GID is required}
     cap_drop:
       - ALL
     security_opt:
@@ -324,17 +340,20 @@ services:
     env_file:
       - ${BLOG_WORKER_1_ENV_FILE:-/opt/brand-pilot/shared/env/blog-worker-1.env}
     environment:
-      CODEX_HOME: /codex
+      CODEX_HOME: /codex-accounts/primary
+      CODEX_ACCOUNT_POOL_ROOT: /codex-accounts
+      CODEX_ACCOUNT_PROFILES: primary,secondary
       BLOG_WORKER_ID: blog-worker-1
     user: "${CODEX_RUNTIME_UID:?CODEX_RUNTIME_UID is required}:${CODEX_RUNTIME_GID:?CODEX_RUNTIME_GID is required}"
     restart: unless-stopped
     init: true
     read_only: true
     volumes:
-      - ${CODEX_HOME_PATH:-/opt/brand-pilot/shared/codex}:/codex
+      - ${CODEX_ACCOUNT_POOL_ROOT_PATH:-/opt/brand-pilot/shared/codex-accounts}:/codex-accounts
     tmpfs:
       - /tmp:size=64m,mode=1777
-      - /codex/generated_images:rw,size=512m,mode=0700,uid=${CODEX_RUNTIME_UID:?CODEX_RUNTIME_UID is required},gid=${CODEX_RUNTIME_GID:?CODEX_RUNTIME_GID is required}
+      - /codex-accounts/primary/generated_images:rw,size=512m,mode=0700,uid=${CODEX_RUNTIME_UID:?CODEX_RUNTIME_UID is required},gid=${CODEX_RUNTIME_GID:?CODEX_RUNTIME_GID is required}
+      - /codex-accounts/secondary/generated_images:rw,size=512m,mode=0700,uid=${CODEX_RUNTIME_UID:?CODEX_RUNTIME_UID is required},gid=${CODEX_RUNTIME_GID:?CODEX_RUNTIME_GID is required}
     cap_drop:
       - ALL
     security_opt:
@@ -349,24 +368,27 @@ services:
         max-size: 10m
         max-file: "5"
 
-  marketing-worker-1:
+  reel-worker-1:
     profiles:
-      - "marketing-worker-1"
-    image: ${MARKETING_WORKER_IMAGE:?MARKETING_WORKER_IMAGE is required}
+      - "reel-worker-1"
+    image: ${REEL_WORKER_IMAGE:?REEL_WORKER_IMAGE is required}
     env_file:
-      - ${MARKETING_WORKER_1_ENV_FILE:-/opt/brand-pilot/shared/env/marketing-worker-1.env}
+      - ${REEL_WORKER_1_ENV_FILE:-/opt/brand-pilot/shared/env/reel-worker-1.env}
     environment:
-      CODEX_HOME: /codex
-      MARKETING_WORKER_ID: marketing-worker-1
+      CODEX_HOME: /codex-accounts/primary
+      CODEX_ACCOUNT_POOL_ROOT: /codex-accounts
+      CODEX_ACCOUNT_PROFILES: primary,secondary
+      REEL_WORKER_ID: reel-worker-1
     user: "${CODEX_RUNTIME_UID:?CODEX_RUNTIME_UID is required}:${CODEX_RUNTIME_GID:?CODEX_RUNTIME_GID is required}"
     restart: unless-stopped
     init: true
     read_only: true
     volumes:
-      - ${CODEX_HOME_PATH:-/opt/brand-pilot/shared/codex}:/codex
+      - ${CODEX_ACCOUNT_POOL_ROOT_PATH:-/opt/brand-pilot/shared/codex-accounts}:/codex-accounts
     tmpfs:
       - /tmp:size=64m,mode=1777
-      - /codex/generated_images:rw,size=512m,mode=0700,uid=${CODEX_RUNTIME_UID:?CODEX_RUNTIME_UID is required},gid=${CODEX_RUNTIME_GID:?CODEX_RUNTIME_GID is required}
+      - /codex-accounts/primary/generated_images:rw,size=512m,mode=0700,uid=${CODEX_RUNTIME_UID:?CODEX_RUNTIME_UID is required},gid=${CODEX_RUNTIME_GID:?CODEX_RUNTIME_GID is required}
+      - /codex-accounts/secondary/generated_images:rw,size=512m,mode=0700,uid=${CODEX_RUNTIME_UID:?CODEX_RUNTIME_UID is required},gid=${CODEX_RUNTIME_GID:?CODEX_RUNTIME_GID is required}
     cap_drop:
       - ALL
     security_opt:

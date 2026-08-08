@@ -1,12 +1,15 @@
 import { spawn } from "node:child_process";
 import {
   buildWorkerCliChildEnv,
+  codexAccountFailure,
+  codexAccountSuccess,
   runControlledSearch,
   terminateProcessTree,
+  type CodexAccountPool,
+  type CodexAccountProfile,
   type ControlledSearchInput,
-  type ContentGenerationInputV3,
-  type ResearchEvidenceSnapshotV1,
 } from "@brand-pilot/worker-runtime";
+import type { ContentGenerationInputV3, ResearchEvidenceSnapshotV1 } from "@brand-pilot/content-contracts";
 
 export interface BlogResearchDecision { decision: "needed" | "not_needed"; reason: string }
 export interface BlogResearch {
@@ -14,7 +17,14 @@ export interface BlogResearch {
   search(input: ContentGenerationInputV3, signal?: AbortSignal): Promise<ResearchEvidenceSnapshotV1>;
 }
 
-type AssessmentChild = (input: { args: string[]; prompt: string; signal?: AbortSignal }) => Promise<string>;
+type AssessmentChild = (input: {
+  args: string[];
+  prompt: string;
+  signal?: AbortSignal;
+  profile?: CodexAccountProfile;
+}) => Promise<string>;
+
+type AssessmentFailure = Error & { diagnostic?: unknown; acceptedOutput?: unknown };
 
 function publicSubjectTitle(input: ContentGenerationInputV3): string | null {
   if (input.subject.kind === "topic_text") return input.subject.title;
@@ -46,7 +56,7 @@ function publicResearchContext(input: ContentGenerationInputV3): ControlledSearc
 export function buildResearchAssessmentArgs(): string[] {
   return [
     "--strict-config", "-c", 'default_permissions="assessor"',
-    "-c", 'permissions.assessor.filesystem={":minimal"="read","/codex"="deny",":workspace_roots"={"."="deny"}}',
+    "-c", 'permissions.assessor.filesystem={":minimal"="read","/codex"="deny","/codex-accounts"="deny",":workspace_roots"={"."="deny"}}',
     "-c", "permissions.assessor.network.enabled=false",
     "--disable", "shell_tool", "--disable", "image_generation", "--disable", "shell_snapshot",
     "--disable", "apps", "--disable", "browser_use", "--disable", "browser_use_external", "--disable", "in_app_browser",
@@ -66,9 +76,23 @@ function assessmentPrompt(input: ContentGenerationInputV3): string {
   ].join("\n");
 }
 
-async function productionAssessmentChild({ args, prompt, signal }: { args: string[]; prompt: string; signal?: AbortSignal }): Promise<string> {
+async function productionAssessmentChild({
+  args,
+  prompt,
+  signal,
+  profile,
+}: {
+  args: string[];
+  prompt: string;
+  signal?: AbortSignal;
+  profile?: CodexAccountProfile;
+}): Promise<string> {
   const child = spawn(process.env.BLOG_RESEARCH_CODEX_COMMAND?.trim() || "codex", args, {
-    shell: false, windowsHide: true, detached: process.platform !== "win32", stdio: ["pipe", "pipe", "pipe"], env: buildWorkerCliChildEnv(process.env),
+    shell: false,
+    windowsHide: true,
+    detached: process.platform !== "win32",
+    stdio: ["pipe", "pipe", "pipe"],
+    env: buildWorkerCliChildEnv(profile ? { ...process.env, CODEX_HOME: profile.home } : process.env),
   });
   return new Promise<string>((resolve, reject) => {
     let stdout = ""; let stderr = ""; let settled = false;
@@ -79,7 +103,22 @@ async function productionAssessmentChild({ args, prompt, signal }: { args: strin
     child.stdout.on("data", (chunk) => { stdout += String(chunk); if (Buffer.byteLength(stdout) > 64 * 1024) stop(new Error("blog_research_assessment_output_limit")); });
     child.stderr.on("data", (chunk) => { stderr += String(chunk); if (Buffer.byteLength(stderr) > 64 * 1024) stop(new Error("blog_research_assessment_output_limit")); });
     child.once("error", (error) => stop(error));
-    child.once("close", (code) => { if (settled) return; settled = true; clearTimeout(timer); signal?.removeEventListener("abort", abort); code === 0 ? resolve(stdout) : reject(new Error(`blog_research_assessment_failed:${code}:${stderr.slice(0, 500)}`)); });
+    child.once("close", (code) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", abort);
+      if (code === 0) {
+        resolve(stdout);
+        return;
+      }
+      const error = new Error(`blog_research_assessment_failed:${code}`) as AssessmentFailure;
+      Object.defineProperties(error, {
+        diagnostic: { enumerable: false, value: stderr.slice(0, 8_192) },
+        acceptedOutput: { enumerable: false, value: stdout.trim().length > 0 },
+      });
+      reject(error);
+    });
     child.stdin.end(prompt);
     if (signal?.aborted) abort();
   });
@@ -94,8 +133,24 @@ function parseDecision(raw: string): BlogResearchDecision {
   return { decision: source.decision, reason: source.reason.trim() };
 }
 
-export async function assessBlogResearchNeed(input: ContentGenerationInputV3, dependencies: { runChild?: AssessmentChild; signal?: AbortSignal } = {}): Promise<BlogResearchDecision> {
-  return parseDecision(await (dependencies.runChild ?? productionAssessmentChild)({ args: buildResearchAssessmentArgs(), prompt: assessmentPrompt(input), signal: dependencies.signal }));
+export async function assessBlogResearchNeed(input: ContentGenerationInputV3, dependencies: {
+  accountPool?: CodexAccountPool;
+  runChild?: AssessmentChild;
+  signal?: AbortSignal;
+} = {}): Promise<BlogResearchDecision> {
+  const runChild = dependencies.runChild ?? productionAssessmentChild;
+  const request = { args: buildResearchAssessmentArgs(), prompt: assessmentPrompt(input), signal: dependencies.signal };
+  if (!dependencies.accountPool) return parseDecision(await runChild(request));
+  const result = await dependencies.accountPool.run(async (profile) => {
+    try {
+      return codexAccountSuccess(await runChild({ ...request, profile }));
+    } catch (error) {
+      const failure = error as AssessmentFailure;
+      if (typeof failure.diagnostic !== "string" || typeof failure.acceptedOutput !== "boolean") throw error;
+      return codexAccountFailure(failure, failure.diagnostic, failure.acceptedOutput);
+    }
+  });
+  return parseDecision(result.value);
 }
 
 export async function runBlogSupplementalSearch(input: ContentGenerationInputV3, dependencies: { search?: typeof runControlledSearch; signal?: AbortSignal } = {}): Promise<ResearchEvidenceSnapshotV1> {
@@ -107,9 +162,9 @@ export async function runBlogSupplementalSearch(input: ContentGenerationInputV3,
   });
 }
 
-export function createBlogResearch(): BlogResearch {
+export function createBlogResearch(accountPool?: CodexAccountPool): BlogResearch {
   return {
-    assess: (input, signal) => assessBlogResearchNeed(input, { signal }),
+    assess: (input, signal) => assessBlogResearchNeed(input, { accountPool, signal }),
     search: (input, signal) => runBlogSupplementalSearch(input, { signal }),
   };
 }

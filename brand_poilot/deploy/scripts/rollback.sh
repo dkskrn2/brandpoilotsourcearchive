@@ -29,6 +29,7 @@ for command_name in docker flock sync; do
 done
 exec 9>"$ROOT/state/deploy.lock"
 flock -n 9 || fail "deploy_lock_busy"
+enforce_ai_content_roll_forward_floor "$ROOT"
 reconcile_transition_or_fail "$ROOT" "$READY_TIMEOUT_SECONDS"
 if [[ "$TARGET_MODE" == "previous" ]]; then
   load_required_state_sha "$ROOT/state/previous" TARGET_SHA
@@ -70,7 +71,7 @@ if load_optional_state_sha "$ROOT/state/previous" ORIGINAL_PREVIOUS_SHA; then
   ORIGINAL_PREVIOUS_EXISTS=true
   validate_state_release_directory "$ROOT" "$ORIGINAL_PREVIOUS_SHA"
 fi
-validate_state_release_directory "$ROOT" "$TARGET_SHA"
+validate_normal_rollback_target "$ROOT" "$TARGET_SHA"
 TARGET_API_IMAGE="${RELEASE_MANIFEST[API_IMAGE]}"
 TARGET_CADDY_IMAGE="${RELEASE_MANIFEST[CADDY_IMAGE]}"
 TARGET_CANARY_HOST="${RELEASE_MANIFEST[CANARY_HOST]}"

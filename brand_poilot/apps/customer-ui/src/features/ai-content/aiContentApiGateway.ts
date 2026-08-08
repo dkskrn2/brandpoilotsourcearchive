@@ -1,6 +1,14 @@
 import { put as putBlob } from "@vercel/blob/client";
+import {
+  parseAiContentManifestV3,
+  parseContentPurpose,
+  parseContentStudioOutputFormat,
+  type AiContentManifestV3,
+  type ContentPurpose,
+  type ContentStudioOutputFormat,
+} from "@brand-pilot/content-contracts";
 import { ApiRequestError, apiClient, mapApiChannelConnection, type ApiChannel } from "../../lib/apiClient";
-import type { DeliveryFormat, PublishArtifact, PublishArtifactAsset } from "../../types";
+import type { PublishArtifact } from "../../types";
 import type {
   AiContentDraft,
   AiContentGateway,
@@ -24,7 +32,8 @@ import type {
   AiContentDraftReference,
   ContentOrchestration,
 } from "./types";
-import { DEFAULT_BRAND_COLOR } from "./useAiContentDraft";
+
+const DEFAULT_BRAND_COLOR = "#0057B8";
 
 export interface ContentGenerationFieldError {
   phase: "setup" | "proposal_selection" | "generating";
@@ -93,8 +102,6 @@ interface ApiOutput {
   id: string; generationId: string; outputIndex: number; title: string | null; status: AiGenerationOutput["status"];
   content: Record<string, unknown>; manifest: Record<string, unknown>; manifestUrl: string | null;
   failureCode: string | null; failureMessage: string | null; downloadedAt: string | null;
-  revisionCapabilities?: AiGenerationOutput["revisionCapabilities"];
-  legacyReadOnly?: boolean;
   manifestVersion?: AiGenerationOutput["manifestVersion"];
 }
 
@@ -102,20 +109,9 @@ function text(value: unknown) {
   return typeof value === "string" ? value : "";
 }
 
-function outputCopy(content: Record<string, unknown>) {
-  return {
-    hook: text(content.hook ?? content.headline ?? content.title),
-    keyMessage: text(content.keyMessage ?? content.concept ?? content.summary),
-    body: text(content.body),
-    cta: text(content.cta),
-    caption: text(content.caption),
-    hashtags: Array.isArray(content.hashtags)
-      ? content.hashtags.filter((tag): tag is string => typeof tag === "string")
-      : [],
-  };
-}
 interface ApiGeneration {
-  id: string; brandId: string; type: AiContentType; title: string; status: AiContentGeneration["status"];
+  id: string; brandId: string; outputFormat: ContentStudioOutputFormat; purpose: ContentPurpose;
+  title: string; status: AiContentGeneration["status"];
   currentStage: string | null; draft: Partial<AiContentDraft> | null; analysis: Record<string, unknown>; outputs?: ApiOutput[];
   attachmentsLockedAt?: string | null; terminalAt?: string | null; retryableUntil?: string | null;
   evidenceSnapshot?: AiContentGeneration["evidenceSnapshot"];
@@ -215,7 +211,7 @@ function parseV2Proposal(value: unknown): ContentProposalV2 {
   ]);
   const details = parseV2PurposeDetails(source.purposeDetails);
   const format = source.outputFormat;
-  if (format !== "card_news" && format !== "blog" && format !== "reel" && format !== "marketing_content") {
+  if (format !== "card_news" && format !== "blog" && format !== "reel") {
     invalidProposalBatchResponse();
   }
   const channelTargets = responseStrings(source.channelTargets);
@@ -273,7 +269,13 @@ function parseV2Proposal(value: unknown): ContentProposalV2 {
 function parseV2ProposalBatch(value: unknown): ContentProposalBatch {
   const source = responseObject(value);
   const request = responseObject(source.request);
-  if (request.contractVersion !== "content-proposal-request.v2") return value as ContentProposalBatch;
+  if (request.contractVersion !== "content-proposal-request.v2") {
+    if (source.origin === "scheduled_crawl"
+      && request.contractVersion === "content-proposal-request.v1") {
+      return value as ContentProposalBatch;
+    }
+    invalidProposalBatchResponse();
+  }
   if (
     typeof source.id !== "string"
     || typeof source.workspaceId !== "string"
@@ -378,7 +380,7 @@ function legacyAppeal(value: Partial<AiContentDraft>): SubjectAppeal | null {
   return appeal ? { id: appeal.id, targetId: value.audience?.id ?? "legacy-target", title: appeal.title, description: appeal.description, evidenceType: appeal.evidenceType === "fact" ? "product_fact" : appeal.evidenceType === "benefit" ? "public_research" : "manual_input", connectionReason: "기존 저장 소구점", sources: [] } : null;
 }
 
-export function normalizeAiContentDraft(type: AiContentType, value: ApiGeneration["draft"], brandColor = DEFAULT_BRAND_COLOR): AiContentDraft {
+export function normalizeAiContentDraft(outputFormat: ContentStudioOutputFormat, value: ApiGeneration["draft"], brandColor = DEFAULT_BRAND_COLOR): AiContentDraft {
   const source = value ?? {};
   const legacySourceUrl = typeof source.productUrl === "string" ? source.productUrl : "";
   const subjectInput = source.subjectInput && typeof source.subjectInput === "object"
@@ -392,7 +394,6 @@ export function normalizeAiContentDraft(type: AiContentType, value: ApiGeneratio
     ? Object.fromEntries(Object.entries(source.appealOverridesByTarget).filter((entry): entry is [string, SubjectAppeal[]] => Array.isArray(entry[1])).map(([targetId, appeals]) => [targetId, appeals.map((appeal) => ({ ...appeal, sources: [...appeal.sources] }))]))
     : {};
   return {
-    type: source.type ?? type,
     orchestration: source.orchestration as ContentOrchestration | undefined,
     subjectType,
     subjectInput,
@@ -409,121 +410,79 @@ export function normalizeAiContentDraft(type: AiContentType, value: ApiGeneratio
   };
 }
 
-function serializableAttachment(attachment: GenerationAttachment) {
-  const confirmed = attachment.uploadStatus === "confirmed"
-    || (attachment.uploadStatus === undefined && Boolean(attachment.storagePath && attachment.storageUrl));
-  if (!confirmed || !attachment.storagePath || !attachment.storageUrl) return null;
-  return {
-    id: attachment.id,
-    role: attachment.role,
-    fileName: attachment.fileName,
-    mimeType: attachment.mimeType,
-    size: attachment.size,
-    storageUrl: attachment.storageUrl,
-    storagePath: attachment.storagePath,
-  };
+function activeV3Manifest(output: ApiOutput, generation: ApiGeneration): AiContentManifestV3 {
+  let manifest: AiContentManifestV3;
+  try {
+    manifest = parseAiContentManifestV3(output.manifest);
+  } catch {
+    throw new Error("ai_content_output_manifest_invalid");
+  }
+  if (manifest.outputFormat !== generation.outputFormat || manifest.purpose !== generation.purpose) {
+    throw new Error("ai_content_output_manifest_invalid");
+  }
+  return manifest;
 }
 
-function serializableAttachments(attachments: GenerationAttachment[]) {
-  return attachments.map(serializableAttachment).filter((attachment) => attachment !== null);
-}
-
-function serializeDraft(draft: AiContentDraft): Record<string, unknown> {
-  return {
-    type: draft.type,
-    ...(draft.orchestration ? { orchestration: draft.orchestration } : {}),
-    subjectType: draft.subjectType, subjectInput: { ...draft.subjectInput, sourceUrl: draft.subjectInput.sourceUrl || draft.productUrl },
-    subjectAnalysisId: draft.subjectAnalysisId, subjectAnalysisVersion: draft.subjectAnalysisVersion,
-    subjectAttachments: serializableAttachments(draft.subjectAttachments ?? []),
-    selectedSubjectImageIds: [...draft.selectedSubjectImageIds], selectedTarget: draft.selectedTarget, selectedAppeal: draft.selectedAppeal,
-    appealOverridesByTarget: Object.fromEntries(Object.entries(draft.appealOverridesByTarget).map(([targetId, appeals]) => [targetId, appeals.map((appeal) => ({ ...appeal, sources: [...appeal.sources] }))])),
-    referenceIds: [...draft.referenceIds], brief: draft.brief ? { ...draft.brief, attachments: serializableAttachments(draft.brief.attachments), outputDirections: [...draft.brief.outputDirections] } : null,
-  };
-}
-
-function outputArtifact(type: AiContentType, output: ApiOutput): PublishArtifact | null {
-  if (output.status !== "completed") return null;
-  const rawAssets = Array.isArray(output.manifest.assets)
-    ? [...output.manifest.assets as Array<PublishArtifactAsset & { index?: number }>].sort((left, right) => (left.index ?? 0) - (right.index ?? 0))
-    : [];
-  const outputFormat = typeof output.manifest.outputFormat === "string"
-    ? output.manifest.outputFormat
-    : type === "card_news" ? "card_news" : type === "blog" ? "blog" : null;
+function outputArtifact(outputId: string, manifest: AiContentManifestV3): PublishArtifact {
+  const rawAssets = [...manifest.assets].sort((left, right) => (left.index ?? 0) - (right.index ?? 0));
+  const outputFormat = manifest.outputFormat;
   const assets = outputFormat === "blog"
     ? rawAssets.filter((asset) => asset.mimeType?.startsWith("image/"))
     : rawAssets;
-  const content = output.content ?? {};
-  const html = outputFormat === "blog" && typeof content.html === "string" ? content.html : null;
-  const deliveryFormat = typeof output.manifest.deliveryFormat === "string"
-    ? output.manifest.deliveryFormat as DeliveryFormat
-    : null;
+  const content = manifest.content;
+  const html = outputFormat === "blog" && "html" in content ? content.html : null;
+  const deliveryFormat = null;
   const text = outputFormat === "card_news"
-    ? [content.caption, ...(Array.isArray(content.hashtags) ? content.hashtags : [])].filter(Boolean).join("\n\n")
-    : outputFormat === "marketing_content" || type === "marketing"
-      ? [content.concept, content.headline, content.body, content.caption, content.cta].filter(Boolean).join("\n\n")
-      : [content.title, content.summary].filter(Boolean).join("\n\n");
+    ? ["caption" in content ? content.caption : "", ...("hashtags" in content ? content.hashtags : [])].filter(Boolean).join("\n\n")
+    : outputFormat === "reel"
+      ? ["caption" in content ? content.caption : "", ...("hashtags" in content ? content.hashtags : []), "cta" in content ? content.cta : ""].filter(Boolean).join("\n\n")
+      : ["title" in content ? content.title : "", "summary" in content ? content.summary : ""].filter(Boolean).join("\n\n");
   const firstImage = rawAssets.find((asset) => asset.mimeType?.startsWith("image/"));
   return {
-    queueId: output.id,
+    queueId: outputId,
     kind: outputFormat === "blog"
       ? "html"
       : outputFormat === "reel"
         ? "video"
-        : outputFormat === "card_news" || outputFormat === "marketing_content"
-          ? "image_gallery"
-          : type === "blog" ? "html" : type === "card_news" ? "image_gallery" : "image",
+        : "image_gallery",
     deliveryFormat,
-    assets: assets.map((asset) => ({ ...asset, width: asset.width ?? null, height: asset.height ?? null })),
+    assets: assets.map((asset) => ({
+      ...asset,
+      width: "width" in asset ? asset.width : null,
+      height: "height" in asset ? asset.height : null,
+    })),
     posterUrl: firstImage?.url ?? null,
     html,
     text,
   };
 }
 
-function normalizedApiManifestVersion(manifest: Record<string, unknown>): AiGenerationOutput["manifestVersion"] {
-  if (manifest.version === "ai-content.v1" || manifest.version === "ai-content.v2") return manifest.version;
-  if (Object.prototype.hasOwnProperty.call(manifest, "version")) return null;
-  const knownLegacyType = manifest.type === "card_news" || manifest.type === "blog" || manifest.type === "marketing";
-  const knownLegacyDelivery = manifest.deliveryFormat === "instagram_feed_carousel"
-    || manifest.deliveryFormat === "instagram_story"
-    || manifest.deliveryFormat === "instagram_reel";
-  return knownLegacyType || knownLegacyDelivery ? "ai-content.v1" : null;
-}
-
 function mapGeneration(value: ApiGeneration): AiContentGeneration {
   const stepByStatus: Record<AiContentGeneration["status"], AiContentWizardStep> = { draft: 1, analyzing: 2, analysis_ready: 3, queued: 5, planning: 5, generating: 5, completed: 5, partial_failed: 5, failed: 5 };
+  try {
+    parseContentStudioOutputFormat(value.outputFormat);
+    parseContentPurpose(value.purpose);
+  } catch {
+    throw new Error("ai_content_generation_contract_invalid");
+  }
   return {
-    id: value.id, brandId: value.brandId, title: value.title, type: value.type, status: value.status,
-    currentStep: stepByStatus[value.status], draft: normalizeAiContentDraft(value.type, value.draft), analysis: value.analysis,
+    id: value.id, brandId: value.brandId, title: value.title,
+    outputFormat: value.outputFormat, purpose: value.purpose, status: value.status,
+    currentStep: stepByStatus[value.status], draft: normalizeAiContentDraft(value.outputFormat, value.draft), analysis: value.analysis,
     outputs: (value.outputs ?? []).map((output) => {
-      const manifestVersion = output.manifestVersion === "ai-content.v1" || output.manifestVersion === "ai-content.v2" || output.manifestVersion === null
-        ? output.manifestVersion
-        : normalizedApiManifestVersion(output.manifest);
-      const outputFormat = typeof output.manifest.outputFormat === "string"
-        ? output.manifest.outputFormat as AiGenerationOutput["outputFormat"]
-        : value.type === "card_news" ? "card_news" : value.type === "blog" ? "blog" : null;
-      const legacyReadOnly = output.legacyReadOnly === true
-        || (manifestVersion === "ai-content.v1"
-          && (output.manifest.deliveryFormat === "instagram_reel" || output.manifest.outputFormat === "reel"));
-      const publishSupported = !legacyReadOnly && (manifestVersion === "ai-content.v2"
-        ? outputFormat === "card_news" || outputFormat === "marketing_content"
-        : manifestVersion === "ai-content.v1"
-          ? value.type === "card_news" || (value.type === "marketing" && outputFormat !== "channel_text")
-          : false);
+      const manifest = output.status === "completed" ? activeV3Manifest(output, value) : null;
+      const outputFormat = manifest?.outputFormat ?? value.outputFormat;
       return {
         id: output.id,
         generationId: output.generationId,
-        title: output.title ?? `결과 ${output.outputIndex}`,
+        title: manifest?.title ?? output.title ?? `결과 ${output.outputIndex}`,
         status: output.status,
-        artifact: outputArtifact(value.type, output),
-        copy: outputCopy(output.content),
+        artifact: manifest ? outputArtifact(output.id, manifest) : null,
         failureReason: output.failureMessage ?? output.failureCode,
         downloadedAt: output.downloadedAt,
-        revisionCapabilities: output.revisionCapabilities ?? [],
-        legacyReadOnly,
-        manifestVersion,
+        manifestVersion: manifest?.version ?? null,
         outputFormat,
-        publishSupported,
+        publishSupported: manifest?.outputFormat === "card_news",
       };
     }),
     evidenceSnapshot: value.evidenceSnapshot ?? null,
@@ -532,12 +491,6 @@ function mapGeneration(value: ApiGeneration): AiContentGeneration {
     retryableUntil: value.retryableUntil ?? null,
     createdAt: value.createdAt, updatedAt: value.updatedAt,
   };
-}
-
-function legacyTypeForOrchestration(orchestration: ContentOrchestration): AiContentType {
-  if (orchestration.outputFormat === "card_news") return "card_news";
-  if (orchestration.outputFormat === "blog") return "blog";
-  return "marketing";
 }
 
 function mapSubjectAnalysis(value: ApiSubjectAnalysis): SubjectAnalysis {
@@ -598,6 +551,7 @@ function shouldRetryConfirm(error: unknown) {
 }
 
 export function createAiContentApiGateway(client = apiClient(), blobPut: typeof putBlob = putBlob): AiContentGateway {
+  const retryIdempotencyKeys = new Map<string, string>();
   return {
     async getUsage(brandId) {
       const usage = await client.requestJson<{ usageDate: string; generationCount: number; downloadCount: number; dailyGenerationLimit: number; dailyDownloadLimit: number }>(`/brands/${brandId}/ai-content/usage`, { method: "GET" });
@@ -609,23 +563,6 @@ export function createAiContentApiGateway(client = apiClient(), blobPut: typeof 
     },
     async listGenerations(brandId) { return (await client.requestJson<ApiGeneration[]>(`/brands/${brandId}/ai-content/generations`, { method: "GET" })).map(mapGeneration); },
     async getGeneration(brandId, generationId) { return mapGeneration(await client.requestJson<ApiGeneration>(`/brands/${brandId}/ai-content/generations/${generationId}`, { method: "GET" })); },
-    async createAnalysis(brandId, input) {
-      const orchestration = input.orchestration ?? input.draft.orchestration ?? undefined;
-      return mapGeneration(await client.requestJson<ApiGeneration>(
-        `/brands/${brandId}/ai-content/generations`,
-        {
-          method: "POST",
-          body: JSON.stringify({
-            ...input,
-            type: orchestration ? legacyTypeForOrchestration(orchestration) : input.type,
-            draft: serializeDraft(input.draft),
-            ...(orchestration ? { orchestration } : {}),
-          }),
-        },
-      ));
-    },
-    async updateGeneration(brandId, generationId, input) { return mapGeneration(await client.requestJson<ApiGeneration>(`/brands/${brandId}/ai-content/generations/${generationId}`, { method: "PATCH", body: JSON.stringify({ ...input, draft: serializeDraft(input.draft) }) })); },
-    async startGeneration(brandId, generationId, input) { return mapGeneration(await client.requestJson<ApiGeneration>(`/brands/${brandId}/ai-content/generations/${generationId}/generate`, { method: "POST", body: JSON.stringify(input) })); },
     async updateFinalizationDraft(brandId, generationId, finalizationDraft) {
       return mapGeneration(await client.requestJson<ApiGeneration>(
         `/brands/${brandId}/ai-content/generations/${generationId}`,
@@ -728,35 +665,22 @@ export function createAiContentApiGateway(client = apiClient(), blobPut: typeof 
     },
     async retryOutput(brandId, outputId, reason) {
       if (!reason.trim()) throw new Error("retry_reason_required");
-      let generation = mapGeneration(await client.requestJson<ApiGeneration>(`/brands/${brandId}/ai-content/outputs/${outputId}/retry`, { method: "POST", body: JSON.stringify({ reason }) }));
-      let output = generation.outputs.find((item) => item.id === outputId);
-      if (!output) {
-        generation = mapGeneration(await client.requestJson<ApiGeneration>(
-          `/brands/${brandId}/ai-content/generations/${generation.id}`,
-          { method: "GET" },
-        ));
-        output = generation.outputs.find((item) => item.id === outputId);
+      const normalizedReason = reason.trim();
+      const retryKey = `${brandId}:${outputId}:${normalizedReason}`;
+      const idempotencyKey = retryIdempotencyKeys.get(retryKey) ?? crypto.randomUUID();
+      retryIdempotencyKeys.set(retryKey, idempotencyKey);
+      const generation = mapGeneration(await client.requestJson<ApiGeneration>(
+        `/brands/${brandId}/ai-content/outputs/${outputId}/retry`,
+        {
+          method: "POST",
+          body: JSON.stringify({ contractVersion: "content-generation-retry.v1", idempotencyKey, reason: normalizedReason }),
+        },
+      ));
+      retryIdempotencyKeys.delete(retryKey);
+      if (generation.outputs.length !== 1 || generation.outputs[0]?.status !== "queued") {
+        throw new Error("ai_content_generation_retry_response_invalid");
       }
-      if (!output) throw new Error("ai_content_output_not_found");
-      return output;
-    },
-    async reviseOutput(brandId, outputId, input) {
-      const generation = mapGeneration(await client.requestJson<ApiGeneration>(
-        `/brands/${brandId}/ai-content/outputs/${outputId}/revisions`,
-        { method: "POST", body: JSON.stringify(input) },
-      ));
-      const output = generation.outputs.find((item) => item.id === outputId);
-      if (!output) throw new Error("ai_content_output_not_found");
-      return output;
-    },
-    async saveOutputCopy(brandId, outputId, input) {
-      const generation = mapGeneration(await client.requestJson<ApiGeneration>(
-        `/brands/${brandId}/ai-content/outputs/${outputId}/copy`,
-        { method: "PUT", body: JSON.stringify(input) },
-      ));
-      const output = generation.outputs.find((item) => item.id === outputId);
-      if (!output) throw new Error("ai_content_output_not_found");
-      return output;
+      return generation;
     },
     downloadOutput(brandId, outputId) {
       return client.requestBlob(`/brands/${brandId}/ai-content/outputs/${outputId}/download`, { method: "GET" });

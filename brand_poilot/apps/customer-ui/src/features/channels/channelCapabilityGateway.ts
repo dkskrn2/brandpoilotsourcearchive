@@ -4,7 +4,6 @@ export type ChannelContentFormat =
   | "card_news"
   | "blog"
   | "reel"
-  | "marketing_content"
   | "single_image"
   | "channel_text";
 
@@ -112,7 +111,6 @@ function isChannelCapability(value: unknown): value is ChannelCapability {
       "card_news",
       "blog",
       "reel",
-      "marketing_content",
       "single_image",
       "channel_text",
     ]))

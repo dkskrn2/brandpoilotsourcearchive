@@ -94,7 +94,7 @@ describe("channel capability aggregate", () => {
       enabled: boolean;
       connectionStatus: ChannelStatus;
       canGenerate: boolean;
-      generationFormats: Array<"card_news" | "blog" | "reel" | "marketing_content" | "single_image" | "channel_text">;
+      generationFormats: Array<"card_news" | "blog" | "reel" | "single_image" | "channel_text">;
       exportModes: Array<"image" | "html" | "text">;
       publishModes: DeliveryFormat[];
       readiness: "ready" | "needs_connection" | "needs_permission" | "not_supported";
@@ -115,7 +115,7 @@ describe("channel capability aggregate", () => {
       enabled: false,
       connectionStatus: "not_connected",
       canGenerate: true,
-      generationFormats: ["card_news", "single_image", "reel", "marketing_content"],
+      generationFormats: ["card_news", "single_image", "reel"],
       exportModes: ["image"],
       publishModes: [],
       readiness: "needs_connection",
@@ -248,7 +248,7 @@ describe("channel capability aggregate", () => {
       enabled: true,
       connectionStatus: "connected",
       canGenerate: true,
-      generationFormats: ["card_news", "single_image", "reel", "marketing_content"],
+      generationFormats: ["card_news", "single_image", "reel"],
       exportModes: ["image"],
       publishModes: [],
       readiness: "not_supported",

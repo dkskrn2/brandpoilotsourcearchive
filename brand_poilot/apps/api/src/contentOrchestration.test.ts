@@ -1,9 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   assertContentGenerationStartAllowed,
-  orchestrateContentProposalBatchV2,
   mapOrchestrationToWorkerType,
   parseContentOrchestrationV1,
+  resolveContentProposalV2Input,
 } from "./contentOrchestration.js";
 import type {
   ApprovedBrandCoreSnapshotV2,
@@ -15,10 +15,7 @@ import type {
 } from "./aiContentContracts.js";
 import type { ChannelCapability } from "./channelCapabilities.js";
 import type { ResolvedAiContentSubjectV2 } from "./aiContentSeedResolver.js";
-import type {
-  AiContentProposalBatchRecord,
-  CreateAiContentProposalBatchV2Input,
-} from "./aiContentRepository.js";
+import { parseContentOrchestrationV2 } from "./aiContentGenerationInputV3.js";
 
 function orchestration(
   overrides: Partial<ContentOrchestrationV1> = {},
@@ -408,7 +405,7 @@ function readyCapability(
     enabled: true,
     connectionStatus: "connected",
     canGenerate: true,
-    generationFormats: ["card_news", "reel", "marketing_content"],
+    generationFormats: ["card_news", "reel"],
     exportModes: ["image"],
     publishModes: ["instagram_feed_carousel"],
     readiness: "ready",
@@ -419,10 +416,6 @@ function readyCapability(
 
 function v2Harness() {
   const events: string[] = [];
-  const getAiContentProposalBatchV2Replay = vi.fn(async (): Promise<AiContentProposalBatchRecord | null> => {
-    events.push("replay");
-    return null;
-  });
   const loadChannelCapability = vi.fn(async () => {
     events.push("capability");
     return readyCapability();
@@ -449,29 +442,9 @@ function v2Harness() {
     events.push("references");
     return frozenReferencesV2;
   });
-  const createAiContentProposalBatchV2 = vi.fn(async (
-    _input: CreateAiContentProposalBatchV2Input,
-  ) => {
-    events.push("create");
-    return {
-      id: v2Ids.batch,
-      workspaceId: v2Ids.workspace,
-      brandId: v2Ids.brand,
-      origin: "manual" as const,
-      contentFamily: "informational" as const,
-      request: {},
-      sourceSnapshots: [],
-      status: "queued" as const,
-      errorCode: null,
-      errorMessage: null,
-      createdAt: "2026-08-01T03:00:00.000Z",
-      updatedAt: "2026-08-01T03:00:00.000Z",
-    };
-  });
   return {
     events,
     deps: {
-      getAiContentProposalBatchV2Replay,
       loadChannelCapability,
       resolveAiContentSeed,
       snapshotRepository: {
@@ -484,115 +457,47 @@ function v2Harness() {
       loadApprovedCore,
       loadApprovedProduct,
       freezeReferences,
-      createAiContentProposalBatchV2,
       now: () => new Date("2026-08-01T03:00:00.000Z"),
     },
   };
 }
 
-function v2ServiceInput(body: unknown = orchestrationV2()) {
-  return {
-    routeBrandId: v2Ids.brand,
-    scope: {
-      workspaceId: v2Ids.workspace,
-      brandId: v2Ids.brand,
-      actorUserId: v2Ids.actor,
-    },
-    body,
-    idempotencyKey: "proposal-v2-1",
-  };
+function resolveV2(
+  body: ContentOrchestrationV2,
+  harness: ReturnType<typeof v2Harness>,
+) {
+  return resolveContentProposalV2Input(parseContentOrchestrationV2(body), {
+    workspaceId: v2Ids.workspace,
+    brandId: v2Ids.brand,
+  }, harness.deps);
 }
 
-describe("V2 proposal orchestration service", () => {
+describe("V2 proposal input resolver", () => {
   it("builds an informational text base snapshot in dependency order without product or reference reads", async () => {
     const harness = v2Harness();
 
-    const result = await orchestrateContentProposalBatchV2(v2ServiceInput(), harness.deps);
+    const result = await resolveV2(orchestrationV2(), harness);
 
-    expect(result.id).toBe(v2Ids.batch);
-    expect(harness.events).toEqual(["replay", "capability", "resolve", "core", "create"]);
+    expect(result.channelTarget).toBe("instagram");
+    expect(harness.events).toEqual(["capability", "resolve", "core"]);
     expect(harness.deps.loadApprovedProduct).not.toHaveBeenCalled();
     expect(harness.deps.freezeReferences).not.toHaveBeenCalled();
-    expect(harness.deps.createAiContentProposalBatchV2).toHaveBeenCalledOnce();
-    expect(harness.deps.createAiContentProposalBatchV2).toHaveBeenCalledWith({
-      workspaceId: v2Ids.workspace,
-      brandId: v2Ids.brand,
-      actorUserId: v2Ids.actor,
-      origin: "manual",
-      idempotencyKey: "proposal-v2-1",
-      requestFingerprint: expect.stringMatching(/^[0-9a-f]{64}$/),
-      purpose: "informational",
-      outputFormat: "card_news",
-      channelTarget: "instagram",
-      inputSnapshot: {
-        contractVersion: "proposal-base-input.v2",
-        brandCore: approvedCoreV2,
-        subject: { kind: "topic_text", title: "운영 체크리스트" },
-        contentInstruction: "실무 중심으로",
-        product: null,
-        references: [],
-        outputSettings: {
-          outputFormat: "card_news",
-          channelTargets: ["instagram"],
-          aspectRatio: "1:1",
-          outputCount: 1,
-          purpose: "informational",
-        },
-        capturedAt: "2026-08-01T03:00:00.000Z",
+    expect(result.inputSnapshot).toEqual({
+      contractVersion: "proposal-base-input.v2",
+      brandCore: approvedCoreV2,
+      subject: { kind: "topic_text", title: "운영 체크리스트" },
+      contentInstruction: "실무 중심으로",
+      product: null,
+      references: [],
+      outputSettings: {
+        outputFormat: "card_news",
+        channelTargets: ["instagram"],
+        aspectRatio: "1:1",
+        outputCount: 1,
+        purpose: "informational",
       },
+      capturedAt: "2026-08-01T03:00:00.000Z",
     });
-  });
-
-  it("returns a same-request replay before URL crawl or any mutable snapshot read even when now changed", async () => {
-    const harness = v2Harness();
-    const body = orchestrationV2({
-      seed: { kind: "topic_url", url: "https://example.test/requested" },
-    });
-    harness.deps.resolveAiContentSeed.mockResolvedValue({
-      kind: "topic_url",
-      requestedUrl: "https://example.test/requested",
-      canonicalUrl: "https://example.test/canonical",
-      title: "수집 제목",
-      text: "수집 본문",
-      contentHash: "c".repeat(64),
-      capturedAt: "2026-08-01T02:30:00.000Z",
-    });
-
-    await orchestrateContentProposalBatchV2(v2ServiceInput(body), harness.deps);
-    const firstFingerprint = harness.deps.createAiContentProposalBatchV2.mock.calls[0]?.[0]
-      .requestFingerprint;
-    harness.events.length = 0;
-    harness.deps.getAiContentProposalBatchV2Replay.mockResolvedValueOnce({
-      id: v2Ids.batch,
-      workspaceId: v2Ids.workspace,
-      brandId: v2Ids.brand,
-      origin: "manual",
-      contentFamily: "informational",
-      request: {},
-      sourceSnapshots: [],
-      status: "queued",
-      errorCode: null,
-      errorMessage: null,
-      createdAt: "2026-08-01T03:00:00.000Z",
-      updatedAt: "2026-08-01T03:00:00.000Z",
-    });
-    harness.deps.now = () => new Date("2026-08-02T04:00:00.000Z");
-
-    const replay = await orchestrateContentProposalBatchV2(v2ServiceInput(body), harness.deps);
-
-    expect(replay.id).toBe(v2Ids.batch);
-    expect(harness.events).toEqual([]);
-    expect(harness.deps.getAiContentProposalBatchV2Replay).toHaveBeenLastCalledWith({
-      workspaceId: v2Ids.workspace,
-      brandId: v2Ids.brand,
-      actorUserId: v2Ids.actor,
-      idempotencyKey: "proposal-v2-1",
-      requestFingerprint: firstFingerprint,
-    });
-    expect(harness.deps.resolveAiContentSeed).toHaveBeenCalledTimes(1);
-    expect(harness.deps.loadApprovedCore).toHaveBeenCalledTimes(1);
-    expect(harness.deps.freezeReferences).not.toHaveBeenCalled();
-    expect(harness.deps.createAiContentProposalBatchV2).toHaveBeenCalledTimes(1);
   });
 
   it("resolves a URL seed once and persists the exact frozen URL subject", async () => {
@@ -611,12 +516,11 @@ describe("V2 proposal orchestration service", () => {
       seed: { kind: "topic_url", url: "https://example.test/requested" },
     });
 
-    await orchestrateContentProposalBatchV2(v2ServiceInput(body), harness.deps);
+    const result = await resolveV2(body, harness);
 
     expect(harness.deps.resolveAiContentSeed).toHaveBeenCalledOnce();
     expect(harness.deps.resolveAiContentSeed).toHaveBeenCalledWith(body.seed);
-    expect(harness.deps.createAiContentProposalBatchV2.mock.calls[0]?.[0].inputSnapshot.subject)
-      .toEqual(subject);
+    expect(result.inputSnapshot.subject).toEqual(subject);
     expect(harness.deps.freezeReferences).not.toHaveBeenCalled();
   });
 
@@ -632,7 +536,7 @@ describe("V2 proposal orchestration service", () => {
       },
     });
 
-    await orchestrateContentProposalBatchV2(v2ServiceInput(body), harness.deps);
+    const result = await resolveV2(body, harness);
 
     expect(harness.deps.freezeReferences).toHaveBeenCalledOnce();
     expect(harness.deps.freezeReferences).toHaveBeenCalledWith(
@@ -642,8 +546,7 @@ describe("V2 proposal orchestration service", () => {
         { referenceId: v2Ids.referenceB, roles: ["visual_composition"] },
       ],
     );
-    expect(harness.deps.createAiContentProposalBatchV2.mock.calls[0]?.[0].inputSnapshot.references)
-      .toEqual(frozenReferencesV2);
+    expect(result.inputSnapshot.references).toEqual(frozenReferencesV2);
     expect(harness.deps.loadApprovedProduct).not.toHaveBeenCalled();
   });
 
@@ -651,55 +554,14 @@ describe("V2 proposal orchestration service", () => {
     const harness = v2Harness();
     const body = orchestrationV2({ purpose: "marketing", productId: v2Ids.product });
 
-    await orchestrateContentProposalBatchV2(v2ServiceInput(body), harness.deps);
+    const result = await resolveV2(body, harness);
 
     expect(harness.deps.loadApprovedProduct).toHaveBeenCalledOnce();
     expect(harness.deps.loadApprovedProduct).toHaveBeenCalledWith(
       { workspaceId: v2Ids.workspace, brandId: v2Ids.brand },
       v2Ids.product,
     );
-    expect(harness.deps.createAiContentProposalBatchV2.mock.calls[0]?.[0].inputSnapshot.product)
-      .toEqual(approvedProductV2);
-  });
-
-  it.each([
-    ["informational product", orchestrationV2({ productId: v2Ids.product })],
-    ["marketing null product", orchestrationV2({ purpose: "marketing", productId: null })],
-    ["unknown Wiki", { ...orchestrationV2(), wikiItemIds: [v2Ids.referenceA] }],
-    ["unknown FAQ", { ...orchestrationV2(), faqData: [] }],
-    ["unknown logo", { ...orchestrationV2(), logoUrl: "https://example.test/logo.png" }],
-    ["two channels", {
-      ...orchestrationV2(),
-      outputSettings: {
-        ...orchestrationV2().outputSettings,
-        channelTargets: ["instagram", "threads"],
-      },
-    }],
-    ["two outputs", {
-      ...orchestrationV2(),
-      outputSettings: { ...orchestrationV2().outputSettings, outputCount: 2 },
-    }],
-  ])("rejects %s before any dependency call", async (_label, body) => {
-    const harness = v2Harness();
-
-    await expect(orchestrateContentProposalBatchV2(v2ServiceInput(body), harness.deps))
-      .rejects.toThrow("content_orchestration_v2_invalid");
-
-    expect(harness.events).toEqual([]);
-  });
-
-  it.each([
-    ["route", v2Ids.otherBrand, v2Ids.brand],
-    ["scope", v2Ids.brand, v2Ids.otherBrand],
-  ])("rejects a %s/body brand mismatch before dependencies", async (_label, routeBrandId, scopeBrandId) => {
-    const harness = v2Harness();
-    const input = v2ServiceInput();
-    input.routeBrandId = routeBrandId;
-    input.scope.brandId = scopeBrandId;
-
-    await expect(orchestrateContentProposalBatchV2(input, harness.deps))
-      .rejects.toThrow("content_orchestration_v2_invalid");
-    expect(harness.events).toEqual([]);
+    expect(result.inputSnapshot.product).toEqual(approvedProductV2);
   });
 
   it.each([
@@ -714,10 +576,10 @@ describe("V2 proposal orchestration service", () => {
       return readyCapability(override);
     });
 
-    await expect(orchestrateContentProposalBatchV2(v2ServiceInput(), harness.deps))
+    await expect(resolveV2(orchestrationV2(), harness))
       .rejects.toThrow("content_orchestration_channel_capability_mismatch");
 
-    expect(harness.events).toEqual(["replay", "capability"]);
+    expect(harness.events).toEqual(["capability"]);
     expect(harness.deps.resolveAiContentSeed).not.toHaveBeenCalled();
     expect(harness.deps.loadApprovedCore).not.toHaveBeenCalled();
   });
@@ -733,10 +595,10 @@ describe("V2 proposal orchestration service", () => {
       },
     });
 
-    await orchestrateContentProposalBatchV2(v2ServiceInput(body), harness.deps);
+    await resolveV2(body, harness);
 
     expect(harness.deps.loadChannelCapability).not.toHaveBeenCalled();
-    expect(harness.events).toEqual(["replay", "resolve", "core", "create"]);
+    expect(harness.events).toEqual(["resolve", "core"]);
   });
 
   it("passes RESOURCE_NOT_AVAILABLE through without translating it", async () => {
@@ -744,7 +606,7 @@ describe("V2 proposal orchestration service", () => {
     const unavailable = new Error("RESOURCE_NOT_AVAILABLE");
     harness.deps.loadApprovedCore.mockRejectedValueOnce(unavailable);
 
-    await expect(orchestrateContentProposalBatchV2(v2ServiceInput(), harness.deps))
+    await expect(resolveV2(orchestrationV2(), harness))
       .rejects.toBe(unavailable);
   });
 });

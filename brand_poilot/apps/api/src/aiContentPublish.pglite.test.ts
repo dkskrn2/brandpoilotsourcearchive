@@ -18,8 +18,9 @@ const ids = {
 const manifestPath = `ai-content/${ids.brand}/${ids.generation}/${ids.output}/manifest.json`;
 const manifestUrl = `https://assets.public.blob.vercel-storage.com/${manifestPath}`;
 const manifest = {
-  version: "ai-content.v1",
-  type: "card_news",
+  version: "ai-content.v3",
+  outputFormat: "card_news",
+  purpose: "informational",
   title: "Tea",
   assets: [{
     role: "slide", index: 1,
@@ -37,7 +38,7 @@ describe("AI content publish artifact ownership with postgres semantics", () => 
     db = await PGlite.create({ extensions: { pgcrypto } });
     await db.exec(`
       create table ai_content_generations (
-        id uuid primary key, type text not null, title text not null, draft_json jsonb not null default '{}'
+        id uuid primary key, output_format text not null, purpose text not null, title text not null, draft_json jsonb not null default '{}'
       );
       create table ai_content_generation_outputs (
         id uuid primary key, generation_id uuid not null, workspace_id uuid not null, brand_id uuid not null,
@@ -94,7 +95,7 @@ describe("AI content publish artifact ownership with postgres semantics", () => 
       );
     `);
     await db.query(
-      "insert into ai_content_generations(id,type,title) values($1,'card_news','Tea')",
+      "insert into ai_content_generations(id,output_format,purpose,title) values($1,'card_news','informational','Tea')",
       [ids.generation],
     );
     await db.query(

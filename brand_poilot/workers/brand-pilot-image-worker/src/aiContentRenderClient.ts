@@ -1,4 +1,4 @@
-import { parseImageGenerationPackageV1, type ImageGenerationPackageV1 } from "@brand-pilot/worker-runtime";
+import { parseImageGenerationPackageV1, type ImageGenerationPackageV1 } from "@brand-pilot/content-contracts";
 
 export interface AiContentRenderedAsset {
   index: number;

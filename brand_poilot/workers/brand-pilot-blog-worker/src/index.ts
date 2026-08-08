@@ -1,3 +1,52 @@
-import "dotenv/config"; import { head } from "@vercel/blob"; import { createClient } from "./client.js"; import { createStorage } from "./storage.js"; import { createCommandRunner, runOnce } from "./worker.js";
-function required(name: string) { const value = process.env[name]; if (!value) throw new Error(`${name}_required`); return value; } const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
-async function main() { const mode = process.argv[2] ?? "run-once"; const workerId = process.env.BLOG_WORKER_ID ?? `blog-${process.pid}`; const blobToken = required("BLOB_READ_WRITE_TOKEN"); const execute = () => runOnce({ workerId, client: createClient(required("BRAND_PILOT_API_URL"), required("WORKER_API_TOKEN")), runner: createCommandRunner(required("BLOG_CODEX_COMMAND"), Math.max(1_000, Number(process.env.BLOG_CODEX_TIMEOUT_MS ?? 1_200_000))), storage: createStorage(blobToken), head: (storagePath, options) => head(storagePath, { token: blobToken, abortSignal: options.abortSignal }) }); if (mode === "watch") for (;;) { process.stdout.write(`${JSON.stringify(await execute())}\n`); await wait(Math.max(1_000, Number(process.env.BLOG_WORKER_POLL_MS ?? 10_000))); } process.stdout.write(`${JSON.stringify(await execute())}\n`); } main().catch((error) => { process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`); process.exitCode = 1; });
+import "dotenv/config";
+import {
+  contentWorkerPollDelayMs,
+  contentWorkerPollObservation,
+  createCodexAccountPoolFromEnv,
+} from "@brand-pilot/worker-runtime";
+import { createClient } from "./client.js";
+import { createCommandRunner, runOnce } from "./worker.js";
+import { createBlogResearch } from "./research.js";
+
+function required(name: string): string {
+  const value = process.env[name];
+  if (!value) throw new Error(`${name}_required`);
+  return value;
+}
+
+const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+async function main() {
+  const mode = process.argv[2] ?? "run-once";
+  const workerId = process.env.BLOG_WORKER_ID ?? `blog-${process.pid}`;
+  const shutdown = new AbortController();
+  process.once("SIGINT", () => shutdown.abort());
+  process.once("SIGTERM", () => shutdown.abort());
+  const client = createClient(required("BRAND_PILOT_API_URL"), required("WORKER_API_TOKEN"));
+  const accountPool = await createCodexAccountPoolFromEnv(process.env);
+  const runner = createCommandRunner(
+    process.env.BLOG_CODEX_PLAN_COMMAND ?? "node scripts/run-codex-blog-v2-plan.mjs --job \"{{jobFile}}\" --output \"{{outputDir}}\"",
+    Math.max(1_000, Number(process.env.BLOG_CODEX_PLAN_TIMEOUT_MS ?? 300_000)),
+    { accountPool },
+  );
+  const research = createBlogResearch(accountPool);
+  const execute = () => runOnce({ workerId, client, runner, research, shutdownSignal: shutdown.signal });
+  const pollMs = contentWorkerPollDelayMs(process.env.BLOG_WORKER_POLL_MS, 10_000);
+  if (mode === "watch") {
+    while (!shutdown.signal.aborted) {
+      try {
+        process.stdout.write(`${JSON.stringify(await execute())}\n`);
+      } catch (error) {
+        process.stderr.write(`${JSON.stringify(contentWorkerPollObservation(error))}\n`);
+      }
+      if (!shutdown.signal.aborted) await wait(pollMs);
+    }
+    return;
+  }
+  process.stdout.write(`${JSON.stringify(await execute())}\n`);
+}
+
+main().catch((error) => {
+  process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
+  process.exitCode = 1;
+});

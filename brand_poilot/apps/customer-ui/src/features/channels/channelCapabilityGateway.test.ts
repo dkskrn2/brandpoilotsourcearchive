@@ -72,11 +72,10 @@ describe("supportedChannelsForFormat", () => {
     expect(supportedChannelsForFormat([item], "reel")).toEqual([]);
   });
 
-  it("supports the V2 reel and marketing content formats", () => {
-    const instagram = capability("instagram", ["reel", "marketing_content"]);
+  it("supports the active reel format", () => {
+    const instagram = capability("instagram", ["reel"]);
 
     expect(supportedChannelsForFormat([instagram], "reel")).toEqual([instagram]);
-    expect(supportedChannelsForFormat([instagram], "marketing_content")).toEqual([instagram]);
   });
 });
 

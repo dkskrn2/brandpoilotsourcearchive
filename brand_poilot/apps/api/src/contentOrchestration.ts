@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import type {
   ApprovedBrandCoreSnapshotV2,
   ApprovedProductSnapshotV2,
@@ -19,13 +18,7 @@ import type {
   ChannelExportMode,
   ChannelGenerationFormat,
 } from "./channelCatalog.js";
-import { parseContentOrchestrationV2 } from "./aiContentGenerationInputV3.js";
-import type {
-  AiContentProposalBatchRecord,
-  AiContentRepository,
-  AuthenticatedBrandScope,
-  BrandScope,
-} from "./aiContentRepository.js";
+import type { BrandScope } from "./aiContentRepository.js";
 import type {
   ResolvedAiContentSubjectV2,
 } from "./aiContentSeedResolver.js";
@@ -61,7 +54,6 @@ const referenceRoles = new Set([
   "copy_pattern",
   "visual_composition",
 ]);
-const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 export interface ProposalBaseInputSnapshotV2 {
   contractVersion: "proposal-base-input.v2";
@@ -74,26 +66,13 @@ export interface ProposalBaseInputSnapshotV2 {
   capturedAt: string;
 }
 
-export interface OrchestrateContentProposalBatchV2Input {
-  routeBrandId: string;
-  scope: AuthenticatedBrandScope;
-  body: unknown;
-  idempotencyKey: string;
-}
-
-export interface ContentProposalOrchestrationV2Dependencies {
-  getAiContentProposalBatchV2Replay(
-    input: Parameters<AiContentRepository["getAiContentProposalBatchV2Replay"]>[0],
-  ): Promise<AiContentProposalBatchRecord | null>;
+export interface ResolveContentProposalV2Dependencies {
   loadChannelCapability(
     scope: BrandScope,
     channel: ChannelCapability["channel"],
   ): Promise<ChannelCapability | null>;
   resolveAiContentSeed(seed: ContentSeedV2): Promise<ResolvedAiContentSubjectV2>;
   snapshotRepository: AiContentSnapshotRepository;
-  createAiContentProposalBatchV2(
-    input: Parameters<AiContentRepository["createAiContentProposalBatchV2"]>[0],
-  ): Promise<AiContentProposalBatchRecord>;
   now(): Date;
 }
 
@@ -101,16 +80,6 @@ function invalid(): never {
   throw new Error("content_orchestration_invalid");
 }
 
-function invalidV2(): never {
-  throw new Error("content_orchestration_v2_invalid");
-}
-
-function normalizedBrandId(value: unknown): string {
-  if (typeof value !== "string") invalidV2();
-  const normalized = value.trim().toLowerCase();
-  if (!uuidPattern.test(normalized)) invalidV2();
-  return normalized;
-}
 
 function record(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) invalid();
@@ -324,26 +293,14 @@ export function assertContentGenerationStartAllowed(
   }
 }
 
-export async function orchestrateContentProposalBatchV2(
-  input: OrchestrateContentProposalBatchV2Input,
-  dependencies: ContentProposalOrchestrationV2Dependencies,
-): Promise<AiContentProposalBatchRecord> {
-  const request = parseContentOrchestrationV2(input.body);
-  const routeBrandId = normalizedBrandId(input.routeBrandId);
-  const scopeBrandId = normalizedBrandId(input.scope.brandId);
-  if (request.brandId !== routeBrandId || request.brandId !== scopeBrandId) invalidV2();
-
-  const scope = { workspaceId: input.scope.workspaceId, brandId: scopeBrandId };
-  const requestFingerprint = createHash("sha256")
-    .update(JSON.stringify(request))
-    .digest("hex");
-  const replay = await dependencies.getAiContentProposalBatchV2Replay({
-    ...scope,
-    actorUserId: input.scope.actorUserId,
-    idempotencyKey: input.idempotencyKey,
-    requestFingerprint,
-  });
-  if (replay) return replay;
+export async function resolveContentProposalV2Input(
+  request: ContentOrchestrationV2,
+  scope: BrandScope,
+  dependencies: ResolveContentProposalV2Dependencies,
+): Promise<{
+  channelTarget: ContentOrchestrationV2["outputSettings"]["channelTargets"][number];
+  inputSnapshot: ProposalBaseInputSnapshotV2;
+}> {
 
   const channelTarget = request.outputSettings.channelTargets[0];
   if (channelTarget !== "blog_export") {
@@ -392,16 +349,5 @@ export async function orchestrateContentProposalBatchV2(
     capturedAt: dependencies.now().toISOString(),
   };
 
-  return dependencies.createAiContentProposalBatchV2({
-    workspaceId: input.scope.workspaceId,
-    brandId: scopeBrandId,
-    actorUserId: input.scope.actorUserId,
-    origin: "manual",
-    idempotencyKey: input.idempotencyKey,
-    requestFingerprint,
-    purpose: request.purpose,
-    outputFormat: request.outputSettings.outputFormat,
-    channelTarget,
-    inputSnapshot,
-  });
+  return { channelTarget, inputSnapshot };
 }

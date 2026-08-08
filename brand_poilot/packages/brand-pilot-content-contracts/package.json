@@ -1,0 +1,21 @@
+{
+  "name": "@brand-pilot/content-contracts",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "exports": { ".": "./dist/index.js", "./generated/*": "./generated/*" },
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "vitest run",
+    "generate": "tsx src/generateArtifacts.ts",
+    "check:generated": "tsx src/checkGenerated.ts"
+  },
+  "dependencies": { "@sinclair/typebox": "0.34.52" },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "tsx": "^4.21.0",
+    "typescript": "^5.7.2",
+    "vitest": "^4.1.10"
+  }
+}

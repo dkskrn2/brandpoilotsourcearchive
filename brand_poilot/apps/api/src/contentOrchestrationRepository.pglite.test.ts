@@ -238,8 +238,13 @@ async function insertOneTimeReceipt(
 
 beforeAll(async () => {
   database = await PGlite.create({ extensions: { pgcrypto } });
+  await database.exec(`create table schema_migrations(
+    id text primary key,checksum text not null,applied_at timestamptz not null default now()
+  )`);
   const directory = resolve(process.cwd(), "../../db/migrations");
-  const files = (await readdir(directory)).filter((file) => file.endsWith(".sql")).sort();
+  const files = (await readdir(directory))
+    .filter((file) => file.endsWith(".sql") && file <= "073a_legacy_trigger_function_search_path.sql")
+    .sort();
   for (const file of files) {
     const sql = await readFile(resolve(directory, file), "utf8");
     if (sql.startsWith("-- requires: pgvector") || file === "027_wiki_search_v2.sql") continue;
@@ -401,7 +406,7 @@ afterAll(async () => {
 });
 
 describe("content orchestration PostgreSQL contract", () => {
-  it("keeps the legacy repository fixture queryable after migration 072", async () => {
+  it("keeps the legacy repository fixture queryable through migration 073a", async () => {
     const persisted = await database!.query(
       `select output_format,generation_input_snapshot
          from ai_content_generations
@@ -662,199 +667,6 @@ describe("content orchestration PostgreSQL contract", () => {
     );
     expect(actorScoped.rows[0]?.record_id).not.toBe(first.rows[0]?.record_id);
   });
-
-  it("replays proposal batches for structurally equal JSON regardless of object key order", async () => {
-    const query = async (sql: string, params?: unknown[]) => {
-      const result = await database!.query(sql, params);
-      return {
-        ...result,
-        rowCount: result.rows.length > 0 ? result.rows.length : (result.affectedRows ?? 0),
-      };
-    };
-    const repository = createAiContentRepository({
-      query,
-      connect: async () => ({ query, release() {} }),
-    } as never);
-    const firstRequest = {
-      contractVersion: "content-proposal-request.v1" as const,
-      contentFamily: "informational" as const,
-      subjectInput: { topic: "여름 관리", filters: { region: "서울", age: 30 } },
-      channelTargets: ["blog_export" as const],
-      outputFormats: ["blog" as const],
-      sourceSnapshotIds: [],
-      performanceSnapshotIds: [],
-    };
-    const reorderedRequest = {
-      performanceSnapshotIds: [],
-      sourceSnapshotIds: [],
-      outputFormats: ["blog" as const],
-      channelTargets: ["blog_export" as const],
-      subjectInput: { filters: { age: 30, region: "서울" }, topic: "여름 관리" },
-      contentFamily: "informational" as const,
-      contractVersion: "content-proposal-request.v1" as const,
-    };
-    const input = {
-      workspaceId: ids.workspace,
-      brandId: ids.brand,
-      actorUserId: ids.actor,
-      origin: "manual" as const,
-      idempotencyKey: "proposal-jsonb-order",
-    };
-
-    const created = await repository.createAiContentProposalBatch({ ...input, request: firstRequest });
-    await expect(repository.createAiContentProposalBatch({
-      ...input,
-      request: reorderedRequest,
-    })).resolves.toMatchObject({ id: created.id });
-    await expect(repository.createAiContentProposalBatch({
-      ...input,
-      request: {
-        ...reorderedRequest,
-        subjectInput: { topic: "다른 주제", filters: { age: 30, region: "서울" } },
-      },
-    })).rejects.toThrow("ai_content_proposal_batch_conflict");
-  });
-
-  it("replays the frozen batch before mutable source freshness checks or refresh scheduling", async () => {
-    const snapshotA = "41000000-0000-4000-8000-000000000041";
-    const snapshotB = "42000000-0000-4000-8000-000000000042";
-    await database!.query(
-      `insert into source_snapshots (
-         id,workspace_id,brand_id,source_url_id,status,fetched_at,
-         content_hash,extracted_text,summary
-       ) values ($1,$2,$3,$4,'succeeded',now(),$5,'Snapshot A','Snapshot A')`,
-      [snapshotA, ids.workspace, ids.brand, ids.sourceUrl, "a".repeat(64)],
-    );
-    const query = async (sql: string, params?: unknown[]) => {
-      const result = await database!.query(sql, params);
-      return {
-        ...result,
-        rowCount: result.rows.length > 0 ? result.rows.length : (result.affectedRows ?? 0),
-      };
-    };
-    const repository = createAiContentRepository({
-      query,
-      connect: async () => ({ query, release() {} }),
-    } as never);
-    const input = {
-      workspaceId: ids.workspace,
-      brandId: ids.brand,
-      actorUserId: ids.actor,
-      origin: "manual" as const,
-      idempotencyKey: "proposal-frozen-source-replay",
-      request: {
-        contractVersion: "content-proposal-request.v1" as const,
-        contentFamily: "informational" as const,
-        subjectInput: { topic: "Frozen source replay" },
-        channelTargets: ["blog_export" as const],
-        outputFormats: ["blog" as const],
-        sourceSnapshotIds: [snapshotA],
-        performanceSnapshotIds: [],
-      },
-    };
-    const created = await repository.createAiContentProposalBatch(input);
-    await database!.query(
-      "update source_snapshots set fetched_at=now()-interval '9 days' where id=$1",
-      [snapshotA],
-    );
-    await database!.query(
-      `insert into source_snapshots (
-         id,workspace_id,brand_id,source_url_id,status,fetched_at,
-         content_hash,extracted_text,summary
-       ) values ($1,$2,$3,$4,'succeeded',now()-interval '8 days',$5,'Snapshot B','Snapshot B')`,
-      [snapshotB, ids.workspace, ids.brand, ids.sourceUrl, "b".repeat(64)],
-    );
-    await database!.query(
-      "delete from source_crawl_runs where source_url_id=$1",
-      [ids.sourceUrl],
-    );
-
-    await expect(repository.createAiContentProposalBatch(input))
-      .resolves.toMatchObject({ id: created.id });
-    const jobs = await database!.query<{ count: string }>(
-      "select count(*)::text count from ai_content_proposal_jobs where batch_id=$1",
-      [created.id],
-    );
-    expect(jobs.rows[0]?.count).toBe("1");
-    const refreshes = await database!.query<{ count: string }>(
-      "select count(*)::text count from source_crawl_runs where source_url_id=$1",
-      [ids.sourceUrl],
-    );
-    expect(refreshes.rows[0]?.count).toBe("0");
-    await expect(repository.createAiContentProposalBatch({
-      ...input,
-      actorUserId: ids.inactiveActor,
-    })).rejects.toThrow("ai_content_actor_forbidden");
-  });
-
-  it.each(["queued", "completed", "failed"] as const)(
-    "does not enqueue a replacement proposal job when an idempotent batch job is %s",
-    async (terminalStatus) => {
-      const query = async (sql: string, params?: unknown[]) => {
-        const result = await database!.query(sql, params);
-        return {
-          ...result,
-          rowCount: result.rows.length > 0 ? result.rows.length : (result.affectedRows ?? 0),
-        };
-      };
-      const repository = createAiContentRepository({
-        query,
-        connect: async () => ({ query, release() {} }),
-      } as never);
-      const request = {
-        contractVersion: "content-proposal-request.v1" as const,
-        contentFamily: "informational" as const,
-        subjectInput: { topic: `Replay ${terminalStatus}` },
-        channelTargets: ["blog_export" as const],
-        outputFormats: ["blog" as const],
-        sourceSnapshotIds: [],
-        performanceSnapshotIds: [],
-      };
-      const input = {
-        workspaceId: ids.workspace,
-        brandId: ids.brand,
-        actorUserId: ids.actor,
-        origin: "manual" as const,
-        idempotencyKey: `proposal-job-replay-${terminalStatus}`,
-        request,
-      };
-      const batch = await repository.createAiContentProposalBatch(input);
-      if (terminalStatus === "completed") {
-        await database!.query(
-          `update ai_content_proposal_jobs
-              set status='completed',completed_at=now()
-            where batch_id=$1`,
-          [batch.id],
-        );
-        await database!.query(
-          "update ai_content_proposal_batches set status='ready' where id=$1",
-          [batch.id],
-        );
-      } else if (terminalStatus === "failed") {
-        await database!.query(
-          `update ai_content_proposal_jobs
-              set status='failed',error_code='proposal_failed',
-                  error_message='failed',completed_at=now()
-            where batch_id=$1`,
-          [batch.id],
-        );
-        await database!.query(
-          `update ai_content_proposal_batches
-              set status='failed',error_code='proposal_failed',error_message='failed'
-            where id=$1`,
-          [batch.id],
-        );
-      }
-
-      await expect(repository.createAiContentProposalBatch(input))
-        .resolves.toMatchObject({ id: batch.id });
-      const jobs = await database!.query<{ status: string }>(
-        "select status from ai_content_proposal_jobs where batch_id=$1 order by created_at,id",
-        [batch.id],
-      );
-      expect(jobs.rows.map(({ status }) => status)).toEqual([terminalStatus]);
-    },
-  );
 
   it.each(["queued", "completed", "failed"] as const)(
     "does not enqueue a replacement scheduled proposal job when the existing job is %s",

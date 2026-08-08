@@ -29,6 +29,7 @@ done
 for command_name in awk flock sha256sum sync; do
   require_command "$command_name"
 done
+enforce_ai_content_roll_forward_floor "$ROOT"
 mkdir -p -- "$ROOT/state/backups"
 exec 9>"$ROOT/state/deploy.lock"
 flock -n 9 || fail "deploy_lock_busy"
@@ -38,14 +39,28 @@ load_required_state_sha "$ROOT/state/candidate" CANDIDATE_RELEASE_SHA
 validate_release_directory "$ROOT/releases/$CANDIDATE_RELEASE_SHA"
 CANDIDATE_MANIFEST_SHA256="$(sha256sum -- "$ROOT/releases/$CANDIDATE_RELEASE_SHA/release.env" | awk '{print $1}')"
 EXTERNAL_ENV_FILE="${RELEASE_MANIFEST[API_ENV_FILE]}"
+CANDIDATE_MARKETING_CUTOVER=false
+CANDIDATE_RETIREMENT_SOURCE_SHA=""
+if [[ -v "RELEASE_MANIFEST[MARKETING_RETIREMENT_SHA256]" ]]; then
+  CANDIDATE_MARKETING_CUTOVER=true
+  CANDIDATE_RETIREMENT_SOURCE_SHA="$MARKETING_RETIREMENT_SOURCE_RELEASE_SHA"
+fi
 require_file_mode_600 "$EXTERNAL_ENV_FILE"
 EXTERNAL_ENV_SHA256="$(sha256sum -- "$EXTERNAL_ENV_FILE" | awk '{print $1}')"
 
 CURRENT_RELEASE_SHA="NONE"
 CURRENT_IMAGE_DIGEST="NONE"
 if load_optional_state_sha "$ROOT/state/current" CURRENT_RELEASE_SHA; then
-  validate_release_directory "$ROOT/releases/$CURRENT_RELEASE_SHA" legacy-current
-  CURRENT_IMAGE_DIGEST="${RELEASE_MANIFEST[API_IMAGE]}"
+  if [[ "$CANDIDATE_MARKETING_CUTOVER" == "true" ]]; then
+    [[ "$CURRENT_RELEASE_SHA" == "$CANDIDATE_RETIREMENT_SOURCE_SHA" ]] ||
+      fail "marketing_retirement_source_release_mismatch"
+    validate_legacy_marketing_cutover_source "$ROOT/releases/$CURRENT_RELEASE_SHA"
+    CURRENT_IMAGE_DIGEST="$(legacy_release_manifest_value "$ROOT/releases/$CURRENT_RELEASE_SHA/release.env" API_IMAGE)"
+    require_digest_image "$CURRENT_IMAGE_DIGEST"
+  else
+    validate_state_release_directory "$ROOT" "$CURRENT_RELEASE_SHA"
+    CURRENT_IMAGE_DIGEST="${RELEASE_MANIFEST[API_IMAGE]}"
+  fi
 fi
 
 printf -v metadata \

@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite --host 127.0.0.1",
+    "prebuild": "npm run build --workspace @brand-pilot/content-contracts",
     "build": "tsc --noEmit && tsc -p tsconfig.node.json --noEmit && vite build",
     "preview": "vite preview --host 127.0.0.1",
     "test": "vitest run",
@@ -12,6 +13,7 @@
     "e2e": "playwright test"
   },
   "dependencies": {
+    "@brand-pilot/content-contracts": "0.1.0",
     "@vercel/blob": "^2.6.1",
     "lucide-react": "^0.468.0",
     "react": "^18.3.1",

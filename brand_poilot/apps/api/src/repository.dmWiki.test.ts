@@ -53,14 +53,14 @@ function directFaqCompletionFixture(entry: { id: string; answer: string } | null
 }
 
 describe("DM Wiki repository", () => {
-  it("stores proposal readiness separately without requiring a new worker type migration", async () => {
+  it("stores proposal readiness under the dedicated worker type", async () => {
     const query = vi.fn(async () => ({ rowCount: 1, rows: [] }));
     const repository = createRepository(fakePool(query) as any);
 
     await repository.heartbeatContentProposalWorker("content-proposal-worker-1");
 
     expect(query).toHaveBeenCalledWith(
-      expect.stringContaining(`values ($1, 'dm', now(), '{"mode":"content_proposal"}'::jsonb)`),
+      expect.stringContaining(`values ($1, 'content_proposal', now(), '{}'::jsonb)`),
       ["content-proposal-worker-1"],
     );
   });

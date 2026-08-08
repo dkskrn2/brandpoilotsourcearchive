@@ -1,8 +1,13 @@
 import type { Pool, PoolClient } from "pg";
-import type { AiContentManifest, AiContentType, CardNewsContent, MarketingContent } from "./aiContentContracts.js";
+import type {
+  AiContentManifestV3,
+  ContentPurpose,
+  ContentStudioOutputFormat,
+  SocialManifestContent,
+} from "@brand-pilot/content-contracts";
 import { buildImageRenderJobPayload } from "./imageRenderJobs.js";
 import { deliveryFormatToRenderJobType } from "./instagramFormats.js";
-import { parseAiContentManifest } from "./aiContentManifest.js";
+import { parseActiveAiContentManifestV3 } from "./aiContentManifest.js";
 import {
   resolveAiContentPublishTarget,
   type AiContentPublishDeliveryFormat,
@@ -56,7 +61,8 @@ interface OutputRow {
   status: string;
   artifact_manifest_json: unknown;
   manifest_url: unknown;
-  type: AiContentType;
+  output_format: ContentStudioOutputFormat;
+  purpose: ContentPurpose;
   title: string;
   draft_json: unknown;
 }
@@ -107,51 +113,21 @@ function publishRecovery(status: AiContentPublishTargetResult["status"], errorCo
   };
 }
 
-function outputCopy(manifest: AiContentManifest) {
-  if (manifest.type === "card_news") {
-    const content = manifest.content as CardNewsContent;
-    return {
-      angle: text(content.caption) || manifest.title,
-      previewBody: `카드뉴스 ${manifest.assets.length}장`,
-      draft: { title: manifest.title, caption: content.caption, hashtags: content.hashtags, cta: content.cta },
-      output: { caption: content.caption, hashtags: content.hashtags, cta: content.cta },
-    };
+function outputCopy(manifest: AiContentManifestV3) {
+  if (manifest.outputFormat !== "card_news" || !("caption" in manifest.content)) {
+    throw new Error("ai_content_publish_type_not_supported");
   }
-  if (manifest.type === "marketing") {
-    if (manifest.version === "ai-content.v2" && manifest.outputFormat === "marketing_content") {
-      const caption = text(manifest.content.caption);
-      const cta = text(manifest.content.cta);
-      const hashtags = Array.isArray(manifest.content.hashtags)
-        ? manifest.content.hashtags.filter((tag): tag is string => typeof tag === "string")
-        : [];
-      return {
-        angle: caption || manifest.title,
-        previewBody: caption,
-        draft: { title: manifest.title, caption, hashtags, cta },
-        output: { caption, hashtags, cta },
-      };
-    }
-    const content = manifest.content as MarketingContent;
-    return {
-      angle: text(content.body) || content.headline,
-      previewBody: content.body,
-      draft: { title: manifest.title, headline: content.headline, body: content.body, cta: content.cta, concept: content.concept },
-      output: {
-        caption: [content.headline, content.body, content.cta].filter(Boolean).join("\n\n"),
-        hashtags: [],
-        cta: content.cta,
-        headline: content.headline,
-        body: content.body,
-        concept: content.concept,
-      },
-    };
-  }
-  throw new Error("ai_content_publish_type_not_supported");
+  const content = manifest.content as SocialManifestContent;
+  return {
+    angle: text(content.caption) || manifest.title,
+    previewBody: `카드뉴스 ${manifest.assets.length}장`,
+    draft: { title: manifest.title, caption: content.caption, hashtags: content.hashtags, cta: content.cta },
+    output: { caption: content.caption, hashtags: content.hashtags, cta: content.cta },
+  };
 }
 
-function assertPublishableManifest(manifest: AiContentManifest) {
-  if (manifest.version !== "ai-content.v2") return;
-  if (manifest.outputFormat !== "card_news" && manifest.outputFormat !== "marketing_content") {
+function assertPublishableManifest(manifest: AiContentManifestV3) {
+  if (manifest.outputFormat !== "card_news") {
     throw new Error("ai_content_publish_type_not_supported");
   }
   if (manifest.assets.some((asset) => asset.mimeType !== "image/png")) {
@@ -159,7 +135,7 @@ function assertPublishableManifest(manifest: AiContentManifest) {
   }
 }
 
-function legacyAssets(manifest: AiContentManifest, target: AiContentPublishTarget) {
+function manifestAssets(manifest: AiContentManifestV3, target: AiContentPublishTarget) {
   const assets = target.deliveryFormat === "instagram_story" || target.deliveryFormat === "instagram_feed_single"
     ? manifest.assets.slice(0, 1)
     : manifest.assets;
@@ -170,15 +146,15 @@ function legacyAssets(manifest: AiContentManifest, target: AiContentPublishTarge
     url: asset.url,
     fileName: asset.fileName,
     mimeType: asset.mimeType,
-    width: asset.width,
-    height: asset.height,
+    width: "width" in asset ? asset.width : undefined,
+    height: "height" in asset ? asset.height : undefined,
   }));
 }
 
 async function getOrCreatePublishContext(
   client: PoolClient,
   input: BrandOutputScope,
-  manifest: AiContentManifest,
+  manifest: AiContentManifestV3,
 ): Promise<PublishContext> {
   const existing = await client.query(
     `select topic.id as content_topic_id, master.id as master_draft_id, topic_group.id as publish_group_id
@@ -209,7 +185,7 @@ async function getOrCreatePublishContext(
   const topicId = String(topic.rows[0].id);
   const master = await client.query(
     `insert into master_drafts (workspace_id, brand_id, content_topic_id, status, prompt_version, draft_json, source_snapshot_refs)
-     values ($1, $2, $3, 'generated', 'ai-content.v1', $4::jsonb, '[]'::jsonb) returning id`,
+     values ($1, $2, $3, 'generated', 'ai-content.v3', $4::jsonb, '[]'::jsonb) returning id`,
     [input.workspaceId, input.brandId, topicId, JSON.stringify(copy.draft)],
   );
   const group = await client.query(
@@ -252,7 +228,7 @@ async function enqueueReelRenderJob(
   input: BrandOutputScope,
   context: PublishContext,
   channelOutputId: string,
-  manifest: AiContentManifest,
+  manifest: AiContentManifestV3,
 ) {
   const brandResult = await client.query(
     `select brand.name as brand_name, profile.industry, profile.primary_customer,
@@ -379,7 +355,7 @@ export function createAiContentPublishRepository(pool: Pool): AiContentPublishRe
       await client.query("BEGIN");
       const outputResult = await client.query(
         `select output.id, output.status, output.artifact_manifest_json, output.manifest_url,
-                generation.type, generation.title, generation.draft_json
+                generation.output_format, generation.purpose, generation.title, generation.draft_json
            from ai_content_generation_outputs output
            join ai_content_generations generation on generation.id = output.generation_id
           where output.id = $1 and output.workspace_id = $2 and output.brand_id = $3
@@ -390,15 +366,13 @@ export function createAiContentPublishRepository(pool: Pool): AiContentPublishRe
       if (!output) throw new Error("ai_content_output_not_found");
       if (output.status !== "completed") throw new Error("ai_content_output_not_completed");
 
-      const manifest = parseAiContentManifest(output.type, output.artifact_manifest_json);
+      const manifest = parseActiveAiContentManifestV3(output.artifact_manifest_json);
+      if (manifest.outputFormat !== output.output_format || manifest.purpose !== output.purpose) {
+        throw new Error("ai_content_publish_manifest_mismatch");
+      }
       assertPublishableManifest(manifest);
       const normalizedTargets = input.targets.map((target) => {
-        const adapterType = manifest.version === "ai-content.v2"
-          && manifest.outputFormat === "marketing_content"
-          && manifest.assets.length > 1
-          ? "card_news"
-          : output.type;
-        const resolution = resolveAiContentPublishTarget({ type: adapterType, assetCount: manifest.assets.length }, target);
+        const resolution = resolveAiContentPublishTarget({ type: "card_news", assetCount: manifest.assets.length }, target);
         if (!resolution.supported) throw new Error(resolution.reason);
         return resolution.target;
       });
@@ -449,11 +423,11 @@ export function createAiContentPublishRepository(pool: Pool): AiContentPublishRe
           });
           continue;
         }
-        const assets = legacyAssets(manifest, target);
+        const assets = manifestAssets(manifest, target);
         const outputJson = {
           ...copy.output,
           deliveryFormat: target.deliveryFormat,
-          promptVersion: "ai-content.v1",
+          promptVersion: "ai-content.v3",
           generationState: "completed",
           artifactStatus: "ready",
           cards: assets,
@@ -582,7 +556,7 @@ export function createAiContentPublishRepository(pool: Pool): AiContentPublishRe
     getAiContentPublishQueueResult,
     async sendAiContentToPublish(input) {
       const output = await pool.query(
-        `select generation.type, jsonb_array_length(output.artifact_manifest_json -> 'assets') as asset_count
+        `select generation.output_format, jsonb_array_length(output.artifact_manifest_json -> 'assets') as asset_count
            from ai_content_generation_outputs output
            join ai_content_generations generation on generation.id = output.generation_id
           where output.id = $1 and output.workspace_id = $2 and output.brand_id = $3`,

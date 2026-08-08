@@ -50,12 +50,12 @@ describe("channelCapabilityViewModel", () => {
     expect(view.repairAction).toEqual({ kind: "oauth", label: "Meta 다시 연결" });
   });
 
-  it("labels the V2 reel and marketing content generation formats", () => {
+  it("labels the active reel generation format", () => {
     const view = channelCapabilityViewModel(capability({
-      generationFormats: ["reel", "marketing_content"],
+      generationFormats: ["reel"],
     }), connectedInstagram);
 
-    expect(view.rows[1].detail).toBe("릴스(세로 이미지), 마케팅 콘텐츠");
+    expect(view.rows[1].detail).toBe("릴스");
   });
 
   it.each([

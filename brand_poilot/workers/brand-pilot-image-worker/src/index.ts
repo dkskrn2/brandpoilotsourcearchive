@@ -1,6 +1,11 @@
 import "dotenv/config";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import {
+  contentWorkerPollDelayMs,
+  contentWorkerPollObservation,
+  createCodexAccountPoolFromEnv,
+} from "@brand-pilot/worker-runtime";
 import { createTextWorkerClient, createWorkerClient, createWorkerResourceClient } from "./client.js";
 import { createCodexTextGenerator } from "./codexTextRunner.js";
 import { createConfiguredRenderer } from "./renderer.js";
@@ -74,7 +79,9 @@ async function main() {
   const textGenerator = createCodexTextGenerator({ rootDir: workerRoot });
   const blobToken = required("BLOB_READ_WRITE_TOKEN");
   const aiContentStorage = createAiContentBlobStorage({ token: blobToken });
+  const accountPool = await createCodexAccountPoolFromEnv(process.env);
   const aiContentRenderer = createAiContentAssetRenderer({
+    accountPool,
     workerRoot,
     readOwned: (storagePath) => aiContentStorage.readOwned(storagePath),
     timeoutMs: Math.max(1000, Number(process.env.AI_CONTENT_ASSET_TIMEOUT_MS ?? "1200000")),
@@ -126,10 +133,10 @@ async function main() {
     heartbeatIntervalMs: Math.max(1000, Number(process.env.WORKER_RESOURCE_HEARTBEAT_INTERVAL_MS ?? "15000")),
   }, executeJob);
   if (mode === "watch") {
-    const interval = Math.max(1000, Number(process.env.POLL_INTERVAL_MS ?? "10000"));
+    const interval = contentWorkerPollDelayMs(process.env.POLL_INTERVAL_MS, 10_000);
     while (!shutdown.signal.aborted) {
       await execute().catch((error) => {
-        process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
+        process.stderr.write(`${JSON.stringify(contentWorkerPollObservation(error))}\n`);
       });
       if (shutdown.signal.aborted) break;
       await waitForShutdownOrTimeout(interval, shutdown.signal);

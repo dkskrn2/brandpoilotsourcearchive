@@ -6,7 +6,6 @@ import { contentGenerationFieldError, createAiContentApiGateway } from "./aiCont
 import type { AiContentDraft, GenerationAttachment, SubjectAnalysisInput } from "./types";
 
 const draft: AiContentDraft = {
-  type: "card_news",
   subjectType: "product",
   subjectInput: { sourceUrl: "https://example.com/product", name: "제품", promotion: "", description: "" },
   subjectAnalysisId: "analysis-1",
@@ -29,7 +28,8 @@ function generation(status = "analyzing") {
   return {
     id: "generation-1",
     brandId: "brand-1",
-    type: "card_news",
+    outputFormat: "card_news",
+    purpose: "informational",
     title: "여름 추천",
     status,
     currentStage: "analysis",
@@ -66,9 +66,9 @@ describe("createAiContentApiGateway", () => {
       brandId: "brand-1",
       origin: "manual",
       contentFamily: "informational",
-      request: {},
+      request: { contractVersion: "content-proposal-request.v2" },
       sourceSnapshots: [],
-      status: "ready",
+      status: "queued",
       proposals: [],
       errorCode: null,
       errorMessage: null,
@@ -195,34 +195,22 @@ describe("createAiContentApiGateway", () => {
     });
   });
 
-  it("refetches the generation when a retry response omits outputs", async () => {
-    const retriedOutput = {
-      id: "output-1",
-      generationId: "generation-1",
-      outputIndex: 1,
-      title: "다시 생성 중",
-      status: "planning",
-      content: {},
-      manifest: {},
-      manifestUrl: null,
-      failureCode: null,
-      failureMessage: null,
-      downloadedAt: null,
-      revisionCapabilities: [],
-    };
-    const requestJson = vi.fn()
-      .mockResolvedValueOnce({ ...generation("planning"), outputs: undefined })
-      .mockResolvedValueOnce({ ...generation("planning"), outputs: [retriedOutput] });
+  it("rejects a retry response that does not contain exactly one queued child output", async () => {
+    vi.spyOn(globalThis.crypto, "randomUUID").mockReturnValue("11111111-1111-4111-8111-111111111111");
+    const requestJson = vi.fn().mockResolvedValueOnce({ ...generation("queued"), outputs: undefined });
     const gateway = createAiContentApiGateway(clientWith(requestJson));
 
     await expect(gateway.retryOutput("brand-1", "output-1", "다시 생성"))
-      .resolves.toMatchObject({ id: "output-1", status: "planning" });
+      .rejects.toThrow("ai_content_generation_retry_response_invalid");
     expect(requestJson.mock.calls).toEqual([
       ["/brands/brand-1/ai-content/outputs/output-1/retry", {
         method: "POST",
-        body: JSON.stringify({ reason: "다시 생성" }),
+        body: JSON.stringify({
+          contractVersion: "content-generation-retry.v1",
+          idempotencyKey: "11111111-1111-4111-8111-111111111111",
+          reason: "다시 생성",
+        }),
       }],
-      ["/brands/brand-1/ai-content/generations/generation-1", { method: "GET" }],
     ]);
   });
 
@@ -295,65 +283,6 @@ describe("createAiContentApiGateway", () => {
     expect(result.draft.brief?.attachments).toEqual([{ ...serverRecord, uploadStatus: "confirmed" }]);
   });
 
-  it("creates analysis with the stable idempotency key", async () => {
-    const requestJson = vi.fn(async (..._args: unknown[]) => generation());
-    const gateway = createAiContentApiGateway(clientWith(requestJson));
-
-    await gateway.createAnalysis("brand-1", {
-      type: "card_news",
-      title: "여름 추천",
-      draft,
-      idempotencyKey: "analysis-1",
-    });
-
-    expect(requestJson).toHaveBeenCalledWith(
-      "/brands/brand-1/ai-content/generations",
-      expect.objectContaining({
-        method: "POST",
-        body: expect.stringContaining('"idempotencyKey":"analysis-1"'),
-      }),
-    );
-  });
-
-  it("sends canonical orchestration on create, update, and start while mapping its output to the legacy type", async () => {
-    const orchestration = {
-      contractVersion: "content-orchestration.v1" as const,
-      contentFamily: "informational" as const,
-      subject: { mode: "brand_topic" as const, topic: "운영 가이드" },
-      target: { id: null, snapshot: {} },
-      strategy: "how_to" as const,
-      outputFormat: "blog" as const,
-      channelTargets: ["blog_export" as const],
-      brief: {},
-      references: [],
-      avatar: null,
-    };
-    const requestJson = vi.fn(async (..._args: [string, { body?: string }]) => generation());
-    const gateway = createAiContentApiGateway(clientWith(requestJson));
-
-    await gateway.createAnalysis("brand-1", {
-      type: "marketing",
-      title: "운영 가이드",
-      draft: { ...draft, orchestration },
-      orchestration,
-      idempotencyKey: "create-orchestration",
-    });
-    await gateway.updateGeneration("brand-1", "generation-1", {
-      draft: { ...draft, orchestration },
-      referenceIds: [],
-      orchestration,
-    });
-    await gateway.startGeneration("brand-1", "generation-1", {
-      idempotencyKey: "start-orchestration",
-      outputCount: 1,
-      orchestration,
-    });
-
-    expect(JSON.parse(requestJson.mock.calls[0]?.[1].body ?? "{}")).toMatchObject({ type: "blog", orchestration });
-    expect(JSON.parse(requestJson.mock.calls[1]?.[1].body ?? "{}")).toMatchObject({ orchestration });
-    expect(JSON.parse(requestJson.mock.calls[2]?.[1].body ?? "{}")).toMatchObject({ orchestration });
-  });
-
   it.each([
     ["content_orchestration_channel_unsupported", { phase: "setup", field: "channelTargets" }],
     ["ai_content_seed_resolution_failed", { phase: "setup", field: "subject" }],
@@ -412,39 +341,16 @@ describe("createAiContentApiGateway", () => {
     expect(requestJson).toHaveBeenCalledTimes(1);
   });
 
-  it("maps revision capabilities explicitly and keeps legacy Reel results read-only", async () => {
-    const requestJson = vi.fn(async () => ({
-      ...generation("completed"),
-      outputs: [{
-        id: "output-reel",
-        generationId: "generation-1",
-        outputIndex: 1,
-        title: "과거 릴스",
-        status: "completed",
-        content: { caption: "과거 결과" },
-        manifest: {
-          deliveryFormat: "instagram_reel",
-          assets: [{ url: "https://cdn.example.com/reel.png", fileName: "reel.png", mimeType: "image/png", index: 1 }],
-        },
-        manifestUrl: null,
-        failureCode: null,
-        failureMessage: null,
-        downloadedAt: null,
-        revisionCapabilities: [],
-      }],
-    }));
-    const gateway = createAiContentApiGateway(clientWith(requestJson));
-
-    await expect(gateway.getGeneration("brand-1", "generation-1")).resolves.toMatchObject({
-      outputs: [{
-        legacyReadOnly: true,
-        revisionCapabilities: [],
-        artifact: { deliveryFormat: "instagram_reel" },
-      }],
-    });
-  });
-
-  it("preserves v2 output formats and maps final card, blog, reel, and marketing artifacts by format", async () => {
+  it.each([
+    ["card_news", "informational", "image_gallery", true],
+    ["card_news", "marketing", "image_gallery", true],
+    ["blog", "informational", "html", false],
+    ["blog", "marketing", "html", false],
+    ["reel", "informational", "video", false],
+    ["reel", "marketing", "video", false],
+  ] as const)(
+    "maps active V3 %s/%s results from manifest content and final columns",
+    async (outputFormat, purpose, artifactKind, publishSupported) => {
     const asset = (role: string, index: number, mimeType = "image/png") => ({
       role,
       index,
@@ -453,119 +359,85 @@ describe("createAiContentApiGateway", () => {
       mimeType,
       ...(mimeType === "image/png" ? { width: 1080, height: role === "scene" ? 1920 : 1080 } : {}),
     });
-    const apiOutput = (
-      id: string,
-      outputFormat: "card_news" | "blog" | "reel" | "marketing_content",
-      assets: unknown[],
-      status: "completed" | "generating" = "completed",
-    ) => ({
-      id,
+    const assets = outputFormat === "card_news"
+      ? [asset("slide", 1)]
+      : outputFormat === "blog"
+        ? [asset("html", 1, "text/html"), asset("inline", 1)]
+        : [
+            asset("scene", 1),
+            { ...asset("video", 1, "video/mp4"), width: 1080, height: 1920, durationSeconds: 4, videoCodec: "h264", fps: 30, audioCodec: null },
+          ];
+    const manifestContent = outputFormat === "blog"
+      ? { title: "V3 블로그", summary: "V3 요약", html: "<article><h1>V3 블로그</h1></article>", metaTitle: "V3", metaDescription: "V3 설명" }
+      : { caption: `V3 ${purpose}`, hashtags: ["#v3"], cta: "확인" };
+    const requestJson = vi.fn(async () => ({
+      ...generation("completed"),
+      outputFormat,
+      purpose,
+      outputs: [{
+      id: `output-${outputFormat}-${purpose}`,
       generationId: "generation-1",
       outputIndex: 1,
-      title: id,
-      status,
-      content: outputFormat === "blog"
-        ? { title: "블로그", summary: "요약", html: "<article><h1>블로그</h1></article>" }
-        : { caption: id, hashtags: [], cta: "확인" },
+      title: null,
+      status: "completed",
+      content: { caption: "stale API content", html: "<p>stale</p>" },
       manifest: {
-        version: "ai-content.v2",
+        version: "ai-content.v3",
         outputFormat,
+        purpose,
+        title: `V3 ${outputFormat}`,
         assets,
+        content: manifestContent,
       },
       manifestUrl: null,
       failureCode: null,
       failureMessage: null,
       downloadedAt: null,
-      legacyReadOnly: false,
-    });
-    const requestJson = vi.fn(async () => ({
-      ...generation("completed"),
-      type: "marketing",
-      outputs: [
-        apiOutput("card", "card_news", [asset("slide", 1)]),
-        apiOutput("blog", "blog", [asset("html", 1, "text/html")]),
-        apiOutput("reel", "reel", [
-          asset("scene", 1),
-          { ...asset("video", 1, "video/mp4"), width: 1080, height: 1920, durationSeconds: 4 },
-        ]),
-        apiOutput("marketing", "marketing_content", [asset("creative", 1), asset("creative", 2)]),
-        apiOutput("partial", "card_news", [asset("slide", 1)], "generating"),
-        {
-          ...apiOutput("legacy-text", "marketing_content", [asset("text", 1)]),
-          manifest: { version: "ai-content.v1", type: "marketing", outputFormat: "channel_text", assets: [asset("text", 1)] },
-        },
-        {
-          ...apiOutput("v1-reel", "reel", [asset("scene", 1)]),
-          manifest: { version: "ai-content.v1", type: "marketing", outputFormat: "reel", assets: [asset("scene", 1)] },
-          legacyReadOnly: false,
-        },
-        {
-          ...apiOutput("versionless-reel", "reel", [asset("scene", 1)]),
-          manifest: { type: "marketing", outputFormat: "reel", deliveryFormat: "instagram_reel", assets: [asset("scene", 1)] },
-          legacyReadOnly: false,
-        },
-        {
-          ...apiOutput("unknown-reel", "reel", [asset("scene", 1)]),
-          manifest: { version: "ai-content.v999", type: "marketing", outputFormat: "reel", deliveryFormat: "instagram_reel", assets: [asset("scene", 1)] },
-          legacyReadOnly: false,
-        },
-      ],
+      }],
     }));
 
     const result = await createAiContentApiGateway(clientWith(requestJson)).getGeneration("brand-1", "generation-1");
 
-    expect(result.outputs.find((output) => output.id === "card")).toMatchObject({ outputFormat: "card_news", artifact: { kind: "image_gallery" }, publishSupported: true });
-    expect(result.outputs.find((output) => output.id === "blog")).toMatchObject({ outputFormat: "blog", artifact: { kind: "html", assets: [] }, publishSupported: false });
-    expect(result.outputs.find((output) => output.id === "reel")).toMatchObject({
-      outputFormat: "reel",
-      legacyReadOnly: false,
-      publishSupported: false,
-      artifact: { kind: "video", posterUrl: "https://cdn.example.com/scene-1.png" },
+    expect(result).toMatchObject({ outputFormat, purpose });
+    expect(result).not.toHaveProperty("type");
+    expect(result.outputs[0]).toMatchObject({
+      title: `V3 ${outputFormat}`,
+      manifestVersion: "ai-content.v3",
+      outputFormat,
+      publishSupported,
+      artifact: { kind: artifactKind },
     });
-    expect(result.outputs.find((output) => output.id === "marketing")).toMatchObject({ outputFormat: "marketing_content", artifact: { kind: "image_gallery" }, publishSupported: true });
-    expect(result.outputs.find((output) => output.id === "partial")?.artifact).toBeNull();
-    expect(result.outputs.find((output) => output.id === "legacy-text")).toMatchObject({ outputFormat: "channel_text", publishSupported: false });
-    expect(result.outputs.find((output) => output.id === "v1-reel")).toMatchObject({ manifestVersion: "ai-content.v1", legacyReadOnly: true, publishSupported: false });
-    expect(result.outputs.find((output) => output.id === "versionless-reel")).toMatchObject({ manifestVersion: "ai-content.v1", legacyReadOnly: true, publishSupported: false });
-    expect(result.outputs.find((output) => output.id === "unknown-reel")).toMatchObject({ manifestVersion: null, legacyReadOnly: false, publishSupported: false });
+    expect(result.outputs[0]).not.toHaveProperty("copy");
+    expect(result.outputs[0]?.artifact?.text).toContain(outputFormat === "blog" ? "V3 블로그" : `V3 ${purpose}`);
+    if (outputFormat === "blog") expect(result.outputs[0]?.artifact?.html).toBe(manifestContent.html);
   });
 
-  it("queues supported partial revisions through the output revision endpoint", async () => {
+  it.each([
+    ["ai-content.v2", "card_news", "informational"],
+    ["ai-content.v3", "marketing_content", "marketing"],
+    ["ai-content.v3", "card_news", "sales"],
+  ])("rejects non-active result contract %s/%s/%s", async (version, outputFormat, purpose) => {
     const requestJson = vi.fn(async () => ({
-      ...generation("generating"),
+      ...generation("completed"),
+      outputFormat: "card_news",
+      purpose: "informational",
       outputs: [{
-        id: "output-1",
+        id: "output-invalid",
         generationId: "generation-1",
         outputIndex: 1,
-        title: "수정 중",
-        status: "generating",
+        title: "invalid",
+        status: "completed",
         content: {},
-        manifest: {},
+        manifest: { version, outputFormat, purpose, title: "invalid", assets: [], content: {} },
         manifestUrl: null,
         failureCode: null,
         failureMessage: null,
         downloadedAt: null,
-        revisionCapabilities: ["regenerate_card"],
       }],
     }));
-    const gateway = createAiContentApiGateway(clientWith(requestJson));
 
-    await expect(gateway.reviseOutput("brand-1", "output-1", {
-      action: "regenerate_card",
-      cardIndex: 2,
-      idempotencyKey: "revision-card-2",
-    })).resolves.toMatchObject({ id: "output-1", status: "generating" });
-    expect(requestJson).toHaveBeenCalledWith(
-      "/brands/brand-1/ai-content/outputs/output-1/revisions",
-      {
-        method: "POST",
-        body: JSON.stringify({
-          action: "regenerate_card",
-          cardIndex: 2,
-          idempotencyKey: "revision-card-2",
-        }),
-      },
-    );
+    await expect(createAiContentApiGateway(clientWith(requestJson)).getGeneration("brand-1", "generation-1"))
+      .rejects.toThrow("ai_content_output_manifest_invalid");
   });
 
   it("propagates API failures instead of returning sample content", async () => {
@@ -756,97 +628,6 @@ describe("createAiContentApiGateway", () => {
     );
   });
 
-  it("serializes only confirmed server attachments and strips local lifecycle fields", async () => {
-    const requestJson = vi.fn(async (..._args: [string, { body?: string }]) => generation());
-    const gateway = createAiContentApiGateway(clientWith(requestJson));
-    const confirmed = {
-      ...localAttachment(),
-      id: "attachment-1",
-      file: undefined,
-      storageUrl: "https://blob.example/product.png",
-      storagePath: "confirmed/product.png",
-      uploadStatus: "confirmed" as const,
-      sessionId: "must-not-leak",
-      nonce: "must-not-leak",
-    };
-    const failed = { ...localAttachment(), id: "failed-1", uploadStatus: "failed" as const };
-    const pending = localAttachment();
-    const localDraft = {
-      ...draft,
-      subjectAttachments: [confirmed, failed, pending],
-      brief: { ...draft.brief!, attachments: [failed, confirmed] },
-    };
-
-    await gateway.createAnalysis("brand-1", {
-      type: "card_news",
-      title: "직렬화",
-      draft: localDraft,
-      idempotencyKey: "serialize-1",
-    });
-
-    const requestBody = requestJson.mock.calls[0]?.[1].body ?? "";
-    const body = JSON.parse(requestBody);
-    expect(body.draft.subjectAttachments).toEqual([{
-      id: "attachment-1",
-      role: "product",
-      fileName: "product.png",
-      mimeType: "image/png",
-      size: 5,
-      storageUrl: "https://blob.example/product.png",
-      storagePath: "confirmed/product.png",
-    }]);
-    expect(body.draft.brief.attachments).toEqual(body.draft.subjectAttachments);
-    expect(requestBody).not.toContain("must-not-leak");
-  });
-
-  it("updates a generation with only exact confirmed server attachments", async () => {
-    const requestJson = vi.fn(async (..._args: [string, { body?: string }]) => generation());
-    const gateway = createAiContentApiGateway(clientWith(requestJson));
-    const confirmed = {
-      ...localAttachment(),
-      id: "attachment-1",
-      file: undefined,
-      storageUrl: "https://blob.example/product.png",
-      storagePath: "confirmed/product.png",
-      uploadStatus: "confirmed" as const,
-      sessionId: "must-not-leak",
-      nonce: "must-not-leak",
-    };
-    const localDraft = {
-      ...draft,
-      subjectAttachments: [
-        localAttachment(),
-        { ...localAttachment(), id: "failed-1", uploadStatus: "failed" as const },
-        confirmed,
-      ],
-      brief: {
-        ...draft.brief!,
-        attachments: [confirmed, localAttachment()],
-      },
-    };
-
-    await gateway.updateGeneration("brand-1", "generation-1", {
-      draft: localDraft,
-      referenceIds: [],
-    });
-
-    const requestBody = requestJson.mock.calls[0]?.[1].body ?? "";
-    const body = JSON.parse(requestBody);
-    const exactConfirmed = {
-      id: "attachment-1",
-      role: "product",
-      fileName: "product.png",
-      mimeType: "image/png",
-      size: 5,
-      storageUrl: "https://blob.example/product.png",
-      storagePath: "confirmed/product.png",
-    };
-    expect(body.draft.subjectAttachments).toEqual([exactConfirmed]);
-    expect(body.draft.brief.attachments).toEqual([exactConfirmed]);
-    expect(requestBody).not.toContain("uploadStatus");
-    expect(requestBody).not.toContain("must-not-leak");
-  });
-
   it("removes a confirmed attachment through the generation-scoped endpoint", async () => {
     const requestJson = vi.fn(async () => ({ id: "attachment-1" }));
     const gateway = createAiContentApiGateway(clientWith(requestJson));
@@ -910,27 +691,6 @@ describe("createAiContentApiGateway", () => {
       idempotencyKey: "legacy-request",
     } as never)).rejects.toThrow("subject_analysis_v2_input_required");
     expect(requestJson).not.toHaveBeenCalled();
-  });
-
-  it("normalizes legacy drafts and omits secondary appeals from new writes", async () => {
-    const requestJson = vi.fn()
-      .mockResolvedValueOnce({
-        id: "generation-legacy", brandId: "brand-1", type: "card_news", title: "레거시", status: "draft", currentStage: null,
-        draft: { type: "card_news", productUrl: "https://example.com/legacy", coreAppeal: { id: "appeal-1", title: "핵심", description: "설명", evidenceType: "benefit" }, secondaryAppeals: [{ id: "appeal-2" }], referenceIds: [], brief: null },
-        analysis: {}, outputs: [], createdAt: "2026-07-20T00:00:00.000Z", updatedAt: "2026-07-20T00:00:00.000Z",
-      })
-      .mockResolvedValueOnce(generation("draft"));
-    const gateway = createAiContentApiGateway(clientWith(requestJson));
-
-    const normalized = await gateway.getGeneration("brand-1", "generation-legacy");
-    expect(normalized.draft.subjectInput.sourceUrl).toBe("https://example.com/legacy");
-    expect(normalized.draft.selectedAppeal?.id).toBe("appeal-1");
-    expect(normalized.draft.appealOverridesByTarget).toEqual({});
-    await gateway.updateGeneration("brand-1", "generation-1", { draft: { ...draft, secondaryAppeals: [{ id: "ignored" } as never] }, referenceIds: [] });
-    const body = JSON.parse(requestJson.mock.calls[1][1].body as string);
-    expect(body.draft.secondaryAppeals).toBeUndefined();
-    expect(body.draft.subjectAnalysisId).toBe("analysis-1");
-    expect(body.draft.appealOverridesByTarget).toEqual({});
   });
 
   it("requests appeal regeneration with an idempotency key", async () => {
@@ -1042,6 +802,28 @@ describe("createAiContentApiGateway", () => {
       proposals: [{ id: "proposal-1", proposal: { title: "불완전한 안" } }],
       researchEvidence: { items: [] },
       selectedReferences: [],
+      errorCode: null,
+      errorMessage: null,
+      createdAt: "2026-08-01T00:00:00.000Z",
+      updatedAt: "2026-08-01T00:00:00.000Z",
+    });
+    const gateway = createAiContentApiGateway(clientWith(requestJson));
+
+    await expect(gateway.getProposalBatch("brand-1", "batch-1"))
+      .rejects.toThrow("ai_content_proposal_batch_response_invalid");
+  });
+
+  it("rejects a retired proposal contract on a manual batch instead of entering the automated-card fallback", async () => {
+    const requestJson = vi.fn().mockResolvedValue({
+      id: "batch-1",
+      workspaceId: "workspace-1",
+      brandId: "brand-1",
+      origin: "manual",
+      contentFamily: "informational",
+      request: { contractVersion: "content-proposal-request.v1" },
+      sourceSnapshots: [],
+      status: "queued",
+      proposals: [],
       errorCode: null,
       errorMessage: null,
       createdAt: "2026-08-01T00:00:00.000Z",

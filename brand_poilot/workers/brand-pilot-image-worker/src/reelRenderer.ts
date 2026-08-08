@@ -254,11 +254,11 @@ export function createAiContentReelRenderer({
       try {
         await mkdir(inputDir);
         await Promise.all(input.scenes.map((scene) => writeFile(path.join(inputDir, `scene-${String(scene.index).padStart(2, "0")}.png`), scene.bytes)));
-        await writeFile(manifestPath, JSON.stringify({ contractVersion: "ai-content.v2", scenes: input.scenes.map(({ index }) => ({ index })) }), "utf8");
+        await writeFile(manifestPath, JSON.stringify({ contractVersion: "studio-reel.v3", scenes: input.scenes.map(({ index }) => ({ index })) }), "utf8");
         try {
           await runPython(pythonExecutable, [
             scriptPath,
-            "--contract-version", "ai-content.v2",
+            "--contract-version", "studio-reel.v3",
             "--input-dir", inputDir,
             "--manifest", manifestPath,
             "--output", outputPath,

@@ -1,5 +1,7 @@
 import type { Pool, PoolClient } from "pg";
 import { createHash, randomUUID } from "node:crypto";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { isDeepStrictEqual } from "node:util";
 import {
   type AiContentManifest,
@@ -7,22 +9,17 @@ import {
   type ContentChannelV2,
   type ContentFinalizationDraftV2,
   type ContentGenerationStartV2,
-  type ContentProposalRequestV1,
   type ContentOutputFormatV2,
   type ContentPurposeV2,
   LegacyConfirmAttachmentInput,
   type FailAiContentJobInput,
   AiContentType,
-  CreateAiContentAnalysisInput,
-  StartAiContentGenerationInput,
-  UpdateAiContentDraftInput,
 } from "./aiContentContracts.js";
 import {
   createContentProposalJobsRepository,
   type ContentProposalJobsRepository,
 } from "./contentProposalJobs.js";
 import { parseAiContentManifest } from "./aiContentManifest.js";
-import { mapOrchestrationToWorkerType, parseContentOrchestrationV1 } from "./contentOrchestration.js";
 import { parseContentQualityBrief } from "./contentQualityBrief.js";
 import { buildContentGenerationInput, parseContentGenerationInputV2, stripContentKnowledgeData, type ContentGenerationInputV2 } from "./aiContentGenerationInput.js";
 import { createAiContentSubjectRepository } from "./aiContentSubjectRepository.js";
@@ -33,10 +30,8 @@ import {
   createAiContentAttachmentRepository,
   type AiContentAttachmentLifecycleRepository,
 } from "./aiContentAttachmentRepository.js";
-import type { ProposalBaseInputSnapshotV2 } from "./contentOrchestration.js";
 import {
   parseContentFinalizationDraftV2,
-  parseContentGenerationInputV3,
   parseProposalInputSnapshotV2,
 } from "./aiContentGenerationInputV3.js";
 import type { AiContentSnapshotRepository } from "./aiContentSnapshotRepository.js";
@@ -45,6 +40,34 @@ import {
   createAiContentRenderJobsRepository,
   enqueueAiContentRenderJobs,
 } from "./aiContentRenderJobs.js";
+import { assertAiContentWritable, withAiContentTransactionFence } from "./aiContentMaintenance.js";
+import {
+  parseProposalBaseInputSnapshotV2 as parseCanonicalProposalBaseInputSnapshotV2,
+  parseContentOrchestrationV2 as parseCanonicalContentOrchestrationV2,
+  parseContentGenerationInputV3 as parseCanonicalContentGenerationInputV3,
+  assertPlannerPromptBinding,
+  parseContentPromptBinding,
+  type ContentOrchestrationV2 as CanonicalContentOrchestrationV2,
+  type ContentPurpose,
+  type ContentStudioOutputFormat,
+  type VerifiedGeneratedContentCatalog,
+} from "@brand-pilot/content-contracts";
+import {
+  assembleAiContentFixedInput,
+  type AiContentFixedInputSource,
+} from "./aiContentFixedInputAssembler.js";
+import {
+  completeGenerationOperationIfTerminal,
+  reverseGenerationReservationIfTerminalFailure,
+} from "./aiContentGenerationOperations.js";
+import {
+  canonicalProposalJson,
+  proposalSha256,
+  type EnqueueProposalV2Input,
+  type ProposalV2CreationResult,
+  type ProposalV2ReplayIdentity,
+  type ProposalV2Transaction,
+} from "./aiContentProposalV2Service.js";
 
 export interface BrandScope {
   workspaceId: string;
@@ -63,7 +86,8 @@ export interface AiContentGenerationRecord {
   id: string;
   workspaceId: string;
   brandId: string;
-  type: AiContentType;
+  outputFormat: ContentStudioOutputFormat;
+  purpose: ContentPurpose;
   title: string;
   status: string;
   currentStage: string | null;
@@ -108,13 +132,10 @@ export interface AiContentOutputRecord {
   createdAt: string;
   updatedAt: string;
   completedAt: string | null;
-  revisionCapabilities: Array<"save_copy" | "regenerate_hook" | "regenerate_copy" | "regenerate_card">;
+  revisionCapabilities: [];
   legacyReadOnly: boolean;
-  manifestVersion: "ai-content.v1" | "ai-content.v2" | null;
+  manifestVersion: "ai-content.v3" | null;
 }
-
-export type AiContentRevisionAction = "regenerate_hook" | "regenerate_copy" | "regenerate_card";
-export type AiContentCopyField = "hook" | "keyMessage" | "body" | "cta" | "caption" | "hashtags";
 
 export interface AiContentUsageRecord {
   usageDate: string;
@@ -166,8 +187,8 @@ export interface AiContentJobRecord {
   outputId: string | null;
   workspaceId: string;
   brandId: string;
-  jobType: "analyze" | "generate";
-  contentType: AiContentType;
+  jobType: "generate";
+  outputFormat: ContentStudioOutputFormat;
   status: "queued" | "processing" | "succeeded" | "failed";
   payload: Record<string, unknown>;
   attemptCount: number;
@@ -211,11 +232,20 @@ export interface AiContentProposalBatchRecord {
   origin: "manual" | "scheduled_crawl";
   contentFamily: "informational" | "marketing";
   request: Record<string, unknown>;
+  resumeInput?: CanonicalContentOrchestrationV2;
   sourceSnapshots: Record<string, unknown>[];
   status: "queued" | "building" | "ready" | "failed";
   proposals?: AiContentProposalRecord[];
   researchEvidence?: {
     items: Array<{ id: string; title: string; url: string; publisher: string | null }>;
+  };
+  provenance?: {
+    kind: "performance_experiment";
+    experimentId: string;
+    evidenceVersion: string;
+    snapshotCount: number;
+    capturedFrom: string;
+    capturedTo: string;
   };
   selectedReferences?: Array<{
     id: string;
@@ -235,16 +265,6 @@ export interface AiContentProposalRecord {
   status: "suggested" | "selected" | "dismissed";
   generationId: string | null;
   createdAt: string;
-}
-
-export interface CreateAiContentProposalBatchV2Input extends AuthenticatedBrandScope {
-  origin: "manual" | "scheduled_crawl";
-  idempotencyKey: string;
-  requestFingerprint: string;
-  purpose: ContentPurposeV2;
-  outputFormat: ContentOutputFormatV2;
-  channelTarget: ContentChannelV2;
-  inputSnapshot: ProposalBaseInputSnapshotV2;
 }
 
 export interface AiContentDraftReferenceRecord {
@@ -287,6 +307,7 @@ export interface SaveAppealInput extends BrandScope {
 }
 
 export interface AiContentRepository extends AiContentAttachmentLifecycleRepository, ContentProposalJobsRepository {
+  assertAiContentWritable(): Promise<void>;
   getAiContentBrandContext(input: BrandScope): Promise<AiContentBrandContextRecord>;
   getConfirmedSubjectAnalysisBrandContext(input: BrandScope): Promise<SubjectAnalysisBrandContext>;
   listSubjectEvidenceAttachments(input: LoadSubjectEvidenceInput): Promise<SubjectEvidenceAttachment[]>;
@@ -295,8 +316,6 @@ export interface AiContentRepository extends AiContentAttachmentLifecycleReposit
     workerId: string;
     leaseToken: string;
   }): Promise<SubjectAnalysisWorkerLease | null>;
-  createAiContentAnalysis(input: AuthenticatedBrandScope & CreateAiContentAnalysisInput): Promise<AiContentGenerationRecord>;
-  updateAiContentDraft(input: BrandGenerationScope & AuthenticatedBrandScope & UpdateAiContentDraftInput): Promise<AiContentGenerationRecord>;
   updateAiContentFinalizationDraft(input: BrandGenerationScope & AuthenticatedBrandScope & {
     draft: ContentFinalizationDraftV2;
   }): Promise<AiContentGenerationRecord>;
@@ -308,11 +327,6 @@ export interface AiContentRepository extends AiContentAttachmentLifecycleReposit
     snapshots: AiContentSnapshotRepository,
     now?: () => Date,
   ): Promise<AiContentGenerationRecord>;
-  startAiContentGeneration(input: BrandGenerationScope & StartAiContentGenerationInput & {
-    actorUserId: string;
-    usageDate: string;
-    dailyGenerationLimit: number;
-  }): Promise<AiContentGenerationRecord>;
   listAiContentGenerations(input: BrandScope): Promise<AiContentGenerationRecord[]>;
   getAiContentGeneration(input: BrandGenerationScope): Promise<AiContentGenerationRecord | null>;
   listAiContentUsage(input: BrandScope & { usageDate: string }): Promise<AiContentUsageRecord>;
@@ -333,7 +347,7 @@ export interface AiContentRepository extends AiContentAttachmentLifecycleReposit
   saveBrandAppeal(input: SaveAppealInput): Promise<AppealRecord>;
   confirmAiContentAttachment(input: BrandGenerationScope & LegacyConfirmAttachmentInput): Promise<AiContentAttachmentRecord>;
   removeAiContentAttachment(input: BrandGenerationScope & { attachmentId: string }): Promise<{ id: string }>;
-  claimAiContentJob(input: { contentType: AiContentType; workerId: string; leaseSeconds: number }): Promise<AiContentJobRecord | null>;
+  claimAiContentJob(input: { outputFormat: ContentStudioOutputFormat; workerId: string; leaseSeconds: number }): Promise<AiContentJobRecord | null>;
   heartbeatAiContentJob(input: { jobId: string; workerId: string; leaseToken: string; leaseSeconds: number }): Promise<boolean>;
   completeAiContentJob(input: CompleteAiContentJobInput): Promise<AiContentGenerationRecord>;
   failAiContentJob(input: FailAiContentJobInput): Promise<AiContentGenerationRecord>;
@@ -343,31 +357,14 @@ export interface AiContentRepository extends AiContentAttachmentLifecycleReposit
   completeAiContentRenderPackage(input: import("./aiContentRenderJobs.js").RenderPackageCompletion): Promise<AiContentGenerationRecord>;
   failAiContentRenderJob(input: import("./aiContentRenderJobs.js").RenderFailure): Promise<void>;
   saveAiContentOutputResearch(input: { jobId: string; outputId: string; workerId: string; leaseToken: string; evidence: Record<string, unknown> }): Promise<void>;
-  retryAiContentOutput(input: BrandScope & { outputId: string }): Promise<AiContentGenerationRecord>;
-  reviseAiContentOutput(input: BrandScope & {
+  retryAiContentOutput(input: AuthenticatedBrandScope & {
     outputId: string;
-    action: AiContentRevisionAction;
-    cardIndex?: number;
+    contractVersion: "content-generation-retry.v1";
     idempotencyKey: string;
+    reason: string;
+    usageDate: string;
+    dailyGenerationLimit: number;
   }): Promise<AiContentGenerationRecord>;
-  saveAiContentOutputCopy(input: BrandScope & {
-    outputId: string;
-    fields: Partial<Record<AiContentCopyField, string | string[]>>;
-    idempotencyKey: string;
-  }): Promise<AiContentGenerationRecord>;
-  createAiContentProposalBatch(input: AuthenticatedBrandScope & {
-    actorUserId: string;
-    origin: "manual" | "scheduled_crawl";
-    idempotencyKey: string;
-    request: ContentProposalRequestV1;
-  }): Promise<AiContentProposalBatchRecord>;
-  createAiContentProposalBatchV2(
-    input: CreateAiContentProposalBatchV2Input,
-  ): Promise<AiContentProposalBatchRecord>;
-  getAiContentProposalBatchV2Replay(input: AuthenticatedBrandScope & {
-    idempotencyKey: string;
-    requestFingerprint: string;
-  }): Promise<AiContentProposalBatchRecord | null>;
   getAiContentProposalBatch(input: BrandScope & { batchId: string }): Promise<AiContentProposalBatchRecord | null>;
   listAiContentProposals(input: BrandScope & { status: "suggested" | "selected" | "dismissed" }): Promise<AiContentProposalRecord[]>;
   selectAiContentProposal(input: AuthenticatedBrandScope & {
@@ -432,11 +429,313 @@ function canonicalJson(value: unknown): string {
   return JSON.stringify(normalize(value));
 }
 
+const EXPECTED_PROPOSAL_CATALOG_SHA256 = "41ac04e76adf0fd9746ea7535b36f6c1ea314ec4890253a2cd56a9f215f7cdbe";
+const PROPOSAL_MODEL_ID = "gpt-5.6-terra";
+
+function loadProposalCatalog(): VerifiedGeneratedContentCatalog {
+  const url = import.meta.resolve("@brand-pilot/content-contracts/generated/content-catalog.json");
+  const bytes = readFileSync(fileURLToPath(url));
+  const catalogSha256 = createHash("sha256").update(bytes).digest("hex");
+  if (catalogSha256 !== EXPECTED_PROPOSAL_CATALOG_SHA256) {
+    throw new Error("content_contract_catalog_hash_mismatch");
+  }
+  const catalog = JSON.parse(bytes.toString("utf8")) as VerifiedGeneratedContentCatalog;
+  if (
+    catalog.contractSourceHash !== "02760a1e006eb5920980a4b9c5b268cf53b3595543c5f909f2d66be53393c660"
+    || catalog.proposalContracts.requestVersion !== "content-proposal-request.v2"
+    || catalog.proposalContracts.baseInputVersion !== "proposal-base-input.v2"
+    || catalog.proposalContracts.outputVersion !== "content-proposal.v2"
+    || catalog.proposalContracts.promptVersion !== "proposal.writer.v2"
+    || catalog.proposalContracts.outputSchemaSha256 !== "54bf063cf32926874af6b098272df08d41a9e7d7f578ee6560debe44428cf5f3"
+    || catalog.researchEvidence.version !== "research-evidence.v1"
+  ) {
+    throw new Error("content_contract_catalog_invalid");
+  }
+  return catalog;
+}
+
+export interface ProposalV2Repository {
+  findCommittedReplay(identity: ProposalV2ReplayIdentity): Promise<ProposalV2CreationResult | null>;
+  withTransaction<T>(work: (tx: ProposalV2Transaction) => Promise<T>): Promise<T>;
+  lockIdempotencyKey(tx: ProposalV2Transaction, identity: ProposalV2ReplayIdentity): Promise<void>;
+  findReplay(
+    tx: ProposalV2Transaction,
+    identity: ProposalV2ReplayIdentity,
+  ): Promise<ProposalV2CreationResult | null>;
+  enqueue(tx: ProposalV2Transaction, input: EnqueueProposalV2Input): Promise<ProposalV2CreationResult>;
+}
+
+function mapProposalV2CreationResult(
+  row: Record<string, unknown>,
+  disposition: ProposalV2CreationResult["disposition"],
+): ProposalV2CreationResult {
+  return {
+    disposition,
+    proposalRunId: row.proposal_run_id ? String(row.proposal_run_id) : null,
+    proposalBatchId: String(row.id),
+    status: "proposal_pending",
+  };
+}
+
+async function findProposalV2Replay(
+  database: Pick<Pool | PoolClient, "query">,
+  identity: ProposalV2ReplayIdentity,
+  lock: boolean,
+): Promise<ProposalV2CreationResult | null> {
+  const result = await database.query(
+    `select batch.*,run.id proposal_run_id,
+            batch.created_by_user_id is not distinct from $4::uuid actor_matches,
+            batch.input_snapshot_json->>'replayFingerprint' = $5 request_fingerprint_matches
+       from ai_content_proposal_batches batch
+       left join automated_content_proposal_runs run
+         on run.proposal_batch_id=batch.id
+        and run.workspace_id=batch.workspace_id and run.brand_id=batch.brand_id
+      where batch.workspace_id=$1 and batch.brand_id=$2 and batch.idempotency_key=$3
+      ${lock ? "for update of batch" : ""}`,
+    [
+      identity.workspaceId,
+      identity.brandId,
+      identity.idempotencyKey,
+      identity.actorUserId,
+      identity.replayFingerprint,
+    ],
+  );
+  if (!result.rowCount) return null;
+  const row = result.rows[0] as Record<string, unknown>;
+  if (row.actor_matches !== true || row.request_fingerprint_matches !== true) {
+    throw new Error("ai_content_proposal_batch_conflict");
+  }
+  return mapProposalV2CreationResult(row, "replayed");
+}
+
+export function createAiContentProposalV2Repository(pool: Pool): ProposalV2Repository {
+  const catalog = loadProposalCatalog();
+  const commandDescriptorSha256 = proposalSha256({
+    runner: "codex-exec",
+    model: PROPOSAL_MODEL_ID,
+    promptVersion: catalog.proposalContracts.promptVersion,
+    outputSchemaSha256: catalog.proposalContracts.outputSchemaSha256,
+    requestContractVersion: catalog.proposalContracts.requestVersion,
+    baseInputContractVersion: catalog.proposalContracts.baseInputVersion,
+    researchContractVersion: catalog.researchEvidence.version,
+    proposalContractVersion: catalog.proposalContracts.outputVersion,
+  });
+  return {
+    findCommittedReplay(identity) {
+      return findProposalV2Replay(pool, identity, false);
+    },
+    async withTransaction(work) {
+      const client = await pool.connect();
+      try {
+        await client.query("BEGIN");
+        await assertAiContentWritable(client);
+        const result = await work(client as ProposalV2Transaction);
+        await client.query("COMMIT");
+        return result;
+      } catch (error) {
+        await client.query("ROLLBACK");
+        throw error;
+      } finally {
+        client.release();
+      }
+    },
+    async lockIdempotencyKey(tx, identity) {
+      await tx.query(
+        "select pg_advisory_xact_lock(hashtextextended($1,0))",
+        [`proposal-v2:${identity.workspaceId}:${identity.brandId}:${identity.idempotencyKey}`],
+      );
+    },
+    findReplay(tx, identity) {
+      return findProposalV2Replay(tx, identity, true);
+    },
+    async enqueue(tx, input) {
+      if (input.actorUserId !== null) {
+        await assertActiveAiContentActor(tx, {
+          workspaceId: input.workspaceId,
+          brandId: input.brandId,
+          actorUserId: input.actorUserId,
+        });
+      }
+      const workerRequestJson = canonicalProposalJson(input.workerRequest);
+      const baseInputJson = canonicalProposalJson(input.baseInput);
+      const inputSnapshotJson = canonicalProposalJson({
+        replayFingerprint: input.replayFingerprint,
+        baseInput: input.baseInput,
+        resumeInput: input.request,
+      });
+      const requestSha256 = proposalSha256(input.workerRequest);
+      const baseInputSha256 = proposalSha256(input.baseInput);
+      const created = await tx.query(
+        `insert into ai_content_proposal_batches(
+           workspace_id,brand_id,origin,purpose,request_json,source_snapshot_json,
+           input_snapshot_json,status,idempotency_key,created_by_user_id
+         ) values($1,$2,$3,$4,$5::jsonb,$6::jsonb,$7::jsonb,'queued',$8,$9::uuid)
+         on conflict(workspace_id,brand_id,idempotency_key) do nothing
+         returning *`,
+        [
+          input.workspaceId,
+          input.brandId,
+          input.source === "scheduled_crawl" ? "scheduled_crawl" : "manual",
+          input.request.purpose,
+          workerRequestJson,
+          canonicalProposalJson(input.sourceSnapshots),
+          inputSnapshotJson,
+          input.idempotencyKey,
+          input.actorUserId,
+        ],
+      );
+      const batch = created.rows[0] as Record<string, unknown> | undefined;
+      if (!batch) {
+        const replay = await findProposalV2Replay(tx, input, true);
+        if (!replay) throw new Error("ai_content_proposal_batch_conflict");
+        return replay;
+      }
+      const jobResult = await tx.query(
+        `insert into ai_content_proposal_jobs(workspace_id,brand_id,batch_id,status)
+         values($1,$2,$3,'queued') returning id`,
+        [input.workspaceId, input.brandId, batch.id],
+      );
+      const jobId = String(jobResult.rows[0]?.id ?? "");
+      if (!jobId) throw new Error("ai_content_proposal_job_insert_failed");
+      const enqueueContractSha256 = proposalSha256({
+        jobId,
+        batchId: String(batch.id),
+        workspaceId: input.workspaceId,
+        brandId: input.brandId,
+        requestSha256,
+        baseInputSha256,
+        commandDescriptorSha256,
+        contractSourceSha256: catalog.contractSourceHash,
+        catalogSha256: EXPECTED_PROPOSAL_CATALOG_SHA256,
+      });
+      const contractResult = await tx.query<{ id: string }>(
+        `insert into ai_content_proposal_job_contracts(
+           job_id,batch_id,workspace_id,brand_id,request_contract_version,
+           base_input_contract_version,research_contract_version,proposal_contract_version,
+           proposal_prompt_version,proposal_output_schema_sha256,proposal_model_id,
+           command_descriptor_sha256,request_sha256,base_input_sha256,
+           contract_source_sha256,catalog_sha256,enqueue_contract_sha256
+         ) values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
+         returning id`,
+        [
+          jobId,
+          batch.id,
+          input.workspaceId,
+          input.brandId,
+          catalog.proposalContracts.requestVersion,
+          catalog.proposalContracts.baseInputVersion,
+          catalog.researchEvidence.version,
+          catalog.proposalContracts.outputVersion,
+          catalog.proposalContracts.promptVersion,
+          catalog.proposalContracts.outputSchemaSha256,
+          PROPOSAL_MODEL_ID,
+          commandDescriptorSha256,
+          requestSha256,
+          baseInputSha256,
+          catalog.contractSourceHash,
+          EXPECTED_PROPOSAL_CATALOG_SHA256,
+          enqueueContractSha256,
+        ],
+      );
+      const contractId = String(contractResult.rows[0]?.id ?? "");
+      if (!contractId) throw new Error("ai_content_proposal_job_contract_insert_failed");
+      if (input.performanceAudit) {
+        const audit = input.performanceAudit;
+        if ((audit.researchEvidence === null) !== (audit.composedInput === null)) {
+          throw new Error("ai_content_proposal_performance_composition_invalid");
+        }
+        if (audit.researchEvidence && audit.composedInput) {
+          const { contractVersion: _contractVersion, ...baseFields } = input.baseInput;
+          const expectedComposition = parseProposalInputSnapshotV2({
+            ...baseFields,
+            contractVersion: "proposal-input.v2",
+            researchEvidence: audit.researchEvidence,
+          });
+          if (canonicalProposalJson(expectedComposition) !== canonicalProposalJson(audit.composedInput)) {
+            throw new Error("ai_content_proposal_performance_composition_mismatch");
+          }
+        }
+        const snapshotAuditJson = canonicalProposalJson(audit.snapshotAudit);
+        const auditResult = await tx.query<{ id: string }>(
+          `insert into ai_content_proposal_performance_audits(
+             workspace_id,brand_id,batch_id,experiment_id,experiment_definition_json,
+             evidence_version,resolved_input_fingerprint_sha256,snapshot_audit_json,
+             captured_from,captured_to
+           ) values($1,$2,$3,$4,$5::jsonb,$6,$7,$8::jsonb,$9::timestamptz,$10::timestamptz)
+           returning id`,
+          [
+            input.workspaceId,
+            input.brandId,
+            batch.id,
+            audit.experimentId,
+            canonicalProposalJson(audit.experimentDefinition),
+            audit.evidenceVersion,
+            audit.resolvedInputFingerprint,
+            snapshotAuditJson,
+            audit.capturedFrom,
+            audit.capturedTo,
+          ],
+        );
+        const auditId = String(auditResult.rows[0]?.id ?? "");
+        if (!auditId) throw new Error("ai_content_proposal_performance_audit_insert_failed");
+        if (audit.researchEvidence) {
+          await tx.query(
+            `insert into ai_content_proposal_research_snapshots(
+               workspace_id,brand_id,batch_id,evidence_json
+             ) values($1,$2,$3,$4::jsonb)`,
+            [
+              input.workspaceId,
+              input.brandId,
+              batch.id,
+              canonicalProposalJson(audit.researchEvidence),
+            ],
+          );
+        }
+        if (audit.composedInput) {
+          const composedInputJson = canonicalProposalJson(audit.composedInput);
+          await tx.query(
+            `insert into ai_content_proposal_compositions(
+               job_id,batch_id,contract_id,performance_audit_id,workspace_id,brand_id,
+               research_evidence_json,research_evidence_set_sha256,composed_input_json,
+               composed_input_sha256,final_invocation_aggregate_sha256
+             ) values(
+               $1,$2,$3,$4,$5,$6,
+               jsonb_build_array($7::jsonb),
+               encode(digest(convert_to(jsonb_build_array($7::jsonb)::text,'UTF8'),'sha256'),'hex'),
+               $8::jsonb,encode(digest(convert_to(($8::jsonb)::text,'UTF8'),'sha256'),'hex'),$9
+             )`,
+            [
+              jobId,
+              batch.id,
+              contractId,
+              auditId,
+              input.workspaceId,
+              input.brandId,
+              snapshotAuditJson,
+              composedInputJson,
+              proposalSha256({
+                source: "performance_experiment",
+                auditId,
+                resolvedInputFingerprint: audit.resolvedInputFingerprint,
+              }),
+            ],
+          );
+        }
+      }
+      return {
+        disposition: "created",
+        proposalRunId: input.proposalRunId,
+        proposalBatchId: String(batch.id),
+        status: "proposal_pending",
+      };
+    },
+  };
+}
+
 const aiContentReferenceSeedFormats = new Set<ContentOutputFormatV2>([
   "card_news",
   "blog",
   "reel",
-  "marketing_content",
 ]);
 
 function normalizedReferenceSeedCategory(value: string): string {
@@ -497,18 +796,6 @@ function compareAiContentReferenceSeeds(
   return left.id.localeCompare(right.id);
 }
 
-function canonicalSubjectColumns(orchestration: ReturnType<typeof parseContentOrchestrationV1>): {
-  subjectMode: "brand_topic" | "product_service" | "new_subject";
-  productServiceId: string | null;
-} {
-  return {
-    subjectMode: orchestration.subject.mode,
-    productServiceId: orchestration.subject.mode === "product_service"
-      ? orchestration.subject.productServiceId
-      : null,
-  };
-}
-
 function mapProposal(row: Record<string, unknown>): AiContentProposalRecord {
   return {
     id: String(row.id),
@@ -521,8 +808,8 @@ function mapProposal(row: Record<string, unknown>): AiContentProposalRecord {
 }
 
 function mapProposalBatch(row: Record<string, unknown>): AiContentProposalBatchRecord {
-  const request = object(row.request_json);
-  const v2 = request.contractVersion === "content-proposal-request.v2";
+  const workerRequest = object(row.request_json);
+  const v2 = workerRequest.contractVersion === "content-proposal-request.v2";
   const rawEvidence = object(row.evidence_json);
   const evidenceItems = Array.isArray(rawEvidence.items)
     ? rawEvidence.items.flatMap((value) => {
@@ -540,8 +827,17 @@ function mapProposalBatch(row: Record<string, unknown>): AiContentProposalBatchR
       })
     : [];
   const inputSnapshot = object(row.input_snapshot_json);
-  const selectedReferences = Array.isArray(inputSnapshot.references)
-    ? inputSnapshot.references.flatMap((value) => {
+  const baseInput = v2 ? object(inputSnapshot.baseInput) : inputSnapshot;
+  let resumeInput: CanonicalContentOrchestrationV2 | undefined;
+  if (v2) {
+    try {
+      resumeInput = parseCanonicalContentOrchestrationV2(inputSnapshot.resumeInput);
+    } catch {
+      throw new Error("ai_content_proposal_resume_input_invalid");
+    }
+  }
+  const selectedReferences = Array.isArray(baseInput.references)
+    ? baseInput.references.flatMap((value) => {
         const reference = object(value);
         if (typeof reference.referenceItemId !== "string" || typeof reference.title !== "string") return [];
         const image = object(reference.image);
@@ -555,21 +851,36 @@ function mapProposalBatch(row: Record<string, unknown>): AiContentProposalBatchR
         }];
       })
     : [];
+  const provenance = typeof row.performance_experiment_id === "string"
+    && typeof row.performance_evidence_version === "string"
+    && row.performance_captured_from
+    && row.performance_captured_to
+    ? {
+        kind: "performance_experiment" as const,
+        experimentId: row.performance_experiment_id,
+        evidenceVersion: row.performance_evidence_version,
+        snapshotCount: Number(row.performance_snapshot_count ?? 0),
+        capturedFrom: iso(row.performance_captured_from as Date | string)!,
+        capturedTo: iso(row.performance_captured_to as Date | string)!,
+      }
+    : undefined;
   return {
     id: String(row.id),
     workspaceId: String(row.workspace_id),
     brandId: String(row.brand_id),
     origin: row.origin as AiContentProposalBatchRecord["origin"],
-    contentFamily: row.content_family as AiContentProposalBatchRecord["contentFamily"],
-    request,
-    sourceSnapshots: Array.isArray(row.source_snapshot_json)
+    contentFamily: row.purpose as AiContentProposalBatchRecord["contentFamily"],
+    request: v2 ? resumeInput as unknown as Record<string, unknown> : workerRequest,
+    ...(resumeInput ? { resumeInput } : {}),
+    sourceSnapshots: !v2 && Array.isArray(row.source_snapshot_json)
       ? row.source_snapshot_json as Record<string, unknown>[]
       : [],
     status: row.status as AiContentProposalBatchRecord["status"],
     ...(Array.isArray(row.proposals)
       ? { proposals: (row.proposals as Record<string, unknown>[]).map(mapProposal) }
       : {}),
-    ...(v2 && row.evidence_json ? { researchEvidence: { items: evidenceItems } } : {}),
+    ...(v2 && row.evidence_json && !provenance ? { researchEvidence: { items: evidenceItems } } : {}),
+    ...(provenance ? { provenance } : {}),
     ...(v2 ? { selectedReferences } : {}),
     errorCode: row.error_code ? String(row.error_code) : null,
     errorMessage: row.error_message ? String(row.error_message) : null,
@@ -818,8 +1129,11 @@ function requestedDimensionsFromDraft(value: unknown) {
 }
 
 function mapGeneration(row: Record<string, unknown>): AiContentGenerationRecord {
+  const outputFormat = String(row.output_format) as ContentStudioOutputFormat;
   return {
-    id: String(row.id), workspaceId: String(row.workspace_id), brandId: String(row.brand_id), type: row.type as AiContentType,
+    id: String(row.id), workspaceId: String(row.workspace_id), brandId: String(row.brand_id),
+    outputFormat,
+    purpose: String(row.purpose) as ContentPurpose,
     title: String(row.title), status: String(row.status), currentStage: row.current_stage ? String(row.current_stage) : null,
     draft: object(row.draft_json), analysis: object(row.analysis_json), errorCode: row.error_code ? String(row.error_code) : null,
     errorMessage: row.error_message ? String(row.error_message) : null, createdAt: iso(row.created_at)!, updatedAt: iso(row.updated_at)!, completedAt: iso(row.completed_at),
@@ -832,28 +1146,14 @@ function mapGeneration(row: Record<string, unknown>): AiContentGenerationRecord 
 function normalizedOutputManifestVersion(
   manifest: Record<string, unknown>,
 ): AiContentOutputRecord["manifestVersion"] {
-  if (manifest.version === "ai-content.v1" || manifest.version === "ai-content.v2") return manifest.version;
-  if (Object.prototype.hasOwnProperty.call(manifest, "version")) return null;
-  const knownLegacyType = manifest.type === "card_news" || manifest.type === "blog" || manifest.type === "marketing";
-  const knownLegacyDelivery = manifest.deliveryFormat === "instagram_feed_carousel"
-    || manifest.deliveryFormat === "instagram_story"
-    || manifest.deliveryFormat === "instagram_reel";
-  return knownLegacyType || knownLegacyDelivery ? "ai-content.v1" : null;
+  return manifest.version === "ai-content.v3" ? "ai-content.v3" : null;
 }
 
 function mapOutput(row: Record<string, unknown>): AiContentOutputRecord {
   const manifest = object(row.artifact_manifest_json);
   const manifestVersion = normalizedOutputManifestVersion(manifest);
-  const legacyReadOnly = manifestVersion === "ai-content.v1"
-    && (manifest.deliveryFormat === "instagram_reel" || manifest.outputFormat === "reel");
-  const manifestType = String(manifest.type ?? manifest.outputFormat ?? "");
-  const revisionCapabilities: AiContentOutputRecord["revisionCapabilities"] = legacyReadOnly
-    ? []
-    : manifestType === "card_news"
-      ? ["save_copy", "regenerate_hook", "regenerate_copy", "regenerate_card"]
-      : ["blog", "marketing", "single_image", "channel_text"].includes(manifestType)
-        ? ["save_copy", "regenerate_hook", "regenerate_copy"]
-        : [];
+  const legacyReadOnly = manifestVersion !== "ai-content.v3";
+  const revisionCapabilities: AiContentOutputRecord["revisionCapabilities"] = [];
   return {
     id: String(row.id), generationId: String(row.generation_id), outputIndex: Number(row.output_index),
     title: row.title ? String(row.title) : null, status: row.status as AiContentOutputRecord["status"],
@@ -864,59 +1164,6 @@ function mapOutput(row: Record<string, unknown>): AiContentOutputRecord {
     legacyReadOnly,
     manifestVersion,
   };
-}
-
-const copyFieldsByFormat: Record<string, ReadonlySet<AiContentCopyField>> = {
-  card_news: new Set(["hook", "keyMessage", "body", "cta", "caption", "hashtags"]),
-  blog: new Set(["hook", "keyMessage", "body", "cta"]),
-  marketing: new Set(["hook", "keyMessage", "body", "cta", "caption", "hashtags"]),
-  single_image: new Set(["hook", "keyMessage", "body", "cta", "caption", "hashtags"]),
-  channel_text: new Set(["hook", "keyMessage", "body", "cta", "caption", "hashtags"]),
-};
-
-function editableCopyFields(
-  manifest: Record<string, unknown>,
-  fields: Partial<Record<AiContentCopyField, string | string[]>>,
-) {
-  const format = String(manifest.type ?? manifest.outputFormat ?? "");
-  const allowed = copyFieldsByFormat[format];
-  if (!allowed) throw new Error("ai_content_copy_edit_unsupported");
-  const entries = Object.entries(fields) as Array<[AiContentCopyField, string | string[]]>;
-  if (!entries.length || entries.some(([field]) => !allowed.has(field))) {
-    throw new Error("ai_content_copy_fields_invalid");
-  }
-  return Object.fromEntries(entries);
-}
-
-function mergeRevisionManifest(
-  generatedManifest: AiContentManifest,
-  revisionValue: unknown,
-): AiContentManifest {
-  const revision = object(revisionValue);
-  if (revision.contractVersion !== "ai-content-revision.v1") return generatedManifest;
-  const previousManifest = object(revision.previousManifest);
-  const previousAssets = Array.isArray(previousManifest.assets) ? previousManifest.assets : [];
-  if (revision.action === "regenerate_card") {
-    const cardIndex = Number(revision.cardIndex);
-    const generatedAssets = Array.isArray(generatedManifest.assets) ? generatedManifest.assets : [];
-    const replacement = generatedAssets.find((asset, index) =>
-      Number(object(asset).index ?? index + 1) === cardIndex);
-    if (!replacement) throw new Error("ai_content_revision_card_result_missing");
-    return {
-      ...generatedManifest,
-      ...previousManifest,
-      assets: previousAssets.map((asset, index) =>
-        Number(object(asset).index ?? index + 1) === cardIndex ? replacement : asset),
-      content: object(revision.previousContent),
-    } as unknown as AiContentManifest;
-  }
-  if (revision.action === "regenerate_hook" || revision.action === "regenerate_copy") {
-    return {
-      ...generatedManifest,
-      ...(previousAssets.length ? { assets: previousAssets } : {}),
-    } as unknown as AiContentManifest;
-  }
-  throw new Error("ai_content_revision_invalid");
 }
 
 function publicGenerationInputSnapshot(value: unknown): Record<string, unknown> {
@@ -1009,8 +1256,14 @@ async function generationEvidenceSnapshot(
       const snapshot = object(reference.reference_snapshot_json);
       return {
         id: String(reference.reference_id),
-        title: String(snapshot.title ?? snapshot.caption ?? snapshot.url ?? reference.reference_id),
-        url: snapshot.url ? String(snapshot.url) : snapshot.permalink ? String(snapshot.permalink) : null,
+        title: String(snapshot.title ?? snapshot.caption ?? snapshot.sourceUrl ?? snapshot.url ?? reference.reference_id),
+        url: snapshot.sourceUrl
+          ? String(snapshot.sourceUrl)
+          : snapshot.url
+            ? String(snapshot.url)
+            : snapshot.permalink
+              ? String(snapshot.permalink)
+              : null,
         previewUrl: snapshot.previewUrl ? String(snapshot.previewUrl) : snapshot.mediaUrl ? String(snapshot.mediaUrl) : null,
         roles: Array.isArray(reference.roles_json)
           ? reference.roles_json.filter((role: unknown): role is string => typeof role === "string")
@@ -1023,8 +1276,12 @@ async function generationEvidenceSnapshot(
       if (typeof id !== "string") return [];
       return [{
         id,
-        title: String(reference.title ?? reference.url ?? id),
-        url: typeof reference.url === "string" ? reference.url : null,
+        title: String(reference.title ?? reference.sourceUrl ?? reference.url ?? id),
+        url: typeof reference.sourceUrl === "string"
+          ? reference.sourceUrl
+          : typeof reference.url === "string"
+            ? reference.url
+            : null,
         previewUrl: null,
         roles: Array.isArray(reference.roles)
           ? reference.roles.filter((role: unknown): role is string => typeof role === "string")
@@ -1055,9 +1312,9 @@ async function outputsForGenerations(client: Queryable, generationIds: string[])
 
 async function scopedGeneration(client: Queryable, input: BrandGenerationScope, lock = false) {
   const result = await client.query(
-    `select id, workspace_id, brand_id, type, title, status, current_stage, draft_json, analysis_json,
-            generation_idempotency_key, subject_analysis_snapshot, generation_input_snapshot, attachments_locked_at,
-            content_family, output_format, subject_mode, product_service_id, orchestration_snapshot, avatar_snapshot,
+    `select id, workspace_id, brand_id, output_format, purpose, title, status, current_stage, draft_json, analysis_json,
+            generation_idempotency_key, operation_id, subject_analysis_snapshot, generation_input_snapshot, attachments_locked_at,
+            subject_mode, product_service_id, orchestration_snapshot, avatar_snapshot,
             terminal_at, retryable_until, error_code, error_message, created_at, updated_at, completed_at
        from ai_content_generations
       where id = $1 and workspace_id = $2 and brand_id = $3${lock ? " for update" : ""}`,
@@ -1267,7 +1524,7 @@ function mapJob(row: Record<string, unknown>): AiContentJobRecord {
     workspaceId: String(row.workspace_id),
     brandId: String(row.brand_id),
     jobType: row.job_type as AiContentJobRecord["jobType"],
-    contentType: row.content_type as AiContentType,
+    outputFormat: row.output_format as ContentStudioOutputFormat,
     status: row.status as AiContentJobRecord["status"],
     payload: object(row.payload_json),
     attemptCount: Number(row.attempt_count),
@@ -1281,7 +1538,7 @@ function mapJob(row: Record<string, unknown>): AiContentJobRecord {
 
 async function generationById(client: Queryable, generationId: string) {
   const result = await client.query(
-    `select id, workspace_id, brand_id, type, title, status, current_stage, draft_json, analysis_json,
+    `select id, workspace_id, brand_id, output_format, purpose, title, status, current_stage, draft_json, analysis_json,
             attachments_locked_at, terminal_at, retryable_until,
             error_code, error_message, created_at, updated_at, completed_at
        from ai_content_generations where id = $1`,
@@ -1395,28 +1652,608 @@ async function recalculateGenerationStatus(client: Queryable, generationId: stri
   );
 }
 
-function generationInputForWorker(
-  snapshot: unknown,
-  analysisJson: unknown,
-  jobType: unknown,
-): ContentGenerationInputV2 | undefined {
-  if (!snapshot) return undefined;
-  const parsed = parseContentGenerationInputV2(snapshot);
-  if (jobType !== "generate") return parsed;
-  const finalBrief = object(analysisJson).qualityBrief;
-  if (!finalBrief || typeof finalBrief !== "object" || Array.isArray(finalBrief)) return parsed;
+
+async function loadAiContentFixedInputSource(input: {
+  client: Queryable;
+  catalog: VerifiedGeneratedContentCatalog;
+  snapshots: AiContentSnapshotRepository;
+  startedAt: string;
+  scope: AuthenticatedBrandScope;
+  generation: Record<string, unknown>;
+  batch: Record<string, unknown>;
+  selection: Record<string, unknown>;
+  finalization: ContentFinalizationDraftV2;
+}): Promise<AiContentFixedInputSource> {
+  const { client, scope, generation, batch, selection, finalization, snapshots } = input;
+  const batchInputSnapshot = object(batch.input_snapshot_json);
+  if (!isDeepStrictEqual(Object.keys(batchInputSnapshot).sort(), [
+    "baseInput", "replayFingerprint", "resumeInput",
+  ])) throw new Error("fixed_input_batch_contract_invalid");
+  const baseInput = parseCanonicalProposalBaseInputSnapshotV2(batchInputSnapshot.baseInput);
+  const proposalId = String(selection.id);
+  const batchId = String(batch.id);
+  const generationId = String(generation.id);
+  const proposalJobId = String(selection.successful_proposal_job_id ?? "");
+  const successfulAttemptId = String(selection.successful_model_attempt_id ?? "");
+  const finalInvocationOrdinal = Number(selection.final_invocation_ordinal);
+  if (!proposalJobId || !successfulAttemptId || ![1, 2].includes(finalInvocationOrdinal)) {
+    throw new Error("fixed_input_success_lineage_mismatch");
+  }
+
+  const lineageResult = await client.query(
+    `select job.id job_id,job.batch_id,job.status job_status,
+            contract.id contract_id,contract.request_contract_version,
+            contract.base_input_contract_version,contract.research_contract_version,
+            contract.proposal_contract_version,contract.proposal_prompt_version,
+            contract.proposal_output_schema_sha256,contract.proposal_model_id,
+            contract.command_descriptor_sha256,contract.request_sha256,contract.base_input_sha256,
+            contract.contract_source_sha256,contract.catalog_sha256,contract.enqueue_contract_sha256,
+            composition.id composition_id,composition.composed_input_json,
+            composition.research_evidence_set_sha256,composition.composed_input_sha256,
+            composition.research_evidence_set_sha256=encode(
+              digest(composition.research_evidence_json::text,'sha256'),'hex'
+            ) research_evidence_set_hash_matches,
+            composition.composed_input_sha256=encode(
+              digest(composition.composed_input_json::text,'sha256'),'hex'
+            ) composed_input_hash_matches,
+            composition.final_invocation_aggregate_sha256,
+            attempt.id attempt_id,attempt.composition_id,attempt.aggregate_contract_sha256,
+            attempt.model_id,attempt.model_sha256,attempt.command_descriptor_sha256 attempt_command_sha256,
+            attempt.proposal_output_schema_sha256 attempt_schema_sha256,
+            attempt.composed_input_sha256 attempt_composed_sha256,
+            event.event_type,event.invocation_ordinal,event.aggregate_contract_sha256 event_aggregate_sha256,
+            event.model_sha256 event_model_sha256,event.command_descriptor_sha256 event_command_sha256,
+            event.proposal_output_schema_sha256 event_schema_sha256,
+            event.composed_input_sha256 event_composed_sha256,event.output_sha256,event.parser_sha256,
+            event.parser_valid,research.evidence_json
+       from ai_content_proposal_jobs job
+       join ai_content_proposal_job_contracts contract
+         on contract.job_id=job.id and contract.workspace_id=job.workspace_id and contract.brand_id=job.brand_id
+       join ai_content_proposal_compositions composition
+         on composition.job_id=job.id and composition.contract_id=contract.id
+        and composition.workspace_id=job.workspace_id and composition.brand_id=job.brand_id
+       join ai_content_proposal_model_attempts attempt
+         on attempt.id=$5 and attempt.job_id=job.id and attempt.contract_id=contract.id
+        and attempt.workspace_id=job.workspace_id and attempt.brand_id=job.brand_id
+       join ai_content_proposal_attempt_events event
+         on event.model_attempt_id=attempt.id and event.job_id=job.id
+        and event.workspace_id=job.workspace_id and event.brand_id=job.brand_id
+        and event.event_type='attempt_succeeded' and event.invocation_ordinal=$6
+        and event.parser_valid is true
+       join ai_content_proposal_research_snapshots research
+         on research.batch_id=job.batch_id and research.workspace_id=job.workspace_id
+        and research.brand_id=job.brand_id
+      where job.id=$4 and job.batch_id=$1 and job.workspace_id=$2 and job.brand_id=$3
+        and job.status='completed'`,
+    [batchId, scope.workspaceId, scope.brandId, proposalJobId, successfulAttemptId, finalInvocationOrdinal],
+  );
+  if (lineageResult.rows.length !== 1) throw new Error("fixed_input_success_lineage_mismatch");
+  const lineage = lineageResult.rows[0] as Record<string, unknown>;
+  const composedInput = object(lineage.composed_input_json);
+  const composedEvidence = object(composedInput.researchEvidence);
+  if (!isDeepStrictEqual(lineage.evidence_json, composedEvidence)) {
+    throw new Error("fixed_input_evidence_mismatch");
+  }
+
+  const referenceIds = baseInput.references.map(({ referenceItemId }) => referenceItemId);
+  const referenceSnapshotIds = baseInput.references.map(({ snapshotId }) => snapshotId);
+  const lockedSources = await client.query(
+    `select lock_ai_content_fixed_input_sources(
+       $1,$2,$3,$4,$5,$6::uuid[],$7::uuid[]
+     ) locked`,
+    [scope.workspaceId, scope.brandId, baseInput.brandCore.versionId,
+      baseInput.product?.id ?? null, baseInput.product?.versionId ?? null,
+      referenceIds, referenceSnapshotIds],
+  );
+  if (lockedSources.rows[0]?.locked !== true) throw new Error("fixed_input_source_lock_failed");
+
+  const coreResult = await client.query(
+    `select id,status from brand_core_versions
+      where id=$3 and workspace_id=$1 and brand_id=$2 and status='approved'`,
+    [scope.workspaceId, scope.brandId, baseInput.brandCore.versionId],
+  );
+  if (coreResult.rows.length !== 1) throw new Error("fixed_input_brand_core_unavailable");
+
+  if (baseInput.product !== null) {
+    const productResult = await client.query(
+      `select item.id
+         from product_services item
+         join product_service_versions version
+           on version.id=$4 and version.product_service_id=item.id
+          and version.workspace_id=item.workspace_id and version.brand_id=item.brand_id
+          and version.status='approved'
+         where item.id=$3 and item.workspace_id=$1 and item.brand_id=$2 and item.status='active'`,
+      [scope.workspaceId, scope.brandId, baseInput.product.id, baseInput.product.versionId],
+    );
+    if (productResult.rows.length !== 1) throw new Error("fixed_input_product_unavailable");
+  }
+
+  if (referenceIds.length > 0) {
+    const referencesResult = await client.query(
+      `select requested.reference_item_id
+         from unnest($3::uuid[],$4::uuid[]) with ordinality
+              requested(reference_item_id,snapshot_id,position)
+         join reference_items item
+           on item.id=requested.reference_item_id and item.workspace_id=$1 and item.brand_id=$2
+          and item.archived_at is null
+         join reference_snapshots snapshot
+           on snapshot.id=requested.snapshot_id and snapshot.reference_item_id=item.id
+          and snapshot.workspace_id=item.workspace_id and snapshot.brand_id=item.brand_id
+        where snapshot.snapshot_json #>> '{permittedUse,modelInput}'='true'
+          and snapshot.snapshot_json #>> '{permittedUse,derivativeInspiration}'='true'
+        order by requested.position`,
+      [scope.workspaceId, scope.brandId, referenceIds, referenceSnapshotIds],
+    );
+    if (referencesResult.rows.length !== referenceIds.length) {
+      throw new Error("fixed_input_reference_unavailable");
+    }
+  }
+
+  const rulesResult = await client.query(
+    `select rules.id,rules.version,rules.status,rules.rules_json
+       from brand_profiles profile
+       join brand_rule_sets rules
+         on rules.id=profile.active_brand_rule_set_id
+        and rules.workspace_id=profile.workspace_id and rules.brand_id=profile.brand_id
+        and rules.status='approved'
+      where profile.workspace_id=$1 and profile.brand_id=$2`,
+    [scope.workspaceId, scope.brandId],
+  );
+  if (rulesResult.rows.length !== 1) throw new Error("fixed_input_brand_rules_unavailable");
+  const rules = rulesResult.rows[0] as Record<string, unknown>;
+  const styleResult = await client.query(
+    `select item.id reference_item_id,style.image->>'description' description,
+            style.image->'tags' tags,artifact.public_url storage_url,artifact.path storage_path,
+            lower(artifact.mime_type) mime_type,artifact.checksum
+       from jsonb_array_elements(coalesce($3::jsonb #> '{designRules,referenceImages}','[]'::jsonb))
+            with ordinality style(image,position)
+       join reference_items item
+         on item.id::text=style.image->>'referenceItemId'
+        and item.workspace_id=$1 and item.brand_id=$2 and item.kind='upload' and item.archived_at is null
+       join storage_artifacts artifact
+         on artifact.id=item.storage_artifact_id and artifact.workspace_id=item.workspace_id
+        and artifact.brand_id=item.brand_id and artifact.deleted_at is null
+        and artifact.public_url is not null and artifact.path is not null
+        and artifact.checksum ~ '^[0-9a-f]{64}$'
+        and lower(artifact.mime_type) in ('image/png','image/jpeg','image/webp')
+      order by style.position`,
+    [scope.workspaceId, scope.brandId, JSON.stringify(rules.rules_json)],
+  );
+  const configuredStyles = object(object(rules.rules_json).designRules).referenceImages;
+  const configuredStyleCount = Array.isArray(configuredStyles) ? configuredStyles.length : 0;
+  if (styleResult.rows.length !== configuredStyleCount) {
+    throw new Error("fixed_input_style_image_unavailable");
+  }
+  const styleImages = configuredStyleCount === 0
+    ? []
+    : await snapshots.loadApprovedStyleImages({
+      workspaceId: scope.workspaceId,
+      brandId: scope.brandId,
+    }, client);
+  if (styleImages.length !== styleResult.rows.length
+    || styleImages.some((image, index) => (
+      image.referenceItemId !== String(styleResult.rows[index]?.reference_item_id ?? "")
+    ))) {
+    throw new Error("fixed_input_style_image_unavailable");
+  }
+
+  const attachmentResult = finalization.attachmentIds.length === 0
+    ? { rows: [] as Record<string, unknown>[] }
+    : await client.query(
+      `select attachment.id,attachment.role,attachment.file_name,lower(attachment.mime_type) mime_type,
+              attachment.size_bytes,attachment.checksum,attachment.storage_url,attachment.storage_path
+         from unnest($4::uuid[]) with ordinality requested(id,position)
+         join ai_content_generation_attachments attachment
+           on attachment.id=requested.id and attachment.generation_id=$1
+          and attachment.workspace_id=$2 and attachment.brand_id=$3 and attachment.deleted_at is null
+         join ai_content_attachment_upload_sessions upload
+           on upload.id=attachment.upload_session_id and upload.workspace_id=attachment.workspace_id
+          and upload.brand_id=attachment.brand_id and upload.generation_id=attachment.generation_id
+          and upload.status='confirmed' and upload.confirmed_attachment_id=attachment.id
+        where attachment.role in ('product_image','visual_reference','supporting_image')
+          and lower(attachment.mime_type) in ('image/png','image/jpeg','image/webp')
+        order by requested.position
+        for update of attachment,upload`,
+      [generationId, scope.workspaceId, scope.brandId, finalization.attachmentIds],
+    );
+  if (attachmentResult.rows.length !== finalization.attachmentIds.length) {
+    throw new Error("fixed_input_attachment_unavailable");
+  }
+  const attachments = attachmentResult.rows.map((row) => ({
+    id: String(row.id), role: String(row.role) as "product_image" | "visual_reference" | "supporting_image",
+    fileName: String(row.file_name), mimeType: String(row.mime_type) as "image/png" | "image/jpeg" | "image/webp",
+    sizeBytes: Number(row.size_bytes), checksum: String(row.checksum),
+    storageUrl: String(row.storage_url), storagePath: String(row.storage_path),
+  }));
+
   return {
-    ...parsed,
-    message: { ...parsed.message, qualityBrief: object(finalBrief) },
+    catalog: input.catalog,
+    catalogSha256: EXPECTED_PROPOSAL_CATALOG_SHA256,
+    startedAt: input.startedAt,
+    scope: {
+      workspaceId: scope.workspaceId,
+      brandId: scope.brandId,
+      actorUserId: scope.actorUserId,
+    },
+    draft: {
+      workspaceId: scope.workspaceId, brandId: scope.brandId, generationId,
+      status: "draft", deletedAt: null, origin: "proposal-v2", proposalBatchId: batchId,
+      proposalId, outputFormat: String(generation.output_format) as AiContentFixedInputSource["draft"]["outputFormat"],
+      purpose: String(generation.purpose) as AiContentFixedInputSource["draft"]["purpose"],
+      userImageInstruction: finalization.userImageInstruction,
+      brandStyleImageIds: styleImages.map(({ referenceItemId }) => referenceItemId),
+      avatarStyleImageId: finalization.avatarStyleImageId,
+      attachmentIds: [...finalization.attachmentIds],
+    },
+    batch: {
+      workspaceId: scope.workspaceId, brandId: scope.brandId, id: batchId,
+      status: "ready", deletedAt: null, baseInput,
+    },
+    selection: {
+      workspaceId: scope.workspaceId, brandId: scope.brandId, id: proposalId, batchId,
+      generationId, status: "selected", deletedAt: null,
+      proposal: selection.proposal_json as AiContentFixedInputSource["selection"]["proposal"],
+      successfulModelAttemptId: successfulAttemptId,
+      successfulProposalJobId: proposalJobId,
+      finalInvocationOrdinal: finalInvocationOrdinal as 1 | 2,
+    },
+    proposalJob: {
+      workspaceId: scope.workspaceId, brandId: scope.brandId, id: proposalJobId,
+      contractId: String(lineage.contract_id), batchId, status: "completed",
+      request: batch.request_json as AiContentFixedInputSource["proposalJob"]["request"],
+      requestContractVersion: String(lineage.request_contract_version),
+      baseInputContractVersion: String(lineage.base_input_contract_version),
+      researchContractVersion: String(lineage.research_contract_version),
+      proposalContractVersion: String(lineage.proposal_contract_version),
+      proposalPromptVersion: String(lineage.proposal_prompt_version),
+      proposalOutputSchemaSha256: String(lineage.proposal_output_schema_sha256),
+      proposalModelId: String(lineage.proposal_model_id),
+      commandDescriptorSha256: String(lineage.command_descriptor_sha256),
+      requestSha256: String(lineage.request_sha256), baseInputSha256: String(lineage.base_input_sha256),
+      contractSourceSha256: String(lineage.contract_source_sha256),
+      catalogSha256: String(lineage.catalog_sha256), enqueueContractSha256: String(lineage.enqueue_contract_sha256),
+    },
+    composition: {
+      workspaceId: scope.workspaceId, brandId: scope.brandId, id: String(lineage.composition_id),
+      jobId: proposalJobId, contractId: String(lineage.contract_id), batchId,
+      composedInput: lineage.composed_input_json as AiContentFixedInputSource["composition"]["composedInput"],
+      researchEvidenceSetSha256: String(lineage.research_evidence_set_sha256),
+      researchEvidenceSetHashMatches: lineage.research_evidence_set_hash_matches === true,
+      composedInputSha256: String(lineage.composed_input_sha256),
+      composedInputHashMatches: lineage.composed_input_hash_matches === true,
+      finalInvocationAggregateSha256: String(lineage.final_invocation_aggregate_sha256),
+    },
+    successfulAttempt: {
+      workspaceId: scope.workspaceId, brandId: scope.brandId, id: successfulAttemptId,
+      jobId: proposalJobId, contractId: String(lineage.contract_id), compositionId: String(lineage.composition_id),
+      aggregateContractSha256: String(lineage.aggregate_contract_sha256), modelId: String(lineage.model_id),
+      modelSha256: String(lineage.model_sha256), commandDescriptorSha256: String(lineage.attempt_command_sha256),
+      proposalOutputSchemaSha256: String(lineage.attempt_schema_sha256),
+      composedInputSha256: String(lineage.attempt_composed_sha256),
+    },
+    successEvent: {
+      workspaceId: scope.workspaceId, brandId: scope.brandId, modelAttemptId: successfulAttemptId,
+      jobId: proposalJobId, eventType: "attempt_succeeded",
+      invocationOrdinal: finalInvocationOrdinal as 1 | 2,
+      aggregateContractSha256: String(lineage.event_aggregate_sha256), modelSha256: String(lineage.event_model_sha256),
+      commandDescriptorSha256: String(lineage.event_command_sha256),
+      proposalOutputSchemaSha256: String(lineage.event_schema_sha256),
+      composedInputSha256: String(lineage.event_composed_sha256), outputSha256: String(lineage.output_sha256),
+      parserSha256: String(lineage.parser_sha256), parserValid: true,
+    } as AiContentFixedInputSource["successEvent"],
+    approvedBrandCore: {
+      workspaceId: scope.workspaceId, brandId: scope.brandId,
+      status: "approved", deletedAt: null, snapshot: baseInput.brandCore,
+    },
+    approvedBrandRules: {
+      workspaceId: scope.workspaceId, brandId: scope.brandId, versionId: String(rules.id),
+      version: Number(rules.version), status: "approved", deletedAt: null,
+      content: rules.rules_json as AiContentFixedInputSource["approvedBrandRules"]["content"],
+      contentSha256: proposalSha256(rules.rules_json),
+    },
+    approvedProduct: baseInput.product === null ? null : {
+      workspaceId: scope.workspaceId, brandId: scope.brandId,
+      status: "approved", deletedAt: null, snapshot: baseInput.product,
+    },
+    evidence: (Array.isArray(object(composedInput.researchEvidence).items)
+      ? object(composedInput.researchEvidence).items as unknown[] : []).map((snapshot) => ({
+      workspaceId: scope.workspaceId, brandId: scope.brandId, proposalBatchId: batchId,
+      status: "frozen" as const, deletedAt: null, snapshot: snapshot as AiContentFixedInputSource["evidence"][number]["snapshot"],
+    })),
+    references: baseInput.references.map((snapshot) => ({
+      workspaceId: scope.workspaceId, brandId: scope.brandId, proposalBatchId: batchId,
+      status: "approved" as const, deletedAt: null, snapshot,
+    })),
+    brandStyleImages: styleImages.map((snapshot) => ({
+      workspaceId: scope.workspaceId, brandId: scope.brandId, ruleSetVersionId: String(rules.id),
+      status: "approved" as const, deletedAt: null, snapshot,
+    })),
+    attachments: attachments.map((snapshot) => ({
+      workspaceId: scope.workspaceId, brandId: scope.brandId, generationId,
+      status: "finalized" as const, deletedAt: null, snapshot,
+    })),
   };
 }
 
+async function startAiContentGenerationV3Transaction(input: {
+  pool: Pool;
+  catalog: VerifiedGeneratedContentCatalog;
+  snapshots: AiContentSnapshotRepository;
+  command: BrandGenerationScope & AuthenticatedBrandScope & ContentGenerationStartV2 & {
+    usageDate: string;
+    dailyGenerationLimit: number;
+  };
+  now: () => Date;
+}): Promise<AiContentGenerationRecord> {
+  const { pool, catalog, snapshots, command, now } = input;
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    await assertAiContentWritable(client);
+    await assertActiveAiContentActor(client, command);
+
+    const draftLookup = await scopedGeneration(client, command);
+    if (!draftLookup) throw new Error("ai_content_generation_not_found");
+    const draftLookupJson = object(draftLookup.draft_json);
+    const proposalBatchId = String(draftLookupJson.proposalBatchId ?? "");
+    const proposalId = String(draftLookupJson.proposalId ?? "");
+    if (!proposalBatchId || !proposalId || draftLookupJson.origin !== "proposal-v2") {
+      throw new Error("ai_content_generation_not_draft");
+    }
+
+    const batchResult = await client.query(
+      `select id,workspace_id,brand_id,status,purpose,input_snapshot_json,request_json
+         from ai_content_proposal_batches
+        where id=$1 and workspace_id=$2 and brand_id=$3
+        for update`,
+      [proposalBatchId, command.workspaceId, command.brandId],
+    );
+    const batch = batchResult.rows[0] as Record<string, unknown> | undefined;
+    const proposalResult = await client.query(
+      `select id,batch_id,workspace_id,brand_id,status,generation_id,proposal_json,
+              successful_model_attempt_id,successful_proposal_job_id,final_invocation_ordinal
+         from ai_content_proposals
+        where id=$1 and batch_id=$2 and workspace_id=$3 and brand_id=$4
+        for update`,
+      [proposalId, proposalBatchId, command.workspaceId, command.brandId],
+    );
+    const selection = proposalResult.rows[0] as Record<string, unknown> | undefined;
+    const generation = await scopedGeneration(client, command, true);
+    if (!batch || batch.status !== "ready" || !selection || selection.status !== "selected"
+      || selection.generation_id !== command.generationId) {
+      throw new Error("RESOURCE_NOT_AVAILABLE");
+    }
+    if (!generation) throw new Error("ai_content_generation_not_found");
+    const generationDraft = object(generation.draft_json);
+    if (!isDeepStrictEqual(Object.keys(generationDraft).sort(), [
+      "finalization", "origin", "proposalBatchId", "proposalId",
+    ]) || generationDraft.origin !== "proposal-v2"
+      || generationDraft.proposalBatchId !== proposalBatchId
+      || generationDraft.proposalId !== proposalId) {
+      throw new Error("ai_content_generation_not_draft");
+    }
+    const finalization = parseContentFinalizationDraftV2(generationDraft.finalization);
+    const requestFingerprint = proposalSha256({
+      generationId: command.generationId,
+      contractVersion: command.contractVersion,
+      workspaceId: command.workspaceId,
+      brandId: command.brandId,
+      proposalBatchId,
+      proposalId,
+      outputFormat: generation.output_format,
+      purpose: generation.purpose,
+      finalization,
+    });
+
+    await client.query("select pg_advisory_xact_lock(hashtextextended($1,0))", [
+      `ai-content-operation:${command.brandId}:${command.idempotencyKey}`,
+    ]);
+    const operationResult = await client.query(
+      `select * from ai_content_generation_operations
+        where brand_id=$1 and operation_key=$2
+        for update`,
+      [command.brandId, command.idempotencyKey],
+    );
+    const existingOperation = operationResult.rows[0] as Record<string, unknown> | undefined;
+    if (existingOperation) {
+      if (String(existingOperation.workspace_id) !== command.workspaceId
+        || String(existingOperation.generation_id) !== command.generationId
+        || String(existingOperation.request_fingerprint_sha256) !== requestFingerprint
+        || String(generation.operation_id ?? "") !== String(existingOperation.id)
+        || !["started", "completed", "failed", "reversed"].includes(String(existingOperation.status))) {
+        throw new Error("ai_content_generation_start_conflict");
+      }
+      const replayGraph = await client.query(
+        `select snapshot.input_json,snapshot.content_hash,binding.binding_json,binding.binding_sha256,
+                binding.binding_sha256=encode(digest(binding.binding_json::text,'sha256'),'hex') binding_hash_matches,
+                binding.selected_proposal_id,binding.proposal_job_id,
+                binding.successful_model_attempt_id,binding.final_invocation_ordinal,
+                binding.output_format,binding.purpose,binding.generation_input_version,
+                reservation.id reservation_id,reservation.quantity,
+                (select count(*)::integer from ai_content_generation_outputs output
+                  where output.generation_id=$1) output_count,
+                (select count(*)::integer from ai_content_generation_jobs job
+                  where job.generation_id=$1 and job.job_type='generate'
+                    and job.output_format=$4) job_count
+           from ai_content_generation_input_snapshots snapshot
+           join ai_content_generation_prompt_bindings binding
+             on binding.generation_id=snapshot.generation_id
+            and binding.workspace_id=snapshot.workspace_id and binding.brand_id=snapshot.brand_id
+           join ai_content_usage_ledger reservation
+             on reservation.operation_id=$5 and reservation.generation_id=snapshot.generation_id
+            and reservation.usage_type='generation' and reservation.reservation_id=reservation.id
+          where snapshot.generation_id=$1 and snapshot.workspace_id=$2 and snapshot.brand_id=$3`,
+        [command.generationId, command.workspaceId, command.brandId, generation.output_format, existingOperation.id],
+      );
+      const replay = replayGraph.rows[0] as Record<string, unknown> | undefined;
+      if (!replay || !isDeepStrictEqual(generation.generation_input_snapshot, replay.input_json)
+        || proposalSha256(replay.input_json) !== replay.content_hash) {
+        throw new Error("ai_content_generation_start_conflict");
+      }
+      let frozenInput: ReturnType<typeof parseCanonicalContentGenerationInputV3>;
+      try {
+        frozenInput = parseCanonicalContentGenerationInputV3(replay.input_json);
+        const frozenBinding = parseContentPromptBinding(replay.binding_json);
+        assertPlannerPromptBinding(frozenInput, frozenBinding);
+      } catch {
+        throw new Error("ai_content_generation_start_conflict");
+      }
+      const outputCount = frozenInput.outputSettings.outputCount;
+      if (Number(replay.quantity) !== outputCount || Number(replay.output_count) !== outputCount
+        || Number(replay.job_count) !== outputCount
+        || replay.binding_hash_matches !== true
+        || String(replay.selected_proposal_id) !== proposalId
+        || String(replay.proposal_job_id) !== String(selection.successful_proposal_job_id)
+        || String(replay.successful_model_attempt_id) !== String(selection.successful_model_attempt_id)
+        || Number(replay.final_invocation_ordinal) !== Number(selection.final_invocation_ordinal)
+        || String(replay.output_format) !== String(generation.output_format)
+        || String(replay.purpose) !== String(generation.purpose)
+        || String(replay.generation_input_version) !== frozenInput.contractVersion) {
+        throw new Error("ai_content_generation_start_conflict");
+      }
+      await client.query("COMMIT");
+      return mapGeneration(generation);
+    }
+    if (generation.operation_id !== null && generation.operation_id !== undefined) {
+      throw new Error("ai_content_generation_start_conflict");
+    }
+    if (generation.generation_idempotency_key !== null
+      || generation.generation_input_snapshot !== null
+      || generation.attachments_locked_at !== null) {
+      throw new Error("ai_content_generation_start_conflict");
+    }
+    if (generation.status !== "draft") throw new Error("ai_content_generation_not_draft");
+
+    const startedAt = now().toISOString();
+    const source = await loadAiContentFixedInputSource({
+      client,
+      catalog,
+      snapshots,
+      startedAt,
+      scope: command,
+      generation,
+      batch,
+      selection,
+      finalization,
+    });
+    const assembly = assembleAiContentFixedInput(source);
+    const outputCount = assembly.input.outputSettings.outputCount;
+
+    await client.query("select pg_advisory_xact_lock(hashtextextended($1,0))", [
+      `ai-content-usage:${command.brandId}:${command.usageDate}`,
+    ]);
+    const usageResult = await client.query(
+      `select coalesce(sum(quantity),0)::integer generation_count
+         from ai_content_usage_ledger
+        where workspace_id=$1 and brand_id=$2 and usage_date=$3::date
+          and usage_type in ('generation','reversal')`,
+      [command.workspaceId, command.brandId, command.usageDate],
+    );
+    if (Number(usageResult.rows[0]?.generation_count ?? 0) + outputCount > command.dailyGenerationLimit) {
+      throw new Error("ai_content_limit_reached");
+    }
+
+    const operationId = randomUUID();
+    const reservationId = randomUUID();
+    await client.query(
+      `insert into ai_content_generation_operations(
+         id,workspace_id,brand_id,operation_key,request_fingerprint_sha256,generation_id,status
+       ) values($1,$2,$3,$4,$5,$6,'reserved')`,
+      [operationId, command.workspaceId, command.brandId, command.idempotencyKey,
+        requestFingerprint, command.generationId],
+    );
+    await client.query(
+      `insert into ai_content_usage_ledger(
+         id,workspace_id,brand_id,generation_id,output_id,usage_type,quantity,usage_date,
+         idempotency_key,operation_id,reservation_id,reversal_of_ledger_id
+       ) values($1,$2,$3,$4,null,'generation',$5,$6::date,$7,$8,$1,null)`,
+      [reservationId, command.workspaceId, command.brandId, command.generationId,
+        outputCount, command.usageDate, `generation-reservation:${operationId}`, operationId],
+    );
+    await client.query(
+      `insert into ai_content_generation_input_snapshots(
+         id,workspace_id,brand_id,generation_id,input_json,content_hash
+       ) values($1,$2,$3,$4,$5::jsonb,$6)`,
+      [randomUUID(), command.workspaceId, command.brandId, command.generationId,
+        assembly.canonicalJson, assembly.contentHash],
+    );
+    await client.query(
+      `select create_ai_content_generation_prompt_binding($1,$2,$3,$4,$5,$6,$7,$8::jsonb)`,
+      [command.generationId, command.workspaceId, command.brandId,
+        assembly.provenance.selectedProposalId, assembly.provenance.proposalJobId,
+        assembly.provenance.proposalContractId, assembly.provenance.successfulModelAttemptId,
+        JSON.stringify(assembly.binding)],
+    );
+
+    for (let outputIndex = 1; outputIndex <= outputCount; outputIndex += 1) {
+      const outputId = randomUUID();
+      await client.query(
+        `insert into ai_content_generation_outputs(
+           id,generation_id,workspace_id,brand_id,output_index,status
+         ) values($1,$2,$3,$4,$5,'queued')`,
+        [outputId, command.generationId, command.workspaceId, command.brandId, outputIndex],
+      );
+      if (assembly.input.outputSettings.outputFormat !== "blog") {
+        await client.query(
+          `insert into ai_content_output_research_snapshots(
+             id,workspace_id,brand_id,generation_id,output_id,evidence_json
+           ) values($1,$2,$3,$4,$5,$6::jsonb)`,
+          [randomUUID(), command.workspaceId, command.brandId, command.generationId,
+            outputId, JSON.stringify(assembly.input.researchEvidence)],
+        );
+      }
+      await client.query(
+        `insert into ai_content_generation_jobs(
+           id,generation_id,output_id,workspace_id,brand_id,job_type,output_format,status,payload_json
+         ) values($1,$2,$3,$4,$5,'generate',$6,'queued',$7::jsonb)`,
+        [randomUUID(), command.generationId, outputId, command.workspaceId, command.brandId,
+          assembly.input.outputSettings.outputFormat, JSON.stringify({
+            generationId: command.generationId,
+            outputId,
+            contentGenerationInput: assembly.input,
+            planningMode: "selected_proposal",
+            operationId,
+          })],
+      );
+    }
+
+    const updatedResult = await client.query(
+      `update ai_content_generations
+          set status='queued',current_stage='generation',generation_idempotency_key=$4,
+              operation_id=$5,generation_input_snapshot=$6::jsonb,
+              attachments_locked_at=statement_timestamp(),updated_by_user_id=$7,updated_at=now()
+        where id=$1 and workspace_id=$2 and brand_id=$3 and status='draft'
+        returning id,workspace_id,brand_id,output_format,purpose,title,status,current_stage,
+                  draft_json,analysis_json,generation_input_snapshot,operation_id,
+                  attachments_locked_at,terminal_at,retryable_until,error_code,error_message,
+                  created_at,updated_at,completed_at`,
+      [command.generationId, command.workspaceId, command.brandId, command.idempotencyKey,
+        operationId, assembly.canonicalJson, command.actorUserId],
+    );
+    if (updatedResult.rows.length !== 1) throw new Error("ai_content_generation_start_conflict");
+    await client.query(
+      "select transition_ai_content_generation_operation($1,'reserved','started')",
+      [operationId],
+    );
+    await client.query("COMMIT");
+    return mapGeneration(updatedResult.rows[0]);
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
 export function createAiContentRepository(pool: Pool, options: AiContentRepositoryOptions = {}): AiContentRepository {
-  const subjectRepository = createAiContentSubjectRepository(pool);
-  const attachmentLifecycle = createAiContentAttachmentRepository(pool);
-  const proposalJobs = createContentProposalJobsRepository(pool);
-  const renderJobs = createAiContentRenderJobsRepository(pool, generationById);
+  const fixedInputCatalog = loadProposalCatalog();
+  const fencedPool = withAiContentTransactionFence(pool);
+  const subjectRepository = createAiContentSubjectRepository(fencedPool);
+  const attachmentLifecycle = createAiContentAttachmentRepository(fencedPool);
+  const proposalJobs = createContentProposalJobsRepository(fencedPool);
+  const renderJobs = createAiContentRenderJobsRepository(fencedPool, generationById);
   return {
+    assertAiContentWritable: () => assertAiContentWritable(pool),
     ...attachmentLifecycle,
     ...proposalJobs,
     claimAiContentRenderJob: renderJobs.claim,
@@ -1474,421 +2311,16 @@ export function createAiContentRepository(pool: Pool, options: AiContentReposito
       };
     },
 
-    async createAiContentAnalysis(input) {
-      const client = await pool.connect();
-      try {
-        await client.query("BEGIN");
-        await assertActiveAiContentActor(client, input);
-        const existing = await client.query(
-    `select id, workspace_id, brand_id, type, title, status, current_stage, draft_json, analysis_json, generation_idempotency_key,
-                  attachments_locked_at, terminal_at, retryable_until,
-                  error_code, error_message, created_at, updated_at, completed_at
-             from ai_content_generations
-            where workspace_id = $1 and brand_id = $2 and analysis_idempotency_key = $3
-            for update`,
-          [input.workspaceId, input.brandId, input.idempotencyKey],
-        );
-        if (existing.rowCount) {
-          await client.query("COMMIT");
-          return mapGeneration(existing.rows[0]);
-        }
-        const draft: Record<string, unknown> = {
-          ...object(input.draft),
-          ...(input.orchestration ? { orchestration: input.orchestration } : {}),
-          origin: "manual",
-        };
-        const usesOwnedContext = draft.analysisSource === "owned";
-        const usesCompletedSubjectAnalysis = typeof draft.subjectAnalysisId === "string"
-          && draft.subjectAnalysisId.trim().length > 0;
-        const analysisAlreadyReady = usesOwnedContext || usesCompletedSubjectAnalysis;
-        const brandContext = usesOwnedContext
-          ? await loadAiContentBrandContext(client, input, options.brandIntelligenceProvider)
-          : null;
-        if (usesOwnedContext && options.brandIntelligenceProvider && !brandContext?.brandIntelligenceVersionId) {
-          throw new Error("brand_intelligence_required");
-        }
-        const initialStatus = analysisAlreadyReady ? "analysis_ready" : "analyzing";
-        const initialStage = analysisAlreadyReady ? "analysis_ready" : "analysis";
-        const initialAnalysis = usesOwnedContext ? {
-          source: "owned",
-          contextReady: Boolean(brandContext?.ready),
-          summary: brandContext?.summary,
-          ownedUrl: brandContext?.ownedUrl,
-          lastCrawledAt: brandContext?.lastCrawledAt,
-          brandIntelligenceVersionId: brandContext?.brandIntelligenceVersionId,
-        } : {};
-        const contentFamily = input.type === "marketing" ? "marketing" : "informational";
-        const outputFormat = input.type === "marketing" ? "single_image" : input.type;
-        const productServiceId = typeof draft.productServiceId === "string"
-          && draft.productServiceId.trim().length > 0
-          ? draft.productServiceId.trim()
-          : null;
-        const subjectMode = productServiceId
-          ? "product_service"
-          : usesCompletedSubjectAnalysis
-            ? "new_subject"
-            : "brand_topic";
-        const created = await client.query(
-          `insert into ai_content_generations
-             (workspace_id, brand_id, type, title, status, current_stage, draft_json, analysis_json,
-              analysis_idempotency_key, content_family, output_format, subject_mode, product_service_id,
-              created_by_user_id, updated_by_user_id)
-           values ($1, $2, $3, $4, $5, $6, $7::jsonb, $8::jsonb, $9, $10, $11, $12, $13, $14, $14)
-           on conflict (brand_id, analysis_idempotency_key) do nothing
-           returning id, workspace_id, brand_id, type, title, status, current_stage, draft_json, analysis_json,
-                     attachments_locked_at, terminal_at, retryable_until,
-                     error_code, error_message, created_at, updated_at, completed_at`,
-          [
-            input.workspaceId,
-            input.brandId,
-            input.type,
-            input.title,
-            initialStatus,
-            initialStage,
-            JSON.stringify(draft),
-            JSON.stringify(initialAnalysis),
-            input.idempotencyKey,
-            contentFamily,
-            outputFormat,
-            subjectMode,
-            productServiceId,
-            input.actorUserId,
-          ],
-        );
-        const generation = created.rows[0] as Record<string, unknown> | undefined;
-        if (!generation) {
-          const conflicted = await client.query(
-            `select id, workspace_id, brand_id, type, title, status, current_stage, draft_json, analysis_json,
-                    attachments_locked_at, terminal_at, retryable_until,
-                    error_code, error_message, created_at, updated_at, completed_at
-               from ai_content_generations where workspace_id = $1 and brand_id = $2 and analysis_idempotency_key = $3`,
-            [input.workspaceId, input.brandId, input.idempotencyKey],
-          );
-          if (!conflicted.rowCount) throw new Error("ai_content_analysis_create_conflict");
-          await client.query("COMMIT");
-          return mapGeneration(conflicted.rows[0]);
-        }
-        if (!analysisAlreadyReady) {
-          await client.query(
-            `insert into ai_content_generation_jobs
-               (generation_id, workspace_id, brand_id, job_type, content_type, status, payload_json)
-             values ($1, $2, $3, 'analyze', $4, 'queued', jsonb_build_object('generationId', $1::uuid))
-             on conflict do nothing`,
-            [generation.id, input.workspaceId, input.brandId, input.type],
-          );
-        }
-        await client.query("COMMIT");
-        return mapGeneration(generation);
-      } catch (error) {
-        await client.query("ROLLBACK");
-        throw error;
-      } finally { client.release(); }
-    },
-
-    async createAiContentProposalBatch(input) {
-      const client = await pool.connect();
-      try {
-        await client.query("BEGIN");
-        await assertActiveAiContentActor(client, input);
-        const replay = await client.query(
-          `select *,
-                  (request_json - 'performanceEvidence') = $4::jsonb request_matches
-             from ai_content_proposal_batches
-            where workspace_id=$1 and brand_id=$2 and idempotency_key=$3
-            for update`,
-          [
-            input.workspaceId,
-            input.brandId,
-            input.idempotencyKey,
-            JSON.stringify(input.request),
-          ],
-        );
-        if (replay.rowCount) {
-          const batch = replay.rows[0] as Record<string, unknown>;
-          if (batch.request_matches !== true) {
-            throw new Error("ai_content_proposal_batch_conflict");
-          }
-          await client.query("COMMIT");
-          return mapProposalBatch(batch);
-        }
-        const sourceIds = [...new Set(input.request.sourceSnapshotIds)];
-        const sources = sourceIds.length
-          ? await client.query(
-              `select snapshot.id, snapshot.source_url_id, source.url,
-                      snapshot.fetched_at, snapshot.content_hash,
-                      coalesce(snapshot.summary, left(snapshot.extracted_text, 2000), '') summary
-                 from source_urls source
-                 join source_snapshots snapshot on snapshot.source_url_id=source.id
-                where source.workspace_id=$1 and source.brand_id=$2
-                  and source.deleted_at is null and source.enabled=true
-                  and snapshot.workspace_id=$1 and snapshot.brand_id=$2
-                  and snapshot.status='succeeded'
-                  and snapshot.id=any($3::uuid[])
-                  and not exists (
-                    select 1 from source_snapshots newer
-                     where newer.source_url_id=snapshot.source_url_id
-                       and newer.status='succeeded'
-                       and (newer.fetched_at,newer.id) > (snapshot.fetched_at,snapshot.id)
-                  )
-                order by snapshot.id`,
-              [input.workspaceId, input.brandId, sourceIds],
-            )
-          : { rows: [], rowCount: 0 };
-        if (Number(sources.rowCount) !== sourceIds.length) {
-          throw new Error("ai_content_source_snapshot_invalid");
-        }
-        const performanceIds = [...new Set(input.request.performanceSnapshotIds)];
-        const performance = performanceIds.length
-          ? await client.query(
-              `select performance.id, performance.snapshot_date,
-                      performance.raw_metrics, performance.collected_at,
-                      performance.channel_output_id
-                 from content_performance_snapshots performance
-                 join channel_outputs output
-                   on output.id=performance.channel_output_id
-                  and output.workspace_id=performance.workspace_id
-                  and output.brand_id=performance.brand_id
-                  and output.channel=performance.channel
-                where performance.workspace_id=$1 and performance.brand_id=$2
-                  and performance.id=any($3::uuid[])
-                  and performance.collected_at is not null
-                  and output.status in ('published','completed')
-                order by performance.id`,
-              [input.workspaceId, input.brandId, performanceIds],
-            )
-          : { rows: [], rowCount: 0 };
-        if (Number(performance.rowCount) !== performanceIds.length) {
-          throw new Error("ai_content_performance_snapshot_invalid");
-        }
-        const sourceSnapshots = sources.rows.map((row) => ({
-          sourceId: String(row.id),
-          url: String(row.url),
-          crawledAt: iso(row.fetched_at),
-          contentHash: String(row.content_hash),
-          summary: String(row.summary ?? ""),
-        }));
-        const requestSnapshot = {
-          ...input.request,
-          performanceEvidence: performance.rows.map((row) => ({
-            snapshotId: String(row.id),
-            channelOutputId: String(row.channel_output_id ?? ""),
-            snapshotDate: String(row.snapshot_date),
-            metrics: object(row.raw_metrics),
-            collectedAt: iso(row.collected_at),
-          })),
-        };
-        await client.query(
-          `insert into source_crawl_runs (
-             workspace_id,brand_id,source_url_id,run_key,trigger,status
-           )
-           select source.workspace_id,source.brand_id,source.id,
-                  'proposal-refresh:' || source.id::text || ':' || current_date::text,
-                  'manual','queued'
-             from source_urls source
-             left join lateral (
-               select fetched_at from source_snapshots snapshot
-                where snapshot.source_url_id=source.id and snapshot.status='succeeded'
-                order by fetched_at desc limit 1
-             ) latest on true
-            where source.workspace_id=$1 and source.brand_id=$2
-              and source.enabled=true and source.deleted_at is null
-              and (latest.fetched_at is null or latest.fetched_at < now() - interval '7 days')
-           on conflict (run_key) do nothing`,
-          [input.workspaceId, input.brandId],
-        );
-        const created = await client.query(
-          `insert into ai_content_proposal_batches (
-             workspace_id,brand_id,origin,content_family,request_json,
-             source_snapshot_json,status,idempotency_key,created_by_user_id
-           ) values ($1,$2,$3,$4,$5::jsonb,$6::jsonb,'queued',$7,$8)
-           on conflict (workspace_id,brand_id,idempotency_key) do nothing
-           returning *`,
-          [
-            input.workspaceId,
-            input.brandId,
-            input.origin,
-            input.request.contentFamily,
-            JSON.stringify(requestSnapshot),
-            JSON.stringify(sourceSnapshots),
-            input.idempotencyKey,
-            input.actorUserId,
-          ],
-        );
-        let batch = created.rows[0] as Record<string, unknown> | undefined;
-        if (!batch) {
-          const existing = await client.query(
-            `select * from ai_content_proposal_batches
-              where workspace_id=$1 and brand_id=$2 and idempotency_key=$3
-                and (request_json - 'performanceEvidence')=$4::jsonb
-              for update`,
-            [
-              input.workspaceId,
-              input.brandId,
-              input.idempotencyKey,
-              JSON.stringify(input.request),
-            ],
-          );
-          batch = existing.rows[0];
-          if (!batch) {
-            throw new Error("ai_content_proposal_batch_conflict");
-          }
-        }
-        if (created.rowCount) {
-          await client.query(
-            `insert into ai_content_proposal_jobs (workspace_id,brand_id,batch_id,status)
-             values ($1,$2,$3,'queued')`,
-            [input.workspaceId, input.brandId, batch.id],
-          );
-        }
-        await client.query("COMMIT");
-        return mapProposalBatch(batch);
-      } catch (error) {
-        await client.query("ROLLBACK");
-        throw error;
-      } finally {
-        client.release();
-      }
-    },
-
-    async getAiContentProposalBatchV2Replay(input) {
-      const client = await pool.connect();
-      try {
-        await client.query("BEGIN");
-        await assertActiveAiContentActor(client, input);
-        const replay = await client.query(
-          `select *,
-                  created_by_user_id = $4 actor_matches,
-                  request_json->>'requestFingerprint' = $5 request_fingerprint_matches
-             from ai_content_proposal_batches
-            where workspace_id=$1 and brand_id=$2 and idempotency_key=$3
-            for update`,
-          [
-            input.workspaceId,
-            input.brandId,
-            input.idempotencyKey,
-            input.actorUserId,
-            input.requestFingerprint,
-          ],
-        );
-        if (!replay.rowCount) {
-          await client.query("COMMIT");
-          return null;
-        }
-        const batch = replay.rows[0] as Record<string, unknown>;
-        if (batch.actor_matches !== true || batch.request_fingerprint_matches !== true) {
-          throw new Error("ai_content_proposal_batch_conflict");
-        }
-        await client.query("COMMIT");
-        return mapProposalBatch(batch);
-      } catch (error) {
-        await client.query("ROLLBACK");
-        throw error;
-      } finally {
-        client.release();
-      }
-    },
-
-    async createAiContentProposalBatchV2(input) {
-      const client = await pool.connect();
-      const request = {
-        contractVersion: "content-proposal-request.v2",
-        purpose: input.purpose,
-        outputFormat: input.outputFormat,
-        channelTargets: [input.channelTarget],
-        requestFingerprint: input.requestFingerprint,
-      };
-      try {
-        await client.query("BEGIN");
-        const requestJson = JSON.stringify(request);
-        const inputSnapshotJson = JSON.stringify(input.inputSnapshot);
-        await assertActiveAiContentActor(client, input);
-        const replay = await client.query(
-          `select *,
-                  created_by_user_id = $4 actor_matches,
-                  request_json->>'requestFingerprint' = $5 request_fingerprint_matches
-             from ai_content_proposal_batches
-            where workspace_id=$1 and brand_id=$2 and idempotency_key=$3
-            for update`,
-          [
-            input.workspaceId,
-            input.brandId,
-            input.idempotencyKey,
-            input.actorUserId,
-            input.requestFingerprint,
-          ],
-        );
-        if (replay.rowCount) {
-          const batch = replay.rows[0] as Record<string, unknown>;
-          if (batch.actor_matches !== true || batch.request_fingerprint_matches !== true) {
-            throw new Error("ai_content_proposal_batch_conflict");
-          }
-          await client.query("COMMIT");
-          return mapProposalBatch(batch);
-        }
-
-        const created = await client.query(
-          `insert into ai_content_proposal_batches (
-             workspace_id,brand_id,origin,content_family,request_json,
-             source_snapshot_json,input_snapshot_json,status,idempotency_key,created_by_user_id
-           ) values ($1,$2,$3,$4,$5::jsonb,'[]'::jsonb,$6::jsonb,'queued',$7,$8)
-           on conflict (workspace_id,brand_id,idempotency_key) do nothing
-           returning *`,
-          [
-            input.workspaceId,
-            input.brandId,
-            input.origin,
-            input.purpose,
-            requestJson,
-            inputSnapshotJson,
-            input.idempotencyKey,
-            input.actorUserId,
-          ],
-        );
-        let batch = created.rows[0] as Record<string, unknown> | undefined;
-        if (!batch) {
-          const existing = await client.query(
-            `select *,
-                    created_by_user_id = $4 actor_matches,
-                    request_json->>'requestFingerprint' = $5 request_fingerprint_matches
-               from ai_content_proposal_batches
-              where workspace_id=$1 and brand_id=$2 and idempotency_key=$3
-              for update`,
-            [
-              input.workspaceId,
-              input.brandId,
-              input.idempotencyKey,
-              input.actorUserId,
-              input.requestFingerprint,
-            ],
-          );
-          batch = existing.rows[0] as Record<string, unknown> | undefined;
-          if (
-            !batch
-            || batch.actor_matches !== true
-            || batch.request_fingerprint_matches !== true
-          ) {
-            throw new Error("ai_content_proposal_batch_conflict");
-          }
-        } else {
-          await client.query(
-            `insert into ai_content_proposal_jobs (workspace_id,brand_id,batch_id,status)
-             values ($1,$2,$3,'queued')`,
-            [input.workspaceId, input.brandId, batch.id],
-          );
-        }
-        await client.query("COMMIT");
-        return mapProposalBatch(batch);
-      } catch (error) {
-        await client.query("ROLLBACK");
-        throw error;
-      } finally {
-        client.release();
-      }
-    },
 
     async getAiContentProposalBatch(input) {
       const result = await pool.query(
         `select batch.*,research.evidence_json,
+                performance.experiment_id::text performance_experiment_id,
+                performance.evidence_version performance_evidence_version,
+                coalesce(jsonb_array_length(performance.snapshot_audit_json->'snapshots'),0)
+                  performance_snapshot_count,
+                performance.captured_from performance_captured_from,
+                performance.captured_to performance_captured_to,
                 coalesce(jsonb_agg(to_jsonb(proposal) order by proposal.position)
                   filter (where proposal.id is not null),'[]'::jsonb) proposals
            from ai_content_proposal_batches batch
@@ -1900,8 +2332,14 @@ export function createAiContentRepository(pool: Pool, options: AiContentReposito
              on research.batch_id=batch.id
             and research.workspace_id=batch.workspace_id
             and research.brand_id=batch.brand_id
+           left join ai_content_proposal_performance_audits performance
+             on performance.batch_id=batch.id
+            and performance.workspace_id=batch.workspace_id
+            and performance.brand_id=batch.brand_id
           where batch.id=$1 and batch.workspace_id=$2 and batch.brand_id=$3
-          group by batch.id,research.evidence_json`,
+          group by batch.id,research.evidence_json,performance.experiment_id,
+                   performance.evidence_version,performance.snapshot_audit_json,
+                   performance.captured_from,performance.captured_to`,
         [input.batchId, input.workspaceId, input.brandId],
       );
       return result.rowCount ? mapProposalBatch(result.rows[0]) : null;
@@ -1928,45 +2366,63 @@ export function createAiContentRepository(pool: Pool, options: AiContentReposito
       const client = await pool.connect();
       try {
         await client.query("BEGIN");
+        await assertAiContentWritable(client);
         await assertActiveAiContentActor(client, input);
         await client.query(
           "select select_ai_content_proposal($1,$2,$3,$4) selected",
           [input.proposalId, input.workspaceId, input.brandId, input.actorUserId],
         );
         const selected = await client.query(
-          `select proposal.id,proposal.proposal_json,proposal.generation_id,
-                  batch.content_family,batch.input_snapshot_json,
-                  research.evidence_json
+          `select proposal.id,proposal.batch_id,proposal.proposal_json,proposal.generation_id,
+                  batch.purpose,batch.input_snapshot_json
              from ai_content_proposals proposal
              join ai_content_proposal_batches batch
                on batch.id=proposal.batch_id
               and batch.workspace_id=proposal.workspace_id
               and batch.brand_id=proposal.brand_id
-             left join ai_content_proposal_research_snapshots research
-               on research.batch_id=batch.id
-              and research.workspace_id=batch.workspace_id
-              and research.brand_id=batch.brand_id
             where proposal.id=$1 and proposal.workspace_id=$2 and proposal.brand_id=$3
             for update of proposal`,
           [input.proposalId, input.workspaceId, input.brandId],
         );
         const proposal = selected.rows[0] as Record<string, unknown> | undefined;
         if (!proposal) throw new Error("ai_content_proposal_not_found");
-        const baseSnapshot = object(proposal.input_snapshot_json);
-        const isV2Selection = baseSnapshot.contractVersion === "proposal-base-input.v2"
-          || baseSnapshot.contractVersion === "proposal-input.v2";
-        const proposalInput = isV2Selection
-          ? parseProposalInputSnapshotV2(baseSnapshot.contractVersion === "proposal-input.v2"
-            ? baseSnapshot
-            : {
-              ...baseSnapshot,
-              contractVersion: "proposal-input.v2",
-              researchEvidence: proposal.evidence_json,
-            })
-          : null;
+        const batchInputSnapshot = object(proposal.input_snapshot_json);
+        if (!isDeepStrictEqual(Object.keys(batchInputSnapshot).sort(), [
+          "baseInput", "replayFingerprint", "resumeInput",
+        ]) || !/^[0-9a-f]{64}$/.test(String(batchInputSnapshot.replayFingerprint ?? ""))) {
+          throw new Error("ai_content_proposal_selection_conflict");
+        }
+        const baseInput = parseCanonicalProposalBaseInputSnapshotV2(batchInputSnapshot.baseInput);
+        const resumeInput = parseCanonicalContentOrchestrationV2(batchInputSnapshot.resumeInput);
+        const proposalJson = object(proposal.proposal_json);
+        const proposalId = String(proposal.id);
+        const proposalBatchId = String(proposal.batch_id);
+        const outputFormat = String(proposalJson.outputFormat) as ContentOutputFormatV2;
+        const purpose = String(object(proposalJson.purposeDetails).kind) as ContentPurposeV2;
+        if (proposalId !== input.proposalId
+          || outputFormat !== baseInput.outputSettings.outputFormat
+          || purpose !== baseInput.outputSettings.purpose
+          || resumeInput.brandId !== input.brandId
+          || resumeInput.outputSettings.outputFormat !== outputFormat
+          || resumeInput.purpose !== purpose
+          || purpose !== proposal.purpose) {
+          throw new Error("ai_content_proposal_selection_conflict");
+        }
+        const expectedDraft = {
+          origin: "proposal-v2",
+          proposalBatchId,
+          proposalId,
+          finalization: {
+            contractVersion: "content-finalization-draft.v2",
+            avatarStyleImageId: null,
+            userImageInstruction: null,
+            attachmentIds: [],
+          },
+        };
+        const selectionIdentity = `proposal-v2:${proposalBatchId}:${proposalId}:${input.idempotencyKey}`;
         if (proposal.generation_id) {
           const linked = await client.query(
-            `select id,workspace_id,brand_id,type,title,status,current_stage,draft_json,analysis_json,
+            `select id,workspace_id,brand_id,output_format,purpose,title,status,current_stage,draft_json,analysis_json,
                     analysis_idempotency_key,attachments_locked_at,terminal_at,retryable_until,
                     error_code,error_message,created_at,updated_at,completed_at
                from ai_content_generations
@@ -1975,151 +2431,41 @@ export function createAiContentRepository(pool: Pool, options: AiContentReposito
             [proposal.generation_id, input.workspaceId, input.brandId],
           );
           const existing = linked.rows[0] as Record<string, unknown> | undefined;
-          const existingDraft = object(existing?.draft_json);
           if (!existing
             || existing.status !== "draft"
-            || existing.analysis_idempotency_key !== `proposal:${input.proposalId}:${input.idempotencyKey}`
-            || (existingDraft.origin !== "proposal" && existingDraft.origin !== "proposal-v2")
-            || existingDraft.proposalId !== input.proposalId) {
+            || existing.analysis_idempotency_key !== selectionIdentity
+            || existing.output_format !== outputFormat
+            || existing.purpose !== purpose
+            || !isDeepStrictEqual(object(existing.draft_json), expectedDraft)) {
             throw new Error("ai_content_proposal_selection_conflict");
           }
           await client.query("COMMIT");
           return mapGeneration(existing);
         }
-        const proposalJson = object(proposal.proposal_json);
-        const outputFormat = String(proposalJson.outputFormat ?? "blog");
-        const type: AiContentType = outputFormat === "card_news"
-          ? "card_news"
-          : outputFormat === "blog"
-            ? "blog"
-            : "marketing";
         const generationId = randomUUID();
-        const approvedVersionId = randomUUID();
-        const approvedAt = new Date().toISOString();
-        const approvedSnapshot = {
-          contractVersion: "approved-proposal.v1",
-          sourceProposalId: input.proposalId,
-          revision: 1,
-          effectiveProposal: proposalJson,
-          editPatch: [],
-          validationResultId: `proposal-selection:${input.idempotencyKey}`,
-          approvedBy: input.actorUserId,
-          approvedAt,
-        };
         const created = await client.query(
           `insert into ai_content_generations (
-             id,workspace_id,brand_id,type,title,status,current_stage,draft_json,
-             analysis_json,analysis_idempotency_key,content_family,output_format,subject_mode,
+             id,workspace_id,brand_id,title,status,current_stage,draft_json,
+             analysis_json,analysis_idempotency_key,purpose,output_format,subject_mode,
              product_service_id,created_by_user_id,updated_by_user_id
-           ) values ($1,$2,$3,$4,$5,'draft','draft',$6::jsonb,'{}',$7,$8,$9,$10,$11,$12,$12)
-           returning id,workspace_id,brand_id,type,title,status,current_stage,draft_json,analysis_json,
+           ) values ($1,$2,$3,$4,'draft','draft',$5::jsonb,'{}',$6,$7,$8,$9,$10,$11,$11)
+           returning id,workspace_id,brand_id,output_format,purpose,title,status,current_stage,draft_json,analysis_json,
                      attachments_locked_at,terminal_at,retryable_until,error_code,error_message,
                      created_at,updated_at,completed_at`,
           [
             generationId,
             input.workspaceId,
             input.brandId,
-            type,
             String(proposalJson.title ?? "콘텐츠 제안"),
-            JSON.stringify({
-              origin: isV2Selection ? "proposal-v2" : "proposal",
-              proposalId: input.proposalId,
-              approvedProposalVersionId: approvedVersionId,
-              ...(isV2Selection ? {
-                finalization: {
-                  contractVersion: "content-finalization-draft.v2",
-                  avatarStyleImageId: null,
-                  userImageInstruction: null,
-                  attachmentIds: [],
-                },
-              } : {}),
-            }),
-            `proposal:${input.proposalId}:${input.idempotencyKey}`,
-            proposal.content_family,
+            JSON.stringify(expectedDraft),
+            selectionIdentity,
+            purpose,
             outputFormat,
             null,
             null,
             input.actorUserId,
           ],
         );
-        await client.query(
-          `insert into ai_content_approved_proposal_versions (
-             id,workspace_id,brand_id,proposal_id,revision,approved_proposal_snapshot,
-             validation_result_id,approved_by_user_id,approved_at
-           ) values ($1,$2,$3,$4,1,$5::jsonb,$6,$7,$8::timestamptz)`,
-          [
-            approvedVersionId,
-            input.workspaceId,
-            input.brandId,
-            input.proposalId,
-            JSON.stringify(approvedSnapshot),
-            approvedSnapshot.validationResultId,
-            input.actorUserId,
-            approvedAt,
-          ],
-        );
-        if (proposalInput) {
-          const referenceIds = proposalInput.references.map((reference) => reference.referenceItemId);
-          const snapshotIds = proposalInput.references.map((reference) => reference.snapshotId);
-          const canonical = referenceIds.length === 0
-            ? { rows: [], rowCount: 0 }
-            : await client.query(
-              `select requested.reference_item_id,requested.reference_snapshot_id,
-                      snapshot.snapshot_json,pattern.id pattern_version_id
-                 from unnest($3::uuid[],$4::uuid[]) with ordinality
-                      as requested(reference_item_id,reference_snapshot_id,position)
-                 join reference_items item
-                   on item.id=requested.reference_item_id
-                  and item.workspace_id=$1 and item.brand_id=$2
-                  and item.archived_at is null
-                 join reference_snapshots snapshot
-                   on snapshot.id=requested.reference_snapshot_id
-                  and snapshot.reference_item_id=requested.reference_item_id
-                  and snapshot.workspace_id=$1 and snapshot.brand_id=$2
-                 join lateral (
-                   select version.id
-                     from reference_pattern_versions version
-                    where version.reference_item_id=snapshot.reference_item_id
-                      and version.reference_snapshot_id=snapshot.id
-                      and version.workspace_id=snapshot.workspace_id
-                      and version.brand_id=snapshot.brand_id
-                    order by version.version desc
-                    limit 1
-                 ) pattern on true
-                where snapshot.snapshot_json #>> '{permittedUse,modelInput}'='true'
-                  and snapshot.snapshot_json #>> '{permittedUse,derivativeInspiration}'='true'
-                order by requested.position`,
-              [input.workspaceId, input.brandId, referenceIds, snapshotIds],
-            );
-          if (canonical.rows.length !== proposalInput.references.length) {
-            throw new Error("RESOURCE_NOT_AVAILABLE");
-          }
-          const byItemId = new Map(canonical.rows.map((row) => [String(row.reference_item_id), row]));
-          for (const [index, reference] of proposalInput.references.entries()) {
-            const row = byItemId.get(reference.referenceItemId) as Record<string, unknown> | undefined;
-            if (!row || String(row.reference_snapshot_id) !== reference.snapshotId) {
-              throw new Error("RESOURCE_NOT_AVAILABLE");
-            }
-            await client.query(
-              `insert into ai_content_generation_references (
-                 generation_id,reference_id,workspace_id,brand_id,position,reference_snapshot_json,
-                 reference_item_id,reference_snapshot_id,pattern_version_id,roles_json
-               ) values ($1,$2,$3,$4,$5,$6::jsonb,$7,$8,$9,$10::jsonb)`,
-              [
-                generationId,
-                reference.referenceItemId,
-                input.workspaceId,
-                input.brandId,
-                index + 1,
-                JSON.stringify(row.snapshot_json),
-                reference.referenceItemId,
-                reference.snapshotId,
-                String(row.pattern_version_id),
-                JSON.stringify(reference.roles),
-              ],
-            );
-          }
-        }
         await client.query(
           `update ai_content_proposals
               set generation_id=$2,updated_at=now()
@@ -2140,6 +2486,7 @@ export function createAiContentRepository(pool: Pool, options: AiContentReposito
       const client = await pool.connect();
       try {
         await client.query("BEGIN");
+        await assertAiContentWritable(client);
         await assertActiveAiContentActor(client, input);
         const dismissed = await client.query(
           `update ai_content_proposals
@@ -2235,79 +2582,11 @@ export function createAiContentRepository(pool: Pool, options: AiContentReposito
       }));
     },
 
-    async updateAiContentDraft(input) {
-      const client = await pool.connect();
-      try {
-        await client.query("BEGIN");
-        await assertActiveAiContentActor(client, input);
-        const generation = await scopedGeneration(client, input, true);
-        if (!generation) throw new Error("ai_content_generation_not_found");
-        if (object(generation.draft_json).origin === "proposal-v2") {
-          throw new Error("ai_content_v3_contract_required");
-        }
-        const orchestration = input.orchestration
-          ? parseContentOrchestrationV1(input.orchestration)
-          : null;
-        const subjectColumns = orchestration
-          ? canonicalSubjectColumns(orchestration)
-          : {
-              subjectMode: generation.subject_mode ?? null,
-              productServiceId: generation.product_service_id ?? null,
-            };
-        if (
-          generation.attachments_locked_at
-          && !isDeepStrictEqual(
-            attachmentDraftPortion(generation.draft_json),
-            attachmentDraftPortion(input.draft),
-          )
-        ) {
-          throw new Error("ai_content_attachments_locked");
-        }
-        const updated = await client.query(
-          `update ai_content_generations
-              set draft_json = $4::jsonb,
-                  subject_mode = $5,
-                  product_service_id = $6,
-                  updated_by_user_id = $7,
-                  updated_at = now()
-            where id = $1 and workspace_id = $2 and brand_id = $3
-            returning id, workspace_id, brand_id, type, title, status, current_stage, draft_json, analysis_json,
-                      attachments_locked_at, terminal_at, retryable_until,
-                      error_code, error_message, created_at, updated_at, completed_at`,
-          [
-            input.generationId,
-            input.workspaceId,
-            input.brandId,
-            JSON.stringify({
-              ...object(input.draft),
-              ...(orchestration ? { orchestration } : {}),
-              origin: "manual",
-            }),
-            subjectColumns.subjectMode,
-            subjectColumns.productServiceId,
-            input.actorUserId,
-          ],
-        );
-        if (orchestration) {
-          const canonicalIds = orchestration.references.map((reference) => reference.referenceItemId);
-          if (!isDeepStrictEqual(canonicalIds, input.referenceIds)) {
-            throw new Error("ai_content_reference_ids_mismatch");
-          }
-          await snapshotCanonicalReferences(client, input, orchestration.references);
-        } else {
-          await snapshotReferences(client, input, [...new Set(input.referenceIds)]);
-        }
-        await client.query("COMMIT");
-        return mapGeneration(updated.rows[0]);
-      } catch (error) {
-        await client.query("ROLLBACK"); throw error;
-      } finally { client.release(); }
-    },
-
     async updateAiContentFinalizationDraft(input) {
       const client = await pool.connect();
       try {
         await client.query("BEGIN");
+        await assertAiContentWritable(client);
         await assertActiveAiContentActor(client, input);
         const generation = await scopedGeneration(client, input, true);
         if (!generation) throw new Error("ai_content_generation_not_found");
@@ -2341,7 +2620,7 @@ export function createAiContentRepository(pool: Pool, options: AiContentReposito
           `update ai_content_generations
               set draft_json=$4::jsonb,updated_by_user_id=$5,updated_at=now()
             where id=$1 and workspace_id=$2 and brand_id=$3
-            returning id,workspace_id,brand_id,type,title,status,current_stage,draft_json,analysis_json,
+            returning id,workspace_id,brand_id,output_format,purpose,title,status,current_stage,draft_json,analysis_json,
                       attachments_locked_at,terminal_at,retryable_until,error_code,error_message,
                       created_at,updated_at,completed_at`,
           [input.generationId, input.workspaceId, input.brandId, JSON.stringify(nextDraft), input.actorUserId],
@@ -2357,764 +2636,18 @@ export function createAiContentRepository(pool: Pool, options: AiContentReposito
     },
 
     async startAiContentGenerationV3(input, snapshots, now = () => new Date()) {
-      await assertActiveAiContentActor(pool, input);
-      const initial = await scopedGeneration(pool, input);
-      if (!initial) throw new Error("ai_content_generation_not_found");
-      const initialDraft = object(initial.draft_json);
-      if (initialDraft.origin !== "proposal-v2") {
-        throw new Error("ai_content_generation_not_draft");
-      }
-      const initialProposalId = String(initialDraft.proposalId ?? "");
-      if (!initialProposalId) throw new Error("RESOURCE_NOT_AVAILABLE");
-      const ancestry = await pool.query(
-        `select proposal.id proposal_id,proposal.batch_id
-           from ai_content_proposals proposal
-           join ai_content_proposal_batches batch
-             on batch.id=proposal.batch_id
-            and batch.workspace_id=proposal.workspace_id
-            and batch.brand_id=proposal.brand_id
-          where proposal.id=$1 and proposal.workspace_id=$2 and proposal.brand_id=$3`,
-        [initialProposalId, input.workspaceId, input.brandId],
-      );
-      const ancestryRow = ancestry.rows[0] as Record<string, unknown> | undefined;
-      if (!ancestryRow) throw new Error("RESOURCE_NOT_AVAILABLE");
-      const batchId = String(ancestryRow.batch_id ?? "");
-      if (!batchId) throw new Error("RESOURCE_NOT_AVAILABLE");
-      const client = await pool.connect();
-      try {
-        await client.query("BEGIN");
-        await assertActiveAiContentActor(client, input);
-        const lockedBatch = await client.query(
-          `select batch.id,batch.status
-             from ai_content_proposal_batches batch
-            where batch.id=$1 and batch.workspace_id=$2 and batch.brand_id=$3
-            for update`,
-          [batchId, input.workspaceId, input.brandId],
-        );
-        const batch = lockedBatch.rows[0] as Record<string, unknown> | undefined;
-        const lockedProposal = await client.query(
-          `select proposal.id,proposal.batch_id,proposal.status,proposal.generation_id
-             from ai_content_proposals proposal
-            where proposal.id=$1 and proposal.workspace_id=$2 and proposal.brand_id=$3
-              and proposal.batch_id=$4
-            for update`,
-          [initialProposalId, input.workspaceId, input.brandId, batchId],
-        );
-        const selectedProposal = lockedProposal.rows[0] as Record<string, unknown> | undefined;
-        const generation = await scopedGeneration(client, input, true);
-        if (!generation) throw new Error("ai_content_generation_not_found");
-        const generationDraft = object(generation.draft_json);
-        if (generationDraft.origin !== "proposal-v2") {
-          throw new Error("ai_content_generation_not_draft");
-        }
-        const proposalId = String(generationDraft.proposalId ?? "");
-        const approvedProposalVersionId = String(generationDraft.approvedProposalVersionId ?? "");
-        if (!batch
-          || batch.status !== "ready"
-          || !selectedProposal
-          || selectedProposal.status !== "selected"
-          || String(selectedProposal.batch_id ?? "") !== batchId
-          || String(selectedProposal.generation_id ?? "") !== input.generationId
-          || proposalId !== initialProposalId) {
-          throw new Error("RESOURCE_NOT_AVAILABLE");
-        }
-        const approvedLink = await client.query(
-          `select approved.id
-             from ai_content_approved_proposal_versions approved
-            where approved.id=$1 and approved.workspace_id=$2 and approved.brand_id=$3
-              and approved.proposal_id=$4
-            for update`,
-          [approvedProposalVersionId, input.workspaceId, input.brandId, proposalId],
-        );
-        if (!approvedLink.rowCount) throw new Error("RESOURCE_NOT_AVAILABLE");
-        if (generation.generation_idempotency_key === input.idempotencyKey) {
-          await client.query("COMMIT");
-          return mapGeneration(generation);
-        }
-        if (generation.status !== "draft") {
-          throw new Error("ai_content_generation_not_draft");
-        }
-        const finalization = parseContentFinalizationDraftV2(generationDraft.finalization);
-        const frozen = await client.query(
-          `select proposal.proposal_json,batch.input_snapshot_json,research.evidence_json,
-                  approved.approved_proposal_snapshot
-             from ai_content_proposals proposal
-             join ai_content_proposal_batches batch
-               on batch.id=proposal.batch_id
-              and batch.workspace_id=proposal.workspace_id
-              and batch.brand_id=proposal.brand_id
-             join ai_content_proposal_research_snapshots research
-               on research.batch_id=batch.id
-              and research.workspace_id=batch.workspace_id
-              and research.brand_id=batch.brand_id
-             join ai_content_approved_proposal_versions approved
-               on approved.id=$4
-              and approved.proposal_id=proposal.id
-              and approved.workspace_id=proposal.workspace_id
-              and approved.brand_id=proposal.brand_id
-            where proposal.id=$1 and proposal.workspace_id=$2 and proposal.brand_id=$3
-              and proposal.status='selected' and proposal.generation_id=$5
-              and batch.status='ready'
-            for update of proposal,batch,approved`,
-          [proposalId, input.workspaceId, input.brandId, approvedProposalVersionId, input.generationId],
-        );
-        const source = frozen.rows[0] as Record<string, unknown> | undefined;
-        if (!source) throw new Error("RESOURCE_NOT_AVAILABLE");
-        const approved = object(source.approved_proposal_snapshot);
-        if (!isDeepStrictEqual(object(approved.effectiveProposal), object(source.proposal_json))) {
-          throw new Error("ai_content_proposal_selection_conflict");
-        }
-        const baseSnapshot = object(source.input_snapshot_json);
-        const proposalInput = parseProposalInputSnapshotV2({
-          ...baseSnapshot,
-          contractVersion: "proposal-input.v2",
-          researchEvidence: source.evidence_json,
-        });
-        const scope = { workspaceId: input.workspaceId, brandId: input.brandId };
-        await snapshots.revalidateFrozenResources({
-          scope,
-          coreVersionId: proposalInput.brandCore.versionId,
-          product: proposalInput.product,
-          references: proposalInput.references,
-          database: client,
-        });
-        const brandStyleImages = await snapshots.loadApprovedStyleImages(scope, client);
-        if (finalization.avatarStyleImageId !== null
-          && !brandStyleImages.some(({ referenceItemId }) => referenceItemId === finalization.avatarStyleImageId)) {
-          throw new Error("RESOURCE_NOT_AVAILABLE");
-        }
-        const attachmentRows = finalization.attachmentIds.length === 0
-          ? { rows: [], rowCount: 0 }
-          : await client.query(
-            `select id,role,file_name,mime_type,size_bytes,checksum,storage_url,storage_path
-               from ai_content_generation_attachments
-              where generation_id=$1 and workspace_id=$2 and brand_id=$3
-                and id=any($4::uuid[]) and deleted_at is null
-                and role in ('product_image','visual_reference','supporting_image')
-                and lower(mime_type) in ('image/png','image/jpeg','image/webp')
-              for share`,
-            [input.generationId, input.workspaceId, input.brandId, finalization.attachmentIds],
-          );
-        const attachmentById = new Map(attachmentRows.rows.map((row) => [String(row.id), row]));
-        if (attachmentById.size !== finalization.attachmentIds.length
-          || finalization.attachmentIds.some((id) => !attachmentById.has(id))) {
-          throw new Error("RESOURCE_NOT_AVAILABLE");
-        }
-        const attachments = finalization.attachmentIds.map((id) => {
-          const row = attachmentById.get(id)!;
-          return {
-            id,
-            role: String(row.role),
-            fileName: String(row.file_name),
-            mimeType: String(row.mime_type).toLowerCase(),
-            sizeBytes: Number(row.size_bytes),
-            checksum: String(row.checksum),
-            storageUrl: String(row.storage_url),
-            storagePath: String(row.storage_path),
-          };
-        });
-        const finalInput = parseContentGenerationInputV3({
-          contractVersion: "content-generation-input.v3",
-          generationId: input.generationId,
-          brandCore: proposalInput.brandCore,
-          subject: proposalInput.subject,
-          contentInstruction: proposalInput.contentInstruction,
-          product: proposalInput.product,
-          researchEvidence: proposalInput.researchEvidence,
-          references: {
-            selected: proposalInput.references,
-            brandStyleImages,
-            avatarStyleImageId: finalization.avatarStyleImageId,
-            attachments,
-          },
-          selectedProposal: { id: proposalId, ...object(source.proposal_json) },
-          userImageInstruction: finalization.userImageInstruction,
-          outputSettings: proposalInput.outputSettings,
-          capturedAt: now().toISOString(),
-        });
-        const serialized = canonicalJson(finalInput);
-        const contentHash = createHash("sha256").update(serialized).digest("hex");
-        const existingSnapshot = await client.query(
-          `select input_json,content_hash
-             from ai_content_generation_input_snapshots
-            where generation_id=$1 and workspace_id=$2 and brand_id=$3
-            for update`,
-          [input.generationId, input.workspaceId, input.brandId],
-        );
-        if (existingSnapshot.rowCount) {
-          const existing = existingSnapshot.rows[0] as Record<string, unknown>;
-          if (String(existing.content_hash) !== contentHash || canonicalJson(existing.input_json) !== serialized) {
-            throw new Error("ai_content_generation_input_conflict");
-          }
-        } else {
-          await client.query(
-            `insert into ai_content_generation_input_snapshots (
-               id,workspace_id,brand_id,generation_id,input_json,content_hash
-             ) values ($1,$2,$3,$4,$5::jsonb,$6)`,
-            [randomUUID(), input.workspaceId, input.brandId, input.generationId, serialized, contentHash],
-          );
-        }
-        await client.query("select pg_advisory_xact_lock(hashtextextended($1,0))", [
-          `ai-content-usage:${input.brandId}:${input.usageDate}`,
-        ]);
-        const usage = await client.query(
-          `select coalesce(sum(quantity),0)::integer generation_count
-             from ai_content_usage_ledger
-            where workspace_id=$1 and brand_id=$2 and usage_date=$3::date
-              and usage_type in ('generation','reversal')`,
-          [input.workspaceId, input.brandId, input.usageDate],
-        );
-        if (Number(usage.rows[0]?.generation_count ?? 0) + 1 > input.dailyGenerationLimit) {
-          throw new Error("ai_content_limit_reached");
-        }
-        const output = await client.query(
-          `insert into ai_content_generation_outputs (
-             generation_id,workspace_id,brand_id,output_index,status
-           ) values ($1,$2,$3,1,'queued')
-           on conflict (generation_id,output_index) do update set generation_id=excluded.generation_id
-           returning id`,
-          [input.generationId, input.workspaceId, input.brandId],
-        );
-        const outputId = String(output.rows[0]?.id ?? "");
-        if (!outputId) throw new Error("ai_content_generation_output_conflict");
-        if (finalInput.outputSettings.outputFormat !== "blog") {
-          await client.query(
-            `insert into ai_content_output_research_snapshots (
-               id,workspace_id,brand_id,generation_id,output_id,evidence_json
-             ) values ($1,$2,$3,$4,$5,$6::jsonb)
-             on conflict (output_id) do nothing`,
-            [randomUUID(), input.workspaceId, input.brandId, input.generationId, outputId,
-              JSON.stringify(proposalInput.researchEvidence)],
-          );
-        }
-        await client.query(
-          `insert into ai_content_generation_jobs (
-             generation_id,output_id,workspace_id,brand_id,job_type,content_type,status,payload_json
-           ) values ($1,$2,$3,$4,'generate',$5,'queued',$6::jsonb)
-           on conflict do nothing`,
-          [input.generationId, outputId, input.workspaceId, input.brandId, generation.type,
-            JSON.stringify({
-              generationId: input.generationId,
-              outputId,
-              contentGenerationInput: finalInput,
-              planningMode: "selected_proposal",
-              usageDate: input.usageDate,
-              usageIdempotencyKey: `generation:${input.generationId}:${input.idempotencyKey}`,
-            })],
-        );
-        const updated = await client.query(
-          `update ai_content_generations
-              set status='queued',current_stage='generation',generation_idempotency_key=$4,
-                  attachments_locked_at=statement_timestamp(),updated_by_user_id=$5,updated_at=now()
-            where id=$1 and workspace_id=$2 and brand_id=$3
-            returning id,workspace_id,brand_id,type,title,status,current_stage,draft_json,analysis_json,
-                      attachments_locked_at,terminal_at,retryable_until,error_code,error_message,
-                      created_at,updated_at,completed_at`,
-          [input.generationId, input.workspaceId, input.brandId, input.idempotencyKey, input.actorUserId],
-        );
-        await client.query("COMMIT");
-        return mapGeneration(updated.rows[0]);
-      } catch (error) {
-        await client.query("ROLLBACK");
-        throw error;
-      } finally {
-        client.release();
-      }
-    },
-
-    async startAiContentGeneration(input) {
-      await assertActiveAiContentActor(pool, input);
-      const initial = await scopedGeneration(pool, input);
-      if (!initial) throw new Error("ai_content_generation_not_found");
-      if (object(initial.draft_json).origin === "proposal-v2") {
-        throw new Error("ai_content_v3_contract_required");
-      }
-      const isInitialReplay = initial.generation_idempotency_key === input.idempotencyKey;
-      if (isInitialReplay) {
-        return mapGeneration(initial);
-      }
-      const initialDraft = object(initial.draft_json);
-      const canonical = initialDraft.orchestration !== undefined;
-      if (initial.status !== "analysis_ready"
-        && !(canonical && initial.status === "draft")) {
-        throw new Error("ai_content_generation_not_analysis_ready");
-      }
-      const initiallyUsesOwnedContext = initialDraft.analysisSource === "owned";
-      const confirmedBrandIntelligence = initiallyUsesOwnedContext && options.brandIntelligenceProvider
-        ? await options.brandIntelligenceProvider.getConfirmed(input)
-        : undefined;
-      const transactionBrandIntelligenceProvider = initiallyUsesOwnedContext && options.brandIntelligenceProvider
-        ? {
-            getConfirmed: async () => confirmedBrandIntelligence ?? null,
-          }
-        : undefined;
-      const client = await pool.connect();
-      let transactionOpen = false;
-      try {
-        await client.query("BEGIN");
-        transactionOpen = true;
-        await assertActiveAiContentActor(client, input);
-        const current = await scopedGeneration(client, input, true);
-        if (!current) throw new Error("ai_content_generation_not_found");
-        if (object(current.draft_json).origin === "proposal-v2") {
-          throw new Error("ai_content_v3_contract_required");
-        }
-        if (current.generation_idempotency_key === input.idempotencyKey) {
-          await client.query("COMMIT");
-          return mapGeneration(current);
-        }
-        if (current.status !== "analysis_ready" && !(canonical && current.status === "draft")) {
-          throw new Error("ai_content_generation_not_analysis_ready");
-        }
-        if (JSON.stringify(object(current.draft_json)) !== JSON.stringify(initialDraft)) {
-          throw new Error("ai_content_generation_start_conflict");
-        }
-        if (canonical) {
-          const orchestration = parseContentOrchestrationV1(initialDraft.orchestration);
-          const subjectColumns = canonicalSubjectColumns(orchestration);
-          if (current.subject_mode !== subjectColumns.subjectMode
-            || (current.product_service_id ? String(current.product_service_id) : null)
-              !== subjectColumns.productServiceId) {
-            throw new Error("ai_content_subject_mapping_mismatch");
-          }
-          if (mapOrchestrationToWorkerType(orchestration) !== current.type) {
-            throw new Error("ai_content_type_mapping_mismatch");
-          }
-          await client.query("select pg_advisory_xact_lock(hashtextextended($1, 0))", [
-            `ai-content-usage:${input.brandId}:${input.usageDate}`,
-          ]);
-          const usage = await client.query(
-            `select coalesce(sum(quantity),0)::integer generation_count
-               from ai_content_usage_ledger
-              where workspace_id=$1 and brand_id=$2 and usage_date=$3::date
-                and usage_type in ('generation','reversal')`,
-            [input.workspaceId, input.brandId, input.usageDate],
-          );
-          if (Number(usage.rows[0]?.generation_count ?? 0) + input.outputCount > input.dailyGenerationLimit) {
-            throw new Error("ai_content_limit_reached");
-          }
-          const proposalId = String(initialDraft.proposalId ?? "");
-          const approvedProposalVersionId = String(initialDraft.approvedProposalVersionId ?? "");
-          const versions = await client.query(
-            `select profile.active_brand_core_id brand_core_version_id,
-                    profile.active_brand_rule_set_id rule_set_version_id,
-                    approved.approved_proposal_snapshot
-               from brand_profiles profile
-               join brand_core_versions core
-                 on core.id=profile.active_brand_core_id
-                and core.workspace_id=profile.workspace_id and core.brand_id=profile.brand_id
-                and core.status='approved'
-               join brand_rule_sets rules
-                 on rules.id=profile.active_brand_rule_set_id
-                and rules.workspace_id=profile.workspace_id and rules.brand_id=profile.brand_id
-                and rules.status='approved'
-               join ai_content_approved_proposal_versions approved
-                 on approved.id=$4 and approved.workspace_id=profile.workspace_id
-                and approved.brand_id=profile.brand_id and approved.proposal_id=$3
-               join ai_content_proposals proposal
-                 on proposal.id=approved.proposal_id
-                and proposal.workspace_id=approved.workspace_id and proposal.brand_id=approved.brand_id
-                and proposal.status='selected' and proposal.generation_id=$5
-               join ai_content_proposal_batches batch
-                 on batch.id=proposal.batch_id and batch.workspace_id=proposal.workspace_id
-                and batch.brand_id=proposal.brand_id and batch.status='ready'
-                and batch.content_family=$6
-              where profile.workspace_id=$1 and profile.brand_id=$2`,
-            [
-              input.workspaceId,
-              input.brandId,
-              proposalId,
-              approvedProposalVersionId,
-              input.generationId,
-              orchestration.contentFamily,
-            ],
-          );
-          const version = versions.rows[0] as Record<string, unknown> | undefined;
-          if (!version) throw new Error("ai_content_orchestration_versions_invalid");
-
-          let subject: Record<string, unknown>;
-          if (orchestration.subject.mode === "product_service") {
-            const product = await client.query(
-              `select product.id item_id,product.display_name title,version.id,version.version,
-                      version.profile_json::text body,
-                      encode(digest(version.profile_json::text,'sha256'),'hex') content_hash,
-                      version.approved_at captured_at
-                 from product_services product
-                 join product_service_versions version
-                   on version.id=product.active_version_id
-                  and version.workspace_id=product.workspace_id and version.brand_id=product.brand_id
-                  and version.product_service_id=product.id and version.status='approved'
-                where product.id=$1 and product.workspace_id=$2 and product.brand_id=$3
-                  and product.status='active'`,
-              [orchestration.subject.productServiceId, input.workspaceId, input.brandId],
-            );
-            const item = product.rows[0] as Record<string, unknown> | undefined;
-            if (!item) throw new Error("ai_content_product_service_not_found");
-            subject = {
-              kind: "approved_product_service",
-              itemId: String(item.item_id),
-              version: {
-                kind: "product_service",
-                id: String(item.id),
-                version: Number(item.version),
-                title: String(item.title),
-                body: String(item.body),
-                contentHash: String(item.content_hash),
-                capturedAt: iso(item.captured_at),
-                stale: false,
-                trustLevel: "approved",
-                purpose: orchestration.contentFamily,
-              },
-            };
-          } else if (orchestration.subject.mode === "brand_topic") {
-            subject = {
-              kind: "brand_topic",
-              topic: orchestration.subject.topic,
-              brandCoreEvidenceIds: [],
-            };
-          } else {
-            const analyzed = await client.query(
-              `select analysis.id,analysis.analysis_version,analysis.contract_version,
-                      analysis.subject_type,analysis.source_url,analysis.normalized_url,
-                      analysis.input_json,analysis.facts_json,analysis.research_json,
-                      analysis.analysis_result_json,
-                      coalesce(analysis.completed_at,analysis.updated_at) captured_at,
-                      coalesce(jsonb_agg(jsonb_build_object(
-                        'id',image.id::text,'sourceUrl',image.source_url,
-                        'storageUrl',image.storage_url,'width',image.width,'height',image.height,
-                        'mimeType',image.mime_type,'altText',image.alt_text,'role',image.role
-                      ) order by image.id) filter (where image.id is not null),'[]'::jsonb)
-                        selected_images
-                 from ai_content_subject_analyses analysis
-                 left join ai_content_subject_images image
-                   on image.analysis_id=analysis.id
-                  and image.workspace_id=analysis.workspace_id
-                  and image.brand_id=analysis.brand_id
-                  and image.deleted_at is null
-                  and (
-                    image.id=analysis.selected_image_id
-                    or image.id::text=any(
-                      select jsonb_array_elements_text(analysis.attachment_ids_json)
-                    )
-                  )
-                where analysis.id=$1 and analysis.workspace_id=$2 and analysis.brand_id=$3
-                  and analysis.status in ('ready','partial')
-                  and analysis.superseded_at is null
-                group by analysis.id
-                for share of analysis`,
-              [orchestration.subject.subjectAnalysisId, input.workspaceId, input.brandId],
-            );
-            const analysis = analyzed.rows[0] as Record<string, unknown> | undefined;
-            if (!analysis) throw new Error("ai_content_subject_analysis_not_ready");
-            const snapshotId = randomUUID();
-            const analyzedSnapshot = {
-              contractVersion: "analyzed-subject-snapshot.v1",
-              snapshotId,
-              analysisId: String(analysis.id),
-              analysisVersion: Number(analysis.analysis_version),
-              analysisContractVersion: String(analysis.contract_version),
-              subjectType: String(analysis.subject_type),
-              source: {
-                sourceUrl: analysis.source_url ? String(analysis.source_url) : "",
-                normalizedUrl: analysis.normalized_url ? String(analysis.normalized_url) : "",
-                input: object(analysis.input_json),
-              },
-              facts: Array.isArray(analysis.facts_json) ? analysis.facts_json : [],
-              research: object(analysis.research_json),
-              analysisResult: object(analysis.analysis_result_json),
-              selectedImages: Array.isArray(analysis.selected_images) ? analysis.selected_images : [],
-              capturedAt: iso(analysis.captured_at),
-            };
-            const sealed = await client.query(
-              `insert into ai_content_analyzed_subject_snapshots (
-                 id,workspace_id,brand_id,analysis_id,snapshot_json
-               ) values ($1,$2,$3,$4,$5::jsonb)
-               on conflict (analysis_id) do nothing
-               returning id,snapshot_json`,
-              [
-                snapshotId,
-                input.workspaceId,
-                input.brandId,
-                analysis.id,
-                JSON.stringify(analyzedSnapshot),
-              ],
-            );
-            let sealedId: string = snapshotId;
-            let sealedSnapshot = analyzedSnapshot;
-            if (!sealed.rowCount) {
-              const existing = await client.query(
-                `select id,snapshot_json
-                   from ai_content_analyzed_subject_snapshots
-                  where analysis_id=$1 and workspace_id=$2 and brand_id=$3`,
-                [analysis.id, input.workspaceId, input.brandId],
-              );
-              if (!existing.rowCount) throw new Error("ai_content_subject_snapshot_conflict");
-              sealedId = String(existing.rows[0]?.id);
-              sealedSnapshot = existing.rows[0]?.snapshot_json;
-            }
-            subject = {
-              kind: "analyzed_subject",
-              analysisId: String(analysis.id),
-              snapshotId: sealedId,
-              snapshot: sealedSnapshot,
-            };
-          }
-
-          const references = await client.query(
-            `select reference_item_id item_id,reference_snapshot_id snapshot_id,
-                    pattern_version_id,roles_json
-               from ai_content_generation_references
-              where generation_id=$1 and workspace_id=$2 and brand_id=$3
-                and reference_item_id is not null
-              order by position`,
-            [input.generationId, input.workspaceId, input.brandId],
-          );
-          let avatar: Record<string, unknown> | null = null;
-          if (orchestration.avatar) {
-            if (orchestration.avatar.mode === "one_time") {
-              const selectedReceipt = await client.query(
-                `select receipt.id,receipt.upload_session_id,receipt.object_hash,receipt.mime_type
-                   from ai_content_one_time_avatar_receipts receipt
-                  where receipt.id=$1 and receipt.generation_id=$2
-                    and receipt.workspace_id=$3 and receipt.brand_id=$4
-                    and receipt.created_by_user_id=$5 and receipt.confirmed_at is not null`,
-                [
-                  orchestration.avatar.id,
-                  input.generationId,
-                  input.workspaceId,
-                  input.brandId,
-                  input.actorUserId,
-                ],
-              );
-              const selected = selectedReceipt.rows[0] as Record<string, unknown> | undefined;
-              if (!selected) throw new Error("ai_content_one_time_avatar_receipt_not_found");
-              avatar = {
-                id: String(selected.upload_session_id),
-                assetVersionId: String(selected.id),
-                objectHash: String(selected.object_hash),
-                mime: String(selected.mime_type),
-                provenance: "one_time",
-              };
-            } else {
-            const selectedAvatar = await client.query(
-              `select avatar.id,image.id asset_version_id,image.checksum object_hash,image.mime_type
-                 from brand_avatars avatar
-                 join brand_avatar_images image
-                   on image.avatar_id=avatar.id and image.workspace_id=avatar.workspace_id
-                  and image.brand_id=avatar.brand_id
-                where avatar.id=$1 and avatar.workspace_id=$2 and avatar.brand_id=$3
-                  and avatar.status='active'
-                order by image.created_at desc limit 1`,
-              [orchestration.avatar.id, input.workspaceId, input.brandId],
-            );
-            const selected = selectedAvatar.rows[0] as Record<string, unknown> | undefined;
-            if (!selected) throw new Error("ai_content_avatar_not_found");
-            avatar = {
-              id: String(selected.id),
-              assetVersionId: String(selected.asset_version_id),
-              objectHash: String(selected.object_hash),
-              mime: String(selected.mime_type),
-              provenance: "library",
-            };
-            }
-          }
-          const frozen = {
-            contractVersion: "generation-brief.v1",
-            proposalId,
-            approvedProposalVersionId,
-            approvedProposalSnapshot: version.approved_proposal_snapshot,
-            brandCoreVersionId: String(version.brand_core_version_id),
-            ruleSetVersionId: String(version.rule_set_version_id),
-            subject,
-            references: references.rows.map((row) => ({
-              itemId: String(row.item_id),
-              snapshotId: String(row.snapshot_id),
-              patternVersionId: String(row.pattern_version_id),
-              roles: row.roles_json,
-            })),
-            avatar,
-            outputFormat: orchestration.outputFormat,
-            channels: orchestration.channelTargets,
-            promptDefinitionVersions: { generation: "content-generation.v2" },
-          };
-          await client.query(
-            "select start_ai_content_orchestration($1,$2,$3,$4::jsonb,$5::jsonb,$6) id",
-            [
-              input.generationId,
-              input.workspaceId,
-              input.brandId,
-              JSON.stringify(frozen),
-              JSON.stringify(avatar),
-              input.actorUserId,
-            ],
-          );
-          const outputIds: string[] = [];
-          for (let index = 1; index <= input.outputCount; index += 1) {
-            const output = await client.query(
-              `insert into ai_content_generation_outputs (
-                 generation_id,workspace_id,brand_id,output_index,status
-               ) values ($1,$2,$3,$4,'queued') returning id`,
-              [input.generationId, input.workspaceId, input.brandId, index],
-            );
-            outputIds.push(String(output.rows[0]?.id));
-          }
-          await client.query(
-            `insert into ai_content_generation_jobs (
-               generation_id,workspace_id,brand_id,job_type,content_type,status,payload_json
-             ) values ($1,$2,$3,'analyze',$4,'queued',$5::jsonb)`,
-            [
-              input.generationId,
-              input.workspaceId,
-              input.brandId,
-              current.type,
-              JSON.stringify({
-                generationId: input.generationId,
-                finalizeGeneration: true,
-                orchestrationSnapshot: frozen,
-                outputIds,
-              }),
-            ],
-          );
-          await client.query(
-            `insert into ai_content_usage_ledger (
-               workspace_id,brand_id,generation_id,usage_type,quantity,usage_date,idempotency_key
-             ) values ($1,$2,$3,'generation',$4,$5::date,$6)`,
-            [
-              input.workspaceId,
-              input.brandId,
-              input.generationId,
-              input.outputCount,
-              input.usageDate,
-              `generation:${input.generationId}:${input.idempotencyKey}`,
-            ],
-          );
-          const updated = await client.query(
-            `update ai_content_generations
-                set status='queued',current_stage='generation',generation_idempotency_key=$4,
-                    attachments_locked_at=statement_timestamp(),
-                    updated_by_user_id=$5,updated_at=now()
-              where id=$1 and workspace_id=$2 and brand_id=$3
-              returning id,workspace_id,brand_id,type,title,status,current_stage,draft_json,analysis_json,
-                        attachments_locked_at,terminal_at,retryable_until,error_code,error_message,
-                        created_at,updated_at,completed_at`,
-            [input.generationId, input.workspaceId, input.brandId, input.idempotencyKey, input.actorUserId],
-          );
-          await client.query("COMMIT");
-          return mapGeneration(updated.rows[0]);
-        }
-        const pendingUpload = await client.query(
-          `select id
-             from ai_content_attachment_upload_sessions
-            where generation_id = $1 and workspace_id = $2 and brand_id = $3
-              and status = 'pending' and token_expires_at > statement_timestamp()
-            limit 1`,
-          [input.generationId, input.workspaceId, input.brandId],
-        );
-        if (pendingUpload.rowCount) throw new Error("ai_content_attachment_upload_in_progress");
-        const draft = object(current.draft_json);
-        const subjectFlow = draft.subjectAnalysisId !== undefined
-          || draft.subjectType === "product"
-          || draft.subjectType === "service"
-          || draft.selectedTarget !== undefined
-          || draft.selectedAppeal !== undefined;
-        const usesOwnedContext = draft.analysisSource === "owned";
-        const brandContext = usesOwnedContext
-          ? await loadAiContentBrandContext(client, input, transactionBrandIntelligenceProvider)
-          : null;
-        if (usesOwnedContext && options.brandIntelligenceProvider && !brandContext?.brandIntelligenceVersionId) {
-          throw new Error("brand_intelligence_required");
-        }
-        if (usesOwnedContext && !options.brandIntelligenceProvider && !brandContext?.ownedUrl) {
-          throw new Error("ai_content_owned_source_required");
-        }
-        const waitForOwnedContext = false;
-        const generationInput = subjectFlow
-          ? await buildContentGenerationInput(
-            {
-              getBrandContext: (scope) => loadAiContentBrandContext(client, scope, transactionBrandIntelligenceProvider),
-              getSubjectAnalysis: (scope) => subjectRepository.getSubjectAnalysis(scope),
-              getReferences: (scope) => loadGenerationReferences(client, scope),
-              getAttachments: (scope) => loadGenerationAttachments(client, scope),
-            },
-            {
-              ...mapGeneration(current),
-              subjectAnalysisSnapshot: current.subject_analysis_snapshot,
-            },
-            {
-              outputCount: input.outputCount,
-              ...(current.generation_input_snapshot
-                ? { existingSnapshot: current.generation_input_snapshot }
-                : {}),
-            },
-          )
-          : null;
-        await client.query("select pg_advisory_xact_lock(hashtextextended($1, 0))", [
-          `ai-content-usage:${input.brandId}:${input.usageDate}`,
-        ]);
-        const updated = await client.query(
-          `update ai_content_generations
-              set status = 'analyzing', current_stage = $5, generation_idempotency_key = $4,
-                  generation_input_snapshot = $6::jsonb,
-                  subject_analysis_snapshot = coalesce(subject_analysis_snapshot, $6::jsonb),
-                  attachments_locked_at = statement_timestamp(),
-                  updated_by_user_id = coalesce($7, updated_by_user_id), updated_at = now()
-            where id = $1 and workspace_id = $2 and brand_id = $3 and status = 'analysis_ready'
-            returning id, workspace_id, brand_id, type, title, status, current_stage, draft_json, analysis_json,
-                      attachments_locked_at, terminal_at, retryable_until,
-                      error_code, error_message, created_at, updated_at, completed_at`,
-          [input.generationId, input.workspaceId, input.brandId, input.idempotencyKey, waitForOwnedContext ? "owned_context" : "analysis", generationInput ? JSON.stringify(generationInput) : null, input.actorUserId],
-        );
-        const generation = updated.rows[0] as Record<string, unknown> | undefined;
-        if (!generation) throw new Error("ai_content_generation_start_conflict");
-        const usage = await client.query(
-          `select coalesce(sum(quantity), 0)::integer as generation_count
-             from ai_content_usage_ledger
-            where workspace_id = $1 and brand_id = $2 and usage_date = $3::date and usage_type in ('generation', 'reversal')`,
-          [input.workspaceId, input.brandId, input.usageDate],
-        );
-        if (Number(usage.rows[0]?.generation_count ?? 0) + input.outputCount > input.dailyGenerationLimit) {
-          throw new Error("ai_content_limit_reached");
-        }
-        for (let index = 1; index <= input.outputCount; index += 1) {
-          await client.query(
-            `insert into ai_content_generation_outputs
-               (generation_id, workspace_id, brand_id, output_index, status)
-             values ($1, $2, $3, $4, 'queued')
-             returning id`,
-            [input.generationId, input.workspaceId, input.brandId, index],
-          );
-        }
-        await client.query(
-          `insert into ai_content_generation_jobs
-             (generation_id, workspace_id, brand_id, job_type, content_type, status, payload_json)
-           values ($1, $2, $3, 'analyze', $4, 'queued', jsonb_build_object(
-             'generationId', $1::uuid,
-             'finalizeGeneration', true,
-             'waitForOwnedContext', $5::boolean,
-             'contentGenerationInput', $6::jsonb
-           ))
-           on conflict do nothing`,
-          [input.generationId, input.workspaceId, input.brandId, generation.type, waitForOwnedContext,
-            generationInput ? JSON.stringify(generationInput) : null],
-        );
-        await client.query(
-          `insert into ai_content_usage_ledger
-             (workspace_id, brand_id, generation_id, usage_type, quantity, usage_date, idempotency_key)
-           values ($1, $2, $3, 'generation', $4, $5::date, $6)
-           on conflict (brand_id, idempotency_key) do nothing`,
-          [input.workspaceId, input.brandId, input.generationId, input.outputCount, input.usageDate, `generation:${input.generationId}:${input.idempotencyKey}`],
-        );
-        await client.query("COMMIT");
-        return mapGeneration(generation);
-      } catch (error) {
-        if (transactionOpen) await client.query("ROLLBACK");
-        throw error;
-      } finally { client.release(); }
+      return startAiContentGenerationV3Transaction({
+        pool,
+        catalog: fixedInputCatalog,
+        snapshots,
+        command: input,
+        now,
+      });
     },
 
     async listAiContentGenerations(input) {
       const result = await pool.query(
-        `select id, workspace_id, brand_id, type, title, status, current_stage, draft_json, analysis_json,
+        `select id, workspace_id, brand_id, output_format, purpose, title, status, current_stage, draft_json, analysis_json,
                 attachments_locked_at, terminal_at, retryable_until,
                 error_code, error_message, created_at, updated_at, completed_at
            from ai_content_generations
@@ -3143,7 +2676,7 @@ export function createAiContentRepository(pool: Pool, options: AiContentReposito
 
     async listAiContentUsage(input) {
       const result = await pool.query(
-        `select coalesce(sum(quantity) filter (where usage_type = 'generation'), 0)::integer as generation_count,
+        `select coalesce(sum(quantity) filter (where usage_type in ('generation','reversal')), 0)::integer as generation_count,
                 coalesce(sum(quantity) filter (where usage_type = 'new_download'), 0)::integer as download_count
            from ai_content_usage_ledger where workspace_id = $1 and brand_id = $2 and usage_date = $3::date`,
         [input.workspaceId, input.brandId, input.usageDate],
@@ -3201,7 +2734,7 @@ export function createAiContentRepository(pool: Pool, options: AiContentReposito
             where cps.channel_output_id = co.id order by cps.snapshot_date desc limit 1) performance on true
          where co.workspace_id = $1 and co.brand_id = $2 and co.status in ('approved', 'auto_approved')
            ${cardNews ? "and co.delivery_format = 'instagram_feed_carousel'" : "and performance.exposure_count is not null"}
-           ${recommendationFilter("reference_filter", cardNews ? ["card_news"] : ["single_image", "marketing"])}`);
+           ${recommendationFilter("reference_filter", cardNews ? ["card_news"] : ["reel"])}`);
       if (cardNews) queries.push(`
         select reference_filter.id, 'saved_trend' as source, coalesce(media.caption, media.username, 'Instagram reference') as title,
                media.permalink as url, media.media_url as preview_url,
@@ -3213,7 +2746,7 @@ export function createAiContentRepository(pool: Pool, options: AiContentReposito
            and reference_filter.workspace_id=saved.workspace_id
            and reference_filter.brand_id=saved.brand_id
          where saved.workspace_id = $1 and saved.brand_id = $2
-           ${recommendationFilter("reference_filter", ["card_news", "single_image"])}`);
+           ${recommendationFilter("reference_filter", ["card_news"])}`);
       if (blog || marketing) queries.push(`
         select item.id, 'saved_url' as source, coalesce(snapshot.extracted_title, source.title, source.url) as title,
                source.url, null::text as preview_url, '{}'::jsonb as metrics, snapshot.fetched_at as checked_at
@@ -3228,7 +2761,7 @@ export function createAiContentRepository(pool: Pool, options: AiContentReposito
            and item.archived_at is null
            and item.content_purpose in ('${marketing ? "marketing" : "informational"}', 'both')
            and source.source_type = 'reference' and source.deleted_at is null
-           ${recommendationFilter("item", marketing ? ["single_image", "marketing"] : ["blog"])}`);
+           ${recommendationFilter("item", marketing ? ["reel"] : ["blog"])}`);
       if (!queries.length) return [];
       const result = await pool.query(
         `select * from (${queries.join(" union all ")}) reference_rows
@@ -3394,14 +2927,16 @@ export function createAiContentRepository(pool: Pool, options: AiContentReposito
       const client = await pool.connect();
       try {
         await client.query("BEGIN");
+        await assertAiContentWritable(client);
         const exhausted = await client.query(
           `select id
              from ai_content_generation_jobs
-            where content_type = $1 and status = 'processing'
+             where output_format = $1 and status = 'processing'
+              and job_type = 'generate' and output_id is not null
               and lease_expires_at <= clock_timestamp()
               and attempt_count >= max_attempts
             order by generation_id, output_id nulls first, id`,
-          [input.contentType],
+           [input.outputFormat],
         );
         for (const expired of exhausted.rows) {
           const job = await lockAiContentJobContext(client, String(expired.id));
@@ -3421,34 +2956,16 @@ export function createAiContentRepository(pool: Pool, options: AiContentReposito
               where id = $1`,
             [job.id],
           );
-          if (job.job_type === "analyze") {
-            await client.query(
-              `update ai_content_generations
-                  set status = 'failed', error_code = 'ai_content_job_lease_exhausted',
-                      error_message = 'Worker lease expired after the final attempt',
-                      terminal_at = case
-                        when status not in ('completed','partial_failed','failed') then statement_timestamp()
-                        else terminal_at
-                      end,
-                      retryable_until = case
-                        when status not in ('completed','partial_failed','failed')
-                          then statement_timestamp() + interval '15 days'
-                        else retryable_until
-                      end,
-                      updated_at = now()
-                where id = $1`,
-              [job.generation_id],
-            );
-          } else {
-            await client.query(
-              `update ai_content_generation_outputs
-                  set status = 'failed', failure_code = 'ai_content_job_lease_exhausted',
-                      failure_message = 'Worker lease expired after the final attempt', updated_at = now()
-                where id = $1`,
-              [job.output_id],
-            );
-            await recalculateGenerationStatus(client, String(job.generation_id));
-          }
+          if (job.job_type !== "generate" || !job.output_id) throw new Error("ai_content_job_contract_invalid");
+          await client.query(
+            `update ai_content_generation_outputs
+                set status = 'failed', failure_code = 'ai_content_job_lease_exhausted',
+                    failure_message = 'Worker lease expired after the final attempt', updated_at = now()
+              where id = $1`,
+            [job.output_id],
+          );
+          await recalculateGenerationStatus(client, String(job.generation_id));
+          await reverseGenerationReservationIfTerminalFailure(client, String(job.generation_id));
           await markLinkedScheduledCardNewsFailed(
             client,
             String(job.generation_id),
@@ -3460,11 +2977,12 @@ export function createAiContentRepository(pool: Pool, options: AiContentReposito
         const retryableExpired = await client.query(
           `select id
              from ai_content_generation_jobs
-            where content_type = $1 and status = 'processing'
+             where output_format = $1 and status = 'processing'
+              and job_type = 'generate' and output_id is not null
               and lease_expires_at <= clock_timestamp()
               and attempt_count < max_attempts
             order by generation_id, output_id nulls first, id`,
-          [input.contentType],
+           [input.outputFormat],
         );
         for (const expired of retryableExpired.rows) {
           const job = await lockAiContentJobContext(client, String(expired.id));
@@ -3488,20 +3006,24 @@ export function createAiContentRepository(pool: Pool, options: AiContentReposito
         const candidates = await client.query(
           `select job.id
              from ai_content_generation_jobs job
-            where job.content_type = $1
+             where job.output_format = $1
+               and job.job_type = 'generate'
+               and job.output_id is not null
               and job.status = 'queued'
               and job.available_at <= clock_timestamp()
               and job.attempt_count < job.max_attempts
             order by job.available_at, job.created_at, job.id
             limit 25`,
-          [input.contentType],
+           [input.outputFormat],
         );
         let job: Record<string, unknown> | null = null;
         const leaseToken = randomUUID();
         for (const candidate of candidates.rows) {
           const lockedJob = await lockAiContentJobContext(client, String(candidate.id));
           if (
-            lockedJob.content_type !== input.contentType
+            lockedJob.output_format !== input.outputFormat
+            || lockedJob.job_type !== "generate"
+            || !lockedJob.output_id
             || lockedJob.status !== "queued"
             || lockedJob.available !== true
             || Number(lockedJob.attempt_count) >= Number(lockedJob.max_attempts)
@@ -3530,89 +3052,29 @@ export function createAiContentRepository(pool: Pool, options: AiContentReposito
           await client.query("COMMIT");
           return null;
         }
-        if (job.job_type === "generate" && job.output_id) {
-          const inputVersion = await client.query(
-            `select input_json->>'contractVersion' as contract_version
-               from ai_content_generation_input_snapshots
-              where generation_id=$1 and workspace_id=$2 and brand_id=$3`,
-            [job.generation_id, job.workspace_id, job.brand_id],
-          );
-          const planningV3 = inputVersion.rows[0]?.contract_version === "content-generation-input.v3";
-          await client.query(
-            "update ai_content_generation_outputs set status = $2, failure_code = null, failure_message = null, updated_at = now() where id = $1",
-            [job.output_id, planningV3 ? "planning" : "generating"],
-          );
-          await client.query(
-            "update ai_content_generations set status = $2, current_stage = 'generation', updated_at = now() where id = $1",
-            [job.generation_id, planningV3 ? "planning" : "generating"],
-          );
+        if (job.job_type !== "generate" || !job.output_id || job.output_format !== input.outputFormat) {
+          throw new Error("ai_content_job_contract_invalid");
         }
-        if (job.job_type === "generate") {
-          const payload = object(job.payload_json);
-          const queuedInput = object(payload.contentGenerationInput);
-          const strippedInput = stripContentKnowledgeData(queuedInput) as Record<string, unknown>;
-          let sanitizedInput: Record<string, unknown>;
-          if (queuedInput.contractVersion === "content-generation-input.v3") {
-            sanitizedInput = parseContentGenerationInputV3(strippedInput) as unknown as Record<string, unknown>;
-          } else {
-            parseContentGenerationInputV2(strippedInput);
-            sanitizedInput = strippedInput;
-          }
-          const supplement = job.output_id ? await client.query(
-            `select evidence_json from ai_content_output_research_snapshots
-              where output_id=$1 and generation_id=$2 and workspace_id=$3 and brand_id=$4`,
-            [job.output_id, job.generation_id, job.workspace_id, job.brand_id],
-          ) : { rows: [] };
-          if (supplement.rows[0]?.evidence_json) {
-            job.payload_json = {
-              ...payload,
-              contentGenerationInput: sanitizedInput,
-              supplementalResearch: supplement.rows[0].evidence_json,
-            };
-          } else {
-            job.payload_json = { ...payload, contentGenerationInput: sanitizedInput };
-          }
-          await client.query("COMMIT");
-          return mapJob(job);
-        }
-        const context = await client.query(
-          `select generation.draft_json, generation.analysis_json,
-                  coalesce(generation.generation_input_snapshot, generation.subject_analysis_snapshot) as generation_input_snapshot,
-                  generation.title as generation_title,
-                  generation.type as generation_type, output.output_index,
-                  coalesce((select jsonb_agg(reference.reference_snapshot_json order by reference.position)
-                              from ai_content_generation_references reference where reference.generation_id = generation.id), '[]'::jsonb) as reference_snapshots,
-                  coalesce((select jsonb_agg(jsonb_build_object(
-                    'role', attachment.role, 'fileName', attachment.file_name, 'mimeType', attachment.mime_type,
-                    'sizeBytes', attachment.size_bytes, 'checksum', attachment.checksum, 'url', attachment.storage_url
-                  ) order by attachment.created_at)
-                              from ai_content_generation_attachments attachment
-                             where attachment.generation_id = generation.id and attachment.deleted_at is null), '[]'::jsonb) as attachments
-             from ai_content_generations generation
-             left join ai_content_generation_outputs output on output.id = $2
-            where generation.id = $1`,
-          [job.generation_id, job.output_id],
+        await client.query(
+          "update ai_content_generation_outputs set status='planning',failure_code=null,failure_message=null,updated_at=now() where id=$1",
+          [job.output_id],
         );
-        const contextRow = context.rows[0] ?? {};
-        const brandContext = await loadAiContentBrandContext(client, {
-          workspaceId: String(job.workspace_id),
-          brandId: String(job.brand_id),
-        }, options.brandIntelligenceProvider);
-        job.payload_json = {
-          ...object(job.payload_json),
-          title: contextRow.generation_title,
-          draft: object(contextRow.draft_json),
-          analysis: object(contextRow.analysis_json),
-          outputIndex: contextRow.output_index ?? null,
-          references: Array.isArray(contextRow.reference_snapshots) ? contextRow.reference_snapshots : [],
-          attachments: Array.isArray(contextRow.attachments) ? contextRow.attachments : [],
-          brandContext: brandContext.context,
-          contentGenerationInput: generationInputForWorker(
-            contextRow.generation_input_snapshot,
-            contextRow.analysis_json,
-            job.job_type,
-          ),
-        };
+        await client.query(
+          "update ai_content_generations set status='planning',current_stage='generation',updated_at=now() where id=$1",
+          [job.generation_id],
+        );
+        const payload = object(job.payload_json);
+        const sanitizedInput = parseCanonicalContentGenerationInputV3(
+          stripContentKnowledgeData(object(payload.contentGenerationInput)),
+        ) as unknown as Record<string, unknown>;
+        const supplement = await client.query(
+          `select evidence_json from ai_content_output_research_snapshots
+            where output_id=$1 and generation_id=$2 and workspace_id=$3 and brand_id=$4`,
+          [job.output_id, job.generation_id, job.workspace_id, job.brand_id],
+        );
+        job.payload_json = supplement.rows[0]?.evidence_json
+          ? { ...payload, contentGenerationInput: sanitizedInput, supplementalResearch: supplement.rows[0].evidence_json }
+          : { ...payload, contentGenerationInput: sanitizedInput };
         await client.query("COMMIT");
         return mapJob(job);
       } catch (error) {
@@ -3625,6 +3087,7 @@ export function createAiContentRepository(pool: Pool, options: AiContentReposito
       const client = await pool.connect();
       try {
         await client.query("BEGIN");
+        await assertAiContentWritable(client);
         const locked = await client.query(
           `select id
              from ai_content_generation_jobs
@@ -3664,40 +3127,35 @@ export function createAiContentRepository(pool: Pool, options: AiContentReposito
       const client = await pool.connect();
       try {
         await client.query("BEGIN");
+        await assertAiContentWritable(client);
         const job = await lockAiContentJobContext(client, input.jobId);
-        if (job.job_type === "generate" && input.jobType === "generate") {
-          const inputVersion = await client.query(
-            `select input_json->>'contractVersion' as contract_version
-               from ai_content_generation_input_snapshots
-              where generation_id=$1 and workspace_id=$2 and brand_id=$3`,
-            [job.generation_id, job.workspace_id, job.brand_id],
-          );
-          const requiresPlan = inputVersion.rows[0]?.contract_version === "content-generation-input.v3";
-          if (requiresPlan !== ("plan" in input)) {
-            throw new Error("ai_content_job_completion_contract_mismatch");
-          }
+        if (job.job_type !== "generate" || !job.output_id) throw new Error("ai_content_job_contract_invalid");
+        if (job.job_type !== "generate" || !job.output_id || !("plan" in input)) {
+          throw new Error("ai_content_job_completion_contract_mismatch");
         }
+        const snapshot = await client.query(
+          `select input.input_json,research.evidence_json
+             from ai_content_generation_input_snapshots input
+             left join ai_content_output_research_snapshots research
+               on research.generation_id=input.generation_id and research.output_id=$2
+            where input.generation_id=$1 and input.workspace_id=$3 and input.brand_id=$4`,
+          [job.generation_id, job.output_id, job.workspace_id, job.brand_id],
+        );
+        if (!snapshot.rowCount) throw new Error("ai_content_generation_input_missing");
+        const finalInput = parseCanonicalContentGenerationInputV3(snapshot.rows[0].input_json);
+        if (finalInput.generationId !== String(job.generation_id)
+          || finalInput.outputSettings.outputFormat !== job.output_format) {
+          throw new Error("ai_content_generation_input_mismatch");
+        }
+        const plan = parseContentPlanResultV2(input.plan, finalInput, snapshot.rows[0].evidence_json);
         if (job.status === "succeeded") {
           if (job.worker_id !== input.workerId || job.lease_token !== input.leaseToken) throw new Error("ai_content_job_lease_invalid");
-          if (input.jobType === "generate" && "plan" in input) {
-            const snapshot = await client.query(
-              `select input.input_json,research.evidence_json
-                 from ai_content_generation_input_snapshots input
-                 left join ai_content_output_research_snapshots research
-                   on research.generation_id=input.generation_id and research.output_id=$2
-                where input.generation_id=$1 and input.workspace_id=$3 and input.brand_id=$4`,
-              [job.generation_id, job.output_id, job.workspace_id, job.brand_id],
-            );
-            if (!snapshot.rowCount) throw new Error("ai_content_generation_input_missing");
-            const finalInput = parseContentGenerationInputV3(snapshot.rows[0].input_json);
-            const replayedPlan = parseContentPlanResultV2(input.plan, finalInput, snapshot.rows[0].evidence_json);
-            const stored = await client.query(
-              "select plan_json from ai_content_generation_outputs where id=$1 and generation_id=$2 for update",
-              [job.output_id, job.generation_id],
-            );
-            if (!stored.rows[0]?.plan_json || canonicalJson(stored.rows[0].plan_json) !== canonicalJson(replayedPlan)) {
-              throw new Error("ai_content_plan_completion_conflict");
-            }
+          const stored = await client.query(
+            "select plan_json from ai_content_generation_outputs where id=$1 and generation_id=$2 for update",
+            [job.output_id, job.generation_id],
+          );
+          if (!stored.rows[0]?.plan_json || canonicalJson(stored.rows[0].plan_json) !== canonicalJson(plan)) {
+            throw new Error("ai_content_plan_completion_conflict");
           }
           const generation = await generationById(client, String(job.generation_id));
           await client.query("COMMIT");
@@ -3712,142 +3170,30 @@ export function createAiContentRepository(pool: Pool, options: AiContentReposito
         ) {
           throw new Error("ai_content_job_lease_invalid");
         }
-        if (job.job_type !== input.jobType) throw new Error("ai_content_job_type_mismatch");
-        if (input.jobType === "analyze") {
-          if (!input.analysisJson || Object.keys(input.analysisJson).length === 0) throw new Error("ai_content_analysis_result_invalid");
-          const qualityBrief = parseContentQualityBrief(input.analysisJson.qualityBrief ?? input.analysisJson);
-          const normalizedAnalysis = { ...input.analysisJson, qualityBrief };
-          const finalizeGeneration = object(job.payload_json).finalizeGeneration === true;
-          await client.query(
-            `update ai_content_generations
-                set analysis_json = analysis_json || $2::jsonb,
-                    status = $3, current_stage = $4,
-                    error_code = null, error_message = null, updated_at = now()
-              where id = $1`,
-            [
-              job.generation_id,
-              JSON.stringify(normalizedAnalysis),
-              finalizeGeneration ? "queued" : "analysis_ready",
-              finalizeGeneration ? "generation" : "analysis_ready",
-            ],
-          );
-          if (finalizeGeneration) {
-            const storedInput = await client.query(
-              `select coalesce(generation_input_snapshot, subject_analysis_snapshot) as generation_input_snapshot
-                 from ai_content_generations
-                where id = $1`,
-              [job.generation_id],
-            );
-            const baseInput = parseContentGenerationInputV2(
-              storedInput.rows[0]?.generation_input_snapshot,
-            );
-            const finalizedInput = parseContentGenerationInputV2({
-              ...baseInput,
-              message: {
-                ...baseInput.message,
-                qualityBrief,
-              },
-            });
-            const outputs = await client.query(
-              `select id
-                 from ai_content_generation_outputs
-                where generation_id = $1 and workspace_id = $2 and brand_id = $3 and status = 'queued'
-                order by output_index`,
-              [job.generation_id, job.workspace_id, job.brand_id],
-            );
-            for (const output of outputs.rows) {
-              await client.query(
-                `insert into ai_content_generation_jobs
-                   (generation_id, output_id, workspace_id, brand_id, job_type, content_type, status, payload_json)
-                 values ($1, $2, $3, $4, 'generate', $5, 'queued', $6::jsonb)
-                 on conflict do nothing`,
-                [
-                  job.generation_id,
-                  output.id,
-                  job.workspace_id,
-                  job.brand_id,
-                  job.content_type,
-                  JSON.stringify({
-                    generationId: job.generation_id,
-                    outputId: output.id,
-                    contentGenerationInput: finalizedInput,
-                  }),
-                ],
-              );
-            }
-          }
-        } else if ("plan" in input) {
-          if (!job.output_id) throw new Error("ai_content_plan_output_missing");
-          const snapshot = await client.query(
-            `select input_json from ai_content_generation_input_snapshots
-              where generation_id=$1 and workspace_id=$2 and brand_id=$3 for share`,
-            [job.generation_id, job.workspace_id, job.brand_id],
-          );
-          if (!snapshot.rowCount) throw new Error("ai_content_generation_input_missing");
-          const finalInput = parseContentGenerationInputV3(snapshot.rows[0].input_json);
-          if (finalInput.generationId !== String(job.generation_id)) throw new Error("ai_content_generation_input_mismatch");
-          const supplement = await client.query(
-            `select evidence_json from ai_content_output_research_snapshots
-              where output_id=$1 and generation_id=$2 and workspace_id=$3 and brand_id=$4`,
-            [job.output_id, job.generation_id, job.workspace_id, job.brand_id],
-          );
-          const plan = parseContentPlanResultV2(input.plan, finalInput, supplement.rows[0]?.evidence_json);
-          const output = await client.query(
-            `select plan_json from ai_content_generation_outputs
-              where id=$1 and generation_id=$2 and workspace_id=$3 and brand_id=$4 for update`,
-            [job.output_id, job.generation_id, job.workspace_id, job.brand_id],
-          );
-          if (!output.rowCount) throw new Error("ai_content_plan_output_missing");
-          if (output.rows[0].plan_json && canonicalJson(output.rows[0].plan_json) !== canonicalJson(plan)) {
-            throw new Error("ai_content_plan_completion_conflict");
-          }
-          await client.query(
-            `update ai_content_generation_outputs
-                set plan_json=coalesce(plan_json,$2::jsonb),status='generating',
-                    failure_code=null,failure_message=null,updated_at=now()
-              where id=$1`,
-            [job.output_id, JSON.stringify(plan)],
-          );
-          await enqueueAiContentRenderJobs(client, {
-            workspaceId: String(job.workspace_id), brandId: String(job.brand_id),
-            generationId: String(job.generation_id), outputId: String(job.output_id), plan, finalInput,
-          });
-          await client.query(
-            "update ai_content_generations set status='generating',current_stage='generation',error_code=null,error_message=null,updated_at=now() where id=$1",
-            [job.generation_id],
-          );
-        } else {
-          let requestedDimensions: { width: number; height: number } | undefined;
-          if (job.content_type === "marketing" || job.content_type === "card_news") {
-            const generationDraft = await client.query(
-              "select draft_json from ai_content_generations where id = $1",
-              [job.generation_id],
-            );
-            requestedDimensions = requestedDimensionsFromDraft(generationDraft.rows[0]?.draft_json);
-          }
-          const generatedManifest = parseAiContentManifest(
-            job.content_type as AiContentType,
-            input.manifest,
-            requestedDimensions,
-          ) as AiContentManifest;
-          const manifest = parseAiContentManifest(
-            job.content_type as AiContentType,
-            mergeRevisionManifest(generatedManifest, object(job.payload_json).revision),
-            requestedDimensions,
-          ) as AiContentManifest;
-          let manifestUrl: URL;
-          try { manifestUrl = new URL(input.manifestUrl); } catch { throw new Error("ai_content_manifest_url_invalid"); }
-          if (manifestUrl.protocol !== "https:") throw new Error("ai_content_manifest_url_invalid");
-          await client.query(
-            `update ai_content_generation_outputs
-                set title = $2, status = 'completed', content_json = $3::jsonb,
-                    artifact_manifest_json = $4::jsonb, manifest_url = $5,
-                    failure_code = null, failure_message = null, completed_at = coalesce(completed_at, now()), updated_at = now()
-              where id = $1`,
-            [job.output_id, manifest.title, JSON.stringify(manifest.content), JSON.stringify(manifest), input.manifestUrl],
-          );
-          await bridgeScheduledCardNewsCompletion(client, String(job.output_id), manifest, input.manifestUrl);
+        const output = await client.query(
+          `select plan_json from ai_content_generation_outputs
+            where id=$1 and generation_id=$2 and workspace_id=$3 and brand_id=$4 for update`,
+          [job.output_id, job.generation_id, job.workspace_id, job.brand_id],
+        );
+        if (!output.rowCount) throw new Error("ai_content_plan_output_missing");
+        if (output.rows[0].plan_json && canonicalJson(output.rows[0].plan_json) !== canonicalJson(plan)) {
+          throw new Error("ai_content_plan_completion_conflict");
         }
+        await client.query(
+          `update ai_content_generation_outputs
+              set plan_json=coalesce(plan_json,$2::jsonb),status='generating',
+                  failure_code=null,failure_message=null,updated_at=now()
+            where id=$1`,
+          [job.output_id, JSON.stringify(plan)],
+        );
+        await enqueueAiContentRenderJobs(client, {
+          workspaceId: String(job.workspace_id), brandId: String(job.brand_id),
+          generationId: String(job.generation_id), outputId: String(job.output_id), plan, finalInput,
+        });
+        await client.query(
+          "update ai_content_generations set status='generating',current_stage='generation',error_code=null,error_message=null,updated_at=now() where id=$1",
+          [job.generation_id],
+        );
         await client.query(
           `update ai_content_generation_jobs
               set status = 'succeeded', skill_version = $2, completed_at = coalesce(completed_at, now()),
@@ -3855,7 +3201,6 @@ export function createAiContentRepository(pool: Pool, options: AiContentReposito
             where id = $1`,
           [input.jobId, input.skillVersion],
         );
-        if (input.jobType === "generate" && !("plan" in input)) await recalculateGenerationStatus(client, String(job.generation_id));
         const generation = await generationById(client, String(job.generation_id));
         await client.query("COMMIT");
         return generation;
@@ -3869,11 +3214,14 @@ export function createAiContentRepository(pool: Pool, options: AiContentReposito
       const client = await pool.connect();
       try {
         await client.query("BEGIN");
+        await assertAiContentWritable(client);
         const job = await lockAiContentJobContext(client, input.jobId);
+        if (job.job_type !== "generate" || !job.output_id) throw new Error("ai_content_job_contract_invalid");
         if (job.status === "failed") {
           if (job.worker_id !== input.workerId || job.lease_token !== input.leaseToken) {
             throw new Error("ai_content_job_lease_invalid");
           }
+          await reverseGenerationReservationIfTerminalFailure(client, String(job.generation_id));
           const generation = await generationById(client, String(job.generation_id));
           await client.query("COMMIT");
           return generation;
@@ -3904,39 +3252,20 @@ export function createAiContentRepository(pool: Pool, options: AiContentReposito
             where id = $1`,
           [input.jobId, willRetry ? "queued" : "failed", input.errorCode, input.errorMessage],
         );
-        if (job.job_type === "analyze") {
+        await client.query(
+          `update ai_content_generation_outputs
+              set status = $2, failure_code = $3, failure_message = $4, updated_at = now()
+            where id = $1`,
+          [job.output_id, willRetry ? "queued" : "failed", input.errorCode, input.errorMessage],
+        );
+        if (willRetry) {
           await client.query(
-            `update ai_content_generations
-                set status = $2, current_stage = 'analysis', error_code = $3, error_message = $4,
-                    terminal_at = case
-                      when not $5::boolean and status not in ('completed','partial_failed','failed')
-                        then statement_timestamp()
-                      else terminal_at
-                    end,
-                    retryable_until = case
-                      when not $5::boolean and status not in ('completed','partial_failed','failed')
-                        then statement_timestamp() + interval '15 days'
-                      else retryable_until
-                    end,
-                    updated_at = now()
-              where id = $1`,
-            [job.generation_id, willRetry ? "analyzing" : "failed", input.errorCode, input.errorMessage, willRetry],
+            "update ai_content_generations set status='queued',current_stage='generation',updated_at=now() where id=$1",
+            [job.generation_id],
           );
         } else {
-          await client.query(
-            `update ai_content_generation_outputs
-                set status = $2, failure_code = $3, failure_message = $4, updated_at = now()
-              where id = $1`,
-            [job.output_id, willRetry ? "queued" : "failed", input.errorCode, input.errorMessage],
-          );
-          if (willRetry) {
-            await client.query(
-              "update ai_content_generations set status = 'queued', current_stage = 'generation', updated_at = now() where id = $1",
-              [job.generation_id],
-            );
-          } else {
-            await recalculateGenerationStatus(client, String(job.generation_id));
-          }
+          await recalculateGenerationStatus(client, String(job.generation_id));
+          await reverseGenerationReservationIfTerminalFailure(client, String(job.generation_id));
         }
         if (!willRetry) {
           await markLinkedScheduledCardNewsFailed(
@@ -3957,430 +3286,262 @@ export function createAiContentRepository(pool: Pool, options: AiContentReposito
     },
 
     async retryAiContentOutput(input) {
+      if (input.contractVersion !== "content-generation-retry.v1"
+        || !input.idempotencyKey.trim()
+        || !input.reason.trim()
+        || input.reason.length > 4_000) {
+        throw new Error("ai_content_generation_retry_invalid");
+      }
       const client = await pool.connect();
       try {
         await client.query("BEGIN");
+        await assertAiContentWritable(client);
+        await assertActiveAiContentActor(client, input);
         const outputScope = await client.query(
-          `select generation_id
-             from ai_content_generation_outputs
-            where id = $1 and workspace_id = $2 and brand_id = $3`,
+          `select generation_id from ai_content_generation_outputs
+            where id=$1 and workspace_id=$2 and brand_id=$3`,
           [input.outputId, input.workspaceId, input.brandId],
         );
-        if (!outputScope.rowCount) throw new Error("ai_content_output_not_found");
-        const generationId = String(outputScope.rows[0]?.generation_id);
-        const generationResult = await client.query(
-          `select id, retryable_until,
-                  retryable_until > transaction_timestamp() as retryable
-             from ai_content_generations
-            where id = $1 and workspace_id = $2 and brand_id = $3
-            for update`,
-          [generationId, input.workspaceId, input.brandId],
+        const parentGenerationId = String(outputScope.rows[0]?.generation_id ?? "");
+        if (!parentGenerationId) throw new Error("ai_content_output_not_found");
+        const parentResult = await client.query(
+          `select generation.*,generation.retryable_until>transaction_timestamp() retryable,
+                  operation.status operation_status,operation.parent_operation_id,
+                  reservation.id reservation_id,reservation.quantity reservation_quantity,
+                  reversal.id reversal_id,reversal.quantity reversal_quantity,
+                  snapshot.input_json,snapshot.content_hash,binding.id binding_id,binding.binding_json,
+                  binding.binding_sha256,
+                  binding.binding_sha256=encode(digest(binding.binding_json::text,'sha256'),'hex') binding_hash_matches,
+                  binding.selected_proposal_id,binding.proposal_job_id,binding.proposal_contract_id,
+                  binding.successful_model_attempt_id
+             from ai_content_generations generation
+             join ai_content_generation_operations operation on operation.id=generation.operation_id
+             join ai_content_usage_ledger reservation
+               on reservation.operation_id=operation.id and reservation.generation_id=generation.id
+              and reservation.usage_type='generation' and reservation.reservation_id=reservation.id
+             join ai_content_usage_ledger reversal
+               on reversal.operation_id=operation.id and reversal.generation_id=generation.id
+              and reversal.usage_type='reversal' and reversal.reservation_id=reservation.id
+              and reversal.reversal_of_ledger_id=reservation.id
+             join ai_content_generation_input_snapshots snapshot
+               on snapshot.generation_id=generation.id and snapshot.workspace_id=generation.workspace_id
+              and snapshot.brand_id=generation.brand_id
+             join ai_content_generation_prompt_bindings binding
+               on binding.generation_id=generation.id and binding.workspace_id=generation.workspace_id
+              and binding.brand_id=generation.brand_id
+            where generation.id=$1 and generation.workspace_id=$2 and generation.brand_id=$3
+            for update of generation,operation,reservation,reversal`,
+          [parentGenerationId, input.workspaceId, input.brandId],
         );
-        if (!generationResult.rowCount) throw new Error("ai_content_output_not_found");
-        const outputResult = await client.query(
-          `select output.*, generation.type
-             from ai_content_generation_outputs output
-             join ai_content_generations generation on generation.id = output.generation_id
-            where output.id = $1 and output.workspace_id = $2 and output.brand_id = $3
-              and output.generation_id = $4
-            for update of output`,
-          [input.outputId, input.workspaceId, input.brandId, generationId],
+        const parent = parentResult.rows[0] as Record<string, unknown> | undefined;
+        if (!parent) throw new Error("ai_content_generation_retry_parent_invalid");
+        const failedOutput = await client.query(
+          `select * from ai_content_generation_outputs
+            where id=$1 and generation_id=$2 and workspace_id=$3 and brand_id=$4 for update`,
+          [input.outputId, parentGenerationId, input.workspaceId, input.brandId],
         );
-        const output = outputResult.rows[0] as Record<string, unknown> | undefined;
-        if (!output) throw new Error("ai_content_output_not_found");
-        if (output.status !== "failed") throw new Error("ai_content_output_not_failed");
-        if (generationResult.rows[0]?.retryable !== true) {
-          throw new Error("ai_content_attachment_retention_expired");
+        if (!failedOutput.rows.length || failedOutput.rows[0].status !== "failed"
+          || parent.status !== "failed"
+          || parent.operation_status !== "reversed"
+          || parent.retryable !== true
+          || Number(parent.reversal_quantity) !== -Number(parent.reservation_quantity)) {
+          throw new Error("ai_content_generation_retry_parent_invalid");
         }
-        if (output.plan_json) {
-          const failedRenderJobs = await client.query(
-            `select id from ai_content_generation_render_jobs
-              where output_id=$1 and generation_id=$2 and workspace_id=$3 and brand_id=$4 and status='failed'
-              for update`,
-            [input.outputId, generationId, input.workspaceId, input.brandId],
-          );
-          if (!failedRenderJobs.rowCount) throw new Error("ai_content_render_retry_not_available");
-          await client.query(
-            `update ai_content_generation_render_jobs
-                set status='queued',attempt_count=0,result_json=null,available_at=now(),
-                    worker_id=null,lease_token=null,lease_expires_at=null,error_code=null,error_message=null,
-                    completed_at=null,updated_at=now()
-              where output_id=$1 and generation_id=$2 and workspace_id=$3 and brand_id=$4 and status='failed'`,
-            [input.outputId, generationId, input.workspaceId, input.brandId],
-          );
-          await client.query(
-            `update ai_content_generation_outputs set status='generating',failure_code=null,failure_message=null,
-                    completed_at=null,updated_at=now() where id=$1`,
-            [input.outputId],
-          );
-          await client.query(
-            `update ai_content_generations set status='generating',current_stage='generation',completed_at=null,
-                    error_code=null,error_message=null,updated_at=now() where id=$1`,
-            [generationId],
-          );
-          const generation = await generationById(client, generationId);
-          await client.query("COMMIT");
-          return generation;
+        let parentInput: ReturnType<typeof parseCanonicalContentGenerationInputV3>;
+        let parentBinding: ReturnType<typeof parseContentPromptBinding>;
+        try {
+          parentInput = parseCanonicalContentGenerationInputV3(parent.input_json);
+          parentBinding = parseContentPromptBinding(parent.binding_json);
+          assertPlannerPromptBinding(parentInput, parentBinding);
+        } catch {
+          throw new Error("ai_content_generation_retry_parent_invalid");
         }
-        const version = await client.query(
-          `select input_json->>'contractVersion' as contract_version
-             from ai_content_generation_input_snapshots
-            where generation_id=$1 and workspace_id=$2 and brand_id=$3`,
-          [generationId, input.workspaceId, input.brandId],
-        );
-        if (version.rows[0]?.contract_version === "content-generation-input.v3") {
-          const reset = await client.query(
-            `update ai_content_generation_jobs
-                set status='queued',attempt_count=0,available_at=now(),worker_id=null,lease_token=null,
-                    lease_expires_at=null,error_code=null,error_message=null,completed_at=null,updated_at=now()
-              where id=(select id from ai_content_generation_jobs
-                         where output_id=$1 and workspace_id=$2 and brand_id=$3
-                           and job_type='generate' and status='failed'
-                         order by created_at desc,id desc for update limit 1)
-              returning id`,
-            [input.outputId, input.workspaceId, input.brandId],
-          );
-          if (!reset.rowCount) throw new Error("ai_content_planner_retry_not_available");
-          await client.query(
-            `update ai_content_generation_outputs set status='planning',failure_code=null,failure_message=null,
-                    completed_at=null,updated_at=now() where id=$1`,
-            [input.outputId],
-          );
-          await client.query(
-            `update ai_content_generations set status='planning',current_stage='generation',completed_at=null,
-                    error_code=null,error_message=null,updated_at=now() where id=$1`,
-            [generationId],
-          );
-          const generation = await generationById(client, generationId);
-          await client.query("COMMIT");
-          return generation;
+        if (parentInput.generationId !== parentGenerationId
+          || proposalSha256(parent.input_json) !== String(parent.content_hash)
+          || parent.binding_hash_matches !== true) {
+          throw new Error("ai_content_generation_retry_parent_invalid");
         }
-        const previousGenerateJob = await client.query(
-          `select payload_json
-             from ai_content_generation_jobs
-            where output_id = $1 and workspace_id = $2 and brand_id = $3
-              and job_type = 'generate' and status = 'failed'
-            order by created_at desc, id desc
-            for update
-            limit 1`,
-          [input.outputId, input.workspaceId, input.brandId],
-        );
-        const previousPayload = object(previousGenerateJob.rows[0]?.payload_json);
-        let retryPayload = previousPayload.contentGenerationInput
-          ? previousPayload
-          : null;
-        if (!retryPayload) {
-          const legacySnapshot = await client.query(
-            `select generation_input_snapshot, analysis_json
-               from ai_content_generations
-              where id = $1 and workspace_id = $2 and brand_id = $3`,
-            [output.generation_id, input.workspaceId, input.brandId],
-          );
-          retryPayload = {
-            generationId: output.generation_id,
-            outputId: input.outputId,
-            contentGenerationInput: generationInputForWorker(
-              legacySnapshot.rows[0]?.generation_input_snapshot,
-              legacySnapshot.rows[0]?.analysis_json,
-              "generate",
-            ) ?? {},
-          };
-        }
-        const contentGenerationInput = object(retryPayload.contentGenerationInput);
-        const attachments = Array.isArray(contentGenerationInput.attachments)
-          ? contentGenerationInput.attachments
-          : [];
-        const snapshotPaths = attachments.flatMap((attachment) => {
-          const storagePath = object(attachment).storagePath;
-          return typeof storagePath === "string" && storagePath ? [storagePath] : [];
+        const requestFingerprint = proposalSha256({
+          contractVersion: input.contractVersion,
+          workspaceId: input.workspaceId,
+          brandId: input.brandId,
+          parentGenerationId,
+          parentOperationId: parent.operation_id,
+          parentOutputId: input.outputId,
+          reason: input.reason.trim(),
         });
-        if (snapshotPaths.length) {
-          const committedDeletion = await client.query(
-            `select id, status
-               from ai_content_attachment_deletion_jobs
-              where workspace_id = $1
-                and storage_path = any($2::text[])
-                and status in ('deleting', 'deleted')
-              order by storage_path, id
-              for update`,
-            [input.workspaceId, snapshotPaths],
-          );
-          if (committedDeletion.rowCount) {
-            throw new Error("ai_content_attachment_retention_expired");
+        await client.query("select pg_advisory_xact_lock(hashtextextended($1,0))", [
+          `ai-content-operation:${input.brandId}:${input.idempotencyKey}`,
+        ]);
+        const existing = await client.query(
+          `select operation.*,generation.generation_input_snapshot,generation.parent_generation_id,
+                  generation.output_format,generation.purpose,
+                  snapshot.input_json,snapshot.content_hash,
+                   binding.parent_binding_id,binding.binding_json,binding.binding_sha256,
+                   binding.binding_sha256=encode(digest(binding.binding_json::text,'sha256'),'hex') binding_hash_matches,
+                  binding.selected_proposal_id,binding.proposal_job_id,binding.proposal_contract_id,
+                  binding.successful_model_attempt_id,reservation.quantity reservation_quantity,
+                  (select count(*)::integer from ai_content_generation_outputs output
+                    where output.generation_id=generation.id) output_count,
+                  (select count(*)::integer from ai_content_generation_jobs job
+                    where job.generation_id=generation.id and job.job_type='generate'
+                      and job.output_format=generation.output_format) job_count
+             from ai_content_generation_operations operation
+             join ai_content_generations generation on generation.id=operation.generation_id
+              and generation.workspace_id=operation.workspace_id and generation.brand_id=operation.brand_id
+             join ai_content_generation_input_snapshots snapshot
+               on snapshot.generation_id=generation.id and snapshot.workspace_id=generation.workspace_id
+              and snapshot.brand_id=generation.brand_id
+             join ai_content_generation_prompt_bindings binding
+               on binding.generation_id=generation.id and binding.workspace_id=generation.workspace_id
+              and binding.brand_id=generation.brand_id
+             join ai_content_usage_ledger reservation
+               on reservation.operation_id=operation.id and reservation.generation_id=generation.id
+              and reservation.usage_type='generation' and reservation.reservation_id=reservation.id
+            where operation.brand_id=$1 and operation.operation_key=$2 for update of operation,generation`,
+          [input.brandId, input.idempotencyKey],
+        );
+        const replay = existing.rows[0] as Record<string, unknown> | undefined;
+        if (replay) {
+          let replayInput: ReturnType<typeof parseCanonicalContentGenerationInputV3>;
+          try {
+            replayInput = parseCanonicalContentGenerationInputV3(replay.input_json);
+            const replayBinding = parseContentPromptBinding(replay.binding_json);
+            assertPlannerPromptBinding(replayInput, replayBinding);
+          } catch {
+            throw new Error("ai_content_generation_retry_conflict");
           }
+          const { generationId: _parentGenerationId, capturedAt: _parentCapturedAt, ...parentRetrySource } = parentInput;
+          const { generationId: replayGenerationId, capturedAt: _replayCapturedAt, ...replayRetrySource } = replayInput;
+          if (String(replay.workspace_id) !== input.workspaceId
+            || String(replay.parent_operation_id) !== String(parent.operation_id)
+            || String(replay.parent_generation_id) !== parentGenerationId
+            || String(replay.request_fingerprint_sha256) !== requestFingerprint
+            || !["started", "completed", "failed", "reversed"].includes(String(replay.status))
+            || replayGenerationId !== String(replay.generation_id)
+            || !isDeepStrictEqual(parentRetrySource, replayRetrySource)
+            || !isDeepStrictEqual(replay.generation_input_snapshot, replay.input_json)
+            || proposalSha256(replay.input_json) !== String(replay.content_hash)
+            || replay.binding_hash_matches !== true
+            || String(replay.parent_binding_id) !== String(parent.binding_id)
+            || String(replay.selected_proposal_id) !== String(parent.selected_proposal_id)
+            || String(replay.proposal_job_id) !== String(parent.proposal_job_id)
+            || String(replay.proposal_contract_id) !== String(parent.proposal_contract_id)
+            || String(replay.successful_model_attempt_id) !== String(parent.successful_model_attempt_id)
+            || String(replay.output_format) !== parentInput.outputSettings.outputFormat
+            || String(replay.purpose) !== parentInput.outputSettings.purpose
+            || Number(replay.reservation_quantity) !== replayInput.outputSettings.outputCount
+            || Number(replay.output_count) !== replayInput.outputSettings.outputCount
+            || Number(replay.job_count) !== replayInput.outputSettings.outputCount) {
+            throw new Error("ai_content_generation_retry_conflict");
+          }
+          const generation = await generationById(client, String(replay.generation_id));
+          await client.query("COMMIT");
+          return generation;
+        }
+        await client.query("select pg_advisory_xact_lock(hashtextextended($1,0))", [
+          `ai-content-usage:${input.brandId}:${input.usageDate}`,
+        ]);
+        const usage = await client.query(
+          `select coalesce(sum(quantity),0)::integer generation_count from ai_content_usage_ledger
+            where workspace_id=$1 and brand_id=$2 and usage_date=$3::date
+              and usage_type in ('generation','reversal')`,
+          [input.workspaceId, input.brandId, input.usageDate],
+        );
+        const outputCount = parentInput.outputSettings.outputCount;
+        if (Number(usage.rows[0]?.generation_count ?? 0) + outputCount > input.dailyGenerationLimit) {
+          throw new Error("ai_content_limit_reached");
+        }
+        const generationId = randomUUID();
+        const operationId = randomUUID();
+        const reservationId = randomUUID();
+        const retriedInput = parseCanonicalContentGenerationInputV3({
+          ...parentInput,
+          generationId,
+          capturedAt: new Date().toISOString(),
+        });
+        const retriedJson = canonicalProposalJson(retriedInput);
+        const retriedHash = proposalSha256(retriedInput);
+        await client.query(
+          `insert into ai_content_generations(
+             id,workspace_id,brand_id,output_format,purpose,title,status,current_stage,draft_json,analysis_json,
+             analysis_idempotency_key,generation_idempotency_key,operation_id,parent_generation_id,generation_input_snapshot,
+             attachments_locked_at,created_by_user_id,updated_by_user_id
+           ) values($1,$2,$3,$4,$5,$6,'queued','generation',$7::jsonb,$8::jsonb,$9,$10,$11,$12,$13::jsonb,
+              statement_timestamp(),$14,$14)`,
+          [generationId, input.workspaceId, input.brandId, parent.output_format, parent.purpose,
+            parent.title, JSON.stringify({ ...object(parent.draft_json), origin: "retry-v3",
+              parentGenerationId, parentOutputId: input.outputId, retryReason: input.reason.trim() }),
+            JSON.stringify(object(parent.analysis_json)), `retry-v3:${parentGenerationId}:${input.idempotencyKey}`,
+            input.idempotencyKey, operationId, parentGenerationId, retriedJson, input.actorUserId],
+        );
+        await client.query(
+          `insert into ai_content_generation_operations(
+             id,workspace_id,brand_id,operation_key,request_fingerprint_sha256,parent_operation_id,generation_id,status
+           ) values($1,$2,$3,$4,$5,$6,$7,'reserved')`,
+          [operationId, input.workspaceId, input.brandId, input.idempotencyKey, requestFingerprint,
+            parent.operation_id, generationId],
+        );
+        await client.query(
+          `insert into ai_content_usage_ledger(
+             id,workspace_id,brand_id,generation_id,output_id,usage_type,quantity,usage_date,
+             idempotency_key,operation_id,reservation_id,reversal_of_ledger_id
+           ) values($1,$2,$3,$4,null,'generation',$5,$6::date,$7,$8,$1,null)`,
+          [reservationId, input.workspaceId, input.brandId, generationId, outputCount, input.usageDate,
+            `generation-reservation:${operationId}`, operationId],
+        );
+        await client.query(
+          `insert into ai_content_generation_input_snapshots(
+             id,workspace_id,brand_id,generation_id,input_json,content_hash
+           ) values($1,$2,$3,$4,$5::jsonb,$6)`,
+          [randomUUID(), input.workspaceId, input.brandId, generationId, retriedJson, retriedHash],
+        );
+        await client.query(
+          "select create_ai_content_generation_prompt_binding($1,$2,$3,$4,$5,$6,$7,$8::jsonb)",
+          [generationId, input.workspaceId, input.brandId, parent.selected_proposal_id,
+            parent.proposal_job_id, parent.proposal_contract_id, parent.successful_model_attempt_id,
+            JSON.stringify(parent.binding_json)],
+        );
+        const outputId = randomUUID();
+        await client.query(
+          `insert into ai_content_generation_outputs(
+             id,generation_id,workspace_id,brand_id,output_index,status
+           ) values($1,$2,$3,$4,1,'queued')`,
+          [outputId, generationId, input.workspaceId, input.brandId],
+        );
+        if (parentInput.outputSettings.outputFormat !== "blog") {
+          await client.query(
+            `insert into ai_content_output_research_snapshots(
+               id,workspace_id,brand_id,generation_id,output_id,evidence_json
+             ) values($1,$2,$3,$4,$5,$6::jsonb)`,
+            [randomUUID(), input.workspaceId, input.brandId, generationId, outputId,
+              JSON.stringify(parentInput.researchEvidence)],
+          );
         }
         await client.query(
-          `update ai_content_generation_outputs
-              set status = 'queued', failure_code = null, failure_message = null, completed_at = null, updated_at = now()
-            where id = $1`,
-          [input.outputId],
+          `insert into ai_content_generation_jobs(
+             id,generation_id,output_id,workspace_id,brand_id,job_type,output_format,status,payload_json
+           ) values($1,$2,$3,$4,$5,'generate',$6,'queued',$7::jsonb)`,
+          [randomUUID(), generationId, outputId, input.workspaceId, input.brandId,
+            parentInput.outputSettings.outputFormat, JSON.stringify({
+              generationId, outputId, contentGenerationInput: retriedInput,
+              planningMode: "selected_proposal", operationId,
+            })],
         );
         await client.query(
-          `insert into ai_content_generation_jobs
-             (generation_id, output_id, workspace_id, brand_id, job_type, content_type, status, payload_json)
-           values ($1, $2, $3, $4, 'generate', $5, 'queued', $6::jsonb)`,
-          [
-            output.generation_id,
-            input.outputId,
-            input.workspaceId,
-            input.brandId,
-            output.type,
-            JSON.stringify(retryPayload),
-          ],
+          "select transition_ai_content_generation_operation($1,'reserved','started')",
+          [operationId],
         );
-        await client.query(
-          `update ai_content_generations
-              set status = 'queued', current_stage = 'generation', completed_at = null,
-                  error_code = null, error_message = null, updated_at = now()
-            where id = $1`,
-          [output.generation_id],
-        );
-        const generation = await generationById(client, String(output.generation_id));
+        const generation = await generationById(client, generationId);
         await client.query("COMMIT");
         return generation;
       } catch (error) {
         await client.query("ROLLBACK");
         throw error;
-      } finally { client.release(); }
-    },
-
-    async reviseAiContentOutput(input) {
-      const client = await pool.connect();
-      try {
-        await client.query("BEGIN");
-        const outputScope = await client.query(
-          `select generation_id
-             from ai_content_generation_outputs
-            where id = $1 and workspace_id = $2 and brand_id = $3`,
-          [input.outputId, input.workspaceId, input.brandId],
-        );
-        if (!outputScope.rowCount) throw new Error("ai_content_output_not_found");
-        const generationId = String(outputScope.rows[0]?.generation_id);
-        const generationResult = await client.query(
-          `select id
-             from ai_content_generations
-            where id = $1 and workspace_id = $2 and brand_id = $3
-            for update`,
-          [generationId, input.workspaceId, input.brandId],
-        );
-        if (!generationResult.rowCount) throw new Error("ai_content_output_not_found");
-        const outputResult = await client.query(
-          `select output.*, generation.type
-             from ai_content_generation_outputs output
-             join ai_content_generations generation on generation.id = output.generation_id
-            where output.id = $1 and output.workspace_id = $2 and output.brand_id = $3
-              and output.generation_id = $4
-            for update of output`,
-          [input.outputId, input.workspaceId, input.brandId, generationId],
-        );
-        const output = outputResult.rows[0] as Record<string, unknown> | undefined;
-        if (!output) throw new Error("ai_content_output_not_found");
-        const duplicate = await client.query(
-          `select id
-             from ai_content_generation_jobs
-            where output_id = $1 and workspace_id = $2 and brand_id = $3
-              and payload_json #>> '{revision,idempotencyKey}' = $4
-            for update
-            limit 1`,
-          [input.outputId, input.workspaceId, input.brandId, input.idempotencyKey],
-        );
-        if (duplicate.rowCount) {
-          const generation = await generationById(client, generationId);
-          await client.query("COMMIT");
-          return {
-            ...generation,
-            outputs: [mapOutput({
-              ...output,
-              output_index: output.output_index ?? 1,
-              content_json: output.content_json ?? {},
-              artifact_manifest_json: output.artifact_manifest_json ?? {},
-              created_at: output.created_at ?? new Date(0),
-              updated_at: output.updated_at ?? new Date(0),
-            })],
-          };
-        }
-        if (output.status !== "completed") throw new Error("ai_content_output_not_completed");
-
-        const manifest = object(output.artifact_manifest_json);
-        const capabilities = mapOutput({
-          ...output,
-          output_index: output.output_index ?? 1,
-          content_json: output.content_json ?? {},
-          artifact_manifest_json: manifest,
-          created_at: output.created_at ?? new Date(0),
-          updated_at: output.updated_at ?? new Date(0),
-        }).revisionCapabilities;
-        if (!capabilities.includes(input.action)) throw new Error("ai_content_revision_unsupported");
-        if (input.action === "regenerate_card") {
-          if (!Number.isSafeInteger(input.cardIndex) || Number(input.cardIndex) < 1) {
-            throw new Error("ai_content_revision_card_index_invalid");
-          }
-          const assets = Array.isArray(manifest.assets) ? manifest.assets : [];
-          if (!assets.some((asset, index) => Number(object(asset).index ?? index + 1) === input.cardIndex)) {
-            throw new Error("ai_content_revision_card_index_invalid");
-          }
-        } else if (input.cardIndex !== undefined) {
-          throw new Error("ai_content_revision_card_index_invalid");
-        }
-
-        const active = await client.query(
-          `select id
-             from ai_content_generation_jobs
-            where output_id = $1 and workspace_id = $2 and brand_id = $3
-              and job_type = 'generate' and status in ('queued', 'processing')
-            for update
-            limit 1`,
-          [input.outputId, input.workspaceId, input.brandId],
-        );
-        if (active.rowCount) throw new Error("ai_content_revision_conflict");
-
-        const previousGenerateJob = await client.query(
-          `select payload_json
-             from ai_content_generation_jobs
-            where output_id = $1 and workspace_id = $2 and brand_id = $3
-              and job_type = 'generate'
-              and payload_json ? 'contentGenerationInput'
-            order by created_at desc, id desc
-            for update
-            limit 1`,
-          [input.outputId, input.workspaceId, input.brandId],
-        );
-        const previousPayload = object(previousGenerateJob.rows[0]?.payload_json);
-        if (!previousPayload.contentGenerationInput) throw new Error("ai_content_revision_snapshot_missing");
-        const revisionPayload = {
-          ...previousPayload,
-          revision: {
-            contractVersion: "ai-content-revision.v1",
-            action: input.action,
-            idempotencyKey: input.idempotencyKey,
-            cardIndex: input.action === "regenerate_card" ? input.cardIndex : null,
-            previousManifest: manifest,
-            previousContent: object(output.content_json),
-          },
-        };
-        await client.query(
-          `update ai_content_generation_outputs
-              set status = 'queued', failure_code = null, failure_message = null,
-                  completed_at = null, updated_at = now()
-            where id = $1 and generation_id = $2 and workspace_id = $3 and brand_id = $4`,
-          [input.outputId, generationId, input.workspaceId, input.brandId],
-        );
-        await client.query(
-          `insert into ai_content_generation_jobs
-             (generation_id, output_id, workspace_id, brand_id, job_type, content_type, status, payload_json)
-           values ($1, $2, $3, $4, 'generate', $5, 'queued', $6::jsonb)`,
-          [
-            generationId,
-            input.outputId,
-            input.workspaceId,
-            input.brandId,
-            output.type,
-            JSON.stringify(revisionPayload),
-          ],
-        );
-        await client.query(
-          `update ai_content_generations
-              set status = 'queued', current_stage = 'generation', completed_at = null,
-                  error_code = null, error_message = null, updated_at = now()
-            where id = $1 and workspace_id = $2 and brand_id = $3`,
-          [generationId, input.workspaceId, input.brandId],
-        );
-        const generation = await generationById(client, generationId);
-        await client.query("COMMIT");
-        return {
-          ...generation,
-          outputs: [mapOutput({
-            ...output,
-            status: "queued",
-            output_index: output.output_index ?? 1,
-            content_json: output.content_json ?? {},
-            artifact_manifest_json: output.artifact_manifest_json ?? {},
-            completed_at: null,
-            created_at: output.created_at ?? new Date(0),
-            updated_at: new Date(),
-          })],
-        };
-      } catch (error) {
-        await client.query("ROLLBACK");
-        throw error;
       } finally {
         client.release();
       }
     },
 
-    async saveAiContentOutputCopy(input) {
-      const client = await pool.connect();
-      try {
-        await client.query("BEGIN");
-        const outputResult = await client.query(
-          `select output.*, generation.type
-             from ai_content_generation_outputs output
-             join ai_content_generations generation on generation.id = output.generation_id
-            where output.id = $1 and output.workspace_id = $2 and output.brand_id = $3
-            for update of output`,
-          [input.outputId, input.workspaceId, input.brandId],
-        );
-        const output = outputResult.rows[0] as Record<string, unknown> | undefined;
-        if (!output) throw new Error("ai_content_output_not_found");
-        if (output.status !== "completed") throw new Error("ai_content_output_not_completed");
-
-        const manifest = object(output.artifact_manifest_json);
-        const mapped = mapOutput({
-          ...output,
-          output_index: output.output_index ?? 1,
-          content_json: output.content_json ?? {},
-          artifact_manifest_json: manifest,
-          created_at: output.created_at ?? new Date(0),
-          updated_at: output.updated_at ?? new Date(0),
-        });
-        if (mapped.legacyReadOnly || !mapped.revisionCapabilities.includes("save_copy")) {
-          throw new Error("ai_content_copy_edit_unsupported");
-        }
-        const fields = editableCopyFields(manifest, input.fields);
-        const requestHash = createHash("sha256").update(JSON.stringify(fields)).digest("hex");
-        const priorEdit = object(manifest.copyEdit);
-        if (priorEdit.idempotencyKey === input.idempotencyKey) {
-          if (priorEdit.requestHash !== requestHash) throw new Error("ai_content_copy_idempotency_conflict");
-          const generation = await generationById(client, String(output.generation_id));
-          await client.query("COMMIT");
-          return { ...generation, outputs: [mapped] };
-        }
-
-        const content = { ...object(output.content_json), ...fields };
-        const nextManifest = {
-          ...manifest,
-          content: { ...object(manifest.content), ...fields },
-          copyEdit: { idempotencyKey: input.idempotencyKey, requestHash },
-        };
-        await client.query(
-          `update ai_content_generation_outputs
-              set content_json = $2::jsonb, artifact_manifest_json = $3::jsonb, updated_at = now()
-            where id = $1 and workspace_id = $4 and brand_id = $5`,
-          [
-            input.outputId,
-            JSON.stringify(content),
-            JSON.stringify(nextManifest),
-            input.workspaceId,
-            input.brandId,
-          ],
-        );
-        const generation = await generationById(client, String(output.generation_id));
-        await client.query("COMMIT");
-        return {
-          ...generation,
-          outputs: [mapOutput({
-            ...output,
-            content_json: content,
-            artifact_manifest_json: nextManifest,
-            updated_at: new Date(),
-          })],
-        };
-      } catch (error) {
-        await client.query("ROLLBACK");
-        throw error;
-      } finally {
-        client.release();
-      }
-    },
   };
 }

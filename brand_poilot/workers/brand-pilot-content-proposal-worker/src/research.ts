@@ -1,18 +1,18 @@
 import {
   runControlledSearch,
   type ControlledSearchInput,
-  type ResearchEvidenceSnapshotV1,
 } from "@brand-pilot/worker-runtime";
-import type { ContentProposalJobV2 } from "./contracts.js";
+import type { ResearchEvidenceSnapshotV1 } from "@brand-pilot/content-contracts";
+import type { ContentProposalResearchJob } from "./contracts.js";
 
 export interface ContentProposalResearch {
-  run(job: ContentProposalJobV2, signal?: AbortSignal): Promise<ResearchEvidenceSnapshotV1>;
+  run(job: ContentProposalResearchJob, signal?: AbortSignal): Promise<ResearchEvidenceSnapshotV1>;
 }
 
 type ControlledSearch = (input: ControlledSearchInput) => Promise<ResearchEvidenceSnapshotV1>;
 
-function subjectTitle(job: ContentProposalJobV2): string | null {
-  const { subject, references } = job.inputSnapshot;
+function subjectTitle(job: ContentProposalResearchJob): string | null {
+  const { subject, references } = job.baseInput;
   if (subject.kind === "topic_text") return subject.title;
   if (subject.kind === "topic_url") return subject.title;
   const selected = new Set(subject.referenceIds);
@@ -23,8 +23,8 @@ function subjectTitle(job: ContentProposalJobV2): string | null {
   return combined ? combined.slice(0, 1_000) : null;
 }
 
-function publicResearchContext(job: ContentProposalJobV2): ControlledSearchInput["publicResearchContext"] {
-  const snapshot = job.inputSnapshot;
+function publicResearchContext(job: ContentProposalResearchJob): ControlledSearchInput["publicResearchContext"] {
+  const snapshot = job.baseInput;
   const purpose = job.request.purpose;
   return {
     purpose,
@@ -44,9 +44,6 @@ export function createContentProposalResearch(
 ): ContentProposalResearch {
   return {
     run(job, signal) {
-      if (job.inputSnapshot.contractVersion !== "proposal-base-input.v2") {
-        throw new Error("content_proposal_research_already_complete");
-      }
       return search({
         purpose: job.request.purpose,
         mode: job.request.purpose === "informational" ? "required" : "automatic",

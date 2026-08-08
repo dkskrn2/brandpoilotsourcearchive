@@ -1,9 +1,14 @@
 import { createHash, randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
-import type { Pool } from "pg";
+import type { Pool, PoolClient } from "pg";
+import {
+  parseContentProposalRequestV2,
+  parseProposalBaseInputSnapshotV2,
+  type ContentProposalRequestV2,
+  type ProposalBaseInputSnapshotV2,
+} from "@brand-pilot/content-contracts";
 import type {
   ContentProposalSetV2,
-  ContentProposalV1,
   ProposalInputSnapshotV2,
   ResearchEvidenceSnapshotV1,
 } from "./aiContentContracts.js";
@@ -12,290 +17,243 @@ import {
   parseProposalInputSnapshotV2,
   parseResearchEvidenceSnapshotV1,
 } from "./aiContentGenerationInputV3.js";
+import { canonicalProposalJson, proposalSha256 } from "./aiContentProposalV2Service.js";
 
-export interface ContentProposalJobRecord {
+export type ContentProposalClaimStage = "research_required" | "composition_ready";
+
+export interface ContentProposalJobContractRecord {
+  id: string;
+  requestContractVersion: string;
+  baseInputContractVersion: string;
+  researchContractVersion: string;
+  proposalContractVersion: string;
+  proposalPromptVersion: string;
+  proposalOutputSchemaSha256: string;
+  modelId: string;
+  commandDescriptorSha256: string;
+  requestSha256: string;
+  baseInputSha256: string;
+  contractSourceSha256: string;
+  catalogSha256: string;
+  enqueueContractSha256: string;
+}
+
+interface ContentProposalClaimBase {
   id: string;
   workspaceId: string;
   brandId: string;
   batchId: string;
-  status: "queued" | "processing" | "completed" | "failed";
-  request: Record<string, unknown>;
-  sourceSnapshots: Record<string, unknown>[];
+  status: "processing";
+  stage: ContentProposalClaimStage;
   attemptCount: number;
   maxAttempts: number;
-  workerId: string | null;
-  leaseToken: string | null;
-  leaseExpiresAt: string | null;
+  workerId: string;
+  leaseToken: string;
+  leaseExpiresAt: string;
   availableAt: string;
-  inputSnapshot?: Record<string, unknown> | ProposalInputSnapshotV2;
-  researchEvidence?: ResearchEvidenceSnapshotV1;
+  request: ContentProposalRequestV2;
+  contract: ContentProposalJobContractRecord;
 }
 
+export interface ContentProposalResearchClaim extends ContentProposalClaimBase {
+  stage: "research_required";
+  researchAttemptId: string;
+  researchAttemptNumber: number;
+  baseInput: ProposalBaseInputSnapshotV2;
+}
+
+export interface ContentProposalModelClaim extends ContentProposalClaimBase {
+  stage: "composition_ready";
+  modelAttemptId: string;
+  modelAttemptNumber: number;
+  compositionId: string;
+  composedInput: ProposalInputSnapshotV2;
+  evidenceSetSha256: string;
+  composedInputSha256: string;
+  finalInvocationAggregateSha256: string;
+  modelSha256: string;
+}
+
+export type ContentProposalJobRecord = ContentProposalResearchClaim | ContentProposalModelClaim;
+
+type WorkerLeaseIdentity = {
+  jobId: string;
+  workerId: string;
+  leaseToken: string;
+};
+
 export interface ContentProposalJobsRepository {
-  claimContentProposalJob(input: {
-    workerId: string;
+  claimContentProposalJob(input: { workerId: string; leaseSeconds: number }): Promise<ContentProposalJobRecord | null>;
+  heartbeatContentProposalJob(input: WorkerLeaseIdentity & {
     leaseSeconds: number;
-  }): Promise<ContentProposalJobRecord | null>;
-  heartbeatContentProposalJob(input: {
-    jobId: string;
-    workerId: string;
-    leaseToken: string;
-    leaseSeconds: number;
+    stage: ContentProposalClaimStage;
+    attemptId: string;
   }): Promise<boolean>;
-  completeContentProposalJob(input: {
-    jobId: string;
-    workerId: string;
-    leaseToken: string;
-    proposals?: unknown[];
-    proposalSet?: unknown;
-  }): Promise<{ id: string; batchId: string; status: "completed" }>;
-  completeContentProposalResearch(input: {
-    jobId: string;
-    workerId: string;
-    leaseToken: string;
+  completeContentProposalResearch(input: WorkerLeaseIdentity & {
+    researchAttemptId: string;
     evidence: ResearchEvidenceSnapshotV1;
-  }): Promise<ProposalInputSnapshotV2>;
-  failContentProposalJob(input: {
+  }): Promise<{
     jobId: string;
-    workerId: string;
-    leaseToken: string;
+    batchId: string;
+    status: "queued";
+    compositionId: string;
+    composedInput: ProposalInputSnapshotV2;
+    evidenceSetSha256: string;
+    composedInputSha256: string;
+    finalInvocationAggregateSha256: string;
+  }>;
+  startContentProposalInvocation(input: WorkerLeaseIdentity & {
+    modelAttemptId: string;
+    invocationOrdinal: 1 | 2;
+  }): Promise<{ eventSha256: string }>;
+  recordContentProposalInvocationTerminal(input: WorkerLeaseIdentity & {
+    modelAttemptId: string;
+    invocationOrdinal: 1 | 2;
+    eventType: "invocation_completed" | "invocation_failed" | "invocation_indeterminate";
+    transcriptSha256: string | null;
+    outputSha256: string | null;
+    parserSha256: string | null;
+    parserValid: boolean | null;
+  }): Promise<{
+    eventSha256: string;
+    status: "processing" | "queued" | "failed" | "manual_review_required";
+  }>;
+  completeContentProposalJob(input: WorkerLeaseIdentity & {
+    modelAttemptId: string;
+    invocationOrdinal: 1 | 2;
+    transcriptSha256: string;
+    outputSha256: string;
+    parserSha256: string;
+    proposalSet: unknown;
+  }): Promise<{
+    jobId: string;
+    batchId: string;
+    status: "completed";
+    invocationEventSha256: string;
+    attemptEventSha256: string;
+  }>;
+  failContentProposalJob(input: WorkerLeaseIdentity & {
+    stage: ContentProposalClaimStage;
+    attemptId: string;
     errorCode: string;
     errorMessage: string;
     retryable: boolean;
   }): Promise<{ id: string; batchId: string; status: "queued" | "failed" }>;
 }
 
-function iso(value: unknown): string | null {
-  if (!(value instanceof Date) && typeof value !== "string") return null;
-  return new Date(value).toISOString();
+function object(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
 }
 
-function mapJob(row: Record<string, unknown>): ContentProposalJobRecord {
-  const inputSnapshot = isObject(row.input_snapshot_json) ? row.input_snapshot_json : null;
-  const evidence = isObject(row.evidence_json) ? validateResearchEvidence(row.evidence_json) : null;
-  const composed = inputSnapshot?.contractVersion === "proposal-base-input.v2" && evidence
-    ? composeProposalInput(inputSnapshot, evidence)
-    : inputSnapshot;
+function iso(value: unknown): string {
+  if (!(value instanceof Date) && typeof value !== "string") throw new Error("content_proposal_job_invalid");
+  const result = new Date(value).toISOString();
+  if (result === "Invalid Date") throw new Error("content_proposal_job_invalid");
+  return result;
+}
+
+function contractFromRow(row: Record<string, unknown>): ContentProposalJobContractRecord {
   return {
-    id: String(row.id),
-    workspaceId: String(row.workspace_id),
-    brandId: String(row.brand_id),
-    batchId: String(row.batch_id),
-    status: row.status as ContentProposalJobRecord["status"],
-    request: row.request_json as Record<string, unknown>,
-    sourceSnapshots: Array.isArray(row.source_snapshot_json)
-      ? row.source_snapshot_json as Record<string, unknown>[]
-      : [],
-    attemptCount: Number(row.attempt_count),
-    maxAttempts: Number(row.max_attempts),
-    workerId: row.lease_owner ? String(row.lease_owner) : null,
-    leaseToken: row.lease_token ? String(row.lease_token) : null,
-    leaseExpiresAt: iso(row.lease_expires_at),
-    availableAt: iso(row.available_at) ?? "",
-    ...(composed ? { inputSnapshot: composed } : {}),
-    ...(evidence ? { researchEvidence: evidence } : {}),
+    id: String(row.contract_id),
+    requestContractVersion: String(row.request_contract_version),
+    baseInputContractVersion: String(row.base_input_contract_version),
+    researchContractVersion: String(row.research_contract_version),
+    proposalContractVersion: String(row.proposal_contract_version),
+    proposalPromptVersion: String(row.proposal_prompt_version),
+    proposalOutputSchemaSha256: String(row.proposal_output_schema_sha256),
+    modelId: String(row.proposal_model_id),
+    commandDescriptorSha256: String(row.command_descriptor_sha256),
+    requestSha256: String(row.request_sha256),
+    baseInputSha256: String(row.base_input_sha256),
+    contractSourceSha256: String(row.contract_source_sha256),
+    catalogSha256: String(row.catalog_sha256),
+    enqueueContractSha256: String(row.enqueue_contract_sha256),
   };
 }
 
-function isObject(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+function frozenBaseInput(row: Record<string, unknown>): ProposalBaseInputSnapshotV2 {
+  const envelope = object(row.input_snapshot_json);
+  if (Object.keys(envelope).sort().join("\0") !== ["baseInput", "replayFingerprint", "resumeInput"].sort().join("\0")) {
+    throw new Error("content_proposal_input_envelope_invalid");
+  }
+  return parseProposalBaseInputSnapshotV2(envelope.baseInput);
 }
 
-function evidenceItemHash(item: ResearchEvidenceSnapshotV1["items"][number]): string {
-  return createHash("sha256").update(JSON.stringify({
-    title: item.title,
-    url: item.url,
-    publisher: item.publisher,
-    publishedAt: item.publishedAt,
-    claimSummary: item.claimSummary,
-  })).digest("hex");
+function validatedClaimBoundary(row: Record<string, unknown>): {
+  request: ContentProposalRequestV2;
+  baseInput: ProposalBaseInputSnapshotV2;
+  contract: ContentProposalJobContractRecord;
+} {
+  const request = parseContentProposalRequestV2(row.request_json);
+  const baseInput = frozenBaseInput(row);
+  const contract = contractFromRow(row);
+  if (proposalSha256(request) !== contract.requestSha256
+    || proposalSha256(baseInput) !== contract.baseInputSha256
+    || request.contractVersion !== contract.requestContractVersion
+    || baseInput.contractVersion !== contract.baseInputContractVersion
+    || request.purpose !== baseInput.outputSettings.purpose
+    || request.outputFormat !== baseInput.outputSettings.outputFormat
+    || request.channelTargets[0] !== baseInput.outputSettings.channelTargets[0]
+    || row.purpose !== request.purpose) {
+    throw new Error("content_proposal_claim_contract_mismatch");
+  }
+  return { request, baseInput, contract };
 }
 
 function validateResearchEvidence(value: unknown): ResearchEvidenceSnapshotV1 {
-  let parsed: ResearchEvidenceSnapshotV1;
-  try {
-    parsed = parseResearchEvidenceSnapshotV1(value);
-  } catch {
-    throw new Error("content_proposal_research_invalid");
-  }
-  if (parsed.queries.length > 4 || parsed.items.some((item) => {
+  let evidence: ResearchEvidenceSnapshotV1;
+  try { evidence = parseResearchEvidenceSnapshotV1(value); }
+  catch { throw new Error("content_proposal_research_invalid"); }
+  if (evidence.queries.length > 4 || evidence.items.some((item) => {
     try {
-      return new URL(item.url).protocol !== "https:" || evidenceItemHash(item) !== item.contentHash;
+      if (new URL(item.url).protocol !== "https:") return true;
     } catch {
       return true;
     }
-  })) {
-    throw new Error("content_proposal_research_invalid");
-  }
-  return parsed;
+    const observedFields = {
+      title: item.title,
+      url: item.url,
+      publisher: item.publisher,
+      publishedAt: item.publishedAt,
+      claimSummary: item.claimSummary,
+    };
+    const expectedHash = createHash("sha256")
+      .update(JSON.stringify(observedFields))
+      .digest("hex");
+    return item.contentHash !== expectedHash;
+  })) throw new Error("content_proposal_research_invalid");
+  return evidence;
 }
 
 function composeProposalInput(
-  base: Record<string, unknown>,
+  base: ProposalBaseInputSnapshotV2,
   evidence: ResearchEvidenceSnapshotV1,
 ): ProposalInputSnapshotV2 {
-  try {
-    const { contractVersion: _contractVersion, ...fields } = base;
-    return parseProposalInputSnapshotV2({
-      ...fields,
-      contractVersion: "proposal-input.v2",
-      researchEvidence: evidence,
-    });
-  } catch (error) {
-    if (error instanceof Error && error.message.startsWith("content_proposal_")) throw error;
-    throw new Error("content_proposal_research_invalid");
-  }
+  const { contractVersion: _contractVersion, ...fields } = base;
+  return parseProposalInputSnapshotV2({
+    ...fields,
+    contractVersion: "proposal-input.v2",
+    researchEvidence: evidence,
+  });
 }
 
-function nonEmptyText(value: unknown): boolean {
-  return typeof value === "string" && value.trim().length > 0;
-}
-
-const contentFamilies = ["informational", "marketing"] as const;
-const messageStrategies = [
-  "problem_solution", "how_to", "comparison", "faq", "insight",
-  "benefit", "social_proof", "brand_story", "cta",
-] as const;
-const outputFormats = ["card_news", "blog", "single_image", "channel_text"] as const;
-const channelTargets = [
-  "instagram", "threads", "x", "linkedin", "youtube", "tiktok", "blog_export",
-] as const;
-const proposalKeys = [
-  "contractVersion", "title", "reasonToCreateNow", "contentFamily", "topic",
-  "target", "messageStrategy", "hook", "keyMessage", "evidence", "outline",
-  "outputFormat", "channelTargets", "recommendedReferenceQuery",
-].sort();
-
-function hasExactKeys(value: Record<string, unknown>, keys: string[]): boolean {
-  return Object.keys(value).sort().join("\0") === [...keys].sort().join("\0");
-}
-
-function isUniqueStringArray(value: unknown, allowed?: readonly string[]): value is string[] {
-  return Array.isArray(value)
-    && value.every((item) => nonEmptyText(item) && (!allowed || allowed.includes(String(item))))
-    && new Set(value).size === value.length;
-}
-
-export function parseContentProposalResult(value: unknown[]): ContentProposalV1[] {
-  if (!Array.isArray(value) || value.length < 2 || value.length > 3) {
-    throw new Error("content_proposal_result_invalid");
-  }
-  for (const proposal of value) {
-    if (!isObject(proposal)
-      || !hasExactKeys(proposal, proposalKeys)
-      || proposal.contractVersion !== "content-proposal.v1"
-      || !nonEmptyText(proposal.title)
-      || !nonEmptyText(proposal.reasonToCreateNow)
-      || !contentFamilies.includes(proposal.contentFamily as typeof contentFamilies[number])
-      || !nonEmptyText(proposal.topic)
-      || !isObject(proposal.target)
-      || !messageStrategies.includes(proposal.messageStrategy as typeof messageStrategies[number])
-      || !nonEmptyText(proposal.hook)
-      || !nonEmptyText(proposal.keyMessage)
-      || !Array.isArray(proposal.evidence)
-      || proposal.evidence.some((evidence) => !isObject(evidence)
-        || !hasExactKeys(evidence, ["sourceSnapshotId", "summary"])
-        || !nonEmptyText(evidence.sourceSnapshotId)
-        || !nonEmptyText(evidence.summary))
-      || !Array.isArray(proposal.outline)
-      || proposal.outline.length === 0
-      || proposal.outline.some((item) => !isObject(item)
-        || !hasExactKeys(item, ["heading", "purpose"])
-        || !nonEmptyText(item.heading)
-        || !nonEmptyText(item.purpose))
-      || !outputFormats.includes(proposal.outputFormat as typeof outputFormats[number])
-      || !isUniqueStringArray(proposal.channelTargets, channelTargets)
-      || proposal.channelTargets.length === 0
-      || !isObject(proposal.recommendedReferenceQuery)
-      || !hasExactKeys(proposal.recommendedReferenceQuery, ["strategies", "formats", "tags"])
-      || !isUniqueStringArray(proposal.recommendedReferenceQuery.strategies, messageStrategies)
-      || !isUniqueStringArray(proposal.recommendedReferenceQuery.formats, outputFormats)
-      || !isUniqueStringArray(proposal.recommendedReferenceQuery.tags)) {
-      throw new Error("content_proposal_result_invalid");
-    }
-  }
-  return value as ContentProposalV1[];
-}
-
-function parseContentProposalSetResult(
-  value: unknown,
-  errorCode: "content_proposal_result_invalid" | "content_proposal_completion_conflict",
-): ContentProposalSetV2 {
-  try {
-    return parseContentProposalSetV2(value);
-  } catch {
-    throw new Error(errorCode);
-  }
-}
-
-type ContentProposalRequestContract = "v1" | "v2" | "invalid";
-
-function classifyContentProposalRequest(value: unknown): ContentProposalRequestContract {
-  if (!isObject(value)) return "invalid";
-  if (value.contractVersion === "content-proposal-request.v1") return "v1";
-  if (value.contractVersion === "content-proposal-request.v2") return "v2";
-  return "invalid";
-}
-
-type DeferredParse<T> =
-  | { status: "absent" }
-  | { status: "valid"; value: T }
-  | { status: "invalid" };
-
-function deferParse<T>(value: unknown, parser: (input: unknown) => T): DeferredParse<T> {
-  if (value === undefined) return { status: "absent" };
-  try {
-    return { status: "valid", value: parser(value) };
-  } catch {
-    return { status: "invalid" };
-  }
-}
-
-function assertProposalsMatchBatch(
-  proposals: ContentProposalV1[],
-  job: Record<string, unknown>,
-): void {
-  const request = isObject(job.request_json) ? job.request_json : {};
-  const requestedFormats = new Set(Array.isArray(request.outputFormats) ? request.outputFormats : []);
-  const requestedChannels = new Set(Array.isArray(request.channelTargets) ? request.channelTargets : []);
-  const requestedSourceIds = new Set(Array.isArray(request.sourceSnapshotIds) ? request.sourceSnapshotIds : []);
-  const frozenSourceIds = new Set(
-    Array.isArray(job.source_snapshot_json)
-      ? job.source_snapshot_json.flatMap((snapshot) => {
-          const sourceId = isObject(snapshot) ? snapshot.sourceId : null;
-          return nonEmptyText(sourceId) ? [sourceId as string] : [];
-        })
-      : [],
-  );
-  const family = String(job.content_family ?? "");
-  if (request.contentFamily !== family
-    || [...requestedSourceIds].some((id) => !frozenSourceIds.has(id))
-    || proposals.some((proposal) => proposal.contentFamily !== family
-      || !requestedFormats.has(proposal.outputFormat)
-      || proposal.channelTargets.some((channel) => !requestedChannels.has(channel))
-      || proposal.evidence.some((evidence) => !requestedSourceIds.has(evidence.sourceSnapshotId)
-        || !frozenSourceIds.has(evidence.sourceSnapshotId)))) {
-    throw new Error("content_proposal_batch_mismatch");
-  }
-}
-
-function assertProposalSetMatchesBatch(
+function assertProposalSetMatchesClaim(
   proposalSet: ContentProposalSetV2,
-  snapshot: ProposalInputSnapshotV2,
-  request: Record<string, unknown>,
-  contentFamily: unknown,
+  input: ProposalInputSnapshotV2,
+  request: ContentProposalRequestV2,
+  purpose: unknown,
 ): void {
-  const settings = snapshot.outputSettings;
-  if (contentFamily !== settings.purpose
+  const settings = input.outputSettings;
+  if (purpose !== settings.purpose
     || request.purpose !== settings.purpose
     || request.outputFormat !== settings.outputFormat
-    || !Array.isArray(request.channelTargets)
-    || request.channelTargets.length !== 1
     || request.channelTargets[0] !== settings.channelTargets[0]) {
     throw new Error("content_proposal_batch_mismatch");
   }
-  const evidenceIds = new Set(snapshot.researchEvidence.items.map((item) => item.id));
-  const referenceIds = new Set(snapshot.references.map((reference) => reference.referenceItemId));
+  const evidenceIds = new Set(input.researchEvidence.items.map((item) => item.id));
+  const referenceIds = new Set(input.references.map((reference) => reference.referenceItemId));
   for (const proposal of proposalSet.proposals) {
     if (proposal.outputFormat !== settings.outputFormat
       || proposal.channelTargets.length !== 1
@@ -304,12 +262,225 @@ function assertProposalSetMatchesBatch(
       || proposal.evidenceIds.some((id) => !evidenceIds.has(id))
       || proposal.referenceIds.some((id) => !referenceIds.has(id))
       || (settings.purpose === "marketing"
-        && (snapshot.product === null
+        && (input.product === null
           || proposal.purposeDetails.kind !== "marketing"
-          || proposal.purposeDetails.productId !== snapshot.product.id))
+          || proposal.purposeDetails.productId !== input.product.id))
       || (settings.purpose === "informational"
-        && (snapshot.product !== null || proposal.purposeDetails.kind !== "informational"))) {
+        && (input.product !== null || proposal.purposeDetails.kind !== "informational"))) {
       throw new Error("content_proposal_batch_mismatch");
+    }
+  }
+}
+
+function contentProposalRepositoryError(error: unknown): unknown {
+  const message = error instanceof Error ? error.message : String(error);
+  if (/^proposal_(?:research|model).*lease_mismatch$/.test(message)) {
+    return new Error("content_proposal_job_lease_invalid");
+  }
+  if (message === "proposal_invocation_already_started") {
+    return new Error("content_proposal_invocation_already_started");
+  }
+  if (message.endsWith("_replay_conflict")) {
+    return new Error("content_proposal_event_replay_conflict");
+  }
+  return error;
+}
+
+async function transaction<T>(pool: Pool, work: (client: PoolClient) => Promise<T>): Promise<T> {
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const result = await work(client);
+    await client.query("COMMIT");
+    return result;
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw contentProposalRepositoryError(error);
+  } finally {
+    client.release();
+  }
+}
+
+const claimColumns = `
+  job.*,batch.purpose,batch.request_json,batch.input_snapshot_json,
+  contract.id contract_id,contract.request_contract_version,contract.base_input_contract_version,
+  contract.research_contract_version,contract.proposal_contract_version,
+  contract.proposal_prompt_version,contract.proposal_output_schema_sha256,
+  contract.proposal_model_id,contract.command_descriptor_sha256,contract.request_sha256,
+  contract.base_input_sha256,contract.contract_source_sha256,contract.catalog_sha256,
+  contract.enqueue_contract_sha256,
+  composition.id composition_id,composition.research_evidence_set_sha256,
+  composition.composed_input_json,composition.composed_input_sha256,
+  composition.final_invocation_aggregate_sha256`;
+
+type ContentProposalAttemptTable =
+  | "ai_content_proposal_research_attempts"
+  | "ai_content_proposal_model_attempts";
+
+async function lockContentProposalAttemptContext(
+  client: PoolClient,
+  input: {
+    attemptTable: ContentProposalAttemptTable;
+    attemptId: string;
+    jobId?: string;
+  },
+): Promise<{ jobId: string; batchId: string } | null> {
+  const attempt = await client.query(
+    `select attempt.id,attempt.job_id
+       from ${input.attemptTable} attempt
+      where attempt.id=$1${input.jobId ? " and attempt.job_id=$2" : ""}
+      for update`,
+    input.jobId ? [input.attemptId, input.jobId] : [input.attemptId],
+  );
+  const attemptRow = attempt.rows[0] as Record<string, unknown> | undefined;
+  if (!attemptRow) return null;
+  const jobId = String(attemptRow.job_id);
+  await client.query(
+    "select pg_advisory_xact_lock(hashtextextended($1::text,0))",
+    [jobId],
+  );
+  const job = await client.query(
+    `select id,batch_id,workspace_id,brand_id
+       from ai_content_proposal_jobs
+      where id=$1
+      for update`,
+    [jobId],
+  );
+  const jobRow = job.rows[0] as Record<string, unknown> | undefined;
+  if (!jobRow) return null;
+  const batchId = String(jobRow.batch_id);
+  const batch = await client.query(
+    `select id
+       from ai_content_proposal_batches
+      where id=$1 and workspace_id=$2 and brand_id=$3
+      for update`,
+    [batchId, jobRow.workspace_id, jobRow.brand_id],
+  );
+  if (!batch.rowCount) return null;
+  return { jobId, batchId };
+}
+
+async function reclaimExpiredResearchAttempts(client: PoolClient): Promise<void> {
+  const candidates = await client.query(
+    `select attempt.id
+       from ai_content_proposal_research_attempts attempt
+       join ai_content_proposal_jobs job on job.id=attempt.job_id
+      where job.status='processing' and job.active_stage='research'
+        and job.lease_expires_at<=clock_timestamp()
+        and attempt.worker_id=job.lease_owner
+        and attempt.lease_token_sha256=encode(digest(job.lease_token::text,'sha256'),'hex')
+        and exists(
+          select 1 from ai_content_proposal_research_attempt_events event
+           where event.research_attempt_id=attempt.id and event.event_type='research_started'
+        )
+        and not exists(
+          select 1 from ai_content_proposal_research_attempt_events event
+           where event.research_attempt_id=attempt.id and event.event_type<>'research_started'
+        )
+      order by job.lease_expires_at,attempt.id`,
+  );
+  for (const candidate of candidates.rows) {
+    const locked = await lockContentProposalAttemptContext(client, {
+      attemptTable: "ai_content_proposal_research_attempts",
+      attemptId: String(candidate.id),
+    });
+    if (!locked) continue;
+    const current = await client.query(
+      `select job.lease_token,job.max_attempts,attempt.attempt_number
+         from ai_content_proposal_research_attempts attempt
+         join ai_content_proposal_jobs job on job.id=attempt.job_id
+        where attempt.id=$1 and job.status='processing' and job.active_stage='research'
+          and job.lease_expires_at<=clock_timestamp()
+          and attempt.worker_id=job.lease_owner
+          and attempt.lease_token_sha256=encode(digest(job.lease_token::text,'sha256'),'hex')
+          and exists(
+            select 1 from ai_content_proposal_research_attempt_events event
+             where event.research_attempt_id=attempt.id and event.event_type='research_started'
+          )
+          and not exists(
+            select 1 from ai_content_proposal_research_attempt_events event
+             where event.research_attempt_id=attempt.id and event.event_type<>'research_started'
+          )`,
+      [candidate.id],
+    );
+    const row = current.rows[0];
+    if (!row) continue;
+    const failure = canonicalProposalJson({
+      errorCode: "research_lease_expired",
+      errorMessage: "research lease expired before evidence commit",
+      retryable: Number(row.attempt_number) < Number(row.max_attempts),
+    });
+    await client.query(
+      `select append_ai_content_proposal_research_attempt_event(
+         $1,$2,2,'attempt_failed',null,$3::jsonb,
+         encode(digest(($3::jsonb)::text,'sha256'),'hex'),null) event_sha256`,
+      [candidate.id, row.lease_token, failure],
+    );
+  }
+}
+
+async function reclaimExpiredModelAttempts(client: PoolClient): Promise<void> {
+  const candidates = await client.query(
+    `select attempt.id
+       from ai_content_proposal_model_attempts attempt
+       join ai_content_proposal_jobs job on job.id=attempt.job_id
+      where job.status='processing' and job.active_stage='model'
+        and job.lease_expires_at<=clock_timestamp()
+        and attempt.worker_id=job.lease_owner
+        and attempt.lease_token_sha256=encode(digest(job.lease_token::text,'sha256'),'hex')
+      order by job.lease_expires_at,attempt.id`,
+  );
+  for (const candidate of candidates.rows) {
+    const locked = await lockContentProposalAttemptContext(client, {
+      attemptTable: "ai_content_proposal_model_attempts",
+      attemptId: String(candidate.id),
+    });
+    if (!locked) continue;
+    const current = await client.query(
+      `select job.id job_id,job.lease_token,job.max_attempts,
+              attempt.id attempt_id,attempt.attempt_number,attempt.worker_id,
+              previous.event_sequence,previous.event_type,previous.invocation_ordinal,
+              previous.transcript_sha256,previous.output_sha256,
+              previous.parser_sha256,previous.parser_valid
+         from ai_content_proposal_model_attempts attempt
+         join ai_content_proposal_jobs job on job.id=attempt.job_id
+         left join lateral (
+           select event.* from ai_content_proposal_attempt_events event
+            where event.model_attempt_id=attempt.id
+            order by event.event_sequence desc limit 1
+         ) previous on true
+        where attempt.id=$1 and job.status='processing' and job.active_stage='model'
+          and job.lease_expires_at<=clock_timestamp()
+          and attempt.worker_id=job.lease_owner
+          and attempt.lease_token_sha256=encode(digest(job.lease_token::text,'sha256'),'hex')`,
+      [candidate.id],
+    );
+    const row = current.rows[0];
+    if (!row) continue;
+    if (row.event_sequence == null) {
+      await client.query(
+        `select append_ai_content_proposal_attempt_event(
+           attempt.id,$2,1,0,'pre_invocation_failed',attempt.aggregate_contract_sha256,
+           attempt.model_sha256,attempt.command_descriptor_sha256,attempt.composed_input_sha256,
+           'model_lease_expired','model lease expired before invocation start',null,$3) event_sha256
+           from ai_content_proposal_model_attempts attempt where attempt.id=$1`,
+        [candidate.id, row.lease_token, Number(row.attempt_number) < Number(row.max_attempts)],
+      );
+      continue;
+    }
+    if (row.event_type === "invocation_completed" && row.parser_valid === false) {
+      await client.query(
+        `select append_ai_content_proposal_attempt_event(
+           attempt.id,$2,$3,$4,'attempt_failed',attempt.aggregate_contract_sha256,
+           attempt.model_sha256,attempt.command_descriptor_sha256,attempt.composed_input_sha256,
+           $5,$6,$7,false) event_sha256
+           from ai_content_proposal_model_attempts attempt where attempt.id=$1`,
+        [
+          candidate.id, row.lease_token, Number(row.event_sequence) + 1,
+          Number(row.invocation_ordinal), row.transcript_sha256,
+          row.output_sha256, row.parser_sha256,
+        ],
+      );
     }
   }
 }
@@ -317,379 +488,567 @@ function assertProposalSetMatchesBatch(
 export function createContentProposalJobsRepository(pool: Pool): ContentProposalJobsRepository {
   return {
     async claimContentProposalJob(input) {
-      const client = await pool.connect();
-      try {
-        await client.query("BEGIN");
-        await client.query(
-          `with exhausted as (
-             update ai_content_proposal_jobs
-                set status='failed', error_code='content_proposal_attempts_exhausted',
-                    error_message='proposal job attempts exhausted', completed_at=now(),
-                    lease_owner=null, lease_token=null, lease_started_at=null, lease_expires_at=null,
-                    updated_at=now()
-              where status in ('queued','processing')
-                and attempt_count >= max_attempts
-                and (status='queued' or lease_expires_at <= clock_timestamp())
-              returning batch_id,workspace_id,brand_id
-           )
-           update ai_content_proposal_batches batch
-              set status='failed',error_code='content_proposal_attempts_exhausted',
-                  error_message='proposal job attempts exhausted',updated_at=now()
-             from exhausted
-            where batch.id=exhausted.batch_id
-              and batch.workspace_id=exhausted.workspace_id
-              and batch.brand_id=exhausted.brand_id`,
-        );
-        await client.query(
+      return transaction(pool, async (client) => {
+        await reclaimExpiredResearchAttempts(client);
+        await reclaimExpiredModelAttempts(client);
+        const expired = await client.query(
           `update ai_content_proposal_jobs
-              set status='queued',available_at=clock_timestamp(),
+              set status='queued',active_stage=null,available_at=clock_timestamp(),
                   lease_owner=null,lease_token=null,lease_started_at=null,lease_expires_at=null,
                   updated_at=now()
-            where status='processing'
-              and attempt_count < max_attempts
-              and lease_expires_at <= clock_timestamp()`,
+            where status='processing' and lease_expires_at<=clock_timestamp()
+            returning id,batch_id,status,error_code,error_message`,
         );
-        const selected = await client.query(
-          `select job.id
-             from ai_content_proposal_jobs job
-            where job.status='queued' and job.available_at <= clock_timestamp()
-              and job.attempt_count < job.max_attempts
-            order by job.available_at, job.created_at, job.id
-            for update skip locked
-            limit 1`,
-        );
-        if (!selected.rowCount) {
-          await client.query("COMMIT");
-          return null;
-        }
-        const leaseToken = randomUUID();
-        const claimed = await client.query(
-          `update ai_content_proposal_jobs job
-              set status = 'processing',
-                  attempt_count = attempt_count + 1,
-                  lease_owner = $2,
-                  lease_token = $3,
-                  lease_started_at = clock_timestamp(),
-                  lease_expires_at = clock_timestamp()
-                    + (least($4::integer, 900)::text || ' seconds')::interval,
-                  updated_at = now()
-             from ai_content_proposal_batches batch
-            where job.id = $1
-              and batch.id = job.batch_id
-              and batch.workspace_id = job.workspace_id
-              and batch.brand_id = job.brand_id
-            returning job.*, batch.request_json, batch.source_snapshot_json,
-                      batch.input_snapshot_json,
-                      (select research.evidence_json
-                         from ai_content_proposal_research_snapshots research
-                        where research.batch_id=batch.id
-                          and research.workspace_id=batch.workspace_id
-                          and research.brand_id=batch.brand_id) evidence_json`,
-          [selected.rows[0]?.id, input.workerId, leaseToken, input.leaseSeconds],
-        );
-        if (claimed.rowCount) {
+        const terminalExpired = expired.rows.filter((row) => row.status === "manual_review_required");
+        for (const row of terminalExpired) {
           await client.query(
-            `update ai_content_proposal_batches batch
-                set status='building',error_code=null,error_message=null,updated_at=now()
-               from ai_content_proposal_jobs job
-              where job.id=$1 and batch.id=job.batch_id
-                and batch.workspace_id=job.workspace_id and batch.brand_id=job.brand_id`,
-            [selected.rows[0]?.id],
+            `update ai_content_proposal_batches
+                set status='failed',error_code=$2,error_message=$3,updated_at=now()
+              where id=$1`,
+            [row.batch_id, row.error_code, row.error_message],
           );
         }
-        await client.query("COMMIT");
-        return claimed.rowCount ? mapJob(claimed.rows[0]) : null;
-      } catch (error) {
-        await client.query("ROLLBACK");
-        throw error;
-      } finally {
-        client.release();
-      }
+
+        const selected = await client.query(
+          `select ${claimColumns}
+             from ai_content_proposal_jobs job
+             join ai_content_proposal_batches batch
+               on batch.id=job.batch_id and batch.workspace_id=job.workspace_id and batch.brand_id=job.brand_id
+             join ai_content_proposal_job_contracts contract
+               on contract.job_id=job.id and contract.batch_id=job.batch_id
+              and contract.workspace_id=job.workspace_id and contract.brand_id=job.brand_id
+             left join ai_content_proposal_compositions composition
+               on composition.job_id=job.id and composition.batch_id=job.batch_id
+              and composition.workspace_id=job.workspace_id and composition.brand_id=job.brand_id
+            where job.status='queued' and job.available_at<=clock_timestamp()
+              and (composition.id is null or job.attempt_count<job.max_attempts)
+            order by job.available_at,job.created_at,job.id
+            for update of job,batch skip locked limit 1`,
+        );
+        if (!selected.rowCount) return null;
+        const initial = selected.rows[0] as Record<string, unknown>;
+        const boundary = validatedClaimBoundary(initial);
+        const stage: ContentProposalClaimStage = initial.composition_id
+          ? "composition_ready"
+          : "research_required";
+        const activeStage = stage === "composition_ready" ? "model" : "research";
+        const leaseToken = randomUUID();
+        const claimed = await client.query(
+          `update ai_content_proposal_jobs
+              set status='processing',active_stage=$2,
+                  attempt_count=attempt_count+case when $2='model' then 1 else 0 end,
+                  lease_owner=$3,lease_token=$4,lease_started_at=clock_timestamp(),
+                  lease_expires_at=clock_timestamp()+(least($5::integer,300)::text||' seconds')::interval,
+                  updated_at=now()
+            where id=$1
+            returning *`,
+          [initial.id, activeStage, input.workerId, leaseToken, input.leaseSeconds],
+        );
+        const job = claimed.rows[0] as Record<string, unknown>;
+        await client.query(
+          `update ai_content_proposal_batches set status='building',error_code=null,error_message=null,updated_at=now()
+            where id=$1 and workspace_id=$2 and brand_id=$3`,
+          [job.batch_id, job.workspace_id, job.brand_id],
+        );
+        const common = {
+          id: String(job.id), workspaceId: String(job.workspace_id), brandId: String(job.brand_id),
+          batchId: String(job.batch_id), status: "processing" as const, stage,
+          attemptCount: Number(job.attempt_count), maxAttempts: Number(job.max_attempts),
+          workerId: String(job.lease_owner), leaseToken: String(job.lease_token),
+          leaseExpiresAt: iso(job.lease_expires_at), availableAt: iso(job.available_at),
+          request: boundary.request, contract: boundary.contract,
+        };
+
+        if (stage === "research_required") {
+          const attempt = await client.query(
+            `insert into ai_content_proposal_research_attempts(
+               job_id,contract_id,workspace_id,brand_id,attempt_number,worker_id,
+               lease_token_sha256,enqueue_contract_sha256,base_input_sha256,claimed_at,lease_expires_at
+             ) select job.id,$2,job.workspace_id,job.brand_id,
+                    coalesce((select max(prior.attempt_number) from ai_content_proposal_research_attempts prior where prior.job_id=job.id),0)+1,
+                    job.lease_owner,encode(digest(job.lease_token::text,'sha256'),'hex'),$3,$4,
+                    job.lease_started_at,job.lease_expires_at
+                 from ai_content_proposal_jobs job where job.id=$1
+             returning id,attempt_number`,
+            [job.id, boundary.contract.id, boundary.contract.enqueueContractSha256, boundary.contract.baseInputSha256],
+          );
+          const row = attempt.rows[0] as Record<string, unknown>;
+          await client.query(
+            `select append_ai_content_proposal_research_attempt_event(
+               $1,$2,1,'research_started',null,null,null,null)`,
+            [row.id, leaseToken],
+          );
+          return {
+            ...common, stage: "research_required", researchAttemptId: String(row.id),
+            researchAttemptNumber: Number(row.attempt_number), baseInput: boundary.baseInput,
+          };
+        }
+
+        const composedInput = parseProposalInputSnapshotV2(initial.composed_input_json);
+        const modelSha256 = proposalSha256({ modelId: boundary.contract.modelId });
+        const attempt = await client.query(
+          `insert into ai_content_proposal_model_attempts(
+             job_id,contract_id,composition_id,workspace_id,brand_id,attempt_number,
+             worker_id,lease_token_sha256,aggregate_contract_sha256,model_id,model_sha256,
+             command_descriptor_sha256,proposal_output_schema_sha256,composed_input_sha256,claimed_at
+           ) select job.id,$2,$3,job.workspace_id,job.brand_id,
+                    coalesce((select max(prior.attempt_number) from ai_content_proposal_model_attempts prior where prior.job_id=job.id),0)+1,
+                    job.lease_owner,encode(digest(job.lease_token::text,'sha256'),'hex'),$4,$5,$6,$7,$8,$9,
+                    job.lease_started_at
+               from ai_content_proposal_jobs job where job.id=$1
+           returning id,attempt_number`,
+          [
+            job.id, boundary.contract.id, initial.composition_id,
+            initial.final_invocation_aggregate_sha256, boundary.contract.modelId, modelSha256,
+            boundary.contract.commandDescriptorSha256, boundary.contract.proposalOutputSchemaSha256,
+            initial.composed_input_sha256,
+          ],
+        );
+        const row = attempt.rows[0] as Record<string, unknown>;
+        return {
+          ...common, stage: "composition_ready", modelAttemptId: String(row.id),
+          modelAttemptNumber: Number(row.attempt_number), compositionId: String(initial.composition_id),
+          composedInput, evidenceSetSha256: String(initial.research_evidence_set_sha256),
+          composedInputSha256: String(initial.composed_input_sha256),
+          finalInvocationAggregateSha256: String(initial.final_invocation_aggregate_sha256),
+          modelSha256,
+        };
+      });
     },
 
     async heartbeatContentProposalJob(input) {
+      const activeStage = input.stage === "research_required" ? "research" : "model";
+      const attemptTable = input.stage === "research_required"
+        ? "ai_content_proposal_research_attempts"
+        : "ai_content_proposal_model_attempts";
       const result = await pool.query(
-        `update ai_content_proposal_jobs
-            set (lease_expires_at, updated_at) = (
-                  select heartbeat.at
-                           + (least($4::integer, 900)::text || ' seconds')::interval,
-                         heartbeat.at
-                    from (select clock_timestamp() at) heartbeat
-                )
-          where id=$1 and status='processing' and lease_owner=$2 and lease_token=$3
-            and lease_expires_at > clock_timestamp()
-          returning id`,
-        [input.jobId, input.workerId, input.leaseToken, input.leaseSeconds],
+        `update ai_content_proposal_jobs job
+            set lease_expires_at=least(
+                  clock_timestamp()+(least($6::integer,300)::text||' seconds')::interval,
+                  job.lease_started_at+interval '15 minutes'
+                ),updated_at=now()
+          where job.id=$1 and job.status='processing' and job.active_stage=$5
+            and job.lease_owner=$2 and job.lease_token=$3 and job.lease_expires_at>clock_timestamp()
+            and exists(select 1 from ${attemptTable} attempt where attempt.id=$4 and attempt.job_id=job.id)
+          returning job.id`,
+        [input.jobId, input.workerId, input.leaseToken, input.attemptId, activeStage, input.leaseSeconds],
       );
       return Boolean(result.rowCount);
     },
 
     async completeContentProposalResearch(input) {
       const evidence = validateResearchEvidence(input.evidence);
-      const client = await pool.connect();
-      try {
-        await client.query("BEGIN");
+      return transaction(pool, async (client) => {
+        const locked = await lockContentProposalAttemptContext(client, {
+          attemptTable: "ai_content_proposal_research_attempts",
+          attemptId: input.researchAttemptId,
+          jobId: input.jobId,
+        });
+        if (!locked) throw new Error("content_proposal_job_not_found");
         const result = await client.query(
-          `select job.*,batch.content_family,batch.request_json,batch.source_snapshot_json,
-                  batch.input_snapshot_json,research.evidence_json,
-                  job.lease_expires_at <= clock_timestamp() as lease_expired
+          `select ${claimColumns},attempt.id research_attempt_id,attempt.attempt_number,
+                  attempt.worker_id research_worker_id,
+                  attempt.lease_token_sha256=encode(digest($3::uuid::text,'sha256'),'hex') token_matches,
+                  research.evidence_json
              from ai_content_proposal_jobs job
              join ai_content_proposal_batches batch
-               on batch.id=job.batch_id and batch.workspace_id=job.workspace_id
-              and batch.brand_id=job.brand_id
-             left join ai_content_proposal_research_snapshots research
-               on research.batch_id=batch.id and research.workspace_id=batch.workspace_id
-              and research.brand_id=batch.brand_id
-            where job.id=$1
-            for update of job,batch`,
-          [input.jobId],
+               on batch.id=job.batch_id and batch.workspace_id=job.workspace_id and batch.brand_id=job.brand_id
+             join ai_content_proposal_job_contracts contract on contract.job_id=job.id
+             join ai_content_proposal_research_attempts attempt
+               on attempt.id=$2 and attempt.job_id=job.id
+              left join ai_content_proposal_compositions composition on composition.job_id=job.id
+              left join ai_content_proposal_research_snapshots research on research.batch_id=job.batch_id
+             where job.id=$1`,
+          [input.jobId, input.researchAttemptId, input.leaseToken],
         );
-        const job = result.rows[0] as Record<string, unknown> | undefined;
-        if (!job) throw new Error("content_proposal_job_not_found");
-        if (job.status !== "processing"
-          || job.lease_owner !== input.workerId
-          || String(job.lease_token) !== input.leaseToken
-          || job.lease_expired === true) {
+        const row = result.rows[0] as Record<string, unknown> | undefined;
+        if (!row) throw new Error("content_proposal_job_not_found");
+        const boundary = validatedClaimBoundary(row);
+        if (row.research_worker_id !== input.workerId || row.token_matches !== true) {
           throw new Error("content_proposal_job_lease_invalid");
         }
-        const request = isObject(job.request_json) ? job.request_json : {};
-        const base = isObject(job.input_snapshot_json) ? job.input_snapshot_json : null;
-        if (request.contractVersion !== "content-proposal-request.v2"
-          || base?.contractVersion !== "proposal-base-input.v2") {
-          throw new Error("content_proposal_research_v2_required");
+        if (row.composition_id) {
+          if (!isDeepStrictEqual(row.evidence_json, evidence)) {
+            throw new Error("content_proposal_research_snapshot_conflict");
+          }
+          return {
+            jobId: String(row.id), batchId: String(row.batch_id), status: "queued" as const,
+            compositionId: String(row.composition_id),
+            composedInput: parseProposalInputSnapshotV2(row.composed_input_json),
+            evidenceSetSha256: String(row.research_evidence_set_sha256),
+            composedInputSha256: String(row.composed_input_sha256),
+            finalInvocationAggregateSha256: String(row.final_invocation_aggregate_sha256),
+          };
         }
-        if (job.content_family === "informational"
+        if (row.status !== "processing" || row.active_stage !== "research"
+          || row.lease_owner !== input.workerId || String(row.lease_token) !== input.leaseToken
+          || new Date(String(row.lease_expires_at)).getTime() <= Date.now()) {
+          throw new Error("content_proposal_job_lease_invalid");
+        }
+        if (boundary.request.purpose === "informational"
           && (evidence.decision !== "searched" || evidence.items.length === 0)) {
           throw new Error("content_proposal_research_invalid");
         }
-        const existing = isObject(job.evidence_json)
-          ? validateResearchEvidence(job.evidence_json)
-          : null;
-        if (existing && !isDeepStrictEqual(existing, evidence)) {
-          throw new Error("content_proposal_research_snapshot_conflict");
+        const composedInput = composeProposalInput(boundary.baseInput, evidence);
+        const evidenceSetJson = canonicalProposalJson([evidence]);
+        const composedInputJson = canonicalProposalJson(composedInput);
+        const hashes = await client.query(
+          `select encode(digest(($1::jsonb)::text,'sha256'),'hex') evidence_sha256,
+                  encode(digest(($2::jsonb)::text,'sha256'),'hex') composed_sha256`,
+          [evidenceSetJson, composedInputJson],
+        );
+        const evidenceSetSha256 = String(hashes.rows[0]?.evidence_sha256);
+        const composedInputSha256 = String(hashes.rows[0]?.composed_sha256);
+        const finalInvocationAggregateSha256 = proposalSha256({
+          enqueueContractSha256: boundary.contract.enqueueContractSha256,
+          modelId: boundary.contract.modelId,
+          commandDescriptorSha256: boundary.contract.commandDescriptorSha256,
+          proposalOutputSchemaSha256: boundary.contract.proposalOutputSchemaSha256,
+          evidenceSetSha256,
+          composedInputSha256,
+        });
+        const insertedResearch = await client.query(
+          `insert into ai_content_proposal_research_snapshots(workspace_id,brand_id,batch_id,evidence_json)
+           values($1,$2,$3,$4::jsonb) on conflict(batch_id) do nothing returning id`,
+          [row.workspace_id, row.brand_id, row.batch_id, canonicalProposalJson(evidence)],
+        );
+        if (!insertedResearch.rowCount) {
+          const frozen = await client.query(
+            "select evidence_json from ai_content_proposal_research_snapshots where batch_id=$1",
+            [row.batch_id],
+          );
+          if (!isDeepStrictEqual(frozen.rows[0]?.evidence_json, evidence)) {
+            throw new Error("content_proposal_research_snapshot_conflict");
+          }
         }
-        if (!existing) {
+        const sealed = await client.query(
+          `select sealed.*
+             from public.complete_ai_content_proposal_research(
+               $1,$2,$3::jsonb,$4,$5::jsonb,$6,$7
+             ) sealed`,
+          [
+            input.researchAttemptId, input.leaseToken, evidenceSetJson, evidenceSetSha256,
+            composedInputJson, composedInputSha256, finalInvocationAggregateSha256,
+          ],
+        );
+        const composition = sealed.rows[0] as Record<string, unknown>;
+        return {
+          jobId: String(row.id), batchId: String(row.batch_id), status: "queued" as const,
+          compositionId: String(composition.id), composedInput,
+          evidenceSetSha256, composedInputSha256, finalInvocationAggregateSha256,
+        };
+      });
+    },
+
+    async startContentProposalInvocation(input) {
+      const sequence = input.invocationOrdinal === 1 ? 1 : 3;
+      try {
+        const result = await pool.query(
+          `select append_ai_content_proposal_attempt_event(
+             attempt.id,$3,$4,$5,'invocation_started',attempt.aggregate_contract_sha256,
+             attempt.model_sha256,attempt.command_descriptor_sha256,attempt.composed_input_sha256,
+             null,null,null,null) event_sha256
+             from ai_content_proposal_model_attempts attempt
+            where attempt.id=$2 and attempt.job_id=$1 and attempt.worker_id=$6`,
+          [input.jobId, input.modelAttemptId, input.leaseToken, sequence, input.invocationOrdinal, input.workerId],
+        );
+        if (!result.rowCount) throw new Error("content_proposal_job_not_found");
+        return { eventSha256: String(result.rows[0]?.event_sha256) };
+      } catch (error) {
+        throw contentProposalRepositoryError(error);
+      }
+    },
+
+    async recordContentProposalInvocationTerminal(input) {
+      return transaction(pool, async (client) => {
+        const sequence = input.invocationOrdinal === 1 ? 2 : 4;
+        const result = await client.query(
+          `select append_ai_content_proposal_attempt_event(
+             attempt.id,$3,$4,$5,$6,attempt.aggregate_contract_sha256,
+             attempt.model_sha256,attempt.command_descriptor_sha256,attempt.composed_input_sha256,
+             $7,$8,$9,$10) event_sha256,attempt.job_id
+             from ai_content_proposal_model_attempts attempt
+            where attempt.id=$2 and attempt.job_id=$1 and attempt.worker_id=$11`,
+          [
+            input.jobId, input.modelAttemptId, input.leaseToken, sequence, input.invocationOrdinal,
+            input.eventType, input.transcriptSha256, input.outputSha256, input.parserSha256,
+            input.parserValid, input.workerId,
+          ],
+        );
+        if (!result.rowCount) throw new Error("content_proposal_job_not_found");
+        const terminalizesAttempt = input.eventType === "invocation_failed"
+          || (input.invocationOrdinal === 2
+            && input.eventType === "invocation_completed"
+            && input.parserValid === false);
+        if (terminalizesAttempt) {
           await client.query(
-            `insert into ai_content_proposal_research_snapshots (
-               workspace_id,brand_id,batch_id,evidence_json
-             ) select job.workspace_id,job.brand_id,job.batch_id,$2::jsonb
-                 from ai_content_proposal_jobs job
-                where job.id=$1`,
-            [input.jobId, JSON.stringify(evidence)],
+            `select append_ai_content_proposal_attempt_event(
+               attempt.id,$3,$4,$5,'attempt_failed',attempt.aggregate_contract_sha256,
+               attempt.model_sha256,attempt.command_descriptor_sha256,attempt.composed_input_sha256,
+               $6,$7,$8,$9)
+               from ai_content_proposal_model_attempts attempt
+              where attempt.id=$2 and attempt.job_id=$1`,
+            [
+              input.jobId, input.modelAttemptId, input.leaseToken, sequence + 1,
+              input.invocationOrdinal, input.transcriptSha256, input.outputSha256,
+              input.parserSha256, input.parserValid,
+            ],
           );
         }
-        const snapshot = composeProposalInput(base, evidence);
-        await client.query("COMMIT");
-        return snapshot;
-      } catch (error) {
-        await client.query("ROLLBACK");
-        throw error;
-      } finally {
-        client.release();
-      }
-    },
-
-    async completeContentProposalJob(input) {
-      const parsedV1 = deferParse(input.proposals, (value) => {
-        if (!Array.isArray(value)) throw new Error("content_proposal_result_invalid");
-        return parseContentProposalResult(value);
-      });
-      const parsedV2 = deferParse(input.proposalSet, parseContentProposalSetV2);
-      const client = await pool.connect();
-      try {
-        await client.query("BEGIN");
-        const result = await client.query(
-          `select job.*,batch.content_family,batch.request_json,batch.source_snapshot_json,
-                  batch.input_snapshot_json,research.evidence_json,
-                  job.lease_expires_at <= clock_timestamp() as lease_expired
-             from ai_content_proposal_jobs job
-             join ai_content_proposal_batches batch
-               on batch.id=job.batch_id and batch.workspace_id=job.workspace_id
-              and batch.brand_id=job.brand_id
-             left join ai_content_proposal_research_snapshots research
-               on research.batch_id=batch.id and research.workspace_id=batch.workspace_id
-              and research.brand_id=batch.brand_id
-            where job.id=$1
-            for update of job,batch`,
-          [input.jobId],
-        );
-        const job = result.rows[0] as Record<string, unknown> | undefined;
-        if (!job) throw new Error("content_proposal_job_not_found");
-        const requestContract = classifyContentProposalRequest(job.request_json);
-        const request = isObject(job.request_json) ? job.request_json : {};
-        if (requestContract === "v1"
-          && (parsedV1.status === "invalid" || parsedV2.status === "invalid")) {
-          throw new Error("content_proposal_result_invalid");
-        }
-        if (job.status === "completed") {
-          if (job.completion_lease_owner !== input.workerId
-            || String(job.completion_lease_token) !== input.leaseToken) {
-            throw new Error("content_proposal_job_lease_invalid");
-          }
-          if (requestContract === "invalid") {
-            throw new Error("content_proposal_completion_conflict");
-          }
-          if (requestContract === "v2") {
-            if (input.proposals !== undefined || input.proposalSet === undefined) {
-              throw new Error("content_proposal_completion_conflict");
-            }
-            if (parsedV2.status !== "valid") throw new Error("content_proposal_completion_conflict");
-            const retryProposalSet = parsedV2.value;
-            const stored = await client.query(
-              `select position,proposal_json
-                 from ai_content_proposals
-                where batch_id=$1 and workspace_id=$2 and brand_id=$3
-                order by position`,
-              [job.batch_id, job.workspace_id, job.brand_id],
-            );
-            if (stored.rows.length !== 3
-              || stored.rows.some((row, index) => Number(row.position) !== index + 1)) {
-              throw new Error("content_proposal_completion_conflict");
-            }
-            const storedProposalSet = parseContentProposalSetResult(
-              {
-                contractVersion: "content-proposal.v2",
-                proposals: stored.rows.map((row) => row.proposal_json),
-              },
-              "content_proposal_completion_conflict",
-            );
-            if (!isDeepStrictEqual(storedProposalSet, retryProposalSet)) {
-              throw new Error("content_proposal_completion_conflict");
-            }
-          }
-          await client.query("COMMIT");
-          return { id: String(job.id), batchId: String(job.batch_id), status: "completed" };
-        }
-        if (requestContract === "v2"
-          && (parsedV1.status === "invalid" || parsedV2.status === "invalid")) {
-          throw new Error("content_proposal_result_invalid");
-        }
-        if (job.status !== "processing"
-          || job.lease_owner !== input.workerId
-          || String(job.lease_token) !== input.leaseToken
-          || job.lease_expired === true) {
-          throw new Error("content_proposal_job_lease_invalid");
-        }
-        if (requestContract === "invalid") throw new Error("content_proposal_result_invalid");
-        let proposals: ContentProposalV1[] | ContentProposalSetV2["proposals"];
-        if (requestContract === "v2") {
-          if (input.proposals !== undefined || input.proposalSet === undefined) {
-            throw new Error("content_proposal_result_invalid");
-          }
-          if (parsedV2.status !== "valid") throw new Error("content_proposal_result_invalid");
-          const proposalSet = parsedV2.value;
-          const base = isObject(job.input_snapshot_json) ? job.input_snapshot_json : null;
-          const evidence = isObject(job.evidence_json) ? validateResearchEvidence(job.evidence_json) : null;
-          if (!base || base.contractVersion !== "proposal-base-input.v2" || !evidence) {
-            throw new Error("content_proposal_research_required");
-          }
-          const snapshot = composeProposalInput(base, evidence);
-          assertProposalSetMatchesBatch(proposalSet, snapshot, request, job.content_family);
-          proposals = proposalSet.proposals;
-        } else {
-          if (input.proposalSet !== undefined || !Array.isArray(input.proposals)) {
-            throw new Error("content_proposal_result_invalid");
-          }
-          if (parsedV1.status !== "valid") throw new Error("content_proposal_result_invalid");
-          assertProposalsMatchBatch(parsedV1.value, job);
-          proposals = parsedV1.value;
-        }
-        const inserted = await client.query(
-          `insert into ai_content_proposals (
-             workspace_id, brand_id, batch_id, position, proposal_json
-           )
-           select job.workspace_id, job.brand_id, job.batch_id,
-                  proposal.ordinality::integer, proposal.value
-             from ai_content_proposal_jobs job
-             cross join jsonb_array_elements($2::jsonb) with ordinality proposal(value, ordinality)
-            where job.id=$1
-           on conflict (batch_id,position) do nothing`,
-          [input.jobId, JSON.stringify(proposals)],
-        );
-        if (requestContract === "v2" && inserted.rowCount !== 3) {
-          throw new Error("content_proposal_result_invalid");
-        }
-        await client.query(
-          `update ai_content_proposal_batches batch
-              set status='ready', updated_at=now()
-             from ai_content_proposal_jobs job
-            where job.id=$1 and batch.id=job.batch_id
-              and batch.workspace_id=job.workspace_id and batch.brand_id=job.brand_id`,
-          [input.jobId],
-        );
-        await client.query(
-          `update ai_content_proposal_jobs
-              set status = 'completed', lease_owner=null, lease_token=null,
-                  lease_started_at=null, lease_expires_at=null,
-                  completion_lease_owner=$2,completion_lease_token=$3,
-                  completed_at=now(), updated_at=now()
-            where id=$1`,
-          [input.jobId, input.workerId, input.leaseToken],
-        );
-        await client.query("COMMIT");
-        return { id: String(job.id), batchId: String(job.batch_id), status: "completed" };
-      } catch (error) {
-        await client.query("ROLLBACK");
-        throw error;
-      } finally {
-        client.release();
-      }
-    },
-
-    async failContentProposalJob(input) {
-      const client = await pool.connect();
-      try {
-        await client.query("BEGIN");
-        const result = await client.query(
-          `select job.*, lease_expires_at <= clock_timestamp() as lease_expired
-             from ai_content_proposal_jobs job
-            where job.id=$1
-            for update`,
-          [input.jobId],
-        );
-        const job = result.rows[0] as Record<string, unknown> | undefined;
-        if (!job) throw new Error("content_proposal_job_not_found");
-        if (job.status !== "processing"
-          || job.lease_owner !== input.workerId
-          || String(job.lease_token) !== input.leaseToken
-          || job.lease_expired === true) {
-          throw new Error("content_proposal_job_lease_invalid");
-        }
-        const retry = input.retryable && Number(job.attempt_count) < Number(job.max_attempts);
-        await client.query(
-          `update ai_content_proposal_jobs
-              set status = $2,
-                  available_at = case when $2='queued' then now() + interval '60 seconds' else available_at end,
-                  lease_owner=null, lease_token=null, lease_started_at=null, lease_expires_at=null,
-                  error_code = case when $2='failed' then $3 else null end,
-                  error_message = case when $2='failed' then $4 else null end,
-                  completed_at = case when $2='failed' then now() else null end,
-                  updated_at=now()
-            where id=$1 and attempt_count < max_attempts + 1`,
-          [input.jobId, retry ? "queued" : "failed", input.errorCode, input.errorMessage],
-        );
-        if (!retry) {
+        const status = await client.query("select status from ai_content_proposal_jobs where id=$1", [input.jobId]);
+        const projectedStatus = status.rows[0]?.status as "processing" | "queued" | "failed" | "manual_review_required";
+        if (projectedStatus === "failed" || projectedStatus === "manual_review_required") {
           await client.query(
             `update ai_content_proposal_batches batch
-                set status='failed', error_code=$2, error_message=$3, updated_at=now()
+                set status='failed',error_code=job.error_code,error_message=job.error_message,updated_at=now()
                from ai_content_proposal_jobs job
               where job.id=$1 and batch.id=job.batch_id
                 and batch.workspace_id=job.workspace_id and batch.brand_id=job.brand_id`,
-            [input.jobId, input.errorCode, input.errorMessage],
+            [input.jobId],
           );
         }
-        await client.query("COMMIT");
         return {
-          id: String(job.id),
-          batchId: String(job.batch_id),
-          status: retry ? "queued" : "failed",
+          eventSha256: String(result.rows[0]?.event_sha256),
+          status: projectedStatus,
         };
-      } catch (error) {
-        await client.query("ROLLBACK");
-        throw error;
-      } finally {
-        client.release();
-      }
+      });
+    },
+
+    async completeContentProposalJob(input) {
+      let proposalSet: ContentProposalSetV2;
+      try { proposalSet = parseContentProposalSetV2(input.proposalSet); }
+      catch { throw new Error("content_proposal_result_invalid"); }
+      return transaction(pool, async (client) => {
+        const locked = await lockContentProposalAttemptContext(client, {
+          attemptTable: "ai_content_proposal_model_attempts",
+          attemptId: input.modelAttemptId,
+          jobId: input.jobId,
+        });
+        if (!locked) throw new Error("content_proposal_job_not_found");
+        const result = await client.query(
+          `select ${claimColumns},attempt.id model_attempt_id,attempt.worker_id model_worker_id,
+                  terminal.event_sequence terminal_event_sequence,
+                  terminal.invocation_ordinal terminal_invocation_ordinal,
+                  terminal.transcript_sha256 terminal_transcript_sha256,
+                  terminal.output_sha256 terminal_output_sha256,
+                  terminal.parser_sha256 terminal_parser_sha256,
+                  terminal.parser_valid terminal_parser_valid,
+                  terminal.event_sha256 terminal_event_sha256,
+                  succeeded.id succeeded_event_id,
+                  succeeded.event_sha256 succeeded_event_sha256
+             from ai_content_proposal_jobs job
+             join ai_content_proposal_batches batch on batch.id=job.batch_id
+             join ai_content_proposal_job_contracts contract on contract.job_id=job.id
+             join ai_content_proposal_compositions composition on composition.job_id=job.id
+             join ai_content_proposal_model_attempts attempt
+               on attempt.id=$2 and attempt.job_id=job.id and attempt.composition_id=composition.id
+             left join lateral (
+               select event.* from ai_content_proposal_attempt_events event
+                where event.model_attempt_id=attempt.id
+                  and event.event_type='invocation_completed'
+                  and event.invocation_ordinal=$3
+                limit 1
+             ) terminal on true
+              left join ai_content_proposal_attempt_events succeeded
+                on succeeded.model_attempt_id=attempt.id and succeeded.event_type='attempt_succeeded'
+             where job.id=$1`,
+          [input.jobId, input.modelAttemptId, input.invocationOrdinal],
+        );
+        const row = result.rows[0] as Record<string, unknown> | undefined;
+        if (!row) throw new Error("content_proposal_job_not_found");
+        const boundary = validatedClaimBoundary(row);
+        const composedInput = parseProposalInputSnapshotV2(row.composed_input_json);
+        assertProposalSetMatchesClaim(proposalSet, composedInput, boundary.request, row.purpose);
+        if (row.status === "completed") {
+          if (row.completion_lease_owner !== input.workerId
+            || String(row.completion_lease_token) !== input.leaseToken
+            || !row.succeeded_event_id
+            || row.terminal_parser_valid !== true
+            || row.terminal_transcript_sha256 !== input.transcriptSha256
+            || row.terminal_output_sha256 !== input.outputSha256
+            || row.terminal_parser_sha256 !== input.parserSha256) {
+            throw new Error("content_proposal_completion_conflict");
+          }
+          const stored = await client.query(
+            "select position,proposal_json from ai_content_proposals where batch_id=$1 order by position",
+            [row.batch_id],
+          );
+          const replay = parseContentProposalSetV2({
+            contractVersion: "content-proposal.v2",
+            proposals: stored.rows.map((item) => item.proposal_json),
+          });
+          if (!isDeepStrictEqual(replay, proposalSet)) throw new Error("content_proposal_completion_conflict");
+          return {
+            jobId: String(row.id), batchId: String(row.batch_id), status: "completed" as const,
+            invocationEventSha256: String(row.terminal_event_sha256),
+            attemptEventSha256: String(row.succeeded_event_sha256),
+          };
+        }
+        if (row.status !== "processing" || row.active_stage !== "model"
+          || row.lease_owner !== input.workerId || String(row.lease_token) !== input.leaseToken
+          || row.model_worker_id !== input.workerId || row.terminal_event_sequence) {
+          throw new Error("content_proposal_job_lease_invalid");
+        }
+        const terminalSequence = input.invocationOrdinal === 1 ? 2 : 4;
+        const invocation = await client.query(
+          `select append_ai_content_proposal_attempt_event(
+             attempt.id,$3,$4,$5,'invocation_completed',attempt.aggregate_contract_sha256,
+             attempt.model_sha256,attempt.command_descriptor_sha256,attempt.composed_input_sha256,
+             $6,$7,$8,true) event_sha256
+             from ai_content_proposal_model_attempts attempt
+            where attempt.id=$2 and attempt.job_id=$1 and attempt.worker_id=$9`,
+          [
+            input.jobId, input.modelAttemptId, input.leaseToken, terminalSequence,
+            input.invocationOrdinal, input.transcriptSha256, input.outputSha256,
+            input.parserSha256, input.workerId,
+          ],
+        );
+        if (!invocation.rowCount) throw new Error("content_proposal_job_lease_invalid");
+        const inserted = await client.query(
+          `insert into ai_content_proposals(workspace_id,brand_id,batch_id,position,proposal_json)
+           select job.workspace_id,job.brand_id,job.batch_id,item.ordinality::integer,item.value
+             from ai_content_proposal_jobs job
+             cross join jsonb_array_elements($2::jsonb) with ordinality item(value,ordinality)
+            where job.id=$1 on conflict(batch_id,position) do nothing`,
+          [input.jobId, canonicalProposalJson(proposalSet.proposals)],
+        );
+        if (inserted.rowCount !== 3) throw new Error("content_proposal_completion_conflict");
+        await client.query(
+          `update ai_content_proposal_jobs set completion_lease_owner=$2,completion_lease_token=$3 where id=$1`,
+          [input.jobId, input.workerId, input.leaseToken],
+        );
+        const succeeded = await client.query(
+          `select append_ai_content_proposal_attempt_event(
+             attempt.id,$3,$4,$5,'attempt_succeeded',attempt.aggregate_contract_sha256,
+             attempt.model_sha256,attempt.command_descriptor_sha256,attempt.composed_input_sha256,
+             $6,$7,$8,true) event_sha256
+             from ai_content_proposal_model_attempts attempt where attempt.id=$2 and attempt.job_id=$1`,
+          [
+            input.jobId, input.modelAttemptId, input.leaseToken,
+            terminalSequence + 1, input.invocationOrdinal,
+            input.transcriptSha256, input.outputSha256, input.parserSha256,
+          ],
+        );
+        await client.query(
+          `update ai_content_proposal_batches set status='ready',error_code=null,error_message=null,updated_at=now()
+            where id=$1 and workspace_id=$2 and brand_id=$3`,
+          [row.batch_id, row.workspace_id, row.brand_id],
+        );
+        return {
+          jobId: String(row.id), batchId: String(row.batch_id), status: "completed" as const,
+          invocationEventSha256: String(invocation.rows[0]?.event_sha256),
+          attemptEventSha256: String(succeeded.rows[0]?.event_sha256),
+        };
+      });
+    },
+
+    async failContentProposalJob(input) {
+      return transaction(pool, async (client) => {
+        const activeStage = input.stage === "research_required" ? "research" : "model";
+        const attemptTable = input.stage === "research_required"
+          ? "ai_content_proposal_research_attempts"
+          : "ai_content_proposal_model_attempts";
+        const locked = await lockContentProposalAttemptContext(client, {
+          attemptTable,
+          attemptId: input.attemptId,
+          jobId: input.jobId,
+        });
+        if (!locked) throw new Error("content_proposal_job_not_found");
+        const result = await client.query(
+          `select job.*,attempt.id attempt_id,attempt.attempt_number,
+                  attempt.worker_id attempt_worker_id,
+                  attempt.lease_token_sha256=encode(digest($3::uuid::text,'sha256'),'hex') token_matches,
+                  ${input.stage === "composition_ready" ? `exists(
+                    select 1 from ai_content_proposal_attempt_events event
+                     where event.model_attempt_id=attempt.id
+                  )` : "false"} model_event_exists,
+                  ${input.stage === "composition_ready" ? `exists(
+                    select 1 from ai_content_proposal_attempt_events event
+                     where event.model_attempt_id=attempt.id and event.event_type='pre_invocation_failed'
+                  )` : `exists(
+                    select 1 from ai_content_proposal_research_attempt_events event
+                     where event.research_attempt_id=attempt.id and event.event_type='attempt_failed'
+                  )`} failure_event_exists,
+                  ${input.stage === "composition_ready" ? `(
+                    select event.terminal from ai_content_proposal_attempt_events event
+                     where event.model_attempt_id=attempt.id and event.event_type='pre_invocation_failed'
+                     limit 1
+                  )` : `(
+                    select event.terminal from ai_content_proposal_research_attempt_events event
+                     where event.research_attempt_id=attempt.id and event.event_type='attempt_failed'
+                     limit 1
+                  )`} failure_terminal
+              from ai_content_proposal_jobs job
+              join ${attemptTable} attempt on attempt.id=$2 and attempt.job_id=job.id
+             where job.id=$1`,
+          [input.jobId, input.attemptId, input.leaseToken],
+        );
+        const row = result.rows[0] as Record<string, unknown> | undefined;
+        if (!row) throw new Error("content_proposal_job_not_found");
+        if (row.attempt_worker_id !== input.workerId || row.token_matches !== true) {
+          throw new Error("content_proposal_job_lease_invalid");
+        }
+        if (row.failure_event_exists !== true
+          && (row.status !== "processing" || row.active_stage !== activeStage
+            || row.lease_owner !== input.workerId || String(row.lease_token) !== input.leaseToken
+            || new Date(String(row.lease_expires_at)).getTime() <= Date.now())) {
+          throw new Error("content_proposal_job_lease_invalid");
+        }
+        if (input.stage === "composition_ready" && row.model_event_exists === true
+          && row.failure_event_exists !== true) {
+          throw new Error("content_proposal_invocation_already_started");
+        }
+
+        let expectedStatus: "queued" | "failed";
+        if (input.stage === "research_required") {
+          const failureEnvelope = canonicalProposalJson({
+            errorCode: input.errorCode,
+            errorMessage: input.errorMessage,
+            retryable: input.retryable,
+          });
+          await client.query(
+            `select append_ai_content_proposal_research_attempt_event(
+               $1,$2,2,'attempt_failed',null,$3::jsonb,
+               encode(digest(($3::jsonb)::text,'sha256'),'hex'),null) event_sha256`,
+            [input.attemptId, input.leaseToken, failureEnvelope],
+          );
+          expectedStatus = row.failure_event_exists === true
+            ? row.failure_terminal === true ? "failed" : "queued"
+            : input.retryable ? "queued" : "failed";
+        } else {
+          const appended = await client.query(
+            `select append_ai_content_proposal_attempt_event(
+               attempt.id,$3,1,$4,'pre_invocation_failed',attempt.aggregate_contract_sha256,
+               attempt.model_sha256,attempt.command_descriptor_sha256,attempt.composed_input_sha256,
+               $5,$6,null,$7) event_sha256
+               from ai_content_proposal_model_attempts attempt
+              where attempt.id=$2 and attempt.job_id=$1 and attempt.worker_id=$8`,
+            [
+              input.jobId, input.attemptId, input.leaseToken, 0,
+              input.errorCode, input.errorMessage, input.retryable, input.workerId,
+            ],
+          );
+          if (!appended.rowCount) throw new Error("content_proposal_job_not_found");
+          expectedStatus = row.failure_event_exists === true
+            ? row.failure_terminal === true ? "failed" : "queued"
+            : !input.retryable || Number(row.attempt_number) >= Number(row.max_attempts)
+              ? "failed"
+              : "queued";
+        }
+        const projected = await client.query(
+          "select id,batch_id,status from ai_content_proposal_jobs where id=$1",
+          [input.jobId],
+        );
+        const projectedStatus = projected.rows[0]?.status;
+        if (row.failure_event_exists !== true && projectedStatus !== expectedStatus) {
+          throw new Error("content_proposal_failure_projection_conflict");
+        }
+        return {
+          id: String(row.id),
+          batchId: String(row.batch_id),
+          status: expectedStatus,
+        };
+      });
     },
   };
 }

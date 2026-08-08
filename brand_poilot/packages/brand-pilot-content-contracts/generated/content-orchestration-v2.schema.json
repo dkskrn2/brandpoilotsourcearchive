@@ -1,0 +1,251 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "brandId": {
+      "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$",
+      "type": "string"
+    },
+    "contentInstruction": {
+      "anyOf": [
+        {
+          "maxLength": 4000,
+          "minLength": 1,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "contractVersion": {
+      "const": "content-orchestration.v2",
+      "type": "string"
+    },
+    "outputSettings": {
+      "additionalProperties": false,
+      "properties": {
+        "aspectRatio": {
+          "anyOf": [
+            {
+              "anyOf": [
+                {
+                  "const": "1:1",
+                  "type": "string"
+                },
+                {
+                  "const": "4:5",
+                  "type": "string"
+                },
+                {
+                  "const": "16:9",
+                  "type": "string"
+                },
+                {
+                  "const": "9:16",
+                  "type": "string"
+                }
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "channelTargets": {
+          "items": {
+            "anyOf": [
+              {
+                "const": "instagram",
+                "type": "string"
+              },
+              {
+                "const": "threads",
+                "type": "string"
+              },
+              {
+                "const": "x",
+                "type": "string"
+              },
+              {
+                "const": "linkedin",
+                "type": "string"
+              },
+              {
+                "const": "youtube",
+                "type": "string"
+              },
+              {
+                "const": "tiktok",
+                "type": "string"
+              },
+              {
+                "const": "blog_export",
+                "type": "string"
+              }
+            ]
+          },
+          "maxItems": 1,
+          "minItems": 1,
+          "type": "array"
+        },
+        "outputCount": {
+          "const": 1,
+          "type": "number"
+        },
+        "outputFormat": {
+          "anyOf": [
+            {
+              "const": "card_news",
+              "type": "string"
+            },
+            {
+              "const": "blog",
+              "type": "string"
+            },
+            {
+              "const": "reel",
+              "type": "string"
+            }
+          ]
+        }
+      },
+      "required": [
+        "outputFormat",
+        "channelTargets",
+        "aspectRatio",
+        "outputCount"
+      ],
+      "type": "object"
+    },
+    "productId": {
+      "anyOf": [
+        {
+          "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "purpose": {
+      "anyOf": [
+        {
+          "const": "informational",
+          "type": "string"
+        },
+        {
+          "const": "marketing",
+          "type": "string"
+        }
+      ]
+    },
+    "seed": {
+      "anyOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "topic_text",
+              "type": "string"
+            },
+            "title": {
+              "maxLength": 500,
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "title"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "topic_url",
+              "type": "string"
+            },
+            "url": {
+              "maxLength": 2000,
+              "minLength": 1,
+              "pattern": "^https?://",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "url"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "items": {
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "referenceId": {
+                    "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$",
+                    "type": "string"
+                  },
+                  "roles": {
+                    "items": {
+                      "anyOf": [
+                        {
+                          "const": "planning",
+                          "type": "string"
+                        },
+                        {
+                          "const": "copy_pattern",
+                          "type": "string"
+                        },
+                        {
+                          "const": "visual_composition",
+                          "type": "string"
+                        }
+                      ]
+                    },
+                    "maxItems": 3,
+                    "minItems": 1,
+                    "type": "array"
+                  }
+                },
+                "required": [
+                  "referenceId",
+                  "roles"
+                ],
+                "type": "object"
+              },
+              "maxItems": 5,
+              "minItems": 1,
+              "type": "array"
+            },
+            "kind": {
+              "const": "reference",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "items"
+          ],
+          "type": "object"
+        }
+      ]
+    }
+  },
+  "required": [
+    "contractVersion",
+    "brandId",
+    "purpose",
+    "seed",
+    "contentInstruction",
+    "productId",
+    "outputSettings"
+  ],
+  "type": "object"
+}

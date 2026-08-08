@@ -1,32 +1,18 @@
 import { isDeepStrictEqual } from "node:util";
 import { load } from "cheerio";
-import type {
-  ContentGenerationInputV3,
-  ImageGenerationPackageV1,
-} from "./aiContentContracts.js";
 import {
+  parseBlogPlanV2 as parseCanonicalBlogPlanV2,
+  parseCardNewsPlanV2 as parseCanonicalCardNewsPlanV2,
   parseContentGenerationInputV3,
   parseImageGenerationPackageV1,
-  parseResearchEvidenceSnapshotV1,
-} from "./aiContentGenerationInputV3.js";
-
-interface CardNewsPlanV2 {
-  contractVersion: "card-news-plan.v2";
-  content: { caption: string; hashtags: string[]; cta: string };
-  imagePackage: ImageGenerationPackageV1;
-}
-
-interface BlogPlanV2 {
-  contractVersion: "blog-plan.v2";
-  content: {
-    title: string;
-    htmlTemplate: string;
-    metaTitle: string;
-    metaDescription: string;
-    usedEvidenceIds: string[];
-  };
-  imagePackage: ImageGenerationPackageV1 | null;
-}
+  parseReelPlanV2 as parseCanonicalReelPlanV2,
+  type BlogPlanV2,
+  type CardNewsPlanV2,
+  type ContentGenerationInputV3,
+  type ImageGenerationPackageV1,
+  type ReelPlanV2,
+} from "@brand-pilot/content-contracts";
+import { parseResearchEvidenceSnapshotV1 } from "./aiContentGenerationInputV3.js";
 
 export const BLOG_PASSIVE_HTML_FORBIDDEN_TAGS = [
   "script", "style", "form", "iframe", "link", "source", "svg", "image", "noscript", "object", "embed", "video", "audio", "meta", "base",
@@ -35,14 +21,7 @@ export const BLOG_PASSIVE_HTML_FORBIDDEN_ATTRIBUTES = new Set([
   "style", "srcset", "xlink:href", "poster", "background", "data", "ping", "formaction", "action", "srcdoc", "manifest",
 ]);
 
-interface MarketingPlanV2 {
-  contractVersion: "marketing-plan.v2";
-  outputFormat: "reel" | "marketing_content";
-  content: { caption: string; hashtags: string[]; cta: string };
-  imagePackage: ImageGenerationPackageV1;
-}
-
-export type ContentPlanResultV2 = CardNewsPlanV2 | BlogPlanV2 | MarketingPlanV2;
+export type ContentPlanResultV2 = CardNewsPlanV2 | BlogPlanV2 | ReelPlanV2;
 
 function object(value: unknown, keys: readonly string[]): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error();
@@ -190,17 +169,18 @@ export function parseContentPlanResultV2(value: unknown, rawInput: unknown, supp
     if (source.contractVersion === "card-news-plan.v2") {
       object(value, ["contractVersion", "content", "imagePackage"]);
       if (input.outputSettings.outputFormat !== "card_news") throw new Error();
-      const imagePackage = parseImageGenerationPackageV1(source.imagePackage);
+      const canonical = parseCanonicalCardNewsPlanV2(value);
+      const imagePackage = canonical.imagePackage;
       validatePackage(imagePackage, input, true);
-      return { contractVersion: "card-news-plan.v2", content: socialContent(source.content), imagePackage };
+      return { ...canonical, content: socialContent(canonical.content) };
     }
-    if (source.contractVersion === "marketing-plan.v2") {
+    if (source.contractVersion === "reel-plan.v2") {
       object(value, ["contractVersion", "outputFormat", "content", "imagePackage"]);
-      if (source.outputFormat !== "reel" && source.outputFormat !== "marketing_content") throw new Error();
-      if (input.outputSettings.outputFormat !== source.outputFormat) throw new Error();
-      const imagePackage = parseImageGenerationPackageV1(source.imagePackage);
+      if (input.outputSettings.outputFormat !== "reel") throw new Error();
+      const canonical = parseCanonicalReelPlanV2(value);
+      const imagePackage = canonical.imagePackage;
       validatePackage(imagePackage, input, true);
-      return { contractVersion: "marketing-plan.v2", outputFormat: source.outputFormat, content: socialContent(source.content), imagePackage };
+      return { ...canonical, content: socialContent(canonical.content) };
     }
     if (source.contractVersion === "blog-plan.v2") {
       object(value, ["contractVersion", "content", "imagePackage"]);
@@ -220,7 +200,8 @@ export function parseContentPlanResultV2(value: unknown, rawInput: unknown, supp
       });
       if (new Set(usedEvidenceIds).size !== usedEvidenceIds.length) throw new Error();
       const htmlTemplate = text(contentSource.htmlTemplate);
-      const imagePackage = source.imagePackage === null ? null : parseImageGenerationPackageV1(source.imagePackage);
+      const canonical = parseCanonicalBlogPlanV2(value);
+      const imagePackage = canonical.imagePackage;
       if (imagePackage === null) {
         if (/asset:\/\//.test(htmlTemplate)) throw new Error();
       } else {

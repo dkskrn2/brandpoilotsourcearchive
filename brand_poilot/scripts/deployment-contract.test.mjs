@@ -35,7 +35,7 @@ const deploymentArtifacts = [
   "workers/brand-pilot-image-worker/Dockerfile",
   "workers/brand-pilot-card-news-worker/Dockerfile",
   "workers/brand-pilot-blog-worker/Dockerfile",
-  "workers/brand-pilot-marketing-worker/Dockerfile",
+  "workers/brand-pilot-reel-worker/Dockerfile",
   "deploy/compose.production.yml",
   "deploy/Caddyfile",
   "deploy/Caddyfile.canary",
@@ -49,8 +49,12 @@ const deploymentArtifacts = [
   "deploy/env/image-worker.env.example",
   "deploy/env/card-news-worker.env.example",
   "deploy/env/blog-worker.env.example",
-  "deploy/env/marketing-worker.env.example",
+  "deploy/env/reel-worker.env.example",
   "deploy/scripts/preflight.sh",
+  "deploy/scripts/preflight-ai-content.sh",
+  "deploy/scripts/stage-ai-content-release.sh",
+  "deploy/scripts/rollout-ai-content-cutover.sh",
+  "deploy/scripts/collect-ai-content-backend-evidence.sh",
   "deploy/scripts/deploy.sh",
   "deploy/scripts/rollout-workers.sh",
   "deploy/scripts/lib.sh",
@@ -67,6 +71,10 @@ const deploymentArtifacts = [
 const deploymentScripts = [
   "deploy/scripts/lib.sh",
   "deploy/scripts/preflight.sh",
+  "deploy/scripts/preflight-ai-content.sh",
+  "deploy/scripts/stage-ai-content-release.sh",
+  "deploy/scripts/rollout-ai-content-cutover.sh",
+  "deploy/scripts/collect-ai-content-backend-evidence.sh",
   "deploy/scripts/deploy.sh",
   "deploy/scripts/rollout-workers.sh",
   "deploy/scripts/verify-canary.sh",
@@ -76,6 +84,75 @@ const deploymentScripts = [
   "deploy/scripts/restore-state.sh",
   ubuntuBootstrapPath,
 ];
+
+test("cutover API image contains both ordered 074 and 075 migrations", () => {
+  const dockerfile = read("apps/api/Dockerfile");
+  const migrate = read("scripts/migrate.mjs");
+  const runner = read("scripts/migrationRunner.mjs");
+  const migration074 = read("db/migrations/074_ai_content_maintenance_write_fence.sql");
+  assert.match(dockerfile, /db\/migrations/);
+  assert.match(dockerfile, /scripts\/migrationRunner\.mjs/);
+  assert.match(dockerfile, /scripts\/migrate\.mjs/);
+  assert.match(dockerfile, /scripts\/databaseTls\.mjs/);
+  assert.match(dockerfile, /RUN chmod -R a\+rX \/app/);
+  assert.equal(existsSync("db/migrations/074_ai_content_maintenance_write_fence.sql"), true);
+  assert.equal(existsSync("db/migrations/075_ai_content_three_format_cutover.sql"), true);
+  assert.match(migrate, /AI_CONTENT_074_AUTHORIZATION_PUBLIC_KEY_FILE/);
+  assert.match(migrate, /AI_CONTENT_074_PROVIDER_ATTESTATION_PUBLIC_KEY_FILE/);
+  assert.doesNotMatch(migrate, /readFile\([^\n]*(?:PRIVATE|SIGNING)|createPrivateKey|AI_CONTENT_074_(?:AUTHORIZATION|PROVIDER_ATTESTATION)_KEY_FILE/);
+  assert.doesNotMatch(runner, /createPrivateKey|createSign|\bsign\s*\(/);
+  assert.match(runner, /bootstrap_role_membership_catalog_v2/);
+  assert.match(runner, /set_option[\s\S]*inherit_option[\s\S]*admin_option/);
+  assert.match(migration074, /current_setting\('role',\s*true\)/);
+  assert.equal(existsSync("scripts/ai-content-074.postgres.integration.test.mjs"), true);
+  const postgresHarness = read("scripts/ai-content-074.postgres.integration.test.mjs");
+  assert.match(postgresHarness, /from\s+["']@testcontainers\/postgresql["']/);
+  assert.match(postgresHarness, /new\s+PostgreSqlContainer\(["']postgres:16-alpine["']\)/);
+  assert.doesNotMatch(postgresHarness, /AI_CONTENT_074_(?:REAL_POSTGRES_URL|ENABLE_REAL_POSTGRES_TESTS)/);
+  assert.doesNotMatch(postgresHarness, /\bt\.skip\s*\(|\bskip\s*:/);
+  assert.match(postgresHarness, /assert\.match\([^\n]*version[^\n]*PostgreSQL 16\\\./);
+  assert.match(postgresHarness, /requires an empty disposable database/);
+  assert.match(postgresHarness, /to_regclass\('public\.workspaces'\)/);
+  assert.match(postgresHarness, /finally\s*\{[\s\S]*Promise\.allSettled[\s\S]*container\.stop\(\)[\s\S]*AggregateError/);
+  assert.match(postgresHarness, /AI_CONTENT_074_BULK_DML_MAX_OVERHEAD_RATIO/);
+  assert.match(postgresHarness, /migration.*schema_owner/is);
+  assert.match(postgresHarness, /disable trigger|drop trigger|ai_content_ddl_allowlist|ai_content_bootstrap_state|ai_content_maintenance_state|ai_content_cutovers/is);
+  assert.match(postgresHarness, /allowlisted.*ddl.*succeed|positive.*allowlist/is);
+  assert.match(postgresHarness, /rogue.*schema.*owner|schema.*owner.*rogue/is);
+  assert.doesNotMatch(postgresHarness, /with\s+set\s+true\s*,/i);
+  assert.match(postgresHarness, /create index public\.ai_content_074_arbitrary_index/i);
+  for (const classifier of ["whole_relation", "legacy_automated_topic", "scheduled_proposal_refresh",
+    "legacy_content_job", "ai_content_generated_artifact", "ai_content_scheduled_publish",
+    "ai_content_publish_attempt", "daily_generation_automation"]) {
+    assert.match(postgresHarness, new RegExp(classifier));
+  }
+  assert.match(postgresHarness, /perBranchThreshold|maxObservedRatio/);
+});
+
+test("cutover API image contains both ordered migrations in an actual no-network container", {
+  skip: process.env.RUN_DOCKER_FENCE_IMAGE_INSPECTION !== "1",
+}, () => {
+  const tag = `brand-pilot-fence-contract:${process.pid}`;
+  const build = spawnSync("docker", ["build", "--file", "apps/api/Dockerfile", "--tag", tag, "."], {
+    encoding: "utf8",
+    timeout: 15 * 60_000,
+  });
+  assert.equal(build.status, 0, `${build.stdout}\n${build.stderr}`);
+  try {
+    const script = [
+      "const fs=require('node:fs');",
+      "const required=['/app/db/migrations/074_ai_content_maintenance_write_fence.sql','/app/db/migrations/075_ai_content_three_format_cutover.sql','/app/scripts/migrationRunner.mjs','/app/scripts/migrate.mjs','/app/scripts/databaseTls.mjs'];",
+      "for(const path of required)if(!fs.existsSync(path))throw new Error('missing:'+path);",
+    ].join("");
+    const inspect = spawnSync("docker", ["run", "--rm", "--network", "none", "--entrypoint", "node", tag, "-e", script], {
+      encoding: "utf8",
+      timeout: 60_000,
+    });
+    assert.equal(inspect.status, 0, `${inspect.stdout}\n${inspect.stderr}`);
+  } finally {
+    spawnSync("docker", ["image", "rm", "--force", tag], { encoding: "utf8", timeout: 60_000 });
+  }
+});
 
 test("Task 10 canary is read-only, authenticated, and proves safe feature flags", () => {
   const verify = read("deploy/scripts/verify-canary.sh");
@@ -848,11 +925,11 @@ test("optional workers use dedicated profiles, identities, env files, and harden
       env: "BLOG_WORKER_1_ENV_FILE",
       identity: "BLOG_WORKER_ID: blog-worker-1",
     }],
-    ["marketing-worker-1", {
-      profile: "marketing-worker-1",
-      image: "MARKETING_WORKER_IMAGE",
-      env: "MARKETING_WORKER_1_ENV_FILE",
-      identity: "MARKETING_WORKER_ID: marketing-worker-1",
+    ["reel-worker-1", {
+      profile: "reel-worker-1",
+      image: "REEL_WORKER_IMAGE",
+      env: "REEL_WORKER_1_ENV_FILE",
+      identity: "REEL_WORKER_ID: reel-worker-1",
     }],
   ]);
 
@@ -890,7 +967,7 @@ test("optional workers use dedicated profiles, identities, env files, and harden
 test("worker env examples keep service credentials separate and rollout flags fail closed", () => {
   const apiEnv = read("deploy/env/api.env.example");
   assert.match(apiEnv, /^AUTOMATED_CONTENT_ENABLED=false$/m);
-  assert.match(apiEnv, /^CONTENT_PROPOSALS_ENABLED=false$/m);
+  assert.match(apiEnv, /^CONTENT_PROPOSALS_ENABLED=true$/m);
 
   const dmEnv = read("deploy/env/dm-worker.env.example");
   const wikiEnv = read("deploy/env/wiki-worker.env.example");
@@ -934,15 +1011,24 @@ test("Task 6 gives every CLI worker an isolated explicit Compose profile and wri
       "CARD_NEWS_WORKER_ID: card-news-worker-1",
     ]],
     ["blog-worker-1", ["BLOG_WORKER_IMAGE", "BLOG_WORKER_1_ENV_FILE", "BLOG_WORKER_ID: blog-worker-1"]],
-    ["marketing-worker-1", [
-      "MARKETING_WORKER_IMAGE",
-      "MARKETING_WORKER_1_ENV_FILE",
-      "MARKETING_WORKER_ID: marketing-worker-1",
+    ["reel-worker-1", [
+      "REEL_WORKER_IMAGE",
+      "REEL_WORKER_1_ENV_FILE",
+      "REEL_WORKER_ID: reel-worker-1",
     ]],
   ]);
   const runtimeUser =
     '"${CODEX_RUNTIME_UID:?CODEX_RUNTIME_UID is required}:${CODEX_RUNTIME_GID:?CODEX_RUNTIME_GID is required}"';
   const codexMount = "${CODEX_HOME_PATH:-/opt/brand-pilot/shared/codex}:/codex";
+  const accountPoolMount =
+    "${CODEX_ACCOUNT_POOL_ROOT_PATH:-/opt/brand-pilot/shared/codex-accounts}:/codex-accounts";
+  const pooledServices = new Set([
+    "content-proposal-worker-1",
+    "image-worker-1",
+    "card-news-worker-1",
+    "blog-worker-1",
+    "reel-worker-1",
+  ]);
 
   for (const [name, [image, envFile, identity]] of expected) {
     const block = services.get(name);
@@ -951,9 +1037,19 @@ test("Task 6 gives every CLI worker an isolated explicit Compose profile and wri
     assert.match(block.text, new RegExp(`\\$\\{${image}:\\?${image} is required\\}`));
     assert.match(block.text, new RegExp(`\\$\\{${envFile}:-/opt/brand-pilot/shared/env/`));
     assert.ok(block.text.includes(identity), `${name} must have a stable identity`);
-    assert.match(block.text, /^ {6}CODEX_HOME:\s+\/codex$/m);
+    if (pooledServices.has(name)) {
+      assert.match(block.text, /^ {6}CODEX_HOME:\s+\/codex-accounts\/primary$/m);
+      assert.match(block.text, /^ {6}CODEX_ACCOUNT_POOL_ROOT:\s+\/codex-accounts$/m);
+      assert.match(block.text, /^ {6}CODEX_ACCOUNT_PROFILES:\s+primary,secondary$/m);
+    } else {
+      assert.match(block.text, /^ {6}CODEX_HOME:\s+\/codex$/m);
+      assert.doesNotMatch(block.text, /CODEX_ACCOUNT_PROFILES|:\/codex-accounts/);
+    }
     assert.match(block.text, new RegExp(`^ {4}user:\\s+${runtimeUser.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, "m"));
-    assert.deepEqual(parseServiceList(block, "volumes"), [codexMount]);
+    assert.deepEqual(
+      parseServiceList(block, "volumes"),
+      [pooledServices.has(name) ? accountPoolMount : codexMount],
+    );
     assert.match(block.text, /^ {4}read_only:\s+true$/m);
     assert.deepEqual(parseServiceList(block, "cap_drop"), ["ALL"]);
     assert.deepEqual(parseServiceList(block, "security_opt"), [
@@ -976,18 +1072,18 @@ test("Task 6 gives every CLI worker an isolated explicit Compose profile and wri
     "image-worker-1",
     "card-news-worker-1",
     "blog-worker-1",
-    "marketing-worker-1",
+    "reel-worker-1",
   ]) {
     const imageTmpfs = parseServiceList(services.get(serviceName), "tmpfs");
     assert.ok(
-      imageTmpfs.some((entry) => (
-        entry.startsWith("/codex/generated_images:")
+      ["primary", "secondary"].every((profile) => imageTmpfs.some((entry) => (
+        entry.startsWith(`/codex-accounts/${profile}/generated_images:`)
         && /(?:^|,)size=[^,]+/.test(entry)
         && /(?:^|,)mode=0700(?:,|$)/.test(entry)
         && entry.includes("uid=${CODEX_RUNTIME_UID")
         && entry.includes("gid=${CODEX_RUNTIME_GID")
-      )),
-      `${serviceName} must use a bounded runtime-user tmpfs at /codex/generated_images`,
+      ))),
+      `${serviceName} must isolate generated images from both persisted account homes`,
     );
   }
 });
@@ -1007,7 +1103,7 @@ test("Task 6 release plumbing validates every immutable worker image and the per
     "IMAGE_WORKER_IMAGE",
     "CARD_NEWS_WORKER_IMAGE",
     "BLOG_WORKER_IMAGE",
-    "MARKETING_WORKER_IMAGE",
+    "REEL_WORKER_IMAGE",
   ];
 
   for (const key of workerImageKeys) {
@@ -1021,17 +1117,19 @@ test("Task 6 release plumbing validates every immutable worker image and the per
   assert.match(deploy, /verify_release_image_revision[\s\S]*CANDIDATE_API_IMAGE/);
   assert.match(preflight, /COMPOSE_PROFILES[\s\S]*first_deploy_worker_profiles_forbidden/);
 
-  assert.match(bootstrap, /managed_paths=\([\s\S]*"\$ROOT\/shared\/codex"/);
-  assert.match(bootstrap, /install -d -m 0700 -o bpdeploy -g bpdeploy "\$ROOT\/shared\/codex"/);
+  assert.match(bootstrap, /managed_paths=\([\s\S]*"\$ROOT\/shared\/codex-accounts\/primary"[\s\S]*"\$ROOT\/shared\/codex-accounts\/secondary"/);
+  assert.match(bootstrap, /install -d -m 0700 -o bpdeploy -g bpdeploy "\$ROOT\/shared\/codex-accounts\/primary"/);
+  assert.match(bootstrap, /install -d -m 0700 -o bpdeploy -g bpdeploy "\$ROOT\/shared\/codex-accounts\/secondary"/);
   assert.doesNotMatch(bootstrap, /(?:cp|mv|ln|cat|touch|printf)[^\n]*auth\.json/);
 
-  assert.match(preflight, /CODEX_HOME_PATH="\$ROOT\/shared\/codex"/);
-  assert.match(preflight, /codex_home_symlink_forbidden/);
-  assert.match(preflight, /codex_home_mode_invalid/);
-  assert.match(preflight, /codex_home_owner_invalid/);
-  assert.match(preflight, /AUTH_FILE="\$CODEX_HOME_PATH\/auth\.json"/);
-  assert.match(preflight, /auth_file_symlink_forbidden/);
-  assert.match(preflight, /require_file_mode_600 "\$AUTH_FILE" "bpdeploy"/);
+  assert.match(preflight, /CODEX_ACCOUNT_POOL_ROOT_PATH="\$ROOT\/shared\/codex-accounts"/);
+  assert.match(preflight, /codex_account_pool_missing/);
+  assert.match(preflight, /codex_account_pool_mode_invalid/);
+  assert.match(preflight, /codex_account_pool_owner_invalid/);
+  assert.match(preflight, /for profile in primary secondary/);
+  assert.match(preflight, /auth_file="\$profile_home\/auth\.json"/);
+  assert.match(preflight, /auth_file_symlink_forbidden|! -L "\$auth_file"/);
+  assert.match(preflight, /require_file_mode_600 "\$auth_file" "bpdeploy"/);
   assert.match(preflight, /CODEX_RUNTIME_UID=.*id -u bpdeploy/);
   assert.match(preflight, /CODEX_RUNTIME_GID=.*id -g bpdeploy/);
   assert.match(preflight, /timeout[\s\S]*docker run[\s\S]*--pull never[\s\S]*--user[\s\S]*CODEX_HOME=\/codex[\s\S]*codex login status/);
@@ -1051,7 +1149,7 @@ test("Task 6 release plumbing validates every immutable worker image and the per
     "IMAGE_WORKER_IMAGE",
     "CARD_NEWS_WORKER_IMAGE",
     "BLOG_WORKER_IMAGE",
-    "MARKETING_WORKER_IMAGE",
+    "REEL_WORKER_IMAGE",
   ]) {
     assert.ok(runtimeBlock.includes(key), `Codex runtime preflight missing ${key}`);
   }
@@ -1098,7 +1196,7 @@ test("Task 6 deployment env examples expose only real worker settings and never 
       "CARD_NEWS_CODEX_TIMEOUT_MS",
     ]],
     ["deploy/env/blog-worker.env.example", ["BLOG_CODEX_COMMAND", "BLOG_CODEX_TIMEOUT_MS"]],
-    ["deploy/env/marketing-worker.env.example", ["MARKETING_CODEX_COMMAND", "MARKETING_CODEX_TIMEOUT_MS"]],
+    ["deploy/env/reel-worker.env.example", ["REEL_CODEX_PLAN_COMMAND", "REEL_CODEX_PLAN_TIMEOUT_MS"]],
   ]);
 
   for (const [path, requiredKeys] of expected) {
@@ -1124,7 +1222,7 @@ test("Task 6 CI maps every worker Dockerfile into the affected-image matrix", ()
     ["imageWorker", "brand-pilot-image-worker", "IMAGE_WORKER_IMAGE"],
     ["cardNewsWorker", "brand-pilot-card-news-worker", "CARD_NEWS_WORKER_IMAGE"],
     ["blogWorker", "brand-pilot-blog-worker", "BLOG_WORKER_IMAGE"],
-    ["marketingWorker", "brand-pilot-marketing-worker", "MARKETING_WORKER_IMAGE"],
+    ["reelWorker", "brand-pilot-reel-worker", "REEL_WORKER_IMAGE"],
   ];
 
   for (const [component, directory, imageKey] of expected) {
@@ -1134,6 +1232,7 @@ test("Task 6 CI maps every worker Dockerfile into the affected-image matrix", ()
     );
   }
   assert.match(workflow, /dmWikiWorker[^\n]*DM_WORKER_IMAGE[^\n]*WIKI_WORKER_IMAGE/);
+  assert.doesNotMatch(workflow, /marketingWorker|brand-pilot-marketing-worker|MARKETING_WORKER_IMAGE/);
   assert.match(workflow, /org\.opencontainers\.image\.revision=\$\{\{ github\.sha \}\}/);
 });
 
@@ -1167,17 +1266,17 @@ test("all CLI worker images install the pinned Codex runtime and run real entryp
     ["card news", {
       path: "workers/brand-pilot-card-news-worker/Dockerfile",
       entrypoint: /workers\/brand-pilot-card-news-worker\/dist\/index\.js/,
-      assets: [/editorial-plan\.schema\.json/, /card-news-creator\/SKILL\.md/],
+      assets: [/brand-pilot-content-contracts\/generated/, /card-news-creator\/SKILL\.md/],
     }],
     ["blog", {
       path: "workers/brand-pilot-blog-worker/Dockerfile",
       entrypoint: /workers\/brand-pilot-blog-worker\/dist\/index\.js/,
-      assets: [/run-codex-blog\.mjs/, /blog-writer\/SKILL\.md/],
+      assets: [/run-codex-blog-v2-plan\.mjs/, /blog-writer\/SKILL\.md/],
     }],
-    ["marketing", {
-      path: "workers/brand-pilot-marketing-worker/Dockerfile",
-      entrypoint: /workers\/brand-pilot-marketing-worker\/dist\/index\.js/,
-      assets: [/run-codex-marketing\.mjs/, /marketing-creative\/SKILL\.md/],
+    ["reel", {
+      path: "workers/brand-pilot-reel-worker/Dockerfile",
+      entrypoint: /workers\/brand-pilot-reel-worker\/dist\/index\.js/,
+      assets: [/run-codex-reel-plan\.mjs/, /reel-plan-v2\.schema\.json/],
     }],
   ]);
 
@@ -1188,7 +1287,12 @@ test("all CLI worker images install the pinned Codex runtime and run real entryp
     assert.match(dockerfile, /^USER node$/m);
     assert.match(dockerfile, /ca-certificates/, `${name} must trust normal HTTPS certificates`);
     assert.match(dockerfile, /@openai\/codex@0\.145\.0/, `${name} must pin the Codex CLI`);
-    assert.match(dockerfile, /CODEX_HOME=\/codex/, `${name} must isolate the shared auth home`);
+    if (["content proposal", "image", "card news", "blog", "reel"].includes(name)) {
+      assert.match(dockerfile, /CODEX_HOME=\/codex-accounts\/primary/, `${name} must default to the primary profile`);
+      assert.match(dockerfile, /CODEX_ACCOUNT_PROFILES=primary,secondary/, `${name} must declare the account pool`);
+    } else {
+      assert.match(dockerfile, /CODEX_HOME=\/codex(?:\s|$)/, `${name} must isolate the shared auth home`);
+    }
     assert.match(dockerfile, contract.entrypoint, `${name} must run its compiled entrypoint`);
     for (const asset of contract.assets) {
       assert.match(dockerfile, asset, `${name} is missing runtime asset ${asset}`);
@@ -1667,7 +1771,9 @@ test("Caddy container has only the capabilities and writable mounts it needs", (
   ]);
   for (const apiBlock of apiBlocks) {
     assert.deepEqual(parseServiceList(apiBlock, "cap_add"), []);
-    assert.deepEqual(parseServiceList(apiBlock, "volumes"), []);
+    assert.deepEqual(parseServiceList(apiBlock, "volumes"), [
+      "${AI_CONTENT_APPLICATION_DATABASE_URL_FILE:-/opt/brand-pilot/shared/secrets/ai-content-application-database-url}:/run/secrets/ai_content_application_database_url:ro",
+    ]);
   }
 
   const writableMounts = parseServiceList(caddyBlock, "volumes")
@@ -1781,14 +1887,16 @@ test("release manifests are parsed without source or eval and preflight is fail-
   assert.match(lib, /manifest_unknown_key/);
   assert.match(lib, /manifest_duplicate_key/);
   for (const key of [
-    "RELEASE_SCHEMA", "RELEASE_SHA", "API_IMAGE", "API_SOURCE_SHA", "API_CHANGED",
+    "RELEASE_SCHEMA", "RELEASE_SHA", "API_IMAGE",
     "DM_WORKER_IMAGE", "WIKI_WORKER_IMAGE", "CONTENT_PROPOSAL_WORKER_IMAGE",
     "BRAND_INTELLIGENCE_WORKER_IMAGE", "SUBJECT_ANALYSIS_WORKER_IMAGE", "IMAGE_WORKER_IMAGE",
-    "CARD_NEWS_WORKER_IMAGE", "BLOG_WORKER_IMAGE", "MARKETING_WORKER_IMAGE",
+    "CARD_NEWS_WORKER_IMAGE", "BLOG_WORKER_IMAGE", "REEL_WORKER_IMAGE",
     "CADDY_IMAGE", "CANARY_HOST", "PRIMARY_HOST", "ACME_EMAIL", "API_ENV_FILE",
   ]) {
     assert.ok(lib.includes(key), `manifest parser omits ${key}`);
   }
+  assert.match(lib, /\$\{prefix\}_SOURCE_SHA/);
+  assert.match(lib, /\$\{prefix\}_CHANGED/);
   assert.match(preflight, /VERSION_ID=.*24\\?\.04|24\\?\.04.*VERSION_ID/);
   assert.match(preflight, /dpkg --print-architecture/);
   assert.match(preflight, /COMPOSE_MINOR >= 24/);
@@ -1835,13 +1943,13 @@ test("release validation accepts signed schema-1 layouts while requiring the ful
   );
   assert.match(
     lib,
-    /validate_state_release_directory\(\)[\s\S]*validation_role="candidate"[\s\S]*RELEASE_SCHEMA=1[\s\S]*validation_role="legacy-current"/,
+    /validate_state_release_directory\(\)[\s\S]*validation_role="candidate"[\s\S]*RELEASE_SCHEMA=\[12\][\s\S]*validation_role="legacy-current"/,
   );
   assert.match(lib, /release-integrity\.sha256/);
   assert.match(lib, /scripts\/rollout-workers\.sh[\s\S]*scripts\/backup-state\.sh[\s\S]*scripts\/restore-state\.sh/);
   assert.match(
     lib,
-    /validate_state_release_directory "\$root" "\$from_current"[\s\S]*validate_state_release_directory "\$root" "\$from_candidate"[\s\S]*validate_state_release_directory "\$root" "\$from_previous"/,
+    /validate_state_release_directory "\$root" "\$\{TRANSITION_JOURNAL\[TO_RELEASE\]\}"[\s\S]*validate_state_release_directory "\$root" "\$from_current"[\s\S]*validate_state_release_directory "\$root" "\$from_candidate"/,
   );
   const promote = read("deploy/scripts/promote.sh");
   assert.match(
@@ -2049,8 +2157,18 @@ test("CI publishing verifies release tooling plus only affected workspaces", () 
   ]) {
     assert.ok(verifyJob.includes(command), `verify job missing ${command}`);
   }
-  assert.match(verifyJob, /if: fromJSON\(needs\.impact\.outputs\.components\)\.api[\s\S]*npm run test --workspace @brand-pilot\/api/);
+  assert.match(verifyJob, /if: fromJSON\(needs\.impact\.outputs\.components\)\.api[\s\S]*npm run pretest --workspace @brand-pilot\/api[\s\S]*npm exec --workspace @brand-pilot\/api -- vitest run[\s\S]*src\/server\.contentProposalWorker\.test\.ts[\s\S]*--maxWorkers=4/);
+  assert.doesNotMatch(verifyJob, /npm run test --workspace @brand-pilot\/api/);
   assert.match(verifyJob, /if: needs\.impact\.outputs\.migration_changed == 'true'[\s\S]*npm run test:migrations/);
+  for (const command of [
+    "node --test scripts/migrate.test.mjs",
+    "node --test scripts/migrationRunner.test.mjs",
+    "node --test scripts/ai-content-three-format-cutover.postgres.integration.test.mjs",
+    "AI_CONTENT_074_ENFORCE_BENCHMARK=false node --test scripts/ai-content-074.postgres.integration.test.mjs",
+  ]) {
+    assert.ok(verifyJob.includes(command), `migration verify job missing ${command}`);
+  }
+  assert.doesNotMatch(verifyJob, /ai-content-074\.postgres\.integration\.test\.mjs[^\n]*--test-name-pattern/);
 });
 
 test("CI publishing uses an affected linux-amd64 matrix with immutable metadata and cache", () => {
@@ -2132,7 +2250,7 @@ function writeReleaseManifest(directory, overrides = {}, extraLines = []) {
   mkdirSync(directory, { recursive: true });
   const digest = "a".repeat(64);
   const values = {
-    RELEASE_SCHEMA: "1",
+    RELEASE_SCHEMA: "3",
     RELEASE_SHA: "1".repeat(40),
     API_IMAGE: `ghcr.io/dkskrn2/brand-pilot-api@sha256:${digest}`,
     DM_WORKER_IMAGE: `ghcr.io/dkskrn2/brand-pilot-dm-worker@sha256:${digest}`,
@@ -2143,7 +2261,7 @@ function writeReleaseManifest(directory, overrides = {}, extraLines = []) {
     IMAGE_WORKER_IMAGE: `ghcr.io/dkskrn2/brand-pilot-image-worker@sha256:${digest}`,
     CARD_NEWS_WORKER_IMAGE: `ghcr.io/dkskrn2/brand-pilot-card-news-worker@sha256:${digest}`,
     BLOG_WORKER_IMAGE: `ghcr.io/dkskrn2/brand-pilot-blog-worker@sha256:${digest}`,
-    MARKETING_WORKER_IMAGE: `ghcr.io/dkskrn2/brand-pilot-marketing-worker@sha256:${digest}`,
+    REEL_WORKER_IMAGE: `ghcr.io/dkskrn2/brand-pilot-reel-worker@sha256:${digest}`,
     CADDY_IMAGE: `docker.io/library/caddy@sha256:${digest}`,
     CANARY_HOST: "canary-api.danbammsg.co.kr",
     PRIMARY_HOST: "api.danbammsg.co.kr",
@@ -2151,6 +2269,24 @@ function writeReleaseManifest(directory, overrides = {}, extraLines = []) {
     API_ENV_FILE: "/opt/brand-pilot/shared/env/api.env",
     ...overrides,
   };
+  if (values.RELEASE_SCHEMA === "2" || values.RELEASE_SCHEMA === "3") {
+    for (const imageKey of [
+      "API_IMAGE",
+      "DM_WORKER_IMAGE",
+      "WIKI_WORKER_IMAGE",
+      "CONTENT_PROPOSAL_WORKER_IMAGE",
+      "BRAND_INTELLIGENCE_WORKER_IMAGE",
+      "SUBJECT_ANALYSIS_WORKER_IMAGE",
+      "IMAGE_WORKER_IMAGE",
+      "CARD_NEWS_WORKER_IMAGE",
+      "BLOG_WORKER_IMAGE",
+      "REEL_WORKER_IMAGE",
+    ]) {
+      const prefix = imageKey.slice(0, -"_IMAGE".length);
+      values[`${prefix}_SOURCE_SHA`] ??= values.RELEASE_SHA;
+      values[`${prefix}_CHANGED`] ??= "true";
+    }
+  }
   const manifest = join(directory, "release.env");
   const contents = [
     ...Object.entries(values).map(([key, value]) => `${key}=${value}`),
@@ -2186,7 +2322,7 @@ function seedRelease(
     IMAGE_WORKER_IMAGE: `ghcr.io/dkskrn2/brand-pilot-image-worker@sha256:${digest}`,
     CARD_NEWS_WORKER_IMAGE: `ghcr.io/dkskrn2/brand-pilot-card-news-worker@sha256:${digest}`,
     BLOG_WORKER_IMAGE: `ghcr.io/dkskrn2/brand-pilot-blog-worker@sha256:${digest}`,
-    MARKETING_WORKER_IMAGE: `ghcr.io/dkskrn2/brand-pilot-marketing-worker@sha256:${digest}`,
+    REEL_WORKER_IMAGE: `ghcr.io/dkskrn2/brand-pilot-reel-worker@sha256:${digest}`,
     CADDY_IMAGE: `docker.io/library/caddy@sha256:${digest}`,
     API_ENV_FILE: apiEnvFile,
     ...overrides,
@@ -2202,7 +2338,17 @@ function seedRelease(
     "verify-canary.sh",
     "promote.sh",
     "rollback.sh",
-    ...(legacyFileSet ? [] : ["rollout-workers.sh", "backup-state.sh", "restore-state.sh"]),
+    ...(legacyFileSet ? [] : [
+      "rollout-workers.sh",
+      "backup-state.sh",
+      "restore-state.sh",
+      "ai-content-cutover.sh",
+      "verify-ai-content-cutover.sh",
+      "stage-ai-content-release.sh",
+      "preflight-ai-content.sh",
+      "rollout-ai-content-cutover.sh",
+      "collect-ai-content-backend-evidence.sh",
+    ]),
   ];
   for (const name of releaseScripts) {
     copyFileSync(join("deploy", "scripts", name), join(releaseDirectory, "scripts", name));
@@ -2222,6 +2368,12 @@ function seedRelease(
           [0o755, "scripts/rollout-workers.sh"],
           [0o755, "scripts/backup-state.sh"],
           [0o755, "scripts/restore-state.sh"],
+          [0o755, "scripts/ai-content-cutover.sh"],
+          [0o755, "scripts/verify-ai-content-cutover.sh"],
+          [0o755, "scripts/stage-ai-content-release.sh"],
+          [0o755, "scripts/preflight-ai-content.sh"],
+          [0o755, "scripts/rollout-ai-content-cutover.sh"],
+          [0o755, "scripts/collect-ai-content-backend-evidence.sh"],
         ]),
   ];
   const integrity = specs.map(([mode, relative]) => {
@@ -2257,7 +2409,18 @@ function dockerMockScript() {
   return `#!/usr/bin/env bash
 printf 'PRIMARY_API_IMAGE=%s CANDIDATE_API_IMAGE=%s CADDY_IMAGE=%s CADDYFILE_PATH=%s %s\\n' "\${PRIMARY_API_IMAGE:-}" "\${CANDIDATE_API_IMAGE:-}" "\${CADDY_IMAGE:-}" "\${CADDYFILE_PATH:-}" "$*" >> "$DOCKER_LOG"
 if [[ -n "\${EVENT_LOG:-}" ]]; then printf 'docker %s\\n' "$*" >> "$EVENT_LOG"; fi
-if [[ "$1 $2" == "image inspect" ]]; then printf '%s\\n' "$RELEASE_SHA_FOR_TEST"; fi
+if [[ "$*" == *"/app/scripts/ai-content-cutover-floor-probe.mjs"* ]]; then
+  printf '%s\\n' "\${AI_CONTENT_FLOOR_MARKER_FOR_TEST:-false}"
+  exit 0
+fi
+if [[ "$1 $2" == "image inspect" ]]; then
+  case "\${@: -1}" in
+    *@sha256:a*) printf '%s\\n' "$(printf '1%.0s' {1..40})" ;;
+    *@sha256:b*) printf '%s\\n' "$(printf '2%.0s' {1..40})" ;;
+    *@sha256:c*) printf '%s\\n' "$(printf '3%.0s' {1..40})" ;;
+    *) printf '%s\\n' "$RELEASE_SHA_FOR_TEST" ;;
+  esac
+fi
 if [[ "$*" == *" up -d "* ]]; then
   count=0
   [[ ! -f "$DOCKER_UP_COUNT_FILE" ]] || count="$(cat "$DOCKER_UP_COUNT_FILE")"
@@ -2323,7 +2486,7 @@ function runDeployFixture({
   curlSucceeds = false,
   dockerUpFailures = 0,
   dockerFailUpService = "",
-  currentSha = null,
+  currentSha = "2".repeat(40),
   currentManifestOverrides = {},
   corruptCurrent = false,
   previousCandidateSha = null,
@@ -2337,6 +2500,9 @@ function runDeployFixture({
   const incoming = join(fixture, "incoming");
   const mocks = join(fixture, "bin");
   mkdirSync(join(root, "state"), { recursive: true });
+  mkdirSync(join(root, "shared", "env"), { recursive: true });
+  writeFileSync(join(root, "shared", "env", "api.env"), "TEST_ONLY=true\nDB_SSL_CA_BASE64=dGVzdA==\n", { mode: 0o600 });
+  chmodSync(join(root, "shared", "env", "api.env"), 0o600);
   mkdirSync(mocks, { recursive: true });
   const manifest = writeReleaseManifest(incoming, {
     API_ENV_FILE: `${bashPath(root)}/shared/env/api.env`,
@@ -2356,7 +2522,9 @@ function runDeployFixture({
     preflight,
     "#!/usr/bin/env bash\nprintf '%s\\n' \"${CADDYFILE_PATH:-}\" > \"$PREFLIGHT_LOG\"\n",
   );
-  if (currentSha) {
+  if (corruptCurrent) {
+    writeFileSync(join(root, "state", "current"), "not-a-release\n", { mode: 0o600 });
+  } else if (currentSha) {
     seedRelease(
       root,
       currentSha,
@@ -2364,8 +2532,6 @@ function runDeployFixture({
       currentManifestOverrides,
     );
     writeFileSync(join(root, "state", "current"), `${currentSha}\n`, { mode: 0o600 });
-  } else if (corruptCurrent) {
-    writeFileSync(join(root, "state", "current"), "not-a-release\n", { mode: 0o600 });
   }
   if (previousCandidateSha) {
     seedRelease(
@@ -2434,6 +2600,9 @@ function runRollbackFixture({
   const targetSha = "1".repeat(40);
   const apiEnvFile = `${bashPath(root)}/shared/env/api.env`;
   mkdirSync(join(root, "state"), { recursive: true });
+  mkdirSync(join(root, "shared", "env"), { recursive: true });
+  writeFileSync(join(root, "shared", "env", "api.env"), "TEST_ONLY=true\nDB_SSL_CA_BASE64=dGVzdA==\n", { mode: 0o600 });
+  chmodSync(join(root, "shared", "env", "api.env"), 0o600);
   mkdirSync(mocks, { recursive: true });
   const candidateSha = "3".repeat(40);
   if (current) {
@@ -2515,7 +2684,7 @@ function runPromotionFixture({
   mkdirSync(join(root, "state"), { recursive: true });
   mkdirSync(mocks, { recursive: true });
   mkdirSync(join(root, "shared", "env"), { recursive: true });
-  writeFileSync(join(root, "shared", "env", "api.env"), "TEST_ONLY=true\n", { mode: 0o600 });
+  writeFileSync(join(root, "shared", "env", "api.env"), "TEST_ONLY=true\nDB_SSL_CA_BASE64=dGVzdA==\n", { mode: 0o600 });
   chmodSync(join(root, "shared", "env", "api.env"), 0o600);
   seedRelease(root, candidateSha, apiEnvFile, candidateManifestOverrides);
   writeFileSync(join(root, "state", "candidate"), `${candidateSha}\n`, { mode: 0o600 });
@@ -2689,11 +2858,11 @@ test("manifest parser rejects tag-only images, unknown keys, and duplicate keys 
   }
 });
 
-test("a failed first canary stops the candidate and leaves current and candidate state absent", () => {
+test("a failed canary stops the candidate and leaves current unchanged", () => {
   const fixture = runDeployFixture();
   try {
     assert.notEqual(fixture.result.status, 0);
-    assert.equal(existsSync(join(fixture.root, "state", "current")), false);
+    assert.equal(readFileSync(join(fixture.root, "state", "current"), "utf8"), `${"2".repeat(40)}\n`);
     assert.equal(existsSync(join(fixture.root, "state", "candidate")), false);
     const dockerLog = readFileSync(fixture.dockerLog, "utf8");
     assert.match(dockerLog, /\bcompose\b.*\bconfig --quiet\b/);
@@ -2701,14 +2870,13 @@ test("a failed first canary stops the candidate and leaves current and candidate
     assert.match(dockerLog, /\bcompose\b.*\bup\b/);
     assert.match(dockerLog, /\bstop api-canary\b/);
     assert.match(dockerLog, /\brm -f api-canary\b/);
-    assert.match(dockerLog, /\bstop caddy\b/);
-    assert.match(dockerLog, /\brm -f caddy\b/);
+    assert.doesNotMatch(dockerLog, /\b(up|stop|rm)\b[^\n]*caddy/);
   } finally {
     rmSync(fixture.fixture, { recursive: true, force: true });
   }
 });
 
-test("a partial first-canary up failure removes candidate and leaves state absent", () => {
+test("a partial canary up failure removes candidate and leaves current unchanged", () => {
   const fixture = runDeployFixture({ curlSucceeds: true, dockerUpFailures: 1 });
   try {
     assert.notEqual(fixture.result.status, 0);
@@ -2717,7 +2885,7 @@ test("a partial first-canary up failure removes candidate and leaves state absen
     assert.match(dockerLog, /\bstop api-canary\b/);
     assert.match(dockerLog, /\brm -f api-canary\b/);
     assert.doesNotMatch(dockerLog, /\bup -d\b[^\n]*caddy/);
-    assert.equal(existsSync(join(fixture.root, "state", "current")), false);
+    assert.equal(readFileSync(join(fixture.root, "state", "current"), "utf8"), `${"2".repeat(40)}\n`);
     assert.equal(existsSync(join(fixture.root, "state", "candidate")), false);
   } finally {
     rmSync(fixture.fixture, { recursive: true, force: true });
@@ -3144,47 +3312,20 @@ test("confirmed promotion applies production Caddy before polling primary and mu
   }
 });
 
-test("first Task 6 promotion can roll back --previous to the exact signed legacy release", () => {
+test("roll-forward floor rejects a legacy current release before promotion", () => {
   const fixture = runPromotionFixture({
     initialCurrentSha: legacyReleaseSha,
     currentLegacyFileSet: true,
   });
   try {
     const prepare = fixture.prepare();
-    assert.equal(prepare.status, 0, prepare.stderr);
-    const promotion = fixture.run("--commit", "--dns-cutover-confirmed");
-    assert.equal(promotion.status, 0, promotion.stderr);
-    assert.equal(
-      readFileSync(join(fixture.root, "state", "previous"), "utf8"),
-      `${legacyReleaseSha}\n`,
-    );
-    assert.equal(
-      readFileSync(join(fixture.root, "state", "current"), "utf8"),
-      `${fixture.candidateSha}\n`,
-    );
-
-    for (const path of [
-      fixture.dockerLog,
-      fixture.curlLog,
-      fixture.eventLog,
-    ]) {
-      rmSync(path, { force: true });
-    }
-    const rollback = fixture.rollbackPrevious();
-    assert.equal(rollback.status, 0, rollback.stderr);
+    assert.notEqual(prepare.status, 0);
+    assert.match(prepare.stderr, /manifest_unknown_key|release_schema_invalid/);
     assert.equal(
       readFileSync(join(fixture.root, "state", "current"), "utf8"),
       `${legacyReleaseSha}\n`,
     );
-    assert.equal(
-      readFileSync(join(fixture.root, "state", "previous"), "utf8"),
-      `${fixture.candidateSha}\n`,
-    );
-    const dockerLog = readFileSync(fixture.dockerLog, "utf8");
-    assert.match(
-      dockerLog,
-      new RegExp(`/releases/${legacyReleaseSha}/.*api-primary caddy`),
-    );
+    assert.equal(existsSync(join(fixture.root, "state", "previous")), false);
   } finally {
     rmSync(fixture.fixture, { recursive: true, force: true });
   }
@@ -3292,26 +3433,21 @@ test("mutated or symlinked immutable release files are rejected before promotion
   }
 });
 
-test("a successful canary atomically records candidate without creating current", () => {
+test("a successful canary atomically records candidate while preserving current", () => {
   const fixture = runDeployFixture({ curlSucceeds: true });
   try {
     assert.equal(fixture.result.status, 0, fixture.result.stderr);
     assert.equal(readFileSync(join(fixture.root, "state", "candidate"), "utf8"), `${"1".repeat(40)}\n`);
-    assert.equal(existsSync(join(fixture.root, "state", "current")), false);
+    assert.equal(readFileSync(join(fixture.root, "state", "current"), "utf8"), `${"2".repeat(40)}\n`);
     const dockerLog = readFileSync(fixture.dockerLog, "utf8");
-    const caddyUp = dockerLog.split(/\r?\n/).find((line) => /\bup -d\b[^\n]*caddy/.test(line));
-    assert.ok(caddyUp, dockerLog);
-    assert.match(
-      caddyUp,
-      new RegExp(`CADDYFILE_PATH=.*/releases/${"1".repeat(40)}/Caddyfile\\.canary\\b`),
-    );
+    assert.doesNotMatch(dockerLog, /\b(pull|up|stop|rm)\b[^\n]*caddy/);
     assert.match(
       readFileSync(fixture.preflightLog, "utf8"),
-      new RegExp(`/releases/${"1".repeat(40)}/Caddyfile\\.canary\\b`),
+      new RegExp(`/releases/${"1".repeat(40)}/Caddyfile\\b`),
     );
     assert.deepEqual(
       readdirSync(join(fixture.root, "state")).sort(),
-      ["candidate", "deploy.lock"],
+      ["candidate", "current", "deploy.lock"],
     );
   } finally {
     rmSync(fixture.fixture, { recursive: true, force: true });
@@ -3340,7 +3476,7 @@ test("atomic_write leaves a complete state file and no temporary siblings", () =
   }
 });
 
-test("manifest rejects identical canary and primary hosts before Docker", () => {
+test("manifest rejects identical canary and primary hosts after the floor probe and before Compose", () => {
   const fixture = runDeployFixture({
     overrides: {
       CANARY_HOST: "api.danbammsg.co.kr",
@@ -3350,26 +3486,30 @@ test("manifest rejects identical canary and primary hosts before Docker", () => 
   try {
     assert.notEqual(fixture.result.status, 0);
     assert.match(fixture.result.stderr, /manifest_hosts_must_differ/);
-    assert.equal(existsSync(fixture.dockerLog), false);
+    const dockerLog = readFileSync(fixture.dockerLog, "utf8");
+    assert.match(dockerLog, /ai-content-cutover-floor-probe\.mjs/);
+    assert.doesNotMatch(dockerLog, /\bcompose\b|\bup -d\b/);
   } finally {
     rmSync(fixture.fixture, { recursive: true, force: true });
   }
 });
 
-test("promotion commit requires a candidate-bound prepared proof before Docker", () => {
+test("promotion commit requires a candidate-bound prepared proof after the floor probe and before Compose", () => {
   const fixture = runPromotionFixture();
   try {
     const commit = fixture.run("--commit", "--dns-cutover-confirmed");
     assert.notEqual(commit.status, 0);
     assert.match(commit.stderr, /promotion_not_prepared/);
-    assert.equal(existsSync(fixture.dockerLog), false);
+    const dockerLog = readFileSync(fixture.dockerLog, "utf8");
+    assert.match(dockerLog, /ai-content-cutover-floor-probe\.mjs/);
+    assert.doesNotMatch(dockerLog, /\bcompose\b|\bup -d\b/);
     assert.equal(existsSync(fixture.curlLog), false);
   } finally {
     rmSync(fixture.fixture, { recursive: true, force: true });
   }
 });
 
-test("promotion rejects a stale or tampered prepared proof before Docker", () => {
+test("promotion rejects a stale or tampered prepared proof after the floor probe and before Compose", () => {
   const fixture = runPromotionFixture();
   try {
     const prepare = fixture.prepare();
@@ -3382,7 +3522,9 @@ test("promotion rejects a stale or tampered prepared proof before Docker", () =>
     const commit = fixture.run("--commit", "--dns-cutover-confirmed");
     assert.notEqual(commit.status, 0);
     assert.match(commit.stderr, /promotion_prepared_proof_mismatch/);
-    assert.equal(existsSync(fixture.dockerLog), false);
+    const dockerLog = readFileSync(fixture.dockerLog, "utf8");
+    assert.match(dockerLog, /ai-content-cutover-floor-probe\.mjs/);
+    assert.doesNotMatch(dockerLog, /\bcompose\b|\bup -d\b/);
     assert.equal(existsSync(fixture.curlLog), false);
   } finally {
     rmSync(fixture.fixture, { recursive: true, force: true });
@@ -3619,7 +3761,7 @@ test("transition journal is durable and reconciled by every locked deployment en
   }
 });
 
-test("promotion rejects current and candidate host drift before Docker or state mutation", () => {
+test("promotion rejects current and candidate host drift after the floor probe and before Compose or state mutation", () => {
   const fixture = runPromotionFixture({
     currentManifestOverrides: {
       CANARY_HOST: "old-canary-api.danbammsg.co.kr",
@@ -3629,7 +3771,9 @@ test("promotion rejects current and candidate host drift before Docker or state 
     const result = fixture.run("--prepare");
     assert.notEqual(result.status, 0);
     assert.match(result.stderr, /promotion_hosts_mismatch/);
-    assert.equal(existsSync(fixture.dockerLog), false);
+    const dockerLog = readFileSync(fixture.dockerLog, "utf8");
+    assert.match(dockerLog, /ai-content-cutover-floor-probe\.mjs/);
+    assert.doesNotMatch(dockerLog, /\bcompose\b|\bup -d\b/);
     assert.equal(
       readFileSync(join(fixture.root, "state", "current"), "utf8"),
       `${fixture.currentSha}\n`,
@@ -3835,7 +3979,9 @@ test("deploy rejects host drift against current or resident candidate before Doc
     for (const fixture of fixtures) {
       assert.notEqual(fixture.result.status, 0);
       assert.match(fixture.result.stderr, /release_hosts_mismatch/);
-      assert.equal(existsSync(fixture.dockerLog), false);
+      const dockerLog = readFileSync(fixture.dockerLog, "utf8");
+      assert.match(dockerLog, /ai-content-cutover-floor-probe\.mjs/);
+      assert.doesNotMatch(dockerLog, /\bcompose\b|\bup -d\b/);
     }
   } finally {
     for (const fixture of fixtures) {
@@ -3859,9 +4005,11 @@ test("rollback rejects target host drift and empty production state before Docke
   try {
     assert.notEqual(drift.result.status, 0);
     assert.match(drift.result.stderr, /release_hosts_mismatch/);
-    assert.equal(existsSync(drift.dockerLog), false);
+    const driftDockerLog = readFileSync(drift.dockerLog, "utf8");
+    assert.match(driftDockerLog, /ai-content-cutover-floor-probe\.mjs/);
+    assert.doesNotMatch(driftDockerLog, /\bcompose\b|\bup -d\b/);
     assert.notEqual(empty.result.status, 0);
-    assert.match(empty.result.stderr, /production_rollback_requires_runtime_state/);
+    assert.match(empty.result.stderr, /ai_content_cutover_floor_query_failed/);
     assert.equal(existsSync(empty.dockerLog), false);
   } finally {
     rmSync(drift.fixture, { recursive: true, force: true });
@@ -3938,7 +4086,7 @@ test("interrupted transition recovery clears rather than rebinds a stale prepare
   }
 });
 
-test("reconciliation rejects journaled host drift before Docker and retains the journal", () => {
+test("reconciliation rejects journaled host drift after the floor probe and retains the journal before Compose", () => {
   const fixture = runPromotionFixture({
     currentManifestOverrides: {
       CANARY_HOST: "old-canary-api.danbammsg.co.kr",
@@ -3957,7 +4105,9 @@ test("reconciliation rejects journaled host drift before Docker and retains the 
     assert.equal(result.status, 70);
     assert.match(result.stderr, /error=recovery_failed/);
     assert.equal(existsSync(journal), true);
-    assert.equal(existsSync(fixture.dockerLog), false);
+    const dockerLog = readFileSync(fixture.dockerLog, "utf8");
+    assert.match(dockerLog, /ai-content-cutover-floor-probe\.mjs/);
+    assert.doesNotMatch(dockerLog, /\bcompose\b|\bup -d\b/);
   } finally {
     rmSync(fixture.fixture, { recursive: true, force: true });
   }

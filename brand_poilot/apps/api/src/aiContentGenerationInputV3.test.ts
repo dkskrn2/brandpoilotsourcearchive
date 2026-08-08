@@ -9,6 +9,7 @@ import {
   parseProposalInputSnapshotV2,
   parseResearchEvidenceSnapshotV1,
 } from "./aiContentGenerationInputV3.js";
+import { proposalSha256 } from "./aiContentProposalV2Service.js";
 
 const id = (tail: number) => `00000000-0000-4000-8000-${String(tail).padStart(12, "0")}`;
 const now = "2026-07-31T00:00:00.000Z";
@@ -28,6 +29,22 @@ const brandCore = () => ({
   primaryTarget: " Adults ",
   differentiator: " Direct ",
   coreAppeal: " Calm ",
+});
+const brandRulesContent = () => ({
+  contractVersion: "brand-rules.v1",
+  requiredPhrases: [],
+  forbiddenPhrases: [],
+  exaggerationRules: [],
+  ctaRules: { defaultCta: "", allowed: [] },
+  channelRules: {},
+  designRules: { colors: [], fonts: [], notes: [], referenceImages: [] },
+  autoApprovalRules: { enabled: false, conditions: [] },
+});
+const brandRules = () => ({
+  versionId: id(2),
+  version: 1,
+  content: brandRulesContent(),
+  contentSha256: proposalSha256(brandRulesContent()),
 });
 const product = () => ({
   id: id(2),
@@ -166,6 +183,7 @@ const finalInput = () => ({
   contractVersion: "content-generation-input.v3",
   generationId: id(9),
   brandCore: brandCore(),
+  brandRules: brandRules(),
   subject: { kind: "topic_text", title: " Tea " },
   contentInstruction: null,
   product: null,

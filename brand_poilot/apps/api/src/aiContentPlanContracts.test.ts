@@ -12,9 +12,8 @@ const id = (tail: number) => `00000000-0000-4000-8000-${String(tail).padStart(12
 const now = "2026-07-31T00:00:00.000Z";
 const sha = (letter: string) => letter.repeat(64);
 
-function finalInput(outputFormat: "card_news" | "blog" | "reel" | "marketing_content" = "card_news"): ContentGenerationInputV3 {
+function finalInput(outputFormat: "card_news" | "blog" | "reel" = "card_news"): ContentGenerationInputV3 {
   const blog = outputFormat === "blog";
-  const marketing = outputFormat === "reel" || outputFormat === "marketing_content";
   const channel = blog ? "blog_export" : "instagram";
   const aspectRatio = blog ? null : outputFormat === "reel" ? "9:16" : "1:1";
   return {
@@ -25,6 +24,7 @@ function finalInput(outputFormat: "card_news" | "blog" | "reel" | "marketing_con
       primaryCategory: "Food", detailedCategory: "Tea", primaryTarget: "Adults",
       differentiator: "Direct", coreAppeal: "Calm",
     },
+    brandRules: { versionId: id(5), version: 1, content: { contractVersion: "brand-rules.v1", requiredPhrases: [], forbiddenPhrases: [], exaggerationRules: [], ctaRules: { defaultCta: "", allowed: [] }, channelRules: {}, designRules: { colors: [], fonts: [], notes: [], referenceImages: [] }, autoApprovalRules: { enabled: false, conditions: [] } }, contentSha256: "67b61ecaeab23a876527fa4148e4046c2721084306d79b60bfec4f96956ba84b" },
     subject: { kind: "topic_text", title: "Tea" }, contentInstruction: null, product: null,
     researchEvidence: {
       contractVersion: "research-evidence.v1", decision: "searched", reason: "Needed",
@@ -49,7 +49,7 @@ function finalInput(outputFormat: "card_news" | "blog" | "reel" | "marketing_con
   };
 }
 
-function imagePackage(outputFormat: "card_news" | "blog" | "reel" | "marketing_content" = "card_news", count = 2): ImageGenerationPackageV1 {
+function imagePackage(outputFormat: "card_news" | "blog" | "reel" = "card_news", count = 2): ImageGenerationPackageV1 {
   return {
     contractVersion: "image-generation-package.v1", generationId: id(1), outputFormat,
     purpose: "informational", assetCount: count,
@@ -110,6 +110,35 @@ function frozenVisualInputs(): {
 }
 
 describe("content plan v2 contracts", () => {
+  it("accepts only reel-plan.v2 for reel generation and rejects the retired marketing plan", () => {
+    const input = finalInput("reel");
+    const pkg = imagePackage("reel");
+    const reelPlan = {
+      contractVersion: "reel-plan.v2",
+      outputFormat: "reel",
+      content: { caption: "Caption", hashtags: ["#tea"], cta: "Read" },
+      imagePackage: pkg,
+    };
+    expect(parseContentPlanResultV2(reelPlan, input).contractVersion).toBe("reel-plan.v2");
+    expect(() => parseContentPlanResultV2({
+      ...reelPlan,
+      contractVersion: "marketing-plan.v2",
+    }, input)).toThrow("ai_content_plan_invalid");
+  });
+
+  it("rejects the retired marketing_content format before plan parsing", () => {
+    expect(() => parseContentPlanResultV2({
+      contractVersion: "marketing-plan.v2",
+      outputFormat: "marketing_content",
+      content: { caption: "Caption", hashtags: [], cta: "Read" },
+      imagePackage: { ...imagePackage("reel"), outputFormat: "marketing_content" },
+    }, {
+      ...finalInput("reel"),
+      selectedProposal: { ...finalInput("reel").selectedProposal, outputFormat: "marketing_content" },
+      outputSettings: { ...finalInput("reel").outputSettings, outputFormat: "marketing_content" },
+    } as unknown as ContentGenerationInputV3)).toThrow("ai_content_plan_invalid");
+  });
+
   it("rejects image assets that cite evidence outside the frozen final input", () => {
     const input = finalInput();
     const pkg = imagePackage();
@@ -331,8 +360,8 @@ describe("content plan v2 contracts", () => {
     }
   });
 
-  it("rejects a marketing package whose product snapshot data differs from the final input", () => {
-    const input = finalInput("marketing_content");
+  it("rejects a marketing-purpose reel package whose product snapshot differs from the final input", () => {
+    const input = finalInput("reel");
     const product: NonNullable<ContentGenerationInputV3["product"]> = {
       id: id(20), versionId: id(21), kind: "product", name: "Tea", description: "Tea product",
       features: ["Calm"], benefits: ["Focus"], cautions: [], evergreenPurchaseInfo: "Available online", images: [],
@@ -344,8 +373,8 @@ describe("content plan v2 contracts", () => {
       kind: "marketing", campaignObjective: "Convert", situationAndNeed: "Need focus", productId: product.id,
       targetSegment: "Adults", strengths: ["Calm"], limitations: [], appeal: "Focus", buyingBarriers: [], cta: "Buy",
     };
-    const pkg = { ...imagePackage("marketing_content"), purpose: "marketing", product };
-    const plan = { contractVersion: "marketing-plan.v2", outputFormat: "marketing_content", content: { caption: "Caption", hashtags: [], cta: "Buy" }, imagePackage: pkg };
+    const pkg = { ...imagePackage("reel"), purpose: "marketing", product };
+    const plan = { contractVersion: "reel-plan.v2", outputFormat: "reel", content: { caption: "Caption", hashtags: [], cta: "Buy" }, imagePackage: pkg };
     expect(parseContentPlanResultV2(plan, input).imagePackage?.product).toEqual(product);
     expect(() => parseContentPlanResultV2({ ...plan, imagePackage: { ...pkg, product: { ...product, name: "Tampered" } } }, input))
       .toThrow("ai_content_plan_invalid");
@@ -358,17 +387,17 @@ describe("content plan v2 contracts", () => {
       .toThrow("ai_content_plan_invalid");
   });
 
-  it("parses marketing-plan.v2 for reel or marketing content without coupling it to purpose", () => {
-    const input = finalInput("marketing_content");
+  it("parses reel-plan.v2 without coupling the reel format to one purpose", () => {
+    const input = finalInput("reel");
     const plan = {
-      contractVersion: "marketing-plan.v2", outputFormat: "marketing_content",
+      contractVersion: "reel-plan.v2", outputFormat: "reel",
       content: { caption: "Caption", hashtags: ["#tea"], cta: "Learn" },
-      imagePackage: imagePackage("marketing_content"),
+      imagePackage: imagePackage("reel"),
     };
     expect(parseContentPlanResultV2(plan, input)).toMatchObject({
-      contractVersion: "marketing-plan.v2", outputFormat: "marketing_content",
+      contractVersion: "reel-plan.v2", outputFormat: "reel",
     });
-    expect(() => parseContentPlanResultV2({ ...plan, outputFormat: "reel" }, input))
+    expect(() => parseContentPlanResultV2({ ...plan, outputFormat: "card_news" }, input))
       .toThrow("ai_content_plan_invalid");
   });
 });

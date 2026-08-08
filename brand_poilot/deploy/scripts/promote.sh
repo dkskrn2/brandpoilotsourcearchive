@@ -23,6 +23,7 @@ fi
 for command_name in awk docker flock sha256sum sync; do
   require_command "$command_name"
 done
+enforce_ai_content_roll_forward_floor "$ROOT"
 exec 9>"$ROOT/state/deploy.lock"
 flock -n 9 || fail "deploy_lock_busy"
 reconcile_transition_or_fail "$ROOT" "$READY_TIMEOUT_SECONDS"
@@ -35,6 +36,12 @@ CANDIDATE_CADDY_IMAGE="${RELEASE_MANIFEST[CADDY_IMAGE]}"
 CANDIDATE_CANARY_HOST="${RELEASE_MANIFEST[CANARY_HOST]}"
 CANDIDATE_PRIMARY_HOST="${RELEASE_MANIFEST[PRIMARY_HOST]}"
 CANDIDATE_ACME_EMAIL="${RELEASE_MANIFEST[ACME_EMAIL]}"
+CANDIDATE_MARKETING_CUTOVER=false
+CANDIDATE_RETIREMENT_SOURCE_SHA=""
+if [[ -v "RELEASE_MANIFEST[MARKETING_RETIREMENT_SHA256]" ]]; then
+  CANDIDATE_MARKETING_CUTOVER=true
+  CANDIDATE_RETIREMENT_SOURCE_SHA="$MARKETING_RETIREMENT_SOURCE_RELEASE_SHA"
+fi
 
 CURRENT_SHA=""
 CURRENT_API_IMAGE=""
@@ -42,18 +49,36 @@ CURRENT_CADDY_IMAGE=""
 CURRENT_CANARY_HOST=""
 CURRENT_PRIMARY_HOST=""
 if load_optional_state_sha "$ROOT/state/current" CURRENT_SHA; then
-  validate_release_directory "$ROOT/releases/$CURRENT_SHA" legacy-current
-  CURRENT_API_IMAGE="${RELEASE_MANIFEST[API_IMAGE]}"
-  CURRENT_CADDY_IMAGE="${RELEASE_MANIFEST[CADDY_IMAGE]}"
-  CURRENT_CANARY_HOST="${RELEASE_MANIFEST[CANARY_HOST]}"
-  CURRENT_PRIMARY_HOST="${RELEASE_MANIFEST[PRIMARY_HOST]}"
+  if [[ "$CANDIDATE_MARKETING_CUTOVER" == "true" ]]; then
+    [[ "$CURRENT_SHA" == "$CANDIDATE_RETIREMENT_SOURCE_SHA" ]] ||
+      fail "marketing_retirement_source_release_mismatch"
+    validate_legacy_marketing_cutover_source "$ROOT/releases/$CURRENT_SHA"
+    CURRENT_API_IMAGE="$(legacy_release_manifest_value "$ROOT/releases/$CURRENT_SHA/release.env" API_IMAGE)"
+    CURRENT_CADDY_IMAGE="$(legacy_release_manifest_value "$ROOT/releases/$CURRENT_SHA/release.env" CADDY_IMAGE)"
+    CURRENT_CANARY_HOST="$(legacy_release_manifest_value "$ROOT/releases/$CURRENT_SHA/release.env" CANARY_HOST)"
+    CURRENT_PRIMARY_HOST="$(legacy_release_manifest_value "$ROOT/releases/$CURRENT_SHA/release.env" PRIMARY_HOST)"
+    require_digest_image "$CURRENT_API_IMAGE"
+    require_digest_image "$CURRENT_CADDY_IMAGE"
+    require_hostname "$CURRENT_CANARY_HOST"
+    require_hostname "$CURRENT_PRIMARY_HOST"
+  else
+    validate_state_release_directory "$ROOT" "$CURRENT_SHA"
+    CURRENT_API_IMAGE="${RELEASE_MANIFEST[API_IMAGE]}"
+    CURRENT_CADDY_IMAGE="${RELEASE_MANIFEST[CADDY_IMAGE]}"
+    CURRENT_CANARY_HOST="${RELEASE_MANIFEST[CANARY_HOST]}"
+    CURRENT_PRIMARY_HOST="${RELEASE_MANIFEST[PRIMARY_HOST]}"
+  fi
 fi
 
 ORIGINAL_PREVIOUS_SHA=""
 ORIGINAL_PREVIOUS_EXISTS=false
 if load_optional_state_sha "$ROOT/state/previous" ORIGINAL_PREVIOUS_SHA; then
   ORIGINAL_PREVIOUS_EXISTS=true
-  validate_state_release_directory "$ROOT" "$ORIGINAL_PREVIOUS_SHA"
+  if [[ "$CANDIDATE_MARKETING_CUTOVER" == "true" && "$ORIGINAL_PREVIOUS_SHA" == "$CANDIDATE_RETIREMENT_SOURCE_SHA" ]]; then
+    validate_legacy_marketing_cutover_source "$ROOT/releases/$ORIGINAL_PREVIOUS_SHA"
+  else
+    validate_state_release_directory "$ROOT" "$ORIGINAL_PREVIOUS_SHA"
+  fi
 fi
 
 validate_release_directory "$ROOT/releases/$CANDIDATE_SHA"

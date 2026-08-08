@@ -3,14 +3,14 @@ import { createServer } from "./httpServer.js";
 import type { ApiRepository } from "./types.js";
 
 function setup() {
-  const claimAiContentJob = vi.fn(async (input: { contentType: "card_news" | "blog" | "marketing"; workerId: string; leaseSeconds: number }) => ({
-    id: `job-${input.contentType}`,
+  const claimAiContentJob = vi.fn(async (input: { outputFormat: "card_news" | "blog" | "reel"; workerId: string; leaseSeconds: number }) => ({
+    id: `job-${input.outputFormat}`,
     generationId: "generation-1",
     outputId: null,
     workspaceId: "workspace-1",
     brandId: "brand-1",
-    jobType: "analyze" as const,
-    contentType: input.contentType,
+    jobType: "generate" as const,
+    outputFormat: input.outputFormat,
     status: "processing" as const,
     payload: {},
     attemptCount: 1,
@@ -93,10 +93,10 @@ function setup() {
 
 describe("AI content worker routes", () => {
   it.each([
-    ["card-news", "card_news"],
+    ["card_news", "card_news"],
     ["blog", "blog"],
-    ["marketing", "marketing"],
-  ] as const)("maps %s claims to only %s jobs", async (slug, contentType) => {
+    ["reel", "reel"],
+  ] as const)("maps %s claims to only %s jobs", async (slug, outputFormat) => {
     const { app, repository } = setup();
     const response = await app.inject({
       method: "POST",
@@ -105,8 +105,8 @@ describe("AI content worker routes", () => {
       payload: { workerId: `${slug}-worker-1`, leaseSeconds: 180 },
     });
     expect(response.statusCode).toBe(200);
-    expect(response.json().job.contentType).toBe(contentType);
-    expect(repository.claimAiContentJob).toHaveBeenCalledWith(expect.objectContaining({ contentType }));
+    expect(response.json().job.outputFormat).toBe(outputFormat);
+    expect(repository.claimAiContentJob).toHaveBeenCalledWith(expect.objectContaining({ outputFormat }));
     await app.close();
   });
 
@@ -122,18 +122,11 @@ describe("AI content worker routes", () => {
     await app.close();
   });
 
-  it("forwards heartbeat, analysis completion, and retryable failure", async () => {
+  it("forwards heartbeat and retryable failure", async () => {
     const { app, repository } = setup();
     const headers = { authorization: "Bearer worker-token" };
     const heartbeat = await app.inject({ method: "POST", url: "/worker/ai-content-jobs/job-1/heartbeat", headers, payload: { workerId: "worker-1", leaseToken: "lease-1", leaseSeconds: 180 } });
     expect(heartbeat.statusCode).toBe(200);
-
-    const completed = await app.inject({
-      method: "POST", url: "/worker/ai-content-jobs/job-1/complete", headers,
-      payload: { workerId: "worker-1", leaseToken: "lease-1", skillVersion: "blog-skill.v1", jobType: "analyze", analysisJson: { outline: ["핵심"] } },
-    });
-    expect(completed.statusCode).toBe(200);
-    expect(repository.completeAiContentJob).toHaveBeenCalledWith(expect.objectContaining({ jobType: "analyze" }));
 
     const failed = await app.inject({
       method: "POST", url: "/worker/ai-content-jobs/job-1/fail", headers,

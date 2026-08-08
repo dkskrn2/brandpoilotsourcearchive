@@ -304,7 +304,7 @@ describe("apiClient", () => {
     expect(requestedUrl).not.toContain("search");
   });
 
-  it.each(["card_news", "blog", "reel", "marketing_content"] as const)(
+  it.each(["card_news", "blog", "reel"] as const)(
     "accepts the supported %s reference seed format",
     async (format) => {
       const fetchMock = vi.fn(async () => new Response("[]", { status: 200 }));
@@ -323,6 +323,15 @@ describe("apiClient", () => {
     const client = apiClient({ baseUrl: "http://api.test", fetcher: fetchMock as typeof fetch });
 
     await expect(client.listAiContentReferenceSeeds("brand-1", "story" as never))
+      .rejects.toThrow("ai_content_reference_seed_format_invalid");
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects the removed marketing_content reference seed format before issuing a request", async () => {
+    const fetchMock = vi.fn();
+    const client = apiClient({ baseUrl: "http://api.test", fetcher: fetchMock as typeof fetch });
+
+    await expect(client.listAiContentReferenceSeeds("brand-1", "marketing_content" as never))
       .rejects.toThrow("ai_content_reference_seed_format_invalid");
     expect(fetchMock).not.toHaveBeenCalled();
   });

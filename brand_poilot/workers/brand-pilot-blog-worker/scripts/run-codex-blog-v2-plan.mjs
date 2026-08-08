@@ -16,13 +16,16 @@ export function buildCodexPrompt(prompt) { return `${prompt}\n\n제공된 고정
 export function buildCodexArgs(outputDir) {
   return [
     "--strict-config", "-c", 'default_permissions="writer"',
-    "-c", 'permissions.writer.filesystem={":minimal"="read","/codex"="deny",":workspace_roots"={"."="deny"}}',
+    "-c", 'permissions.writer.filesystem={":minimal"="read","/codex"="deny","/codex-accounts"="deny",":workspace_roots"={"."="deny"}}',
     "-c", "permissions.writer.network.enabled=false",
     "--disable", "shell_tool", "--disable", "image_generation", "--disable", "shell_snapshot",
     "--disable", "apps", "--disable", "browser_use", "--disable", "browser_use_external", "--disable", "in_app_browser",
     "--disable", "computer_use", "--disable", "multi_agent", "--disable", "plugins",
     "--ask-for-approval", "never", "exec", "--ignore-user-config", "--skip-git-repo-check", "--ignore-rules", "--ephemeral",
-    "--output-schema", path.resolve(import.meta.dirname, "blog-plan-v2.schema.json"),
+    "--output-schema", path.resolve(
+      import.meta.dirname,
+      "../../../packages/brand-pilot-content-contracts/generated/blog-plan-v2.schema.json",
+    ),
     "--output-last-message", path.join(outputDir, "blog-plan.json"), "-C", outputDir, "-",
   ];
 }

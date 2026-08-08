@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { buildAiContentAssetPrompt } from "./aiContentAssetPrompt.js";
-import type { ImageGenerationPackageV1 } from "@brand-pilot/worker-runtime";
+import type { ImageGenerationPackageV1 } from "@brand-pilot/content-contracts";
 
 const uid = (n: number) => `20000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 

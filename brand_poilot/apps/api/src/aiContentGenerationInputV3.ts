@@ -1,3 +1,8 @@
+import { createHash } from "node:crypto";
+import {
+  parseBrandRulesContentV1,
+  type ApprovedBrandRulesSnapshotV1,
+} from "@brand-pilot/content-contracts";
 import type {
   ApprovedBrandCoreSnapshotV2,
   ApprovedProductSnapshotV2,
@@ -100,7 +105,6 @@ const formats = new Set<ContentOutputFormatV2>([
   "card_news",
   "blog",
   "reel",
-  "marketing_content",
 ]);
 const ratios = new Set<ContentRatioV2>(["1:1", "4:5", "16:9", "9:16"]);
 const imageMimeTypes = new Set<GeneratedImageMimeTypeV2>([
@@ -361,6 +365,28 @@ function parseBrandCore(value: unknown): ApprovedBrandCoreSnapshotV2 {
     differentiator: boundedString(source.differentiator, 4_000),
     coreAppeal: boundedString(source.coreAppeal, 4_000),
   };
+}
+
+function canonicalJson(value: unknown): string {
+  const normalize = (current: unknown): unknown => {
+    if (Array.isArray(current)) return current.map(normalize);
+    if (!current || typeof current !== "object") return current;
+    return Object.fromEntries(
+      Object.entries(current as Record<string, unknown>)
+        .sort(([left], [right]) => left.localeCompare(right))
+        .map(([key, child]) => [key, normalize(child)]),
+    );
+  };
+  return JSON.stringify(normalize(value));
+}
+
+function parseBrandRulesSnapshot(value: unknown): ApprovedBrandRulesSnapshotV1 {
+  const source = exactObject(value, ["versionId", "version", "content", "contentSha256"]);
+  const content = parseBrandRulesContentV1(source.content);
+  const contentSha256 = sha256(source.contentSha256);
+  if (typeof source.version !== "number" || !Number.isInteger(source.version) || source.version < 1
+    || contentSha256 !== createHash("sha256").update(canonicalJson(content)).digest("hex")) fail();
+  return { versionId: uuid(source.versionId), version: source.version, content, contentSha256 };
 }
 
 function parseImageFields(value: unknown): {
@@ -930,6 +956,7 @@ export function parseContentGenerationInputV3(value: unknown): ContentGeneration
     "contractVersion",
     "generationId",
     "brandCore",
+    "brandRules",
     "subject",
     "contentInstruction",
     "product",
@@ -945,6 +972,7 @@ export function parseContentGenerationInputV3(value: unknown): ContentGeneration
     contractVersion: source.contractVersion,
     generationId: uuid(source.generationId),
     brandCore: parseBrandCore(source.brandCore),
+    brandRules: parseBrandRulesSnapshot(source.brandRules),
     subject: parseSubject(source.subject),
     contentInstruction: nullableString(source.contentInstruction, 4_000),
     product: source.product === null ? null : parseProduct(source.product),

@@ -1,3 +1,4 @@
+import { CONTENT_FORMAT_CATALOG } from "@brand-pilot/content-contracts";
 import type {
   ChannelCapability,
   ChannelConnection,
@@ -35,10 +36,9 @@ const channelLabels: Record<ChannelType, string> = {
 };
 
 const generationLabels: Record<ChannelCapability["generationFormats"][number], string> = {
-  card_news: "카드뉴스",
-  blog: "블로그",
-  reel: "릴스(세로 이미지)",
-  marketing_content: "마케팅 콘텐츠",
+  card_news: CONTENT_FORMAT_CATALOG.card_news.koreanLabel,
+  blog: CONTENT_FORMAT_CATALOG.blog.koreanLabel,
+  reel: CONTENT_FORMAT_CATALOG.reel.koreanLabel,
   single_image: "단일 이미지",
   channel_text: "채널 텍스트",
 };

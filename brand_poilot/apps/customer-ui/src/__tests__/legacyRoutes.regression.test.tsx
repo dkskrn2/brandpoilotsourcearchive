@@ -78,7 +78,6 @@ describe("legacy customer routes", () => {
       "card_news",
       "blog",
       "reel",
-      "marketing_content",
     ]);
     expect(screen.queryByText(/Reel|Shorts|TikTok 영상|영상 Story|AI 아바타|얼굴 합성|음성 복제/)).not.toBeInTheDocument();
   });

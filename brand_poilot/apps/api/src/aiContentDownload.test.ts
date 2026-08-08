@@ -5,14 +5,16 @@ const output = {
   id: "33333333-3333-4333-8333-333333333333",
   generation_id: "22222222-2222-4222-8222-222222222222",
   output_index: 1,
-  type: "card_news",
+  output_format: "card_news",
+  purpose: "informational",
   title: "여름 추천",
   status: "completed",
   artifact_manifest_json: {
-    version: "ai-content.v1",
-    type: "card_news",
+    version: "ai-content.v3",
+    outputFormat: "card_news",
+    purpose: "informational",
     title: "여름 추천",
-    assets: [{ role: "slide", url: "https://test.public.blob.vercel-storage.com/slide-01.png", fileName: "slide-01.png", mimeType: "image/png", width: 1080, height: 1080, index: 1 }],
+    assets: [{ role: "slide", url: "https://test.public.blob.vercel-storage.com/ai-content/brand-1/22222222-2222-4222-8222-222222222222/33333333-3333-4333-8333-333333333333/assets/01.png", fileName: "slide-01.png", mimeType: "image/png", width: 1080, height: 1080, index: 1 }],
     content: { caption: "여름 준비", hashtags: ["여름"], cta: "저장해 두세요." },
   },
   content_json: { caption: "여름 준비", hashtags: ["여름"] },
@@ -23,6 +25,13 @@ const secondOutput = {
   id: "44444444-4444-4444-8444-444444444444",
   output_index: 2,
   title: "가을 추천",
+  artifact_manifest_json: {
+    ...output.artifact_manifest_json,
+    assets: output.artifact_manifest_json.assets.map((asset) => ({
+      ...asset,
+      url: asset.url.replace(output.id, "44444444-4444-4444-8444-444444444444"),
+    })),
+  },
 };
 
 function setup() {
@@ -46,6 +55,71 @@ function setup() {
 }
 
 describe("createAiContentDownloadRepository", () => {
+  it("rejects maintenance before output reads, remote fetches, or ZIP construction", async () => {
+    const fetchImpl = vi.fn();
+    const zipBuilder = vi.fn(() => Buffer.from("zip"));
+    const client = { query: vi.fn(), release: vi.fn() };
+    const pool = {
+      query: vi.fn(async (sql: string) => {
+        if (sql === "select assert_ai_content_writable()") throw new Error("ai_content_maintenance");
+        throw new Error(`unexpected_query:${sql}`);
+      }),
+      connect: vi.fn(async () => client),
+    };
+    const repository = createAiContentDownloadRepository(pool as never, {
+      fetchImpl: fetchImpl as never,
+      zipBuilder,
+    });
+
+    await expect(repository.downloadAiContentOutput({
+      workspaceId: "workspace-1",
+      brandId: "brand-1",
+      outputId: output.id,
+      usageDate: "2026-08-05",
+      dailyDownloadLimit: 20,
+    })).rejects.toThrow("ai_content_maintenance");
+
+    expect(pool.query).toHaveBeenCalledTimes(1);
+    expect(pool.query).toHaveBeenCalledWith("select assert_ai_content_writable()");
+    expect(pool.connect).not.toHaveBeenCalled();
+    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(zipBuilder).not.toHaveBeenCalled();
+  });
+
+  it("checks maintenance immediately after BEGIN before recording a download", async () => {
+    const statements: string[] = [];
+    const client = {
+      query: vi.fn(async (sql: string) => {
+        statements.push(sql);
+        if (sql === "select assert_ai_content_writable()") throw new Error("ai_content_maintenance");
+        return { rows: [], rowCount: 0 };
+      }),
+      release: vi.fn(),
+    };
+    const pool = {
+      query: vi.fn(async (sql: string) => {
+        if (sql === "select assert_ai_content_writable()") return { rows: [], rowCount: 1 };
+        return { rows: [output], rowCount: 1 };
+      }),
+      connect: vi.fn(async () => client),
+    };
+    const repository = createAiContentDownloadRepository(pool as never, {
+      fetchImpl: vi.fn(async () => new Response(Buffer.from("png"), { status: 200 })) as never,
+      zipBuilder: () => Buffer.from("zip"),
+    });
+
+    await expect(repository.downloadAiContentOutput({
+      workspaceId: "workspace-1",
+      brandId: "brand-1",
+      outputId: output.id,
+      usageDate: "2026-08-05",
+      dailyDownloadLimit: 20,
+    })).rejects.toThrow("ai_content_maintenance");
+
+    expect(statements.slice(0, 2)).toEqual(["BEGIN", "select assert_ai_content_writable()"]);
+    expect(statements.some((sql) => /insert into ai_content_usage_ledger|update ai_content_generation_outputs/i.test(sql))).toBe(false);
+  });
+
   it("builds a ZIP and records a new download only once", async () => {
     const { repository, client, ledgerInserts } = setup();
     const input = { workspaceId: "workspace-1", brandId: "brand-1", outputId: output.id, usageDate: "2026-07-18", dailyDownloadLimit: 20 };
@@ -163,14 +237,13 @@ describe("createAiContentDownloadRepository", () => {
     expect(updatedOutputs).toBe(1);
   });
 
-  it("packages a v2 blog with HTML and zero or optional inline images from its owned prefix", async () => {
+  it("packages a V3 blog with HTML and zero or optional inline images from its owned prefix", async () => {
     const entriesByCall: string[][] = [];
     const v2Blog = {
       ...output,
-      type: "blog",
+      output_format: "blog",
       artifact_manifest_json: {
-        version: "ai-content.v2",
-        type: "blog",
+        version: "ai-content.v3",
         purpose: "informational",
         outputFormat: "blog",
         title: "검색형 블로그",
@@ -181,7 +254,7 @@ describe("createAiContentDownloadRepository", () => {
           fileName: "content.html",
           mimeType: "text/html",
         }],
-        content: { title: "검색형 블로그", html: "<article><h1>검색형 블로그</h1></article>" },
+        content: { title: "검색형 블로그", summary: "요약", html: "<article><h1>검색형 블로그</h1></article>", metaTitle: "검색형 블로그", metaDescription: "설명" },
       },
       content_json: { title: "검색형 블로그", html: "<article><h1>검색형 블로그</h1></article>" },
     };
@@ -219,14 +292,14 @@ describe("createAiContentDownloadRepository", () => {
     expect(entriesByCall[1]).toEqual(expect.arrayContaining([expect.stringMatching(/inline-01\.png$/)]));
   });
 
-  it("packages v2 reel scenes and the final MP4 while retaining the first scene as the cover asset", async () => {
+  it("packages V3 reel scenes and the final MP4 while retaining the first scene as the cover asset", async () => {
     const names: string[] = [];
     const v2Reel = {
       ...output,
-      type: "marketing",
+      output_format: "reel",
+      purpose: "marketing",
       artifact_manifest_json: {
-        version: "ai-content.v2",
-        type: "marketing",
+        version: "ai-content.v3",
         purpose: "marketing",
         outputFormat: "reel",
         title: "릴스",
@@ -235,7 +308,7 @@ describe("createAiContentDownloadRepository", () => {
           { role: "scene", index: 2, url: `https://assets.public.blob.vercel-storage.com/ai-content/brand-1/${output.generation_id}/${output.id}/assets/02.png`, fileName: "scene-02.png", mimeType: "image/png", width: 1080, height: 1920 },
           { role: "video", index: 1, url: `https://assets.public.blob.vercel-storage.com/ai-content/brand-1/${output.generation_id}/${output.id}/reel.mp4`, fileName: "reel.mp4", mimeType: "video/mp4", width: 1080, height: 1920, durationSeconds: 8, videoCodec: "h264", fps: 30, audioCodec: null },
         ],
-        content: { caption: "릴스" },
+        content: { caption: "릴스", hashtags: [], cta: "보기" },
       },
     };
     const { client } = setup();
@@ -256,17 +329,16 @@ describe("createAiContentDownloadRepository", () => {
     ]));
   });
 
-  it("rejects a v2 asset outside the scoped deterministic brand, generation, and output prefix", async () => {
+  it("rejects a V3 asset outside the scoped deterministic brand, generation, and output prefix", async () => {
     const foreign = {
       ...output,
       artifact_manifest_json: {
-        version: "ai-content.v2",
-        type: "card_news",
+        version: "ai-content.v3",
         purpose: "informational",
         outputFormat: "card_news",
         title: "외부 자산",
         assets: [{ role: "slide", index: 1, url: `https://assets.public.blob.vercel-storage.com/ai-content/other-brand/${output.generation_id}/${output.id}/assets/01.png`, fileName: "slide-01.png", mimeType: "image/png", width: 1080, height: 1080 }],
-        content: { caption: "외부" },
+        content: { caption: "외부", hashtags: [], cta: "보기" },
       },
     };
     const { client } = setup();

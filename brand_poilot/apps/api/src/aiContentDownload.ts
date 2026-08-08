@@ -1,8 +1,9 @@
 import type { Pool, PoolClient } from "pg";
+import type { AiContentManifestV3, ContentPurpose, ContentStudioOutputFormat } from "@brand-pilot/content-contracts";
 import { createZipBuffer } from "./downloadPackage.js";
-import { parseAiContentManifest } from "./aiContentManifest.js";
-import type { AiContentManifest } from "./aiContentContracts.js";
+import { parseActiveAiContentManifestV3 } from "./aiContentManifest.js";
 import type { DownloadPackageDto } from "./types.js";
+import { assertAiContentWritable } from "./aiContentMaintenance.js";
 
 interface Scope {
   workspaceId: string;
@@ -15,7 +16,8 @@ interface OutputRow {
   id: string;
   generation_id: string;
   output_index: number;
-  type: "card_news" | "blog" | "marketing";
+  output_format: ContentStudioOutputFormat;
+  purpose: ContentPurpose;
   title: string;
   status: string;
   artifact_manifest_json: unknown;
@@ -49,13 +51,11 @@ async function fetchAsset(url: string, fetchImpl: typeof fetch, maxBytes: number
   return bytes;
 }
 
-function validateV2AssetPath(
+function validateActiveAssetPath(
   input: Pick<Scope, "brandId">,
   row: OutputRow,
-  asset: AiContentManifest["assets"][number],
+  asset: AiContentManifestV3["assets"][number],
 ) {
-  const manifest = row.artifact_manifest_json as { version?: unknown };
-  if (manifest?.version !== "ai-content.v2") return;
   const path = decodeURIComponent(blobUrl(asset.url).pathname).replace(/^\/+/, "");
   const prefix = `ai-content/${input.brandId}/${row.generation_id}/${row.id}/`;
   const expected = asset.role === "html"
@@ -68,10 +68,13 @@ function validateV2AssetPath(
 
 async function outputEntries(row: OutputRow, input: Scope, fetchImpl: typeof fetch, maxAssetBytes: number) {
   if (row.status !== "completed") throw new Error("ai_content_output_not_completed");
-  const manifest = parseAiContentManifest(row.type, row.artifact_manifest_json) as AiContentManifest;
+  const manifest = parseActiveAiContentManifestV3(row.artifact_manifest_json);
+  if (manifest.outputFormat !== row.output_format || manifest.purpose !== row.purpose) {
+    throw new Error("ai_content_download_manifest_mismatch");
+  }
   const folder = `${String(row.output_index).padStart(2, "0")}-${safeSegment(row.title, "result")}`;
   const assets = await Promise.all(manifest.assets.map(async (asset) => {
-    validateV2AssetPath(input, row, asset);
+    validateActiveAssetPath(input, row, asset);
     return {
       name: `${folder}/${safeSegment(asset.fileName, `asset-${asset.index}`)}`,
       data: await fetchAsset(asset.url, fetchImpl, maxAssetBytes),
@@ -133,6 +136,7 @@ export function createAiContentDownloadRepository(pool: Pool, options: {
     const client = await pool.connect();
     try {
       await client.query("BEGIN");
+      await assertAiContentWritable(client);
       await recordDownloads(client, input, rows);
       await client.query("COMMIT");
     } catch (error) {
@@ -146,8 +150,9 @@ export function createAiContentDownloadRepository(pool: Pool, options: {
 
   return {
     async downloadAiContentOutput(input) {
+      await assertAiContentWritable(pool);
       const result = await pool.query<OutputRow>(
-        `select output.id, output.generation_id, output.output_index, generation.type, coalesce(output.title, generation.title) as title,
+        `select output.id, output.generation_id, output.output_index, generation.output_format, generation.purpose, coalesce(output.title, generation.title) as title,
                 output.status, output.artifact_manifest_json, output.content_json
            from ai_content_generation_outputs output
            join ai_content_generations generation on generation.id = output.generation_id
@@ -158,8 +163,9 @@ export function createAiContentDownloadRepository(pool: Pool, options: {
     },
 
     async downloadAiContentGeneration(input) {
+      await assertAiContentWritable(pool);
       const result = await pool.query<OutputRow>(
-        `select output.id, output.generation_id, output.output_index, generation.type, coalesce(output.title, generation.title) as title,
+        `select output.id, output.generation_id, output.output_index, generation.output_format, generation.purpose, coalesce(output.title, generation.title) as title,
                 output.status, output.artifact_manifest_json, output.content_json
            from ai_content_generation_outputs output
            join ai_content_generations generation on generation.id = output.generation_id

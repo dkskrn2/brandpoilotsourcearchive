@@ -1,7 +1,13 @@
 import { createHash } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import { load } from "cheerio";
-import { parseContentGenerationInputV3, parseImageGenerationPackageV1, type ContentGenerationInputV3 } from "@brand-pilot/worker-runtime";
+import {
+  parseAiContentManifestV3,
+  parseContentGenerationInputV3,
+  parseImageGenerationPackageV1,
+  type AiContentManifestV3,
+  type ContentGenerationInputV3,
+} from "@brand-pilot/content-contracts";
 import type { AiContentPackageFinalizeJob, AiContentRenderedAsset } from "./aiContentRenderClient.js";
 import { buildAiContentReelManifest } from "./manifest.js";
 import { createAiContentReelRenderer, type AiContentReelRenderer } from "./reelRenderer.js";
@@ -16,16 +22,6 @@ export interface AiContentFinalizerStorage {
   readOwned(storagePath: string): Promise<Buffer>;
   uploadVideo(input: { path: string; bytes: Buffer; width: number; height: number; durationSeconds: number; videoCodec: "h264"; audioCodec: null; fps: 30 }): Promise<{ url: string; checksum: string }>;
   uploadText(input: { path: string; text: string; contentType: "text/html; charset=utf-8" | "application/json" }): Promise<{ url: string; checksum: string }>;
-}
-
-export interface AiContentManifestV2 {
-  version: "ai-content.v2";
-  type: "card_news" | "blog" | "marketing";
-  purpose: "informational" | "marketing";
-  outputFormat: "card_news" | "blog" | "reel" | "marketing_content";
-  title: string;
-  assets: Array<Record<string, unknown>>;
-  content: Record<string, unknown>;
 }
 
 function record(value: unknown): Record<string, unknown> {
@@ -118,20 +114,19 @@ function validateFinalBlogHtml(html: string, input: ContentGenerationInputV3, su
   return summaryText.join("\n");
 }
 
-function socialManifest(job: AiContentPackageFinalizeJob, finalInput: ContentGenerationInputV3, plan: Record<string, unknown>, assets: AiContentRenderedAsset[]): AiContentManifestV2 {
+function socialManifest(finalInput: ContentGenerationInputV3, plan: Record<string, unknown>, assets: AiContentRenderedAsset[]): AiContentManifestV3 {
   const content = record(plan.content);
-  const marketing = finalInput.outputSettings.outputFormat === "marketing_content";
   const expectedCount = finalInput.selectedProposal.assetCount;
   if (expectedCount === null || assets.length !== expectedCount) throw new Error("ai_content_finalizer_asset_count_invalid");
-  return {
-    version: "ai-content.v2", type: marketing ? "marketing" : "card_news", purpose: finalInput.outputSettings.purpose,
+  return parseAiContentManifestV3({
+    version: "ai-content.v3", purpose: finalInput.outputSettings.purpose,
     outputFormat: finalInput.outputSettings.outputFormat, title: finalInput.selectedProposal.title,
-    assets: assets.map((asset) => ({ role: marketing ? "creative" : "slide", index: asset.index, url: asset.url, fileName: `${marketing ? "creative" : "slide"}-${String(asset.index).padStart(2, "0")}.png`, mimeType: "image/png", width: asset.width, height: asset.height })),
+    assets: assets.map((asset) => ({ role: "slide", index: asset.index, url: asset.url, fileName: `slide-${String(asset.index).padStart(2, "0")}.png`, mimeType: "image/png", width: asset.width, height: asset.height })),
     content: { caption: content.caption, hashtags: content.hashtags, cta: content.cta },
-  };
+  });
 }
 
-export async function finalizeAiContentPackage(job: AiContentPackageFinalizeJob, storage: AiContentFinalizerStorage, reelRenderer?: AiContentReelRenderer, signal = new AbortController().signal): Promise<{ manifest: AiContentManifestV2; manifestUrl: string }> {
+export async function finalizeAiContentPackage(job: AiContentPackageFinalizeJob, storage: AiContentFinalizerStorage, reelRenderer?: AiContentReelRenderer, signal = new AbortController().signal): Promise<{ manifest: AiContentManifestV3; manifestUrl: string }> {
   const throwIfAborted = () => {
     if (signal.aborted) throw signal.reason instanceof Error ? signal.reason : new Error("ai_content_reel_aborted");
   };
@@ -150,9 +145,9 @@ export async function finalizeAiContentPackage(job: AiContentPackageFinalizeJob,
       || imagePackage.purpose !== finalInput.outputSettings.purpose || imagePackage.assetCount !== assets.length
     ) throw new Error("ai_content_finalizer_asset_count_invalid");
   }
-  let manifest: AiContentManifestV2;
+  let manifest: AiContentManifestV3;
   if (format === "reel") {
-    if (plan.contractVersion !== "marketing-plan.v2" || plan.outputFormat !== "reel") throw new Error("ai_content_finalizer_plan_invalid");
+    if (plan.contractVersion !== "reel-plan.v2" || plan.outputFormat !== "reel") throw new Error("ai_content_finalizer_plan_invalid");
     if (assets.some((asset) => asset.width * 16 !== asset.height * 9)) throw new Error("ai_content_finalizer_asset_dimensions_invalid");
     const assetPrefix = `ai-content/${job.brandId}/${job.generationId}/${job.outputId}/assets`;
     if (assets.some((asset) => asset.storagePath !== `${assetPrefix}/${String(asset.index).padStart(2, "0")}.png`)) {
@@ -179,10 +174,9 @@ export async function finalizeAiContentPackage(job: AiContentPackageFinalizeJob,
       video: { url: uploadedVideo.url, width: rendered.video.width, height: rendered.video.height, durationSeconds: rendered.video.durationSeconds },
       content: record(plan.content)
     });
-  } else if (format === "card_news" || format === "marketing_content") {
-    const expectedVersion = format === "card_news" ? "card-news-plan.v2" : "marketing-plan.v2";
-    if (plan.contractVersion !== expectedVersion || (format === "marketing_content" && plan.outputFormat !== format)) throw new Error("ai_content_finalizer_plan_invalid");
-    manifest = socialManifest(job, finalInput, plan, assets);
+  } else if (format === "card_news") {
+    if (plan.contractVersion !== "card-news-plan.v2") throw new Error("ai_content_finalizer_plan_invalid");
+    manifest = socialManifest(finalInput, plan, assets);
   } else {
     if (plan.contractVersion !== "blog-plan.v2") throw new Error("ai_content_finalizer_plan_invalid");
     const content = record(plan.content);
@@ -193,14 +187,14 @@ export async function finalizeAiContentPackage(job: AiContentPackageFinalizeJob,
     const summary = validateFinalBlogHtml(html, finalInput, job.payload.supplementalResearch, usedEvidenceIds, assets);
     const prefix = `ai-content/${job.brandId}/${job.generationId}/${job.outputId}`;
     const uploadedHtml = await storage.uploadText({ path: `${prefix}/content.html`, text: html, contentType: "text/html; charset=utf-8" });
-    manifest = {
-      version: "ai-content.v2", type: "blog", purpose: finalInput.outputSettings.purpose, outputFormat: "blog", title: text(content.title),
+    manifest = parseAiContentManifestV3({
+      version: "ai-content.v3", purpose: finalInput.outputSettings.purpose, outputFormat: "blog", title: text(content.title),
       assets: [
         { role: "html", index: 1, url: uploadedHtml.url, fileName: "content.html", mimeType: "text/html" },
         ...assets.map((asset) => ({ role: "inline", index: asset.index, url: asset.url, fileName: `inline-${String(asset.index).padStart(2, "0")}.png`, mimeType: "image/png", width: asset.width, height: asset.height })),
       ],
       content: { title: text(content.title), summary, html, metaTitle: text(content.metaTitle), metaDescription: text(content.metaDescription) },
-    };
+    });
   }
   throwIfAborted();
   const manifestPath = `ai-content/${job.brandId}/${job.generationId}/${job.outputId}/manifest.json`;
