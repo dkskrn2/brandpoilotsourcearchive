@@ -93,6 +93,7 @@ import {
 import { registerBrandCenterRoutes } from "./brandCenterHttp.js";
 import type { ApiHttpRuntimePolicy } from "./runtimeConfig.js";
 import { assessApiReadiness } from "./runtime.js";
+import type { AiContentJobRecord } from "./aiContentRepository.js";
 
 export type { ApiHttpRuntimePolicy } from "./runtimeConfig.js";
 
@@ -113,6 +114,23 @@ const dmAttentionTypes = new Set<DmAttentionType>(["restricted_action", "complai
 const instagramFormatSet = new Set<string>(instagramFormats);
 const instagramTrendMediaTypes = new Set<InstagramTrendMediaTypeFilter>(["all", "reel", "video", "image", "carousel"]);
 const instagramTrendSorts = new Set<InstagramTrendSort>(["meta", "likes", "comments"]);
+
+function aiContentWorkerJob(job: AiContentJobRecord | null) {
+  if (!job) return null;
+  if (!job.outputId || !job.leaseToken) throw new Error("ai_content_job_contract_invalid");
+  return {
+    id: job.id,
+    generationId: job.generationId,
+    outputId: job.outputId,
+    workspaceId: job.workspaceId,
+    brandId: job.brandId,
+    jobType: job.jobType,
+    outputFormat: job.outputFormat,
+    status: job.status,
+    payload: job.payload,
+    leaseToken: job.leaseToken,
+  };
+}
 const instagramTrendHttpErrors: Record<string, [number, string]> = {
   invalid_hashtag: [400, "invalid_hashtag"],
   instagram_connection_required: [409, "instagram_connection_required"],
@@ -4407,7 +4425,11 @@ export function createServer(
         reply.code(400);
         return { error: "ai_content_lease_seconds_invalid" };
       }
-      return { job: await repository.claimAiContentJob({ outputFormat, workerId, leaseSeconds }) };
+      return {
+        job: aiContentWorkerJob(
+          await repository.claimAiContentJob({ outputFormat, workerId, leaseSeconds }),
+        ),
+      };
     },
   );
 
