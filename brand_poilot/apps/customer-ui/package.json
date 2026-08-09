@@ -8,6 +8,7 @@
     "prebuild": "npm run build --workspace @brand-pilot/content-contracts",
     "build": "tsc --noEmit && tsc -p tsconfig.node.json --noEmit && vite build",
     "preview": "vite preview --host 127.0.0.1",
+    "pretest": "npm run build --workspace @brand-pilot/content-contracts",
     "test": "vitest run",
     "test:watch": "vitest",
     "e2e": "playwright test"

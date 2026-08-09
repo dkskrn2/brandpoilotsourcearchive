@@ -269,7 +269,7 @@ function parseV2Proposal(value: unknown): ContentProposalV2 {
 function parseV2ProposalBatch(value: unknown): ContentProposalBatch {
   const source = responseObject(value);
   const request = responseObject(source.request);
-  if (request.contractVersion !== "content-proposal-request.v2") {
+  if (request.contractVersion !== "content-orchestration.v2") {
     if (source.origin === "scheduled_crawl"
       && request.contractVersion === "content-proposal-request.v1") {
       return value as ContentProposalBatch;

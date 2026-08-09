@@ -59,6 +59,68 @@ function localAttachment(): GenerationAttachment {
 }
 
 describe("createAiContentApiGateway", () => {
+  it("accepts the manual V2 proposal batch resume contract returned by the API", async () => {
+    const request = {
+      contractVersion: "content-orchestration.v2" as const,
+      brandId: "brand-1",
+      purpose: "informational" as const,
+      seed: { kind: "topic_url" as const, url: "https://example.com/article" },
+      contentInstruction: null,
+      productId: null,
+      outputSettings: {
+        outputFormat: "reel" as const,
+        channelTargets: ["instagram"] as ["instagram"],
+        aspectRatio: "9:16" as const,
+        outputCount: 1 as const,
+      },
+    };
+    const requestJson = vi.fn().mockResolvedValue({
+      id: "batch-1",
+      workspaceId: "workspace-1",
+      brandId: "brand-1",
+      origin: "manual",
+      contentFamily: "informational",
+      request,
+      sourceSnapshots: [],
+      status: "queued",
+      proposals: [],
+      researchEvidence: { items: [] },
+      selectedReferences: [],
+      errorCode: null,
+      errorMessage: null,
+      createdAt: "2026-08-09T00:30:51.542Z",
+      updatedAt: "2026-08-09T00:30:51.542Z",
+    });
+    const gateway = createAiContentApiGateway(clientWith(requestJson));
+
+    await expect(gateway.getProposalBatch("brand-1", "batch-1"))
+      .resolves.toMatchObject({ request, status: "queued", contentFamily: "informational" });
+  });
+
+  it("rejects the worker-internal V2 request contract at the customer batch boundary", async () => {
+    const requestJson = vi.fn().mockResolvedValue({
+      id: "batch-1",
+      workspaceId: "workspace-1",
+      brandId: "brand-1",
+      origin: "manual",
+      contentFamily: "informational",
+      request: { contractVersion: "content-proposal-request.v2" },
+      sourceSnapshots: [],
+      status: "queued",
+      proposals: [],
+      researchEvidence: { items: [] },
+      selectedReferences: [],
+      errorCode: null,
+      errorMessage: null,
+      createdAt: "2026-08-09T00:30:51.542Z",
+      updatedAt: "2026-08-09T00:30:51.542Z",
+    });
+    const gateway = createAiContentApiGateway(clientWith(requestJson));
+
+    await expect(gateway.getProposalBatch("brand-1", "batch-1"))
+      .rejects.toThrow("ai_content_proposal_batch_response_invalid");
+  });
+
   it("calls the proposal batch, inbox, selection, dismissal, and draft-reference contracts", async () => {
     const batch = {
       id: "batch-1",
@@ -66,7 +128,20 @@ describe("createAiContentApiGateway", () => {
       brandId: "brand-1",
       origin: "manual",
       contentFamily: "informational",
-      request: { contractVersion: "content-proposal-request.v2" },
+      request: {
+        contractVersion: "content-orchestration.v2",
+        brandId: "brand-1",
+        purpose: "informational",
+        seed: { kind: "topic_text", title: "여름 관리" },
+        contentInstruction: null,
+        productId: null,
+        outputSettings: {
+          outputFormat: "blog",
+          channelTargets: ["blog_export"],
+          aspectRatio: null,
+          outputCount: 1,
+        },
+      },
       sourceSnapshots: [],
       status: "queued",
       proposals: [],
@@ -796,7 +871,20 @@ describe("createAiContentApiGateway", () => {
       brandId: "brand-1",
       origin: "manual",
       contentFamily: "informational",
-      request: { contractVersion: "content-proposal-request.v2" },
+      request: {
+        contractVersion: "content-orchestration.v2",
+        brandId: "brand-1",
+        purpose: "informational",
+        seed: { kind: "topic_text", title: "피부 장벽" },
+        contentInstruction: null,
+        productId: null,
+        outputSettings: {
+          outputFormat: "card_news",
+          channelTargets: ["instagram"],
+          aspectRatio: "1:1",
+          outputCount: 1,
+        },
+      },
       sourceSnapshots: [],
       status: "ready",
       proposals: [{ id: "proposal-1", proposal: { title: "불완전한 안" } }],
@@ -868,7 +956,20 @@ describe("createAiContentApiGateway", () => {
       brandId: "brand-1",
       origin: "manual",
       contentFamily: "informational",
-      request: { contractVersion: "content-proposal-request.v2" },
+      request: {
+        contractVersion: "content-orchestration.v2",
+        brandId: "brand-1",
+        purpose: "informational",
+        seed: { kind: "topic_text", title: "피부 장벽" },
+        contentInstruction: null,
+        productId: null,
+        outputSettings: {
+          outputFormat: "card_news",
+          channelTargets: ["instagram"],
+          aspectRatio: "1:1",
+          outputCount: 1,
+        },
+      },
       sourceSnapshots: [],
       status: "building",
       proposals: [{
