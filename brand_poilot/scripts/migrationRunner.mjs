@@ -92,15 +92,74 @@ export const fullSourceMigrationIds = Object.freeze([
   "073a_legacy_trigger_function_search_path.sql",
   "074_ai_content_maintenance_write_fence.sql",
   "075_ai_content_three_format_cutover.sql",
+  "076_manual_content_generation_brand_rules.sql",
 ]);
 const legacyTriggerSearchPathMigrationId = "073a_legacy_trigger_function_search_path.sql";
 export const legacyTriggerSearchPathMigrationChecksum =
   "5acce238ce19656738aff6e311d7f3db4a9763c5aee8a3ea1d6e338ce6f84001";
 const bootstrap074MigrationId = "074_ai_content_maintenance_write_fence.sql";
+const cutover075MigrationId = "075_ai_content_three_format_cutover.sql";
+const post075DataMigrationIds = Object.freeze([
+  "076_manual_content_generation_brand_rules.sql",
+]);
+export const post075DataMigrationChecksums = Object.freeze({
+  "076_manual_content_generation_brand_rules.sql": "da42c957d4307d58c1f37f5d508c8a1f14836727080d6290e4b0537e43167604",
+});
 const providerAttestationContract = "ai-content-074-provider-attestation.v4";
 
 const isExactFullSourceManifest = (migrations) => migrations.length === fullSourceMigrationIds.length
   && migrations.every((migration, index) => migration.id === fullSourceMigrationIds[index]);
+
+export function validatePost075DataMigration(migration) {
+  try {
+    if (!migration || !post075DataMigrationIds.includes(migration.id)
+      || typeof migration.sql !== "string"
+      || !exactHex(migration.checksum, 64)
+      || post075DataMigrationChecksums[migration.id] !== migration.checksum
+      || checksum(migration.sql) !== migration.checksum) {
+      throw new Error("post_075_data_migration_invalid");
+    }
+    const statements = topLevelStatements(unwrapFileTransaction(migration.sql))
+      .map((statement) => statement
+        .replace(/^(?:\s|--[^\r\n]*(?:\r?\n|$)|\/\*[\s\S]*?\*\/)+/u, "")
+        .trim())
+      .filter(Boolean);
+    const forbidden = /\b(?:create|alter|drop|truncate|delete|merge|grant|revoke|comment|copy|call|do|execute|vacuum|analyze|cluster|reindex|refresh|reset|lock)\b/i;
+    if (statements.length === 0
+      || statements.some((statement) => !/^(?:select|insert|update|with)\b/i.test(statement)
+        || forbidden.test(statement)
+        || /\bschema_migrations\b/i.test(statement))) {
+      throw new Error("post_075_data_migration_invalid");
+    }
+    return true;
+  } catch (error) {
+    if (error instanceof Error && error.message === "post_075_data_migration_invalid") throw error;
+    throw new Error("post_075_data_migration_invalid");
+  }
+}
+
+export function isExactPost075DataMigrationPlan(migrations, history) {
+  if (!isExactFullSourceManifest(migrations)
+    || !Array.isArray(history)
+    || !history.some(({ id }) => id === cutover075MigrationId)) return false;
+  const sourceIds = new Set(fullSourceMigrationIds);
+  if (history.some(({ id }) => !sourceIds.has(id))) return false;
+  let plan;
+  try {
+    plan = buildMigrationPlan(migrations, history);
+  } catch {
+    return false;
+  }
+  if (plan.pending.some(({ id }) => !post075DataMigrationIds.includes(id))) return false;
+  try {
+    for (const migration of migrations.filter(({ id }) => post075DataMigrationIds.includes(id))) {
+      validatePost075DataMigration(migration);
+    }
+  } catch {
+    return false;
+  }
+  return true;
+}
 // An empty tag catalog is intentional: the provider event trigger observes every
 // ddl_command_end command and the security-definer guard applies the exact DB
 // allowlist. A WHEN TAG filter would leave unlisted DDL as an unguarded bypass.
@@ -1959,7 +2018,6 @@ const bootstrapAuthorizationPayloadKeys = Object.freeze([
   ]);
 const bootstrapAuthorizationEnvelopeKeys = Object.freeze([...bootstrapAuthorizationPayloadKeys, "signature"]);
 
-const cutover075MigrationId = "075_ai_content_three_format_cutover.sql";
 const cutoverAllowlistAuthorizationPayloadKeys = Object.freeze([
   "contractVersion", "algorithm", "keyId", "providerAttestationKeyId",
   "providerAttestationPublicKeySha256", "requestId", "cutoverId", "migrationId",
@@ -3900,6 +3958,115 @@ async function readPersistedCutoverBodyEvidence(client, cutoverId) {
   return validatePersistedCutoverBodyEvidenceRows(result.rows);
 }
 
+export async function runPost075DataMigrationsWithClient({
+  client,
+  migrations,
+  expectedProviderRoleName,
+}) {
+  if (!/^[A-Za-z_][A-Za-z0-9_]{0,62}$/.test(expectedProviderRoleName ?? "")) {
+    throw new Error("post_075_provider_role_required");
+  }
+  await client.query("select pg_advisory_lock(hashtext($1))", [migrationAdvisoryLockName]);
+  try {
+    const history = await readHistory(client);
+    if (!isExactPost075DataMigrationPlan(migrations, history)) {
+      throw new Error("post_075_data_migration_plan_invalid");
+    }
+    const plan = buildMigrationPlan(migrations, history);
+    const evidenceMigration = migrations.find(({ id }) => post075DataMigrationIds.includes(id));
+    if (!evidenceMigration) throw new Error("post_075_data_migration_plan_invalid");
+    const evidence = (status) => ({
+      contractVersion: "post-075-data-migration-evidence.v1",
+      providerRoleName: expectedProviderRoleName,
+      migrationId: evidenceMigration.id,
+      migrationSha256: evidenceMigration.checksum,
+      status,
+    });
+    if (plan.pending.length === 0) {
+      return {
+        migrations,
+        pending: [],
+        baselineRequired: false,
+        post075DataMigration: evidence("already_applied"),
+      };
+    }
+    await client.query("select set_config('search_path','pg_catalog,public,pg_temp',false)");
+    const identity = await client.query(
+      `/* post_075_provider_session_v1 */
+       select session_user::text as session_user_name,
+              current_user::text as current_user_name,
+              current_setting('search_path')='pg_catalog,public,pg_temp' as safe_search_path,
+              (select relation.relowner=role.oid from pg_class relation
+                where relation.oid=to_regclass('public.schema_migrations')) as owns_schema_migrations,
+              (select relation.relowner=role.oid from pg_class relation
+                where relation.oid=to_regclass('public.brand_profiles')) as owns_brand_profiles,
+              (select relation.relowner=role.oid from pg_class relation
+                where relation.oid=to_regclass('public.brand_rule_sets')) as owns_brand_rule_sets,
+              (select relation.relowner=role.oid from pg_class relation
+                where relation.oid=to_regclass('public.reference_items')) as owns_reference_items,
+              (select relation.relowner=role.oid from pg_class relation
+                where relation.oid=to_regclass('public.storage_artifacts')) as owns_storage_artifacts,
+              has_table_privilege(role.rolname,'public.schema_migrations','SELECT') as can_read_schema_migrations,
+              has_table_privilege(role.rolname,'public.schema_migrations','INSERT') as can_insert_schema_migrations,
+              has_table_privilege(role.rolname,'public.brand_profiles','SELECT') as can_read_brand_profiles,
+              has_table_privilege(role.rolname,'public.brand_profiles','UPDATE') as can_update_brand_profiles,
+              has_table_privilege(role.rolname,'public.brand_rule_sets','SELECT') as can_read_brand_rule_sets,
+              has_table_privilege(role.rolname,'public.brand_rule_sets','INSERT') as can_insert_brand_rule_sets,
+              has_table_privilege(role.rolname,'public.brand_rule_sets','UPDATE') as can_update_brand_rule_sets,
+              has_table_privilege(role.rolname,'public.reference_items','SELECT') as can_read_reference_items,
+              has_table_privilege(role.rolname,'public.storage_artifacts','SELECT') as can_read_storage_artifacts
+         from pg_roles role
+        where role.rolname=current_user`,
+    );
+    const provider = identity.rows[0];
+    if (identity.rows.length !== 1
+      || provider.session_user_name !== expectedProviderRoleName
+      || provider.current_user_name !== expectedProviderRoleName
+      || ["safe_search_path", "owns_schema_migrations", "owns_brand_profiles", "owns_brand_rule_sets",
+        "owns_reference_items", "owns_storage_artifacts",
+        "can_read_schema_migrations", "can_insert_schema_migrations", "can_read_brand_profiles",
+        "can_update_brand_profiles", "can_read_brand_rule_sets", "can_insert_brand_rule_sets",
+        "can_update_brand_rule_sets", "can_read_reference_items", "can_read_storage_artifacts"]
+        .some((key) => provider[key] !== true)) {
+      throw new Error("post_075_provider_session_invalid");
+    }
+
+    await client.query("begin");
+    try {
+      for (const migration of plan.pending) {
+        validatePost075DataMigration(migration);
+        await client.query(unwrapFileTransaction(migration.sql));
+        await client.query(
+          "insert into schema_migrations (id, checksum) values ($1, $2)",
+          [migration.id, migration.checksum],
+        );
+        const marker = await client.query(
+          `/* post_075_migration_marker_v1 */
+           select id,checksum from schema_migrations where id=$1`,
+          [migration.id],
+        );
+        if (marker.rows.length !== 1
+          || marker.rows[0]?.id !== migration.id
+          || marker.rows[0]?.checksum !== migration.checksum) {
+          throw new Error("post_075_data_migration_marker_invalid");
+        }
+      }
+      await client.query("commit");
+    } catch (error) {
+      await client.query("rollback");
+      throw error;
+    }
+    return {
+      migrations,
+      pending: plan.pending.map(({ id }) => id),
+      baselineRequired: false,
+      post075DataMigration: evidence("applied"),
+    };
+  } finally {
+    await client.query("select pg_advisory_unlock(hashtext($1))", [migrationAdvisoryLockName]);
+  }
+}
+
 export async function recoverAtomicCutoverMigration({ client, migration, cutover }) {
   if (migration?.id !== cutover075MigrationId || !exactHex(migration?.checksum, 64)
     || !cutover || !exactUuid(cutover.cutoverId)
@@ -4022,7 +4189,9 @@ export async function runMigrationsWithClient({
         throw new Error("bootstrap_075_present_forbidden");
       }
       plan = buildMigrationPlan(migrations, history);
-      const pendingIds = plan.pending.map((migration) => migration.id);
+      const pendingIds = plan.pending
+        .filter((migration) => !post075DataMigrationIds.includes(migration.id))
+        .map((migration) => migration.id);
       const applying074 = pendingIds.includes(bootstrap074MigrationId);
       const exact074Pending = pendingIds.length === 1 && pendingIds[0] === bootstrap074MigrationId;
       const exact073aThen074Pending = pendingIds.length === 2
@@ -4153,7 +4322,7 @@ export async function runMigrationsWithClient({
         ? await verifyCutover075Preconditions({ client, migration: migration075, cutover, bootstrap074, migration074, recovery: true })
         : undefined;
     for (const migration of plan.pending) {
-      if (migration.id === cutover075MigrationId) {
+      if (migration.id === cutover075MigrationId || post075DataMigrationIds.includes(migration.id)) {
         continue;
       }
       await client.query("begin");
@@ -4420,8 +4589,10 @@ export async function runMigrationsWithClient({
     return {
       migrations,
       pending: deferPending075
-        ? plan.pending.filter((migration) => migration.id !== cutover075MigrationId).map((migration) => migration.id)
-        : plan.pending.map((migration) => migration.id),
+        ? plan.pending.filter((migration) => migration.id !== cutover075MigrationId
+          && !post075DataMigrationIds.includes(migration.id)).map((migration) => migration.id)
+        : plan.pending.filter((migration) => !post075DataMigrationIds.includes(migration.id))
+          .map((migration) => migration.id),
       baselineRequired: false,
       ...(deferPending075 ? {
         bootstrap074RestartRequired: true,
@@ -4449,6 +4620,8 @@ export async function runMigrations({
   bootstrap074PrerequisiteMode = false,
   bootstrap074PrerequisiteProviderRoleName,
   cutover,
+  post075DataMigrationMode = false,
+  expectedProviderRoleName,
 }) {
   if (!connectionString) throw new Error("database_url_required");
   const migrations = await loadMigrations(migrationsDirectory);
@@ -4457,6 +4630,13 @@ export async function runMigrations({
   }));
   await client.connect();
   try {
+    if (post075DataMigrationMode) {
+      return await runPost075DataMigrationsWithClient({
+        client,
+        migrations,
+        expectedProviderRoleName,
+      });
+    }
     return await runMigrationsWithClient({
       client,
       migrations,

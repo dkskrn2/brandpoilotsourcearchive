@@ -9,6 +9,50 @@ const API_CONTRACTS_FILE = "apps/api/src/aiContentContracts.ts";
 const CUSTOMER_UI_GATEWAY_FILE = "apps/customer-ui/src/features/ai-content/aiContentApiGateway.ts";
 const HTTP_SERVER_FILE = "apps/api/src/httpServer.ts";
 
+const RUNTIME_MODEL_FILES = Object.freeze({
+  card_news: "workers/brand-pilot-card-news-worker/scripts/run-codex-card-news-v2-plan.mjs",
+  blog: "workers/brand-pilot-blog-worker/scripts/run-codex-blog-v2-plan.mjs",
+  reel: "workers/brand-pilot-reel-worker/scripts/run-codex-reel-plan.mjs",
+  controlled_search: "workers/brand-pilot-worker-runtime/src/controlledSearch.ts",
+  blog_research: "workers/brand-pilot-blog-worker/src/research.ts",
+  proposal: "workers/brand-pilot-content-proposal-worker/src/codexModel.ts",
+});
+
+const PLANNER_ENV_CONTRACTS = Object.freeze([
+  {
+    id: "card_news_deploy",
+    file: "deploy/env/card-news-worker.env.example",
+    key: "CARD_NEWS_CODEX_PLAN_COMMAND",
+    runner: "run-codex-card-news-v2-plan.mjs",
+  },
+  {
+    id: "card_news_worker",
+    file: "workers/brand-pilot-card-news-worker/.env.example",
+    key: "CARD_NEWS_CODEX_PLAN_COMMAND",
+    runner: "run-codex-card-news-v2-plan.mjs",
+  },
+  {
+    id: "blog_deploy",
+    file: "deploy/env/blog-worker.env.example",
+    key: "BLOG_CODEX_PLAN_COMMAND",
+    runner: "run-codex-blog-v2-plan.mjs",
+  },
+  {
+    id: "blog_worker",
+    file: "workers/brand-pilot-blog-worker/.env.example",
+    key: "BLOG_CODEX_PLAN_COMMAND",
+    runner: "run-codex-blog-v2-plan.mjs",
+  },
+]);
+
+const RETIRED_ENV_KEYS = Object.freeze(new Map([
+  ["deploy/env/content-proposal-worker.env.example", ["CONTENT_PROPOSAL_CODEX_MODEL"]],
+  ["deploy/env/card-news-worker.env.example", ["CARD_NEWS_CODEX_COMMAND", "CARD_NEWS_CODEX_TIMEOUT_MS"]],
+  ["workers/brand-pilot-card-news-worker/.env.example", ["CARD_NEWS_CODEX_COMMAND", "CARD_NEWS_CODEX_TIMEOUT_MS"]],
+  ["deploy/env/blog-worker.env.example", ["BLOG_CODEX_COMMAND", "BLOG_CODEX_TIMEOUT_MS"]],
+  ["workers/brand-pilot-blog-worker/.env.example", ["BLOG_CODEX_COMMAND", "BLOG_CODEX_TIMEOUT_MS"]],
+]));
+
 const SQL_FILES = Object.freeze([
   REPOSITORY_FILE,
   "apps/api/src/aiContentRenderJobs.ts",
@@ -69,6 +113,9 @@ export const PRODUCTION_FILE_ALLOWLIST = Object.freeze([
     ...Object.values(PROMPT_BRANCH_FILES),
     CUSTOMER_UI_GATEWAY_FILE,
     ...CANONICAL_CONSUMER_FILES,
+    ...Object.values(RUNTIME_MODEL_FILES),
+    ...PLANNER_ENV_CONTRACTS.map(({ file }) => file),
+    ...RETIRED_ENV_KEYS.keys(),
   ]),
 ].sort());
 
@@ -181,6 +228,13 @@ function checkCanonicalWorkerConsumers(files, violations) {
 
 function checkCatalogAndPromptBranches(files, violations) {
   const catalog = files.get(CATALOG_FILE) ?? "";
+  if (!/\bCONTENT_PLANNER_MODEL_ID\s*=\s*["']gpt-5\.6-terra["']/.test(catalog)) {
+    violations.push(violation(
+      "missing_canonical_terra_model",
+      CATALOG_FILE,
+      "the canonical runtime model constant must bind Terra",
+    ));
+  }
   for (const format of ["card_news", "blog", "reel"]) {
     const entries = [...catalog.matchAll(new RegExp(`\\b${format}\\s*:\\s*\\{([^{}]*)\\}`, "g"))]
       .map((match) => match[1] ?? "");
@@ -198,6 +252,54 @@ function checkCatalogAndPromptBranches(files, violations) {
   if (!/\bpromptBindingFor\b/.test(binding)
     || !/CONTENT_PROMPT_DEFINITION_VERSIONS\s*\[\s*outputFormat\s*\]\s*\[\s*purpose\s*\]/.test(binding)) {
     violations.push(violation("missing_prompt_binding_catalog_lookup", BINDING_FILE, "binding must select format/purpose from the verified catalog"));
+  }
+}
+
+function checkRuntimeModelPins(files, violations) {
+  const terraArgument = /["'](?:--model|-m)["']\s*,\s*(?:CONTENT_PLANNER_MODEL_ID|["']gpt-5\.6-terra["'])/;
+  const canonicalImport = /import\s*\{[^}]*\bCONTENT_PLANNER_MODEL_ID\b[^}]*\}\s*from\s*["']@brand-pilot\/content-contracts["']/;
+  const localModelArgument = /["'](?:--model|-m)["']\s*,\s*MODEL_ID\b/;
+  const localTerraBinding = /\bconst\s+MODEL_ID\s*=\s*["']gpt-5\.6-terra["']/;
+  for (const [id, file] of Object.entries(RUNTIME_MODEL_FILES)) {
+    const source = files.get(file) ?? "";
+    const match = source.match(terraArgument);
+    const usesCanonicalConstant = match?.[0].includes("CONTENT_PLANNER_MODEL_ID") ?? false;
+    const hasDirectPin = Boolean(match) && (!usesCanonicalConstant || canonicalImport.test(source));
+    const hasLocalPin = localModelArgument.test(source) && localTerraBinding.test(source);
+    if (!hasDirectPin && !hasLocalPin) {
+      violations.push(violation(
+        `missing_terra_cli_model:${id}`,
+        file,
+        "the actual Codex invocation must pass the canonical Terra model",
+      ));
+    }
+  }
+}
+
+function regexEscape(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function checkPlannerEnvironmentContracts(files, violations) {
+  for (const contract of PLANNER_ENV_CONTRACTS) {
+    const source = files.get(contract.file) ?? "";
+    const expected = `node scripts/${contract.runner} --job "{{jobFile}}" --output "{{outputDir}}"`;
+    const pattern = new RegExp(`^\\s*${contract.key}=${regexEscape(expected)}\\s*$`, "m");
+    if (!pattern.test(source)) {
+      violations.push(violation(
+        `invalid_planner_command_env:${contract.id}`,
+        contract.file,
+        `${contract.key} must execute ${contract.runner}`,
+      ));
+    }
+  }
+  for (const [file, keys] of RETIRED_ENV_KEYS) {
+    const source = files.get(file) ?? "";
+    for (const key of keys) {
+      if (new RegExp(`^\\s*${key}=`, "m").test(source)) {
+        violations.push(violation("retired_worker_env_key", file, `${key} is not read by the active worker`));
+      }
+    }
   }
 }
 
@@ -303,6 +405,8 @@ export async function inspectThreeFormatCutover(rootDirectory) {
   checkGenerateOnlyPlannerWorkers(files, violations);
   checkCanonicalWorkerConsumers(files, violations);
   checkCatalogAndPromptBranches(files, violations);
+  checkRuntimeModelPins(files, violations);
+  checkPlannerEnvironmentContracts(files, violations);
   checkAssemblerIntegration(files, violations);
   checkV2OnlyCustomerWriters(files, violations);
   checkRetiredV1CustomerContracts(files, violations);

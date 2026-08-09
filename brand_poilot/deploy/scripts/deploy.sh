@@ -13,9 +13,60 @@ MANIFEST="$1"
 PHASE="$3"
 [[ "$PHASE" == "canary" ]] || fail "use_promote_for_production"
 
-for command_name in cmp docker flock install mktemp sha256sum sync; do
+for command_name in cmp docker flock grep id install mktemp sha256sum sync; do
   require_command "$command_name"
 done
+
+POST_075_DATA_MIGRATION_ID="076_manual_content_generation_brand_rules.sql"
+POST_075_DATA_MIGRATION_SHA256="da42c957d4307d58c1f37f5d508c8a1f14836727080d6290e4b0537e43167604"
+
+validate_post_075_data_migration_evidence() {
+  local evidence_file="$1"
+  grep -Fq '"contractVersion": "post-075-data-migration-evidence.v1"' "$evidence_file" ||
+    fail "post_075_data_migration_evidence_invalid"
+  grep -Fq '"providerRoleName": "postgres"' "$evidence_file" ||
+    fail "post_075_data_migration_evidence_invalid"
+  grep -Fq "\"migrationId\": \"$POST_075_DATA_MIGRATION_ID\"" "$evidence_file" ||
+    fail "post_075_data_migration_evidence_invalid"
+  grep -Fq "\"migrationSha256\": \"$POST_075_DATA_MIGRATION_SHA256\"" "$evidence_file" ||
+    fail "post_075_data_migration_evidence_invalid"
+  grep -Eq '"status": "(applied|already_applied)"' "$evidence_file" ||
+    fail "post_075_data_migration_evidence_invalid"
+}
+
+run_post_075_data_migration_gate() {
+  local state_directory="$ROOT/state/post-075-data-migrations"
+  local evidence_file="$state_directory/$POST_075_DATA_MIGRATION_ID.json"
+  local provider_file="${AI_CONTENT_POST_075_PROVIDER_DATABASE_URL_FILE:-}"
+  local output
+  local -a tls_environment=()
+  if [[ -e "$evidence_file" || -L "$evidence_file" ]]; then
+    require_secure_state_directory "$state_directory"
+    require_file_mode_600 "$evidence_file" "${AI_CONTENT_CUTOVER_FILE_OWNER:-bpdeploy}"
+    validate_post_075_data_migration_evidence "$evidence_file"
+    return
+  fi
+  [[ -n "$provider_file" ]] || fail "post_075_provider_database_url_file_required"
+  require_file_mode_600 "$provider_file" "${AI_CONTENT_CUTOVER_FILE_OWNER:-bpdeploy}"
+  mapfile -d '' -t tls_environment < <(resolve_ai_content_floor_tls_environment "$ROOT")
+  output="$(docker run --rm --pull never --read-only \
+    --user "$(id -u):$(id -g)" --cap-drop ALL --security-opt no-new-privileges \
+    --tmpfs /tmp:rw,nosuid,nodev,noexec,size=16m "${tls_environment[@]}" \
+    --entrypoint node \
+    --mount "type=bind,src=$provider_file,dst=/run/secrets/provider-admin-database-url,readonly" \
+    --env SUPABASE_DATABASE_URL_FILE=/run/secrets/provider-admin-database-url \
+    --env AI_CONTENT_POST_075_EXPECTED_PROVIDER_ROLE=postgres \
+    "$CANDIDATE_API_IMAGE" /app/scripts/migrate.mjs --post-075-data)" ||
+    fail "post_075_data_migration_failed"
+  if [[ ! -e "$state_directory" && ! -L "$state_directory" ]]; then
+    install -d -m 0700 "$state_directory"
+  fi
+  [[ -d "$state_directory" && ! -L "$state_directory" ]] ||
+    fail "post_075_data_migration_state_invalid"
+  require_secure_state_directory "$state_directory"
+  atomic_write "$evidence_file" "${output}"$'\n' 600
+  validate_post_075_data_migration_evidence "$evidence_file"
+}
 
 enforce_ai_content_roll_forward_floor "$ROOT"
 mkdir -p -- "$ROOT/releases" "$ROOT/state"
@@ -140,6 +191,7 @@ else
 fi
 
 verify_release_image_revision "$CANDIDATE_API_IMAGE" "$(release_image_source_revision API_IMAGE)"
+run_post_075_data_migration_gate
 
 state_value_or_none "$ROOT/state/current" TRANSITION_CURRENT
 state_value_or_none "$ROOT/state/candidate" TRANSITION_CANDIDATE

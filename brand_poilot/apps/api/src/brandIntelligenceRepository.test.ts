@@ -121,7 +121,9 @@ describe("brand intelligence repository", () => {
       create table brand_profiles (
         id uuid primary key default gen_random_uuid(), workspace_id uuid not null, brand_id uuid not null unique,
         primary_customer text, description text, primary_category_id uuid, active_brand_analysis_id uuid,
-        active_brand_core_id uuid
+        active_brand_core_id uuid, active_brand_rule_set_id uuid,
+        forbidden_terms jsonb not null default '[]'::jsonb, default_cta text,
+        auto_approval_enabled boolean not null default false
       );
       create table brand_analysis_runs (
         id uuid primary key default gen_random_uuid(), workspace_id uuid not null, brand_id uuid not null,
@@ -230,6 +232,15 @@ describe("brand intelligence repository", () => {
       );
       create unique index one_approved_brand_core
         on brand_core_versions(workspace_id, brand_id) where status = 'approved';
+      create table brand_rule_sets (
+        id uuid primary key default gen_random_uuid(), workspace_id uuid not null, brand_id uuid not null,
+        version integer not null, status text not null, rules_json jsonb not null,
+        created_by text not null, created_by_user_id uuid, approved_by_user_id uuid,
+        approved_at timestamptz, created_at timestamptz not null default now(),
+        updated_at timestamptz not null default now(), unique (workspace_id, brand_id, version)
+      );
+      create unique index one_approved_brand_rules
+        on brand_rule_sets(workspace_id, brand_id) where status = 'approved';
       create table source_urls (
         id uuid primary key default gen_random_uuid(), workspace_id uuid not null, brand_id uuid not null,
         source_type text not null, url text not null, url_hash text not null, domain text,
@@ -354,6 +365,22 @@ describe("brand intelligence repository", () => {
       kind: "service",
       display_name: "브랜드 운영",
       status: "approved",
+    }]);
+    const activeRules = await database.query(
+      `select rules.status, rules.version, rules.rules_json
+         from brand_profiles profile
+         join brand_rule_sets rules on rules.id = profile.active_brand_rule_set_id
+        where profile.workspace_id = $1 and profile.brand_id = $2`,
+      [workspaceId, brandId],
+    );
+    expect(activeRules.rows).toMatchObject([{
+      status: "approved",
+      version: 1,
+      rules_json: {
+        contractVersion: "brand-rules.v1",
+        ctaRules: { defaultCta: "", allowed: [] },
+        designRules: { referenceImages: [] },
+      },
     }]);
     const faq = await database.query(
       `select question, answer, category, status, enabled

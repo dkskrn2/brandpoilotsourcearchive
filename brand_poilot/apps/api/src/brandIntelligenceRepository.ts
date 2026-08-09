@@ -11,6 +11,7 @@ import {
   mapAnalysisToBrandCoreDraft,
 } from "./brandCoreContracts.js";
 import { toBrandIntelligenceCommonView } from "./brandIntelligenceV2Contracts.js";
+import { ensureActiveApprovedBrandRules } from "./brandRulesReadiness.js";
 import { hashSourceUrl, normalizeSourceDomain, normalizeSourceUrl } from "./sourceUrl.js";
 
 export interface BrandAnalysisScope { workspaceId: string; brandId: string }
@@ -862,7 +863,15 @@ export function createBrandIntelligenceRepository(
         );
         if (!found.rowCount) throw new Error("brand_analysis_not_found");
         const current = mapRun(found.rows[0] as Record<string, unknown>);
-        if (current.status === "confirmed" && current.isActive) return current;
+        if (current.status === "confirmed" && current.isActive) {
+          await ensureActiveApprovedBrandRules(client, {
+            workspaceId: input.workspaceId,
+            brandId: input.brandId,
+            createdBy: "analysis_confirm",
+            actorUserId: input.actorUserId ?? null,
+          });
+          return current;
+        }
         if (current.status !== "review_ready" || !current.effectiveResult) {
           throw new Error("brand_analysis_not_review_ready");
         }
@@ -1033,6 +1042,12 @@ export function createBrandIntelligenceRepository(
             where workspace_id = $1 and brand_id = $2`,
           [input.workspaceId, input.brandId, coreVersion.rows[0]!.id],
         );
+        await ensureActiveApprovedBrandRules(client, {
+          workspaceId: input.workspaceId,
+          brandId: input.brandId,
+          createdBy: "analysis_confirm",
+          actorUserId: input.actorUserId ?? null,
+        });
         await client.query(
           "delete from brand_offerings where workspace_id = $1 and brand_id = $2",
           [input.workspaceId, input.brandId],

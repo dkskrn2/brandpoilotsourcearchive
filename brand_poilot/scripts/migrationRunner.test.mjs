@@ -4602,6 +4602,175 @@ test("an installation applied through 064 has every later migration pending", as
       "073a_legacy_trigger_function_search_path.sql",
       "074_ai_content_maintenance_write_fence.sql",
       "075_ai_content_three_format_cutover.sql",
+      "076_manual_content_generation_brand_rules.sql",
     ],
   );
+});
+
+test("post-075 data migrations are a closed DML-only contract", async () => {
+  const loaded = await migrationRunner.loadMigrations();
+  const migration076 = loaded.find(({ id }) => id === "076_manual_content_generation_brand_rules.sql");
+  assert.ok(migration076);
+  assert.equal(migrationRunner.validatePost075DataMigration(migration076), true);
+  assert.equal(migrationRunner.isExactPost075DataMigrationPlan(
+    loaded,
+    loaded.filter(({ id }) => id !== migration076.id).map(({ id, checksum }) => ({ id, checksum })),
+  ), true);
+  const alteredSql = `${migration076.sql}\n-- altered but still DML-only\n`;
+  const altered = loaded.map((migration) => migration.id === migration076.id ? {
+    ...migration,
+    sql: alteredSql,
+    checksum: createHash("sha256").update(alteredSql).digest("hex"),
+  } : migration);
+  assert.equal(migrationRunner.isExactPost075DataMigrationPlan(
+    altered,
+    loaded.filter(({ id }) => id !== migration076.id).map(({ id, checksum }) => ({ id, checksum })),
+  ), false);
+  assert.equal(migrationRunner.isExactPost075DataMigrationPlan(
+    loaded,
+    loaded.map(({ id, checksum }) => ({ id, checksum })),
+  ), true);
+
+  for (const sql of [
+    "begin; create table forbidden(id integer); commit;",
+    "begin; delete from brand_profiles; commit;",
+    "begin; grant select on brand_profiles to public; commit;",
+    "begin; update schema_migrations set checksum='x'; commit;",
+  ]) {
+    assert.throws(
+      () => migrationRunner.validatePost075DataMigration({
+        ...migration076,
+        sql,
+        checksum: createHash("sha256").update(sql).digest("hex"),
+      }),
+      /post_075_data_migration_invalid/,
+    );
+  }
+  assert.throws(
+    () => migrationRunner.validatePost075DataMigration({ ...migration076, checksum: "0".repeat(64) }),
+    /post_075_data_migration_invalid/,
+  );
+  assert.equal(migrationRunner.isExactPost075DataMigrationPlan(
+    loaded,
+    loaded.filter(({ id }) => !["072_faq_suggestion_worker.sql", migration076.id].includes(id))
+      .map(({ id, checksum }) => ({ id, checksum })),
+  ), false);
+});
+
+test("post-075 data migration runs as the exact provider administrator and records SQL atomically", async () => {
+  const loaded = await migrationRunner.loadMigrations();
+  const migration076 = loaded.find(({ id }) => id === "076_manual_content_generation_brand_rules.sql");
+  const history = loaded.filter(({ id }) => id !== migration076.id)
+    .map(({ id, checksum }) => ({ id, checksum }));
+  const calls = [];
+  const client = {
+    async query(sql, params = []) {
+      const normalized = String(sql).replace(/\s+/gu, " ").trim();
+      calls.push({ sql: normalized, params });
+      if (normalized.includes("select id, checksum from schema_migrations")) return { rows: history };
+      if (normalized.includes("post_075_provider_session_v1")) return { rows: [{
+        session_user_name: "postgres", current_user_name: "postgres", safe_search_path: true,
+        owns_schema_migrations: true, owns_brand_profiles: true, owns_brand_rule_sets: true,
+        owns_reference_items: true, owns_storage_artifacts: true,
+        can_read_schema_migrations: true, can_insert_schema_migrations: true,
+        can_read_brand_profiles: true, can_update_brand_profiles: true,
+        can_read_brand_rule_sets: true, can_insert_brand_rule_sets: true, can_update_brand_rule_sets: true,
+        can_read_reference_items: true, can_read_storage_artifacts: true,
+      }] };
+      if (normalized.includes("post_075_migration_marker_v1")) return { rows: [{
+        id: migration076.id, checksum: migration076.checksum,
+      }] };
+      return { rows: [] };
+    },
+  };
+
+  const result = await migrationRunner.runPost075DataMigrationsWithClient({
+    client, migrations: loaded, expectedProviderRoleName: "postgres",
+  });
+  assert.deepEqual(result.pending, [migration076.id]);
+  assert.deepEqual(result.post075DataMigration, {
+    contractVersion: "post-075-data-migration-evidence.v1",
+    providerRoleName: "postgres",
+    migrationId: migration076.id,
+    migrationSha256: migration076.checksum,
+    status: "applied",
+  });
+  const beginIndex = calls.findIndex(({ sql }) => sql === "begin");
+  const bodyIndex = calls.findIndex(({ sql }) => sql.includes("DML-only repair"));
+  const markerIndex = calls.findIndex(({ sql }) => sql.startsWith("insert into schema_migrations"));
+  const commitIndex = calls.findIndex(({ sql }) => sql === "commit");
+  assert.ok(beginIndex >= 0 && beginIndex < bodyIndex && bodyIndex < markerIndex && markerIndex < commitIndex);
+  assert.equal(calls.some(({ sql }) => sql.startsWith("set role") || sql.startsWith("set local role")), false);
+});
+
+test("post-075 data migration rejects a non-provider session before writes", async () => {
+  const loaded = await migrationRunner.loadMigrations();
+  const migration076 = loaded.find(({ id }) => id === "076_manual_content_generation_brand_rules.sql");
+  const history = loaded.filter(({ id }) => id !== migration076.id)
+    .map(({ id, checksum }) => ({ id, checksum }));
+  const calls = [];
+  const client = { async query(sql) {
+    const normalized = String(sql).replace(/\s+/gu, " ").trim();
+    calls.push(normalized);
+    if (normalized.includes("select id, checksum from schema_migrations")) return { rows: history };
+    if (normalized.includes("post_075_provider_session_v1")) return { rows: [{
+      session_user_name: "content_migration", current_user_name: "content_migration", safe_search_path: true,
+      owns_schema_migrations: false, owns_brand_profiles: false, owns_brand_rule_sets: false,
+      owns_reference_items: false, owns_storage_artifacts: false,
+      can_read_schema_migrations: true, can_insert_schema_migrations: false,
+      can_read_brand_profiles: false, can_update_brand_profiles: false,
+      can_read_brand_rule_sets: false, can_insert_brand_rule_sets: false, can_update_brand_rule_sets: false,
+      can_read_reference_items: false, can_read_storage_artifacts: false,
+    }] };
+    return { rows: [] };
+  } };
+  await assert.rejects(migrationRunner.runPost075DataMigrationsWithClient({
+    client, migrations: loaded, expectedProviderRoleName: "postgres",
+  }), /post_075_provider_session_invalid/);
+  assert.equal(calls.some((sql) => sql === "begin"), false);
+});
+
+test("post-075 data migration rolls back SQL and marker together and replays as a no-op", async () => {
+  const loaded = await migrationRunner.loadMigrations();
+  const migration076 = loaded.find(({ id }) => id === "076_manual_content_generation_brand_rules.sql");
+  const historyThrough075 = loaded.filter(({ id }) => id !== migration076.id)
+    .map(({ id, checksum }) => ({ id, checksum }));
+  const rollbackCalls = [];
+  const failingClient = { async query(sql) {
+    const normalized = String(sql).replace(/\s+/gu, " ").trim();
+    rollbackCalls.push(normalized);
+    if (normalized.includes("select id, checksum from schema_migrations")) return { rows: historyThrough075 };
+    if (normalized.includes("post_075_provider_session_v1")) return { rows: [{
+      session_user_name: "postgres", current_user_name: "postgres", safe_search_path: true,
+      owns_schema_migrations: true, owns_brand_profiles: true, owns_brand_rule_sets: true,
+      owns_reference_items: true, owns_storage_artifacts: true,
+      can_read_schema_migrations: true, can_insert_schema_migrations: true,
+      can_read_brand_profiles: true, can_update_brand_profiles: true,
+      can_read_brand_rule_sets: true, can_insert_brand_rule_sets: true, can_update_brand_rule_sets: true,
+      can_read_reference_items: true, can_read_storage_artifacts: true,
+    }] };
+    if (normalized.includes("DML-only repair")) throw new Error("forced_body_failure");
+    return { rows: [] };
+  } };
+  await assert.rejects(migrationRunner.runPost075DataMigrationsWithClient({
+    client: failingClient, migrations: loaded, expectedProviderRoleName: "postgres",
+  }), /forced_body_failure/);
+  assert.ok(rollbackCalls.includes("rollback"));
+  assert.equal(rollbackCalls.some((sql) => sql.startsWith("insert into schema_migrations")), false);
+
+  const replayCalls = [];
+  const replayClient = { async query(sql) {
+    const normalized = String(sql).replace(/\s+/gu, " ").trim();
+    replayCalls.push(normalized);
+    if (normalized.includes("select id, checksum from schema_migrations")) {
+      return { rows: loaded.map(({ id, checksum }) => ({ id, checksum })) };
+    }
+    return { rows: [] };
+  } };
+  const replay = await migrationRunner.runPost075DataMigrationsWithClient({
+    client: replayClient, migrations: loaded, expectedProviderRoleName: "postgres",
+  });
+  assert.deepEqual(replay.pending, []);
+  assert.equal(replay.post075DataMigration.status, "already_applied");
+  assert.equal(replayCalls.some((sql) => sql === "begin"), false);
 });

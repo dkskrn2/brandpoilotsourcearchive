@@ -12,6 +12,7 @@ import {
 
 const baseline = Object.freeze({
   "packages/brand-pilot-content-contracts/src/catalog.ts": `
+    export const CONTENT_PLANNER_MODEL_ID = "gpt-5.6-terra";
     export const CONTENT_PROMPT_DEFINITION_VERSIONS = {
       card_news: { informational: "card.info", marketing: "card.marketing" },
       blog: { informational: "blog.info", marketing: "blog.marketing" },
@@ -61,6 +62,48 @@ const baseline = Object.freeze({
   "workers/brand-pilot-reel-worker/src/client.ts": `request("/worker/ai-content-jobs/reel/claim", { workerId });`,
   "workers/brand-pilot-reel-worker/src/index.ts": `const workerId = process.env.REEL_WORKER_ID ?? "reel-worker";`,
   "workers/brand-pilot-reel-worker/src/worker.ts": `export const workerFailure = "reel_worker_failed";`,
+  "workers/brand-pilot-card-news-worker/scripts/run-codex-card-news-v2-plan.mjs": `
+    const args = ["--model", "gpt-5.6-terra", "exec"];
+  `,
+  "workers/brand-pilot-blog-worker/scripts/run-codex-blog-v2-plan.mjs": `
+    import { CONTENT_PLANNER_MODEL_ID } from "@brand-pilot/content-contracts";
+    const args = ["--model", CONTENT_PLANNER_MODEL_ID, "exec"];
+  `,
+  "workers/brand-pilot-reel-worker/scripts/run-codex-reel-plan.mjs": `
+    const args = ["exec", "--model", "gpt-5.6-terra"];
+  `,
+  "workers/brand-pilot-worker-runtime/src/controlledSearch.ts": `
+    import { CONTENT_PLANNER_MODEL_ID } from "@brand-pilot/content-contracts";
+    const args = ["--model", CONTENT_PLANNER_MODEL_ID, "exec"];
+  `,
+  "workers/brand-pilot-blog-worker/src/research.ts": `
+    import { CONTENT_PLANNER_MODEL_ID } from "@brand-pilot/content-contracts";
+    const args = ["--model", CONTENT_PLANNER_MODEL_ID, "exec"];
+  `,
+  "workers/brand-pilot-content-proposal-worker/src/codexModel.ts": `
+    const MODEL_ID = "gpt-5.6-terra";
+    const args = ["exec", "-m", MODEL_ID];
+  `,
+  "deploy/env/content-proposal-worker.env.example": `
+    CONTENT_PROPOSAL_CODEX_COMMAND=codex
+    CONTENT_PROPOSAL_CODEX_TIMEOUT_MS=300000
+  `,
+  "deploy/env/card-news-worker.env.example": `
+    CARD_NEWS_CODEX_PLAN_TIMEOUT_MS=300000
+    CARD_NEWS_CODEX_PLAN_COMMAND=node scripts/run-codex-card-news-v2-plan.mjs --job "{{jobFile}}" --output "{{outputDir}}"
+  `,
+  "workers/brand-pilot-card-news-worker/.env.example": `
+    CARD_NEWS_CODEX_PLAN_TIMEOUT_MS=300000
+    CARD_NEWS_CODEX_PLAN_COMMAND=node scripts/run-codex-card-news-v2-plan.mjs --job "{{jobFile}}" --output "{{outputDir}}"
+  `,
+  "deploy/env/blog-worker.env.example": `
+    BLOG_CODEX_PLAN_TIMEOUT_MS=300000
+    BLOG_CODEX_PLAN_COMMAND=node scripts/run-codex-blog-v2-plan.mjs --job "{{jobFile}}" --output "{{outputDir}}"
+  `,
+  "workers/brand-pilot-blog-worker/.env.example": `
+    BLOG_CODEX_PLAN_TIMEOUT_MS=300000
+    BLOG_CODEX_PLAN_COMMAND=node scripts/run-codex-blog-v2-plan.mjs --job "{{jobFile}}" --output "{{outputDir}}"
+  `,
   "workers/brand-pilot-image-worker/src/aiContentFinalizer.ts": `const plans = ["card-news-plan.v2", "blog-plan.v2", "reel-plan.v2"]; const manifest = "ai-content.v3";`,
   "workers/brand-pilot-image-worker/src/aiContentRenderClient.ts": `import { parseImageGenerationPackageV1 } from "@brand-pilot/content-contracts";`,
   "apps/api/src/automatedCardNews.ts": `const intentionallyDeferred = "marketing-plan.v2 ai-content.v2 marketing-worker content_type";`,
@@ -124,8 +167,18 @@ const violationFixtures = [
   ["legacy_proposal_repository_writer", "apps/api/src/aiContentRepository.ts", `${baseline["apps/api/src/aiContentRepository.ts"]}\nasync function createAiContentProposalBatchV2(input) { return input; }`],
   ["missing_v2_customer_content_writer", "apps/api/src/httpServer.ts", "app.post('/worker/ai-content-jobs/reel/claim', claimReelJob);"],
   ["missing_terra_format_model:blog", "packages/brand-pilot-content-contracts/src/catalog.ts", baseline["packages/brand-pilot-content-contracts/src/catalog.ts"].replace('blog: { model: "gpt-5.6-terra" }', 'blog: { model: "gpt-5.6-sol" }')],
+  ["missing_canonical_terra_model", "packages/brand-pilot-content-contracts/src/catalog.ts", baseline["packages/brand-pilot-content-contracts/src/catalog.ts"].replace('CONTENT_PLANNER_MODEL_ID = "gpt-5.6-terra"', 'CONTENT_PLANNER_MODEL_ID = "gpt-5.6-sol"')],
   ["missing_prompt_binding_catalog_lookup", "packages/brand-pilot-content-contracts/src/binding.ts", "export function promptBindingFor() { return {}; }"],
   ["missing_purpose_prompt_branch:reel", "workers/brand-pilot-reel-worker/src/promptBuilder.ts", "const prompt = informationalPrompt;"],
+  ["missing_terra_cli_model:blog", "workers/brand-pilot-blog-worker/scripts/run-codex-blog-v2-plan.mjs", 'const args = ["exec"];'],
+  ["missing_terra_cli_model:controlled_search", "workers/brand-pilot-worker-runtime/src/controlledSearch.ts", 'const args = ["--model", "gpt-5.6-sol", "exec"];'],
+  ["missing_terra_cli_model:blog_research", "workers/brand-pilot-blog-worker/src/research.ts", 'const args = ["exec", "--model", "gpt-5.6-sol"];'],
+  ["missing_terra_cli_model:proposal", "workers/brand-pilot-content-proposal-worker/src/codexModel.ts", 'const MODEL_ID = "gpt-5.6-sol"; const args = ["exec", "-m", MODEL_ID];'],
+  ["retired_worker_env_key", "deploy/env/content-proposal-worker.env.example", "CONTENT_PROPOSAL_CODEX_MODEL=gpt-5.4"],
+  ["invalid_planner_command_env:card_news_deploy", "deploy/env/card-news-worker.env.example", 'CARD_NEWS_CODEX_PLAN_COMMAND=node scripts/run-codex-card-news-plan.mjs --job "{{jobFile}}" --output "{{outputDir}}"'],
+  ["retired_worker_env_key", "workers/brand-pilot-card-news-worker/.env.example", 'CARD_NEWS_CODEX_COMMAND=node scripts/run-codex-card-news.mjs --job "{{jobFile}}" --output "{{outputDir}}"'],
+  ["invalid_planner_command_env:blog_deploy", "deploy/env/blog-worker.env.example", 'BLOG_CODEX_COMMAND=node scripts/run-codex-blog.mjs --job "{{jobFile}}" --output "{{outputDir}}"'],
+  ["retired_worker_env_key", "workers/brand-pilot-blog-worker/.env.example", "BLOG_CODEX_TIMEOUT_MS=1200000"],
   ["missing_fixed_assembler_import", "apps/api/src/aiContentRepository.ts", baseline["apps/api/src/aiContentRepository.ts"].replace('import { assembleAiContentFixedInput } from "./aiContentFixedInputAssembler.js";', "")],
   ["missing_fixed_assembler_call", "apps/api/src/aiContentRepository.ts", baseline["apps/api/src/aiContentRepository.ts"].replace("const assembly = assembleAiContentFixedInput(lockedSources);", "const assembly = lockedSources;")],
   ["missing_prompt_binding_sql_call", "apps/api/src/aiContentRepository.ts", baseline["apps/api/src/aiContentRepository.ts"].replace("create_ai_content_generation_prompt_binding", "insert_prompt_binding_directly")],

@@ -45,6 +45,7 @@ import {
   parseProposalBaseInputSnapshotV2 as parseCanonicalProposalBaseInputSnapshotV2,
   parseContentOrchestrationV2 as parseCanonicalContentOrchestrationV2,
   parseContentGenerationInputV3 as parseCanonicalContentGenerationInputV3,
+  parseBrandRulesContentV1,
   assertPlannerPromptBinding,
   parseContentPromptBinding,
   type ContentOrchestrationV2 as CanonicalContentOrchestrationV2,
@@ -1799,8 +1800,14 @@ async function loadAiContentFixedInputSource(input: {
       where profile.workspace_id=$1 and profile.brand_id=$2`,
     [scope.workspaceId, scope.brandId],
   );
-  if (rulesResult.rows.length !== 1) throw new Error("fixed_input_brand_rules_unavailable");
+  if (rulesResult.rows.length !== 1) throw new Error("ai_content_brand_rules_required");
   const rules = rulesResult.rows[0] as Record<string, unknown>;
+  let canonicalRules;
+  try {
+    canonicalRules = parseBrandRulesContentV1(rules.rules_json);
+  } catch {
+    throw new Error("ai_content_brand_rules_required");
+  }
   const styleResult = await client.query(
     `select item.id reference_item_id,style.image->>'description' description,
             style.image->'tags' tags,artifact.public_url storage_url,artifact.path storage_path,
@@ -1817,12 +1824,11 @@ async function loadAiContentFixedInputSource(input: {
         and artifact.checksum ~ '^[0-9a-f]{64}$'
         and lower(artifact.mime_type) in ('image/png','image/jpeg','image/webp')
       order by style.position`,
-    [scope.workspaceId, scope.brandId, JSON.stringify(rules.rules_json)],
+    [scope.workspaceId, scope.brandId, JSON.stringify(canonicalRules)],
   );
-  const configuredStyles = object(object(rules.rules_json).designRules).referenceImages;
-  const configuredStyleCount = Array.isArray(configuredStyles) ? configuredStyles.length : 0;
+  const configuredStyleCount = canonicalRules.designRules.referenceImages.length;
   if (styleResult.rows.length !== configuredStyleCount) {
-    throw new Error("fixed_input_style_image_unavailable");
+    throw new Error("ai_content_brand_style_required");
   }
   const styleImages = configuredStyleCount === 0
     ? []
@@ -1834,7 +1840,7 @@ async function loadAiContentFixedInputSource(input: {
     || styleImages.some((image, index) => (
       image.referenceItemId !== String(styleResult.rows[index]?.reference_item_id ?? "")
     ))) {
-    throw new Error("fixed_input_style_image_unavailable");
+    throw new Error("ai_content_brand_style_required");
   }
 
   const attachmentResult = finalization.attachmentIds.length === 0
@@ -1948,8 +1954,8 @@ async function loadAiContentFixedInputSource(input: {
     approvedBrandRules: {
       workspaceId: scope.workspaceId, brandId: scope.brandId, versionId: String(rules.id),
       version: Number(rules.version), status: "approved", deletedAt: null,
-      content: rules.rules_json as AiContentFixedInputSource["approvedBrandRules"]["content"],
-      contentSha256: proposalSha256(rules.rules_json),
+      content: canonicalRules,
+      contentSha256: proposalSha256(canonicalRules),
     },
     approvedProduct: baseInput.product === null ? null : {
       workspaceId: scope.workspaceId, brandId: scope.brandId,

@@ -113,6 +113,7 @@ type SetupOverrides = {
   }>;
   core?: typeof core;
   loadApprovedCore?: AiContentSnapshotRepository["loadApprovedCore"];
+  assertApprovedBrandRulesAvailable?: AiContentSnapshotRepository["assertApprovedBrandRulesAvailable"];
   loadApprovedProduct?: AiContentSnapshotRepository["loadApprovedProduct"];
   freezeReferences?: AiContentSnapshotRepository["freezeReferences"];
   referenceSeeds?: Awaited<ReturnType<ApiRepository["listAiContentReferenceSeeds"]>>;
@@ -169,9 +170,13 @@ function setup(overrides: SetupOverrides = {}) {
     ? readyCapability()
     : overrides.capability);
   const loadApprovedCore = vi.fn(overrides.loadApprovedCore ?? (async () => overrides.core ?? core));
+  const assertApprovedBrandRulesAvailable = vi.fn(
+    overrides.assertApprovedBrandRulesAvailable ?? (async () => undefined),
+  );
   const loadApprovedProduct = vi.fn(overrides.loadApprovedProduct ?? (async () => product));
   const freezeReferences = vi.fn(overrides.freezeReferences ?? (async () => [frozenReference]));
   const snapshotRepository: AiContentSnapshotRepository = {
+    assertApprovedBrandRulesAvailable,
     loadApprovedCore,
     loadApprovedProduct,
     freezeReferences,
@@ -524,6 +529,46 @@ describe("V2 customer proposal batches", () => {
 });
 
 describe("V2 finalization customer boundary", () => {
+  it("returns 409 when generation cannot load active approved Brand Rules", async () => {
+    const harness = setup();
+    vi.mocked(harness.repository.startAiContentGenerationV3)
+      .mockRejectedValueOnce(new Error("ai_content_brand_rules_required"));
+
+    const response = await harness.app.inject({
+      method: "POST",
+      url: `/brands/${brandId}/ai-content/generations/${generationId}/generate`,
+      headers: auth,
+      payload: {
+        contractVersion: "content-generation-start.v2",
+        idempotencyKey: "brand-rules-required",
+      },
+    });
+
+    expect(response.statusCode).toBe(409);
+    expect(response.json()).toEqual({ error: "ai_content_brand_rules_required" });
+    await harness.app.close();
+  });
+
+  it("returns 409 when an approved Brand Rules style image is unavailable", async () => {
+    const harness = setup();
+    vi.mocked(harness.repository.startAiContentGenerationV3)
+      .mockRejectedValueOnce(new Error("ai_content_brand_style_required"));
+
+    const response = await harness.app.inject({
+      method: "POST",
+      url: `/brands/${brandId}/ai-content/generations/${generationId}/generate`,
+      headers: auth,
+      payload: {
+        contractVersion: "content-generation-start.v2",
+        idempotencyKey: "brand-style-required",
+      },
+    });
+
+    expect(response.statusCode).toBe(409);
+    expect(response.json()).toEqual({ error: "ai_content_brand_style_required" });
+    await harness.app.close();
+  });
+
   it.each([
     ["PATCH", { contractVersion: "content-finalization-draft.v99" }],
     ["POST", { contractVersion: "content-generation-start.v99" }],

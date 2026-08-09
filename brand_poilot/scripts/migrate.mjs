@@ -54,6 +54,12 @@ export function resolveMigrationRuntimeConfig(
   env = process.env,
   argv = process.argv,
 ) {
+  const post075DataMigrationMode = argv.includes("--post-075-data");
+  const expectedProviderRoleName = env.AI_CONTENT_POST_075_EXPECTED_PROVIDER_ROLE;
+  if (post075DataMigrationMode
+    && !/^[A-Za-z_][A-Za-z0-9_]{0,62}$/.test(expectedProviderRoleName ?? "")) {
+    throw new Error("post_075_provider_role_required");
+  }
   if (env.AI_CONTENT_075_BYPASS_TOKEN
     || Object.keys(env).some((key) => /^AI_CONTENT_07[45]_/.test(key)
     && (/(?:PRIVATE|SIGNING)/.test(key) || /(?<!PUBLIC_)KEY_FILE$/.test(key)))) {
@@ -131,6 +137,10 @@ export function resolveMigrationRuntimeConfig(
     connectionString: env.SUPABASE_DATABASE_URL || env.DATABASE_URL,
     baselineUpTo: env.MIGRATION_BASELINE_UP_TO,
     dryRun: argv.includes("--dry-run"),
+    ...(post075DataMigrationMode ? {
+      post075DataMigrationMode: true,
+      expectedProviderRoleName,
+    } : {}),
     ...(caCertificate ? { caCertificate } : {}),
     ...(hasBootstrapPrerequisiteRoles ? {
       bootstrap074Prerequisite: {
@@ -305,6 +315,10 @@ export async function main({
   loadEnvironment();
   const databaseUrlFiles = [env.SUPABASE_DATABASE_URL_FILE, env.DATABASE_URL_FILE].filter(Boolean);
   const inlineDatabaseUrls = [env.SUPABASE_DATABASE_URL, env.DATABASE_URL].filter(Boolean);
+  if (argv.includes("--post-075-data")
+    && (databaseUrlFiles.length !== 1 || inlineDatabaseUrls.length !== 0)) {
+    throw new Error("post_075_provider_url_file_required");
+  }
   if (databaseUrlFiles.length > 1 || (databaseUrlFiles.length > 0 && inlineDatabaseUrls.length > 0)) {
     throw new Error("migration_database_url_input_ambiguous");
   }
@@ -346,6 +360,9 @@ export async function main({
     ...(result.providerInstallRequest ? { providerInstallRequest: result.providerInstallRequest } : {}),
     ...(result.revocationRequest ? { revocationRequest: result.revocationRequest } : {}),
     ...(result.cutover ? { cutover: result.cutover } : {}),
+    ...(result.post075DataMigration ? {
+      post075DataMigration: result.post075DataMigration,
+    } : {}),
   }, null, 2));
 }
 

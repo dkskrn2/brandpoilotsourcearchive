@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import { mkdir, readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
+import { CONTENT_PLANNER_MODEL_ID } from "@brand-pilot/content-contracts";
 
 const childEnvironmentKeys = ["CODEX_HOME", "HOME", "LANG", "LC_ALL", "TMPDIR", "TMP", "TEMP", "SSL_CERT_FILE", "NODE_EXTRA_CA_CERTS", "PATHEXT"];
 export function codexChildEnv(source = process.env) {
@@ -15,6 +16,7 @@ export function codexSpawnOptions(outputDir, source = process.env) { return { cw
 export function buildCodexPrompt(prompt) { return `${prompt}\n\n제공된 고정 JSON만 사용하고 파일이나 웹을 조회하지 마세요. 도구를 호출하지 말고 JSON 외의 설명을 반환하지 마세요.`; }
 export function buildCodexArgs(outputDir) {
   return [
+    "--model", CONTENT_PLANNER_MODEL_ID,
     "--strict-config", "-c", 'default_permissions="writer"',
     "-c", 'permissions.writer.filesystem={":minimal"="read","/codex"="deny","/codex-accounts"="deny",":workspace_roots"={"."="deny"}}',
     "-c", "permissions.writer.network.enabled=false",

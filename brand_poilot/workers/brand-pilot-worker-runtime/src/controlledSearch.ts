@@ -1,6 +1,10 @@
 import { createHash } from "node:crypto";
 import { execFile, spawn, type ChildProcess } from "node:child_process";
-import type { ContentPurpose, ResearchEvidenceSnapshotV1 } from "@brand-pilot/content-contracts";
+import {
+  CONTENT_PLANNER_MODEL_ID,
+  type ContentPurpose,
+  type ResearchEvidenceSnapshotV1,
+} from "@brand-pilot/content-contracts";
 
 const OUTPUT_LIMIT_BYTES = 1024 * 1024;
 const DEFAULT_TIMEOUT_MS = 120_000;
@@ -212,6 +216,7 @@ function productionRunner(dependencies: ControlledSearchDependencies): ChildRunn
 function cliArgs(search: boolean): string[] {
   return [
     ...(search ? ["--search"] : []),
+    "--model", CONTENT_PLANNER_MODEL_ID,
     "exec", "--ignore-user-config", "--ignore-rules",
     "--disable", "shell_tool",
     "--disable", "shell_snapshot",

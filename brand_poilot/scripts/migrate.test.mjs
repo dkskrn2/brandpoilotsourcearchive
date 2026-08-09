@@ -194,6 +194,70 @@ test("migration CLI reads a protected database URL file without exposing it as c
   }), /migration_database_url_input_ambiguous/);
 });
 
+test("post-075 data migration CLI requires a protected provider URL and exact role", async () => {
+  assert.throws(() => migrateModule.resolveMigrationRuntimeConfig(
+    { SUPABASE_DATABASE_URL: "postgresql://database.example/postgres" },
+    ["node", "scripts/migrate.mjs", "--post-075-data"],
+  ), /post_075_provider_role_required/);
+  assert.deepEqual(migrateModule.resolveMigrationRuntimeConfig(
+    {
+      SUPABASE_DATABASE_URL: "postgresql://database.example/postgres",
+      AI_CONTENT_POST_075_EXPECTED_PROVIDER_ROLE: "postgres",
+    },
+    ["node", "scripts/migrate.mjs", "--post-075-data"],
+  ), {
+    connectionString: "postgresql://database.example/postgres",
+    baselineUpTo: undefined,
+    dryRun: false,
+    post075DataMigrationMode: true,
+    expectedProviderRoleName: "postgres",
+  });
+  await assert.rejects(migrateModule.main({
+    env: {
+      SUPABASE_DATABASE_URL: "postgresql://database.example/postgres",
+      AI_CONTENT_POST_075_EXPECTED_PROVIDER_ROLE: "postgres",
+    },
+    argv: ["node", "scripts/migrate.mjs", "--post-075-data"],
+    loadEnvironment: () => {},
+    runMigrationsImpl: async () => ({ pending: [], migrations: [], baselineRequired: false }),
+    logger: { log() {} },
+  }), /post_075_provider_url_file_required/);
+});
+
+test("post-075 data migration CLI routes a secure provider file to the dedicated runner", async () => {
+  let receivedOptions;
+  const messages = [];
+  await migrateModule.main({
+    env: {
+      SUPABASE_DATABASE_URL_FILE: "/run/secrets/provider-admin-database-url",
+      AI_CONTENT_POST_075_EXPECTED_PROVIDER_ROLE: "postgres",
+    },
+    argv: ["node", "scripts/migrate.mjs", "--post-075-data"],
+    loadEnvironment: () => {},
+    readDatabaseUrlFileImpl: async () => "postgresql://postgres:secret@database.example/postgres\n",
+    runMigrationsImpl: async (options) => {
+      receivedOptions = options;
+      return {
+        pending: ["076_manual_content_generation_brand_rules.sql"],
+        migrations: [{}],
+        baselineRequired: false,
+        post075DataMigration: {
+          contractVersion: "post-075-data-migration-evidence.v1",
+          providerRoleName: "postgres",
+          migrationId: "076_manual_content_generation_brand_rules.sql",
+          migrationSha256: "a".repeat(64),
+          status: "applied",
+        },
+      };
+    },
+    logger: { log: (message) => messages.push(message) },
+  });
+  assert.equal(receivedOptions.post075DataMigrationMode, true);
+  assert.equal(receivedOptions.expectedProviderRoleName, "postgres");
+  assert.equal(receivedOptions.connectionString, "postgresql://postgres:secret@database.example/postgres");
+  assert.equal(JSON.parse(messages[0]).post075DataMigration.status, "applied");
+});
+
 test("migration CLI exposes the 073a-to-074 restart boundary", async () => {
   const messages = [];
   await migrateModule.main({

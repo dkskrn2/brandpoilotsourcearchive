@@ -13,6 +13,10 @@ import {
   type BrandReviewState,
   type BrandRulesV1,
 } from "./brandCoreContracts.js";
+import {
+  ensureActiveApprovedBrandRules,
+  normalizeBrandRulesV1,
+} from "./brandRulesReadiness.js";
 
 export interface BrandScope {
   workspaceId: string;
@@ -161,6 +165,21 @@ function mapRule(row: Record<string, unknown>): BrandRuleSet {
   };
 }
 
+function mapHistoricalRule(row: Record<string, unknown>): BrandRuleSet {
+  try {
+    return mapRule(row);
+  } catch {
+    return mapRule({
+      ...row,
+      rules_json: normalizeBrandRulesV1(json(row.rules_json, {}), {
+        forbiddenTerms: [],
+        defaultCta: "",
+        autoApprovalEnabled: false,
+      }),
+    });
+  }
+}
+
 async function transaction<T>(pool: Pool, operation: (client: PoolClient) => Promise<T>): Promise<T> {
   const client = await pool.connect();
   try {
@@ -218,6 +237,9 @@ async function requireValidStyleReferences(
         and item.kind = 'upload'
         and item.archived_at is null
         and artifact.deleted_at is null
+        and artifact.public_url is not null
+        and artifact.path is not null
+        and artifact.checksum ~ '^[0-9a-f]{64}$'
         and lower(artifact.mime_type) in ('image/png','image/jpeg','image/webp')`,
     [scope.workspaceId, scope.brandId, referenceIds],
   );
@@ -486,7 +508,15 @@ export function createBrandCoreRepository(pool: Pool): BrandCoreRepository {
         ) {
           throw new Error("brand_core_version_conflict");
         }
-        if (target.status === "approved") return target;
+        if (target.status === "approved") {
+          await ensureActiveApprovedBrandRules(client, {
+            workspaceId: scope.workspaceId,
+            brandId: scope.brandId,
+            createdBy: "user",
+            actorUserId: scope.actorUserId,
+          });
+          return target;
+        }
         if (target.status !== "draft") throw new Error("brand_core_not_draft");
         parseBrandCoreForApproval(target.core);
         parseBrandEvidence(target.evidence);
@@ -529,6 +559,12 @@ export function createBrandCoreRepository(pool: Pool): BrandCoreRepository {
             where workspace_id = $1 and brand_id = $2`,
           [scope.workspaceId, scope.brandId, scope.versionId],
         );
+        await ensureActiveApprovedBrandRules(client, {
+          workspaceId: scope.workspaceId,
+          brandId: scope.brandId,
+          createdBy: "user",
+          actorUserId: scope.actorUserId,
+        });
         return mapCore(approved.rows[0] as Record<string, unknown>);
       });
     },
@@ -556,7 +592,7 @@ export function createBrandCoreRepository(pool: Pool): BrandCoreRepository {
           order by version desc`,
         [scope.workspaceId, scope.brandId],
       );
-      return result.rows.map((row) => mapRule(row as Record<string, unknown>));
+      return result.rows.map((row) => mapHistoricalRule(row as Record<string, unknown>));
     },
 
     async saveRuleDraft(scope, input) {
@@ -601,9 +637,10 @@ export function createBrandCoreRepository(pool: Pool): BrandCoreRepository {
         );
         if (!current.rowCount) throw new Error("brand_rules_not_found");
         const target = mapRule(current.rows[0] as Record<string, unknown>);
+        const targetRules = parseBrandRules(target.rules);
+        await requireValidStyleReferences(client, scope, targetRules);
         if (target.status === "approved") return target;
         if (target.status !== "draft") throw new Error("brand_rules_not_draft");
-        parseBrandRules(target.rules);
         await client.query(
           `update brand_rule_sets set status = 'superseded', updated_at = now()
             where workspace_id = $1 and brand_id = $2 and status = 'approved' and id <> $3`,

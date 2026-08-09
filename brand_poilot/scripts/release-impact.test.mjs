@@ -64,6 +64,20 @@ test("limits the Codex account pool runtime change to manual content generation"
   assert.deepEqual(impact.unknownPaths, []);
 });
 
+test("limits controlled search and its static harness to the workers that execute it", () => {
+  const impact = classifyChangedPaths([
+    "brand_poilot/workers/brand-pilot-worker-runtime/src/controlledSearch.test.ts",
+    "brand_poilot/workers/brand-pilot-worker-runtime/src/controlledSearch.ts",
+    "brand_poilot/scripts/check-local-env.mjs",
+    "brand_poilot/scripts/three-format-cutover-static-check.mjs",
+  ]);
+
+  assert.deepEqual(enabled(impact), ["blogWorker", "contentProposalWorker"]);
+  assert.equal(impact.buildAllServer, false);
+  assert.equal(impact.deployBundleChanged, false);
+  assert.deepEqual(impact.unknownPaths, []);
+});
+
 test("marks migration changes and never treats them as an automatic deploy", () => {
   const impact = classifyChangedPaths(["brand_poilot/db/migrations/074_example.sql"]);
   assert.equal(impact.migrationChanged, true);

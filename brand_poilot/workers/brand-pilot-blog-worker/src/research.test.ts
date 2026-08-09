@@ -25,6 +25,9 @@ afterEach(async () => {
 describe("blog supplemental research", () => {
   it("assesses need with network, file, shell, and image access disabled", async () => {
     const runChild = vi.fn(async ({ args, prompt }: { args: string[]; prompt: string }) => {
+      const modelFlag = args.indexOf("--model");
+      expect(modelFlag).toBeGreaterThanOrEqual(0);
+      expect(args[modelFlag + 1]).toBe("gpt-5.6-terra");
       expect(args.join(" ")).toContain("permissions.assessor.network.enabled=false");
       expect(args).toEqual(expect.arrayContaining(["--disable", "shell_tool", "--disable", "image_generation"]));
       expect(args.join(" ")).not.toContain("--search");

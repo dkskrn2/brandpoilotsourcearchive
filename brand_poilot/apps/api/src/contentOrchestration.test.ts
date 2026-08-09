@@ -434,6 +434,9 @@ function v2Harness() {
     events.push("core");
     return approvedCoreV2;
   });
+  const assertApprovedBrandRulesAvailable = vi.fn(async () => {
+    events.push("rules");
+  });
   const loadApprovedProduct = vi.fn(async () => {
     events.push("product");
     return approvedProductV2;
@@ -448,6 +451,7 @@ function v2Harness() {
       loadChannelCapability,
       resolveAiContentSeed,
       snapshotRepository: {
+        assertApprovedBrandRulesAvailable,
         loadApprovedCore,
         loadApprovedProduct,
         freezeReferences,
@@ -455,6 +459,7 @@ function v2Harness() {
         loadApprovedStyleImages: vi.fn(),
       },
       loadApprovedCore,
+      assertApprovedBrandRulesAvailable,
       loadApprovedProduct,
       freezeReferences,
       now: () => new Date("2026-08-01T03:00:00.000Z"),
@@ -479,7 +484,7 @@ describe("V2 proposal input resolver", () => {
     const result = await resolveV2(orchestrationV2(), harness);
 
     expect(result.channelTarget).toBe("instagram");
-    expect(harness.events).toEqual(["capability", "resolve", "core"]);
+    expect(harness.events).toEqual(["capability", "rules", "core", "resolve"]);
     expect(harness.deps.loadApprovedProduct).not.toHaveBeenCalled();
     expect(harness.deps.freezeReferences).not.toHaveBeenCalled();
     expect(result.inputSnapshot).toEqual({
@@ -598,7 +603,23 @@ describe("V2 proposal input resolver", () => {
     await resolveV2(body, harness);
 
     expect(harness.deps.loadChannelCapability).not.toHaveBeenCalled();
-    expect(harness.events).toEqual(["resolve", "core"]);
+    expect(harness.events).toEqual(["rules", "core", "resolve"]);
+  });
+
+  it("rejects missing Brand Rules before URL research or any proposal model input is prepared", async () => {
+    const harness = v2Harness();
+    harness.deps.assertApprovedBrandRulesAvailable.mockRejectedValueOnce(
+      new Error("ai_content_brand_rules_required"),
+    );
+
+    await expect(resolveV2(orchestrationV2({
+      seed: { kind: "topic_url", url: "https://example.test/expensive" },
+    }), harness)).rejects.toThrow("ai_content_brand_rules_required");
+
+    expect(harness.events).toEqual(["capability"]);
+    expect(harness.deps.assertApprovedBrandRulesAvailable).toHaveBeenCalledOnce();
+    expect(harness.deps.resolveAiContentSeed).not.toHaveBeenCalled();
+    expect(harness.deps.loadApprovedCore).not.toHaveBeenCalled();
   });
 
   it("passes RESOURCE_NOT_AVAILABLE through without translating it", async () => {

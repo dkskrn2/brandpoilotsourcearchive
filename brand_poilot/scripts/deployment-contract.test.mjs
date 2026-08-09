@@ -85,7 +85,7 @@ const deploymentScripts = [
   ubuntuBootstrapPath,
 ];
 
-test("cutover API image contains both ordered 074 and 075 migrations", () => {
+test("cutover API image contains ordered 074, 075, and post-cutover 076 migrations", () => {
   const dockerfile = read("apps/api/Dockerfile");
   const migrate = read("scripts/migrate.mjs");
   const runner = read("scripts/migrationRunner.mjs");
@@ -97,6 +97,7 @@ test("cutover API image contains both ordered 074 and 075 migrations", () => {
   assert.match(dockerfile, /RUN chmod -R a\+rX \/app/);
   assert.equal(existsSync("db/migrations/074_ai_content_maintenance_write_fence.sql"), true);
   assert.equal(existsSync("db/migrations/075_ai_content_three_format_cutover.sql"), true);
+  assert.equal(existsSync("db/migrations/076_manual_content_generation_brand_rules.sql"), true);
   assert.match(migrate, /AI_CONTENT_074_AUTHORIZATION_PUBLIC_KEY_FILE/);
   assert.match(migrate, /AI_CONTENT_074_PROVIDER_ATTESTATION_PUBLIC_KEY_FILE/);
   assert.doesNotMatch(migrate, /readFile\([^\n]*(?:PRIVATE|SIGNING)|createPrivateKey|AI_CONTENT_074_(?:AUTHORIZATION|PROVIDER_ATTESTATION)_KEY_FILE/);
@@ -129,6 +130,19 @@ test("cutover API image contains both ordered 074 and 075 migrations", () => {
   assert.match(postgresHarness, /perBranchThreshold|maxObservedRatio/);
 });
 
+test("deployment applies or verifies the pinned post-075 data migration before canary mutation", () => {
+  const deploy = read("deploy/scripts/deploy.sh");
+  assert.match(deploy, /076_manual_content_generation_brand_rules\.sql/);
+  assert.match(deploy, /da42c957d4307d58c1f37f5d508c8a1f14836727080d6290e4b0537e43167604/);
+  assert.match(deploy, /AI_CONTENT_POST_075_PROVIDER_DATABASE_URL_FILE/);
+  assert.match(deploy, /scripts\/migrate\.mjs --post-075-data/);
+  assert.match(deploy, /post-075-data-migration-evidence\.v1/);
+  const migrationGate = deploy.lastIndexOf("run_post_075_data_migration_gate");
+  const transition = deploy.indexOf("begin_transition");
+  const canary = deploy.indexOf('"${compose[@]}" up -d --no-deps');
+  assert.ok(migrationGate >= 0 && migrationGate < transition && transition < canary);
+});
+
 test("cutover API image contains both ordered migrations in an actual no-network container", {
   skip: process.env.RUN_DOCKER_FENCE_IMAGE_INSPECTION !== "1",
 }, () => {
@@ -141,7 +155,7 @@ test("cutover API image contains both ordered migrations in an actual no-network
   try {
     const script = [
       "const fs=require('node:fs');",
-      "const required=['/app/db/migrations/074_ai_content_maintenance_write_fence.sql','/app/db/migrations/075_ai_content_three_format_cutover.sql','/app/scripts/migrationRunner.mjs','/app/scripts/migrate.mjs','/app/scripts/databaseTls.mjs'];",
+      "const required=['/app/db/migrations/074_ai_content_maintenance_write_fence.sql','/app/db/migrations/075_ai_content_three_format_cutover.sql','/app/db/migrations/076_manual_content_generation_brand_rules.sql','/app/scripts/migrationRunner.mjs','/app/scripts/migrate.mjs','/app/scripts/databaseTls.mjs'];",
       "for(const path of required)if(!fs.existsSync(path))throw new Error('missing:'+path);",
     ].join("");
     const inspect = spawnSync("docker", ["run", "--rm", "--network", "none", "--entrypoint", "node", tag, "-e", script], {
@@ -1171,12 +1185,15 @@ test("Task 6 release plumbing validates every immutable worker image and the per
 });
 
 test("Task 6 deployment env examples expose only real worker settings and never direct model API credentials", () => {
+  const localEnvCheck = read("scripts/check-local-env.mjs");
+  assert.match(localEnvCheck, /"card-news-worker": \["cardNewsWorker", "CARD_NEWS_CODEX_PLAN_COMMAND"\]/);
+  assert.match(localEnvCheck, /"blog-worker": \["blogWorker", "BLOG_CODEX_PLAN_COMMAND"\]/);
+  assert.doesNotMatch(localEnvCheck, /"(?:CARD_NEWS|BLOG)_CODEX_COMMAND"/);
   const expected = new Map([
     ["deploy/env/dm-worker.env.example", ["DM_CODEX_MODEL", "DM_CLI_TIMEOUT_MS"]],
     ["deploy/env/wiki-worker.env.example", ["WIKI_CODEX_MODEL", "WIKI_CODEX_TIMEOUT_MS"]],
     ["deploy/env/content-proposal-worker.env.example", [
       "CONTENT_PROPOSAL_CODEX_COMMAND",
-      "CONTENT_PROPOSAL_CODEX_MODEL",
       "CONTENT_PROPOSAL_CODEX_TIMEOUT_MS",
     ]],
     ["deploy/env/brand-intelligence-worker.env.example", [
@@ -1191,11 +1208,10 @@ test("Task 6 deployment env examples expose only real worker settings and never 
     ]],
     ["deploy/env/image-worker.env.example", ["IMAGE_RENDER_COMMAND", "IMAGE_MODEL", "IMAGE_JOB_TIMEOUT_MS"]],
     ["deploy/env/card-news-worker.env.example", [
-      "CARD_NEWS_CODEX_COMMAND",
       "CARD_NEWS_CODEX_PLAN_COMMAND",
-      "CARD_NEWS_CODEX_TIMEOUT_MS",
+      "CARD_NEWS_CODEX_PLAN_TIMEOUT_MS",
     ]],
-    ["deploy/env/blog-worker.env.example", ["BLOG_CODEX_COMMAND", "BLOG_CODEX_TIMEOUT_MS"]],
+    ["deploy/env/blog-worker.env.example", ["BLOG_CODEX_PLAN_COMMAND", "BLOG_CODEX_PLAN_TIMEOUT_MS"]],
     ["deploy/env/reel-worker.env.example", ["REEL_CODEX_PLAN_COMMAND", "REEL_CODEX_PLAN_TIMEOUT_MS"]],
   ]);
 
@@ -2454,6 +2470,7 @@ if [[ "$*" == *"%U"* ]]; then
 fi
 path="\${@: -1}"
 case "$path" in
+  */post-075-data-migrations) printf '700\\n' ;;
   */scripts/*.sh) printf '755\\n' ;;
   */compose.production.yml|*/Caddyfile|*/Caddyfile.canary) printf '644\\n' ;;
   *) printf '600\\n' ;;
@@ -2470,6 +2487,7 @@ stat() {
   fi
   path="\${@: -1}"
   case "$path" in
+    */post-075-data-migrations) printf '700\\n' ;;
     */scripts/*.sh) printf '755\\n' ;;
     */compose.production.yml|*/Caddyfile|*/Caddyfile.canary) printf '644\\n' ;;
     *) printf '600\\n' ;;
@@ -2500,6 +2518,17 @@ function runDeployFixture({
   const incoming = join(fixture, "incoming");
   const mocks = join(fixture, "bin");
   mkdirSync(join(root, "state"), { recursive: true });
+  const post075State = join(root, "state", "post-075-data-migrations");
+  mkdirSync(post075State, { recursive: true, mode: 0o700 });
+  writeFileSync(join(post075State, "076_manual_content_generation_brand_rules.sql.json"), `${JSON.stringify({
+    post075DataMigration: {
+      contractVersion: "post-075-data-migration-evidence.v1",
+      providerRoleName: "postgres",
+      migrationId: "076_manual_content_generation_brand_rules.sql",
+      migrationSha256: "da42c957d4307d58c1f37f5d508c8a1f14836727080d6290e4b0537e43167604",
+      status: "already_applied",
+    },
+  }, null, 2)}\n`, { mode: 0o600 });
   mkdirSync(join(root, "shared", "env"), { recursive: true });
   writeFileSync(join(root, "shared", "env", "api.env"), "TEST_ONLY=true\nDB_SSL_CA_BASE64=dGVzdA==\n", { mode: 0o600 });
   chmodSync(join(root, "shared", "env", "api.env"), 0o600);
@@ -3447,7 +3476,7 @@ test("a successful canary atomically records candidate while preserving current"
     );
     assert.deepEqual(
       readdirSync(join(fixture.root, "state")).sort(),
-      ["candidate", "current", "deploy.lock"],
+      ["candidate", "current", "deploy.lock", "post-075-data-migrations"],
     );
   } finally {
     rmSync(fixture.fixture, { recursive: true, force: true });

@@ -294,7 +294,7 @@ test("API 패키지는 타입 검사와 tsup 빌드 및 배포 시작 명령을 
   assert.equal(packageJson.scripts.start, "node dist/index.js");
 });
 
-test("데이터베이스 마이그레이션 registry는 콘텐츠 생성 cutover 075까지 포함한다", async () => {
+test("데이터베이스 마이그레이션 registry는 수동 콘텐츠 생성 보정 076까지 포함한다", async () => {
   const migrationFiles = (await readdir("db/migrations"))
     .filter((file) => file.endsWith(".sql"))
     .sort();
@@ -377,6 +377,7 @@ test("데이터베이스 마이그레이션 registry는 콘텐츠 생성 cutover
     "073a_legacy_trigger_function_search_path.sql",
     "074_ai_content_maintenance_write_fence.sql",
     "075_ai_content_three_format_cutover.sql",
+    "076_manual_content_generation_brand_rules.sql",
   ]);
   assert.ok(reservedProgramMigrations.filter((file) => file.startsWith("059_")).length <= 1);
   assert.ok(reservedProgramMigrations.filter((file) => file.startsWith("060_")).length <= 1);

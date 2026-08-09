@@ -995,6 +995,7 @@ describe.skipIf(process.env.RUN_POSTGRES_INTEGRATION !== "true")(
           usageDate: "2026-08-06",
           dailyGenerationLimit: 10,
         }, {
+          assertApprovedBrandRulesAvailable: async () => undefined,
           loadApprovedCore: async () => baseInput(fixture).brandCore,
           loadApprovedProduct: async () => {
             throw new Error("unexpected_product_snapshot_load");
