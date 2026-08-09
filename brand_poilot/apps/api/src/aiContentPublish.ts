@@ -200,7 +200,7 @@ async function getOrCreatePublishContext(
   };
 }
 
-async function storeManifestArtifact(client: PoolClient, input: BrandOutputScope, manifestUrlValue: unknown) {
+export async function storeManifestArtifact(client: PoolClient, input: BrandOutputScope, manifestUrlValue: unknown) {
   const manifestUrl = vercelBlobUrl(manifestUrlValue);
   const artifactPath = decodeURIComponent(manifestUrl.pathname).replace(/^\/+/, "");
   await client.query(
@@ -212,8 +212,7 @@ async function storeManifestArtifact(client: PoolClient, input: BrandOutputScope
   const artifact = await client.query(
     `select id, workspace_id, brand_id
        from storage_artifacts
-      where bucket = $1 and path = $2
-      for key share`,
+      where bucket = $1 and path = $2`,
     ["vercel-blob", artifactPath],
   );
   const row = artifact.rows[0];

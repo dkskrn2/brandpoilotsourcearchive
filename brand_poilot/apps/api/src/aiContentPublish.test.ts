@@ -173,7 +173,9 @@ describe("AI content direct publishing", () => {
     const artifactInsert = statements.find((sql) => sql.includes("insert into storage_artifacts"));
     expect(artifactInsert).toContain("on conflict (bucket, path) do nothing");
     expect(artifactInsert).not.toContain("do update");
-    expect(statements.some((sql) => sql.includes("from storage_artifacts") && sql.includes("where bucket = $1 and path = $2"))).toBe(true);
+    const artifactSelect = statements.find((sql) => sql.includes("from storage_artifacts") && sql.includes("where bucket = $1 and path = $2"));
+    expect(artifactSelect).toBeDefined();
+    expect(artifactSelect).not.toMatch(/\bfor\s+(?:key\s+)?(?:share|update)\b/i);
   });
 
   it("treats uppercase request UUIDs and lowercase PostgreSQL owner UUIDs as the same tenant", async () => {
