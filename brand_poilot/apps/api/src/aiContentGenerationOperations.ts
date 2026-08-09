@@ -39,7 +39,7 @@ export async function reverseGenerationReservationIfTerminalFailure(client: Quer
          on reservation.operation_id=operation.id and reservation.generation_id=operation.generation_id
         and reservation.usage_type='generation' and reservation.reservation_id=reservation.id
       where operation.id=$1 and operation.generation_id=$2
-      for update of operation,reservation`,
+       for update of operation`,
     [generation.operation_id, generationId],
   );
   const row = graph.rows[0] as Record<string, unknown> | undefined;
