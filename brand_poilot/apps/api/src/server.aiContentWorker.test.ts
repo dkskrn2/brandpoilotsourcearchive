@@ -6,7 +6,7 @@ function setup() {
   const claimAiContentJob = vi.fn(async (input: { outputFormat: "card_news" | "blog" | "reel"; workerId: string; leaseSeconds: number }) => ({
     id: `job-${input.outputFormat}`,
     generationId: "generation-1",
-    outputId: null,
+    outputId: "output-1",
     workspaceId: "workspace-1",
     brandId: "brand-1",
     jobType: "generate" as const,
@@ -105,7 +105,18 @@ describe("AI content worker routes", () => {
       payload: { workerId: `${slug}-worker-1`, leaseSeconds: 180 },
     });
     expect(response.statusCode).toBe(200);
-    expect(response.json().job.outputFormat).toBe(outputFormat);
+    expect(response.json().job).toEqual({
+      id: `job-${outputFormat}`,
+      generationId: "generation-1",
+      outputId: "output-1",
+      workspaceId: "workspace-1",
+      brandId: "brand-1",
+      jobType: "generate",
+      outputFormat,
+      status: "processing",
+      payload: {},
+      leaseToken: "lease-1",
+    });
     expect(repository.claimAiContentJob).toHaveBeenCalledWith(expect.objectContaining({ outputFormat }));
     await app.close();
   });
