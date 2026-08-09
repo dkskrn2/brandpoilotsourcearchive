@@ -203,14 +203,18 @@ async function getOrCreatePublishContext(
 async function storeManifestArtifact(client: PoolClient, input: BrandOutputScope, manifestUrlValue: unknown) {
   const manifestUrl = vercelBlobUrl(manifestUrlValue);
   const artifactPath = decodeURIComponent(manifestUrl.pathname).replace(/^\/+/, "");
-  const artifact = await client.query(
+  await client.query(
     `insert into storage_artifacts (workspace_id, brand_id, artifact_type, bucket, path, public_url, mime_type, byte_size)
      values ($1, $2, 'generated_manifest', 'vercel-blob', $3, $4, 'application/json', 0)
-     on conflict (bucket, path) do update set public_url = excluded.public_url
-       where storage_artifacts.workspace_id = excluded.workspace_id
-         and storage_artifacts.brand_id = excluded.brand_id
-     returning id, workspace_id, brand_id`,
+     on conflict (bucket, path) do nothing`,
     [input.workspaceId, input.brandId, artifactPath, String(manifestUrlValue)],
+  );
+  const artifact = await client.query(
+    `select id, workspace_id, brand_id
+       from storage_artifacts
+      where bucket = $1 and path = $2
+      for key share`,
+    ["vercel-blob", artifactPath],
   );
   const row = artifact.rows[0];
   if (
