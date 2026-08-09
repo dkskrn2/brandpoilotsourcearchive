@@ -303,6 +303,46 @@ describe("ContentProposalFlow", () => {
     expect(firstKey).not.toBe(secondKey);
   });
 
+  it("tells the user to approve Brand Rules in Brand Center when proposal preflight blocks", async () => {
+    const user = userEvent.setup();
+    const { create } = renderFlow();
+    create.mockRejectedValueOnce(new ApiRequestError({
+      status: 409,
+      errorCode: "ai_content_brand_rules_required",
+    }));
+
+    await user.click(screen.getByRole("radio", { name: /^정보성/ }));
+    await user.click(screen.getByRole("button", { name: "목적 완료" }));
+    await user.type(screen.getByLabelText("콘텐츠 주제"), "브랜드 신뢰 원칙");
+    await user.click(screen.getByRole("button", { name: "주제·자료 완료" }));
+    await user.click(await screen.findByRole("button", { name: "Instagram" }));
+    await user.click(screen.getByRole("button", { name: "AI 구성안 만들기" }));
+
+    expect(await screen.findByRole("alert"))
+      .toHaveTextContent("브랜드 센터에서 브랜드 규칙을 먼저 승인해 주세요");
+    expect(screen.getByText("브랜드 신뢰 원칙")).toBeVisible();
+  });
+
+  it("tells the user to repair an unavailable Brand Rules style image", async () => {
+    const user = userEvent.setup();
+    const { create } = renderFlow();
+    create.mockRejectedValueOnce(new ApiRequestError({
+      status: 409,
+      errorCode: "ai_content_brand_style_required",
+    }));
+
+    await user.click(screen.getByRole("radio", { name: /^정보성/ }));
+    await user.click(screen.getByRole("button", { name: "목적 완료" }));
+    await user.type(screen.getByLabelText("콘텐츠 주제"), "브랜드 스타일 점검");
+    await user.click(screen.getByRole("button", { name: "주제·자료 완료" }));
+    await user.click(await screen.findByRole("button", { name: "Instagram" }));
+    await user.click(screen.getByRole("button", { name: "AI 구성안 만들기" }));
+
+    expect(await screen.findByRole("alert"))
+      .toHaveTextContent("브랜드 규칙의 스타일 이미지를 다시 선택해 주세요");
+    expect(screen.getByText("브랜드 스타일 점검")).toBeVisible();
+  });
+
   it("serializes the selected reference before proposal creation and loads styles only after proposal selection", async () => {
     const user = userEvent.setup();
     const { create, listReferences, listReferenceSeeds, getRules } = renderFlow();

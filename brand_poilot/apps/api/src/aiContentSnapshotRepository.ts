@@ -6,6 +6,7 @@ import type {
   FrozenStyleImageV2,
   GeneratedImageMimeTypeV2,
 } from "./aiContentContracts.js";
+import { parseBrandRulesContentV1 } from "@brand-pilot/content-contracts";
 import type { AiContentSnapshotBlob } from "./aiContentSnapshotBlob.js";
 import type { BrandScope } from "./brandCoreRepository.js";
 
@@ -13,6 +14,7 @@ export type ReferenceRoleV2 = ContentReferenceRoleV2;
 export type FrozenStyleImageSnapshotV1 = FrozenStyleImageV2;
 
 export interface AiContentSnapshotRepository {
+  assertApprovedBrandRulesAvailable(scope: BrandScope): Promise<void>;
   loadApprovedCore(scope: BrandScope): Promise<ApprovedBrandCoreSnapshotV2>;
   loadApprovedProduct(scope: BrandScope, productId: string): Promise<ApprovedProductSnapshotV2>;
   freezeReferences(
@@ -48,6 +50,14 @@ const IMAGE_MIMES = new Set<GeneratedImageMimeTypeV2>(["image/png", "image/jpeg"
 
 function unavailable(): never {
   throw new Error("RESOURCE_NOT_AVAILABLE");
+}
+
+function brandRulesRequired(): never {
+  throw new Error("ai_content_brand_rules_required");
+}
+
+function brandStyleRequired(): never {
+  throw new Error("ai_content_brand_style_required");
 }
 
 function uuid(value: string): string {
@@ -176,6 +186,51 @@ export function createAiContentSnapshotRepository(
   blob: AiContentSnapshotBlob,
 ): AiContentSnapshotRepository {
   return {
+    async assertApprovedBrandRulesAvailable(inputScope) {
+      const scope = validatedScope(inputScope);
+      const loaded = await database.query(
+        `select rules.rules_json
+           from brand_profiles profile
+           join brand_rule_sets rules
+             on rules.id = profile.active_brand_rule_set_id
+            and rules.workspace_id = profile.workspace_id
+            and rules.brand_id = profile.brand_id
+            and rules.status = 'approved'
+          where profile.workspace_id = $1
+            and profile.brand_id = $2
+            and profile.active_brand_rule_set_id is not null`,
+        [scope.workspaceId, scope.brandId],
+      );
+      if (loaded.rows.length !== 1) brandRulesRequired();
+      let rules;
+      try {
+        rules = parseBrandRulesContentV1(loaded.rows[0]!.rules_json);
+      } catch {
+        brandRulesRequired();
+      }
+      const referenceIds = rules.designRules.referenceImages.map((image) => image.referenceItemId);
+      if (referenceIds.length === 0) return;
+      const styles = await database.query(
+        `select item.id
+           from unnest($3::uuid[]) with ordinality requested(id,position)
+           join reference_items item
+             on item.id=requested.id and item.workspace_id=$1 and item.brand_id=$2
+            and item.kind='upload' and item.archived_at is null
+           join storage_artifacts artifact
+             on artifact.id=item.storage_artifact_id and artifact.workspace_id=item.workspace_id
+            and artifact.brand_id=item.brand_id and artifact.deleted_at is null
+            and artifact.public_url is not null and artifact.path is not null
+            and artifact.checksum ~ '^[0-9a-f]{64}$'
+            and lower(artifact.mime_type) in ('image/png','image/jpeg','image/webp')
+          order by requested.position`,
+        [scope.workspaceId, scope.brandId, referenceIds],
+      );
+      if (styles.rows.length !== referenceIds.length
+        || styles.rows.some((row, index) => String(row.id) !== referenceIds[index])) {
+        brandStyleRequired();
+      }
+    },
+
     async loadApprovedCore(inputScope) {
       const scope = validatedScope(inputScope);
       const loaded = await database.query(

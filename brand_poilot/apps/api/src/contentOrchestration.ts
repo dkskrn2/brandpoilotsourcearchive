@@ -314,11 +314,12 @@ export async function resolveContentProposalV2Input(
     }
   }
 
-  const subject = await dependencies.resolveAiContentSeed(request.seed);
+  await dependencies.snapshotRepository.assertApprovedBrandRulesAvailable(scope);
   const brandCore = await dependencies.snapshotRepository.loadApprovedCore(scope);
   const product = request.purpose === "marketing"
     ? await dependencies.snapshotRepository.loadApprovedProduct(scope, request.productId!)
     : null;
+  const subject = await dependencies.resolveAiContentSeed(request.seed);
   let references: FrozenReferenceSnapshotV2[] = [];
   if (request.seed.kind === "reference") {
     const referenceSeed = request.seed;

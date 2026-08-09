@@ -95,6 +95,7 @@ function harness(options: {
   operationGenerationId?: string;
   startedWithoutOperationMatch?: boolean;
   coreMissing?: boolean;
+  rulesMissing?: boolean;
   malformedFinalization?: boolean;
   unavailableAttachment?: boolean;
   styleReference?: boolean;
@@ -136,7 +137,7 @@ function harness(options: {
       if (sql.includes("from ai_content_proposal_jobs job")) return { rows: [{ job_id: id.job, batch_id: id.batch, job_status: "completed", request_json: {}, contract_id: id.contract, request_contract_version: "content-proposal-request.v2", base_input_contract_version: "proposal-base-input.v2", research_contract_version: "research-evidence.v1", proposal_contract_version: "content-proposal.v2", proposal_prompt_version: "proposal.writer.v2", proposal_output_schema_sha256: HASH, proposal_model_id: "gpt-5.6-terra", command_descriptor_sha256: HASH, request_sha256: HASH, base_input_sha256: HASH, contract_source_sha256: HASH, catalog_sha256: HASH, enqueue_contract_sha256: HASH, composition_id: id.composition, composed_input_json: { researchEvidence: evidence }, research_evidence_set_sha256: HASH, composed_input_sha256: HASH, final_invocation_aggregate_sha256: HASH, attempt_id: id.attempt, aggregate_contract_sha256: HASH, model_id: "gpt-5.6-terra", model_sha256: HASH, attempt_command_sha256: HASH, attempt_schema_sha256: HASH, attempt_composed_sha256: HASH, event_type: "attempt_succeeded", invocation_ordinal: 1, event_aggregate_sha256: HASH, event_model_sha256: HASH, event_command_sha256: HASH, event_schema_sha256: HASH, event_composed_sha256: HASH, output_sha256: HASH, parser_sha256: HASH, parser_valid: true, evidence_json: evidence }], rowCount: 1 };
       if (sql.includes("lock_ai_content_fixed_input_sources")) return { rows: [{ locked: true }], rowCount: 1 };
       if (sql.includes("from brand_core_versions")) return options.coreMissing ? { rows: [], rowCount: 0 } : { rows: [{ id: id.core, status: "approved" }], rowCount: 1 };
-      if (sql.includes("from brand_profiles profile")) return { rows: [{
+      if (sql.includes("from brand_profiles profile")) return options.rulesMissing ? { rows: [], rowCount: 0 } : { rows: [{
         id: id.rules,
         version: 1,
         status: "approved",
@@ -245,6 +246,16 @@ describe("V3 generation start transaction", () => {
       expect(run.statements.map(({ sql }) => sql).filter((sql) => /^(?:insert|update|delete)\b/i.test(sql.trim()))).toEqual([]);
       expect(run.statements.at(-1)?.sql).toBe("ROLLBACK");
     }
+  });
+
+  it("returns an actionable public code when active approved Brand Rules are missing", async () => {
+    const run = harness({ rulesMissing: true });
+
+    await expect(run.repository.startAiContentGenerationV3(run.command as never, {} as never, () => new Date(NOW)))
+      .rejects.toThrow(/^ai_content_brand_rules_required$/);
+    expect(run.statements.map(({ sql }) => sql).filter((sql) => /^(?:insert|update|delete)\b/i.test(sql.trim())))
+      .toEqual([]);
+    expect(run.statements.at(-1)?.sql).toBe("ROLLBACK");
   });
 
   it("holds every mutable frozen-resource row through the start transaction", () => {

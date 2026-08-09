@@ -4,6 +4,7 @@ import { PGlite } from "@electric-sql/pglite";
 import { pgcrypto } from "@electric-sql/pglite/contrib/pgcrypto";
 import type { Pool } from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { createAssetLibraryRepository } from "./assetLibraryRepository.js";
 import { createBrandCoreRepository } from "./brandCoreRepository.js";
 
 type QueryResult = { rowCount: number; rows: Record<string, unknown>[] };
@@ -52,6 +53,11 @@ const concurrencyBrandId = "20000000-0000-4000-8000-000000000004";
 const provenanceBrandId = "20000000-0000-4000-8000-000000000005";
 const precisionBrandId = "20000000-0000-4000-8000-000000000006";
 const foreignWorkspaceBrandId = "20000000-0000-4000-8000-000000000007";
+const missingRulesBrandId = "20000000-0000-4000-8000-000000000008";
+const invalidRulesBrandId = "20000000-0000-4000-8000-000000000009";
+const validRulesBrandId = "20000000-0000-4000-8000-000000000010";
+const missingReferenceImagesBrandId = "20000000-0000-4000-8000-000000000011";
+const v6ReferenceRulesBrandId = "20000000-0000-4000-8000-000000000012";
 const ownerId = "30000000-0000-4000-8000-000000000003";
 const memberId = "30000000-0000-4000-8000-000000000004";
 
@@ -63,7 +69,11 @@ beforeAll(async () => {
   const files = (await readdir(migrationDirectory)).filter((file) => file.endsWith(".sql")).sort();
   for (const file of files) {
     const sql = await readFile(resolve(migrationDirectory, file), "utf8");
-    if (sql.startsWith("-- requires: pgvector") || file === "027_wiki_search_v2.sql") continue;
+    if (
+      sql.startsWith("-- requires: pgvector")
+      || file === "027_wiki_search_v2.sql"
+      || file.startsWith("075_")
+    ) continue;
     await database.exec(sql);
   }
   await database.exec(`
@@ -83,13 +93,23 @@ beforeAll(async () => {
       ('${concurrencyBrandId}', '${workspaceId}', 'Concurrent'),
       ('${provenanceBrandId}', '${workspaceId}', 'Provenance'),
       ('${precisionBrandId}', '${workspaceId}', 'Precision'),
+      ('${missingRulesBrandId}', '${workspaceId}', 'Missing Rules'),
+      ('${invalidRulesBrandId}', '${workspaceId}', 'Invalid Rules'),
+      ('${validRulesBrandId}', '${workspaceId}', 'Valid Rules'),
+      ('${missingReferenceImagesBrandId}', '${workspaceId}', 'Missing Reference Images'),
+      ('${v6ReferenceRulesBrandId}', '${workspaceId}', 'V6 Reference Rules'),
       ('${foreignWorkspaceBrandId}', '${foreignWorkspaceId}', 'Foreign');
     insert into brand_profiles (workspace_id, brand_id) values
       ('${workspaceId}', '${brandId}'),
       ('${workspaceId}', '${otherBrandId}'),
       ('${workspaceId}', '${concurrencyBrandId}'),
       ('${workspaceId}', '${provenanceBrandId}'),
-      ('${workspaceId}', '${precisionBrandId}');
+      ('${workspaceId}', '${precisionBrandId}'),
+      ('${workspaceId}', '${missingRulesBrandId}'),
+      ('${workspaceId}', '${invalidRulesBrandId}'),
+      ('${workspaceId}', '${validRulesBrandId}'),
+      ('${workspaceId}', '${missingReferenceImagesBrandId}'),
+      ('${workspaceId}', '${v6ReferenceRulesBrandId}');
   `);
 }, 60_000);
 
@@ -98,6 +118,179 @@ afterAll(async () => {
 });
 
 describe("brand core repository", () => {
+  async function approveCore(brand: string, label: string) {
+    const repository = createBrandCoreRepository(pglitePool(database));
+    const draft = await repository.createDraft(
+      { workspaceId, brandId: brand, actorUserId: ownerId },
+      { core: validCore(label), evidence: [], sourceAnalysisId: null },
+    );
+    await repository.approve(
+      { workspaceId, brandId: brand, actorUserId: ownerId, versionId: draft.id },
+      { expectedUpdatedAt: draft.updatedAt },
+    );
+    return repository;
+  }
+
+  it("creates canonical approved rules in the same operation when core approval has no rules", async () => {
+    await database.query(
+      `update brand_profiles
+          set forbidden_terms = '["무조건"]'::jsonb,
+              default_cta = null,
+              auto_approval_enabled = true
+        where workspace_id = $1 and brand_id = $2`,
+      [workspaceId, missingRulesBrandId],
+    );
+
+    const repository = await approveCore(missingRulesBrandId, "규칙 누락");
+    const activeRules = await repository.getActiveRules({ workspaceId, brandId: missingRulesBrandId });
+
+    expect(activeRules).toMatchObject({
+      version: 1,
+      status: "approved",
+      rules: {
+        contractVersion: "brand-rules.v1",
+        forbiddenPhrases: ["무조건"],
+        ctaRules: { defaultCta: "", allowed: [] },
+        designRules: { referenceImages: [] },
+        autoApprovalRules: { enabled: true, conditions: [] },
+      },
+    });
+  }, 30_000);
+
+  it("preserves an active canonical user rule set when a core is approved", async () => {
+    const repository = createBrandCoreRepository(pglitePool(database));
+    const ruleDraft = await repository.saveRuleDraft(
+      { workspaceId, brandId: validRulesBrandId, actorUserId: ownerId },
+      {
+        contractVersion: "brand-rules.v1",
+        requiredPhrases: ["근거 중심"],
+        forbiddenPhrases: [],
+        exaggerationRules: [],
+        ctaRules: { defaultCta: "상담하기", allowed: ["문의하기"] },
+        channelRules: { instagram: ["짧고 명확하게"] },
+        designRules: { colors: ["#112233"], fonts: [], notes: [], referenceImages: [] },
+        autoApprovalRules: { enabled: false, conditions: [] },
+      },
+    );
+    const approvedRules = await repository.approveRules({
+      workspaceId,
+      brandId: validRulesBrandId,
+      actorUserId: ownerId,
+      ruleSetId: ruleDraft.id,
+    });
+
+    await approveCore(validRulesBrandId, "유효 규칙 보존");
+
+    expect((await repository.getActiveRules({ workspaceId, brandId: validRulesBrandId }))?.id)
+      .toBe(approvedRules.id);
+    expect(await repository.listRuleSets({ workspaceId, brandId: validRulesBrandId }))
+      .toHaveLength(1);
+  }, 30_000);
+
+  it("supersedes an invalid active legacy rule set and approves a canonical next version", async () => {
+    const inserted = await database.query<{ id: string }>(
+      `insert into brand_rule_sets (
+         workspace_id, brand_id, version, status, rules_json, created_by, approved_at
+       ) values (
+         $1, $2, 3, 'approved',
+         '{
+           "contractVersion":"brand-rules.v1",
+           "requiredPhrases":["기존 필수 문구"],
+           "forbiddenPhrases":[],
+           "exaggerationRules":[],
+           "ctaRules":{"defaultCta":null,"allowed":[]},
+           "channelRules":{},
+           "designRules":{"colors":[],"fonts":[],"notes":[]},
+           "autoApprovalRules":{"enabled":false,"conditions":[]}
+         }'::jsonb,
+         'migration', now()
+       ) returning id`,
+      [workspaceId, invalidRulesBrandId],
+    );
+    await database.query(
+      `update brand_profiles
+          set active_brand_rule_set_id = $3, default_cta = '문의하기'
+        where workspace_id = $1 and brand_id = $2`,
+      [workspaceId, invalidRulesBrandId, inserted.rows[0]!.id],
+    );
+
+    const repository = await approveCore(invalidRulesBrandId, "레거시 규칙 교체");
+    const activeRules = await repository.getActiveRules({ workspaceId, brandId: invalidRulesBrandId });
+    const versions = await repository.listRuleSets({ workspaceId, brandId: invalidRulesBrandId });
+
+    expect(activeRules).toMatchObject({
+      version: 4,
+      status: "approved",
+      rules: {
+        requiredPhrases: ["기존 필수 문구"],
+        ctaRules: { defaultCta: "문의하기", allowed: [] },
+        designRules: { referenceImages: [] },
+      },
+    });
+    expect(versions.map((version) => ({ version: version.version, status: version.status })))
+      .toEqual([
+        { version: 4, status: "approved" },
+        { version: 3, status: "superseded" },
+      ]);
+  }, 30_000);
+
+  it("persists a canonical successor when only referenceImages is missing", async () => {
+    const inserted = await database.query<{ id: string }>(
+      `insert into brand_rule_sets (
+         workspace_id, brand_id, version, status, rules_json, created_by, approved_at
+       ) values ($1, $2, 1, 'approved', '{
+         "contractVersion":"brand-rules.v1",
+         "requiredPhrases":[],"forbiddenPhrases":[],"exaggerationRules":[],
+         "ctaRules":{"defaultCta":"문의하기","allowed":[]},
+         "channelRules":{},
+         "designRules":{"colors":[],"fonts":[],"notes":[]},
+         "autoApprovalRules":{"enabled":false,"conditions":[]}
+       }'::jsonb, 'migration', now()) returning id`,
+      [workspaceId, missingReferenceImagesBrandId],
+    );
+    await database.query(
+      `update brand_profiles set active_brand_rule_set_id=$3
+        where workspace_id=$1 and brand_id=$2`,
+      [workspaceId, missingReferenceImagesBrandId, inserted.rows[0]!.id],
+    );
+
+    const repository = await approveCore(missingReferenceImagesBrandId, "참조 배열 복구");
+    const active = await repository.getActiveRules({ workspaceId, brandId: missingReferenceImagesBrandId });
+    const versions = await repository.listRuleSets({ workspaceId, brandId: missingReferenceImagesBrandId });
+    expect(active).toMatchObject({ version: 2, rules: { designRules: { referenceImages: [] } } });
+    expect(versions.map(({ version, status }) => ({ version, status }))).toEqual([
+      { version: 2, status: "approved" },
+      { version: 1, status: "superseded" },
+    ]);
+  }, 30_000);
+
+  it("does not preserve a version-6 style reference rejected by the writer contract", async () => {
+    const inserted = await database.query<{ id: string }>(
+      `insert into brand_rule_sets (
+         workspace_id, brand_id, version, status, rules_json, created_by, approved_at
+       ) values ($1, $2, 1, 'approved', '{
+         "contractVersion":"brand-rules.v1",
+         "requiredPhrases":[],"forbiddenPhrases":[],"exaggerationRules":[],
+         "ctaRules":{"defaultCta":"","allowed":[]},"channelRules":{},
+         "designRules":{"colors":[],"fonts":[],"notes":[],"referenceImages":[{
+           "referenceItemId":"71000000-0000-6000-8000-000000000001",
+           "description":"","tags":[]
+         }]},
+         "autoApprovalRules":{"enabled":false,"conditions":[]}
+       }'::jsonb, 'migration', now()) returning id`,
+      [workspaceId, v6ReferenceRulesBrandId],
+    );
+    await database.query(
+      `update brand_profiles set active_brand_rule_set_id=$3
+        where workspace_id=$1 and brand_id=$2`,
+      [workspaceId, v6ReferenceRulesBrandId, inserted.rows[0]!.id],
+    );
+
+    const repository = await approveCore(v6ReferenceRulesBrandId, "UUID 계약 복구");
+    const active = await repository.getActiveRules({ workspaceId, brandId: v6ReferenceRulesBrandId });
+    expect(active).toMatchObject({ version: 2, rules: { designRules: { referenceImages: [] } } });
+  }, 30_000);
+
   it("lets a member edit a draft but only an owner approve it", async () => {
     const repository = createBrandCoreRepository(pglitePool(database));
     const draft = await repository.createDraft(
@@ -253,12 +446,12 @@ describe("brand core repository", () => {
       insert into storage_artifacts (
         id,workspace_id,brand_id,artifact_type,bucket,path,public_url,mime_type,byte_size,checksum,created_by_user_id
       ) values
-        ('${validArtifactId}','${workspaceId}','${otherBrandId}','brand_asset','test','style/valid.png','https://blob.example/valid.png','image/png',100,'valid','${ownerId}'),
+        ('${validArtifactId}','${workspaceId}','${otherBrandId}','brand_asset','test','style/valid.png','https://blob.example/valid.png','image/png',100,'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa','${ownerId}'),
         ('${pdfArtifactId}','${workspaceId}','${otherBrandId}','brand_asset','test','style/invalid.pdf','https://blob.example/invalid.pdf','application/pdf',100,'pdf','${ownerId}'),
         ('${archivedArtifactId}','${workspaceId}','${otherBrandId}','brand_asset','test','style/archived.webp','https://blob.example/archived.webp','image/webp',100,'archived','${ownerId}'),
         ('${otherArtifactId}','${workspaceId}','${brandId}','brand_asset','test','style/other.jpg','https://blob.example/other.jpg','image/jpeg',100,'other','${ownerId}'),
-        ('${jpegArtifactId}','${workspaceId}','${otherBrandId}','brand_asset','test','style/valid.jpg','https://blob.example/valid.jpg','image/jpeg',100,'jpeg','${ownerId}'),
-        ('${webpArtifactId}','${workspaceId}','${otherBrandId}','brand_asset','test','style/valid.webp','https://blob.example/valid.webp','image/webp',100,'webp','${ownerId}'),
+        ('${jpegArtifactId}','${workspaceId}','${otherBrandId}','brand_asset','test','style/valid.jpg','https://blob.example/valid.jpg','image/jpeg',100,'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb','${ownerId}'),
+        ('${webpArtifactId}','${workspaceId}','${otherBrandId}','brand_asset','test','style/valid.webp','https://blob.example/valid.webp','image/webp',100,'cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc','${ownerId}'),
         ('${deletedArtifactId}','${workspaceId}','${otherBrandId}','brand_asset','test','style/deleted.png','https://blob.example/deleted.png','image/png',100,'deleted','${ownerId}'),
         ('${foreignArtifactId}','${foreignWorkspaceId}','${foreignWorkspaceBrandId}','brand_asset','test','style/foreign.png','https://blob.example/foreign.png','image/png',100,'foreign','${ownerId}');
       update storage_artifacts set deleted_at = now() where id = '${deletedArtifactId}';
@@ -320,6 +513,38 @@ describe("brand core repository", () => {
       fonts: ["Pretendard"],
       notes: ["절제된 이미지"],
     });
+
+    await database.query("update reference_items set archived_at=now() where id=$1", [validReferenceId]);
+    await expect(repository.approveRules({
+      workspaceId,
+      brandId: otherBrandId,
+      actorUserId: ownerId,
+      ruleSetId: saved.id,
+    })).rejects.toThrow("brand_style_reference_invalid");
+    await database.query("update reference_items set archived_at=null where id=$1", [validReferenceId]);
+    await database.query("update storage_artifacts set public_url=null where id=$1", [validArtifactId]);
+    await expect(repository.approveRules({
+      workspaceId,
+      brandId: otherBrandId,
+      actorUserId: ownerId,
+      ruleSetId: saved.id,
+    })).rejects.toThrow("brand_style_reference_invalid");
+    await database.query(
+      "update storage_artifacts set public_url='https://blob.example/valid.png' where id=$1",
+      [validArtifactId],
+    );
+    await repository.approveRules({
+      workspaceId,
+      brandId: otherBrandId,
+      actorUserId: ownerId,
+      ruleSetId: saved.id,
+    });
+    await expect(createAssetLibraryRepository(pglitePool(database)).archiveReference({
+      workspaceId,
+      brandId: otherBrandId,
+      actorUserId: ownerId,
+      referenceId: validReferenceId,
+    })).rejects.toThrow("brand_style_reference_in_use");
 
     const beforeInvalid = await database.query<{ count: string }>(
       `select count(*)::text as count from brand_rule_sets

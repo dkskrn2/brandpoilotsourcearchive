@@ -728,12 +728,35 @@ export function createAssetLibraryRepository(pool: Pool): AssetLibraryRepository
     async archiveReference(scope) {
       await transaction(pool, async (client) => {
         await requireMember(client, scope, true);
+        const profile = await client.query(
+          `select id from brand_profiles
+            where workspace_id=$1 and brand_id=$2
+            for update`,
+          [scope.workspaceId, scope.brandId],
+        );
+        if (!profile.rowCount) throw new Error("brand_not_found");
         const candidate = await client.query(
           `select id,kind,source_url_id,saved_trend_id from reference_items
             where id=$1 and workspace_id=$2 and brand_id=$3 and archived_at is null`,
           [scope.referenceId, scope.workspaceId, scope.brandId],
         );
         if (!candidate.rowCount) throw new Error("reference_not_found");
+        const activeStyle = await client.query(
+          `select 1
+             from brand_profiles profile
+             join brand_rule_sets rules
+               on rules.id=profile.active_brand_rule_set_id
+              and rules.workspace_id=profile.workspace_id and rules.brand_id=profile.brand_id
+              and rules.status='approved'
+             cross join lateral jsonb_array_elements(
+               coalesce(rules.rules_json #> '{designRules,referenceImages}','[]'::jsonb)
+             ) style(image)
+            where profile.workspace_id=$1 and profile.brand_id=$2
+              and style.image->>'referenceItemId'=$3
+            limit 1`,
+          [scope.workspaceId, scope.brandId, scope.referenceId],
+        );
+        if (activeStyle.rowCount) throw new Error("brand_style_reference_in_use");
         const savedTrendId = candidate.rows[0].saved_trend_id;
         if (savedTrendId) {
           const savedIdentity = await client.query(

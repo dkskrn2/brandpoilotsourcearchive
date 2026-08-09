@@ -934,6 +934,10 @@ export function createServer(
       reply.code(400).send({ error: message });
       return;
     }
+    if (message === "brand_style_reference_in_use") {
+      reply.code(409).send({ error: message });
+      return;
+    }
     if (message.startsWith("product_service_validation_failed:")) {
       reply.code(400).send({
         error: "product_service_validation_failed",
@@ -1163,7 +1167,9 @@ export function createServer(
       ) {
         reply.code(422).send({ error: message });
       } else if (
-        message === "ai_content_generation_not_analysis_ready"
+        message === "ai_content_brand_rules_required"
+        || message === "ai_content_brand_style_required"
+        || message === "ai_content_generation_not_analysis_ready"
         || message === "ai_content_publish_target_unsupported"
         || message === "ai_content_attachment_limit_exceeded"
         || message === "ai_content_attachments_locked"

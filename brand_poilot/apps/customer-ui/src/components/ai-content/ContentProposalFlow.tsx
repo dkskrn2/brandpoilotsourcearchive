@@ -61,6 +61,12 @@ function validationMessage(error: unknown) {
   if (error instanceof ApiRequestError && error.errorCode === "ai_content_limit_reached") {
     return "오늘 AI 콘텐츠 생성 10회를 모두 사용했습니다. 내일 00:00(KST)에 다시 사용할 수 있습니다.";
   }
+  if (error instanceof ApiRequestError && error.errorCode === "ai_content_brand_rules_required") {
+    return "브랜드 센터에서 브랜드 규칙을 먼저 승인해 주세요.";
+  }
+  if (error instanceof ApiRequestError && error.errorCode === "ai_content_brand_style_required") {
+    return "브랜드 센터에서 브랜드 규칙의 스타일 이미지를 다시 선택해 주세요.";
+  }
   const mapped = contentGenerationFieldError(error);
   return mapped ? `${validationFieldLabels[mapped.field]} 입력을 확인해 주세요.` : null;
 }

@@ -48,6 +48,77 @@ function blob() {
 }
 
 describe("AI content snapshot repository", () => {
+  it("accepts only the active approved canonical Brand Rules contract", async () => {
+    const queries: string[] = [];
+    const repository = createAiContentSnapshotRepository(queryable(async (sql) => {
+      queries.push(String(sql));
+      return result([{
+        rules_json: {
+          contractVersion: "brand-rules.v1",
+          requiredPhrases: [],
+          forbiddenPhrases: [],
+          exaggerationRules: [],
+          ctaRules: { defaultCta: "", allowed: [] },
+          channelRules: {},
+          designRules: { colors: [], fonts: [], notes: [], referenceImages: [] },
+          autoApprovalRules: { enabled: false, conditions: [] },
+        },
+      }]);
+    }), blob());
+
+    await expect(repository.assertApprovedBrandRulesAvailable(scope)).resolves.toBeUndefined();
+    expect(queries.join("\n")).toContain("active_brand_rule_set_id");
+    expect(queries.join("\n")).toContain("rules.status = 'approved'");
+  });
+
+  it("uses one actionable error for missing and noncanonical active Brand Rules", async () => {
+    const missing = createAiContentSnapshotRepository(queryable(async () => result([])), blob());
+    const legacy = createAiContentSnapshotRepository(queryable(async () => result([{
+      rules_json: {
+        contractVersion: "brand-rules.v1",
+        requiredPhrases: [],
+        forbiddenPhrases: [],
+        exaggerationRules: [],
+        ctaRules: { defaultCta: "", allowed: [] },
+        channelRules: {},
+        designRules: { colors: [], fonts: [], notes: [] },
+        autoApprovalRules: { enabled: false, conditions: [] },
+      },
+    }])), blob());
+
+    await expect(missing.assertApprovedBrandRulesAvailable(scope))
+      .rejects.toThrow(/^ai_content_brand_rules_required$/);
+    await expect(legacy.assertApprovedBrandRulesAvailable(scope))
+      .rejects.toThrow(/^ai_content_brand_rules_required$/);
+  });
+
+  it("rejects an unavailable configured style image before proposal research", async () => {
+    const queries: string[] = [];
+    const repository = createAiContentSnapshotRepository(queryable(async (sql) => {
+      queries.push(String(sql));
+      if (queries.length === 1) return result([{
+        rules_json: {
+          contractVersion: "brand-rules.v1",
+          requiredPhrases: [], forbiddenPhrases: [], exaggerationRules: [],
+          ctaRules: { defaultCta: "", allowed: [] }, channelRules: {},
+          designRules: {
+            colors: [], fonts: [], notes: [],
+            referenceImages: [{ referenceItemId: ids.style, description: "", tags: [] }],
+          },
+          autoApprovalRules: { enabled: false, conditions: [] },
+        },
+      }]);
+      return result([]);
+    }), blob());
+
+    await expect(repository.assertApprovedBrandRulesAvailable(scope))
+      .rejects.toThrow(/^ai_content_brand_style_required$/);
+    expect(queries).toHaveLength(2);
+    expect(queries[1]).toContain("storage_artifacts");
+    expect(queries[1]).toContain("item.archived_at is null");
+    expect(queries[1]).toContain("artifact.deleted_at is null");
+  });
+
   it("loads exactly the current approved core fields without Wiki or FAQ SQL", async () => {
     const queries: string[] = [];
     const database = queryable(async (sql) => {

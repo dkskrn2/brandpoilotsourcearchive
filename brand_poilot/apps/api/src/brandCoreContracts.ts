@@ -109,7 +109,7 @@ const SOURCE_TYPES: readonly BrandEvidenceSource[] = [
   "public_web",
   "analysis",
 ];
-const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 function invalid(path: string): never {
   throw new Error(`brand_core_validation_failed:${path}`);
