@@ -3107,14 +3107,21 @@ export function createServer(
     "/brands/:brandId/ai-content/outputs/:outputId/retry",
     async (request) => {
       const retry = parseContentGenerationRetryV1(request.body);
-      return repository.retryAiContentOutput({
-        ...aiContentScope(request, request.params.brandId),
+      const scope = aiContentScope(request, request.params.brandId);
+      const child = await repository.retryAiContentOutput({
+        ...scope,
         actorUserId: requiredAiContentActorUserId(request),
         outputId: parseAiContentUuid(request.params.outputId, "ai_content_output_id_invalid"),
         usageDate: kstDateKey(new Date()),
         dailyGenerationLimit: positiveLimit(aiContentLimits?.dailyGenerationLimit, 10),
         ...retry,
       });
+      const generation = await repository.getAiContentGeneration({
+        ...scope,
+        generationId: child.id,
+      });
+      if (!generation) throw new Error("ai_content_generation_not_found");
+      return generation;
     },
   );
 
