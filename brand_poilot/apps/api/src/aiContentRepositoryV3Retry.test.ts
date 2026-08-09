@@ -136,6 +136,9 @@ describe("V3 permanent-failure retry lineage", () => {
     const result = await run.repository.retryAiContentOutput(run.command);
     expect(result.id).not.toBe(UUID.parent);
     const sql = run.statements.map(({ sql }) => sql);
+    const parentLock = sql.find((statement) => statement.includes("select generation.*,")) ?? "";
+    expect(parentLock).toContain("for update of generation,operation");
+    expect(parentLock).not.toContain("for update of generation,operation,reservation,reversal");
     expect(sql.join("\n")).toMatch(/insert into ai_content_generations[\s\S]*insert into ai_content_generation_operations[\s\S]*insert into ai_content_usage_ledger[\s\S]*insert into ai_content_generation_input_snapshots[\s\S]*create_ai_content_generation_prompt_binding[\s\S]*insert into ai_content_generation_outputs[\s\S]*insert into ai_content_generation_jobs/);
     expect(sql.join("\n")).not.toMatch(/update ai_content_generation_(?:outputs|render_jobs)/i);
     const childGeneration = run.statements.find(({ sql: value }) => value.startsWith("insert into ai_content_generations"));

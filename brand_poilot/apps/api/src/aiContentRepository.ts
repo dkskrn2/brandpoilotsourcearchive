@@ -3336,7 +3336,7 @@ export function createAiContentRepository(pool: Pool, options: AiContentReposito
                on binding.generation_id=generation.id and binding.workspace_id=generation.workspace_id
               and binding.brand_id=generation.brand_id
             where generation.id=$1 and generation.workspace_id=$2 and generation.brand_id=$3
-            for update of generation,operation,reservation,reversal`,
+             for update of generation,operation`,
           [parentGenerationId, input.workspaceId, input.brandId],
         );
         const parent = parentResult.rows[0] as Record<string, unknown> | undefined;
