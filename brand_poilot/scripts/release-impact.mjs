@@ -32,6 +32,16 @@ const AI_CONTENT_ACCOUNT_POOL_RUNTIME_PATHS = new Set([
   "workers/brand-pilot-worker-runtime/src/index.ts",
 ]);
 
+const AI_CONTENT_CONTROLLED_SEARCH_RUNTIME_PATHS = new Set([
+  "workers/brand-pilot-worker-runtime/src/controlledSearch.test.ts",
+  "workers/brand-pilot-worker-runtime/src/controlledSearch.ts",
+]);
+
+const AI_CONTENT_SCOPED_TOOLING_PATHS = new Set([
+  "scripts/check-local-env.mjs",
+  "scripts/three-format-cutover-static-check.mjs",
+]);
+
 const WORKER_PATHS = Object.freeze([
   ["workers/brand-pilot-dm-worker/", "dmWikiWorker"],
   ["workers/brand-pilot-content-proposal-worker/", "contentProposalWorker"],
@@ -230,6 +240,12 @@ export function classifyChangedPaths(values, options = {}) {
       enableAiContentCutoverServer(components);
       continue;
     }
+    if (AI_CONTENT_CONTROLLED_SEARCH_RUNTIME_PATHS.has(path)) {
+      components.contentProposalWorker = true;
+      components.blogWorker = true;
+      continue;
+    }
+    if (AI_CONTENT_SCOPED_TOOLING_PATHS.has(path)) continue;
     if (path === "package.json" || path === "package-lock.json" || path === ".dockerignore" || path.startsWith("workers/brand-pilot-worker-runtime/")) {
       buildAllServer = true;
       enableAllServer(components);
