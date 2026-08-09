@@ -3476,7 +3476,7 @@ test("a successful canary atomically records candidate while preserving current"
     );
     assert.deepEqual(
       readdirSync(join(fixture.root, "state")).sort(),
-      ["candidate", "current", "deploy.lock"],
+      ["candidate", "current", "deploy.lock", "post-075-data-migrations"],
     );
   } finally {
     rmSync(fixture.fixture, { recursive: true, force: true });
