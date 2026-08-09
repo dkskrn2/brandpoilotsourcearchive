@@ -270,7 +270,7 @@ describe("createAiContentApiGateway", () => {
     });
   });
 
-  it("rejects a retry response that does not contain exactly one queued child output", async () => {
+  it("rejects a retry response that does not contain exactly one child output", async () => {
     vi.spyOn(globalThis.crypto, "randomUUID").mockReturnValue("11111111-1111-4111-8111-111111111111");
     const requestJson = vi.fn().mockResolvedValueOnce({ ...generation("queued"), outputs: undefined });
     const gateway = createAiContentApiGateway(clientWith(requestJson));
@@ -288,6 +288,32 @@ describe("createAiContentApiGateway", () => {
       }],
     ]);
   });
+
+  it.each(["queued", "planning", "generating"] as const)(
+    "accepts a retry child that already advanced to %s before the response is parsed",
+    async (status) => {
+      const child = {
+        ...generation(status),
+        outputs: [{
+          id: "output-child",
+          generationId: "generation-1",
+          outputIndex: 1,
+          title: null,
+          status,
+          content: {},
+          manifest: {},
+          manifestUrl: null,
+          failureCode: null,
+          failureMessage: null,
+          downloadedAt: null,
+        }],
+      };
+      const gateway = createAiContentApiGateway(clientWith(vi.fn().mockResolvedValueOnce(child)));
+
+      await expect(gateway.retryOutput("brand-1", "output-1", "다시 생성"))
+        .resolves.toMatchObject({ id: "generation-1", outputs: [{ status }] });
+    },
+  );
 
   it("maps missing legacy lifecycle timestamps to null", async () => {
     const requestJson = vi.fn(async () => generation("failed"));

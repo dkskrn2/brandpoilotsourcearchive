@@ -140,6 +140,11 @@ function setup(overrides: SetupOverrides = {}) {
     updateAiContentFinalizationDraft: vi.fn(async (input) => ({ id: input.generationId, status: "draft" })),
     startAiContentGenerationV3: vi.fn(async (input) => ({ id: input.generationId, status: "queued" })),
     retryAiContentOutput: vi.fn(async () => ({ id: childGenerationId, status: "queued" })),
+    getAiContentGeneration: vi.fn(async (input) => ({
+      id: input.generationId,
+      status: "queued",
+      outputs: [{ id: outputId, generationId: input.generationId, status: "queued" }],
+    })),
     claimAiContentJob: vi.fn(async () => null),
     completeAiContentJob: vi.fn(async () => ({ id: generationId, status: "processing" })),
     listAiContentUsage: vi.fn(async () => ({ usageDate: "2026-08-01", generationCount: 0, downloadCount: 0 })),
@@ -838,7 +843,11 @@ describe("V3 manual generation HTTP boundary", () => {
     });
 
     expect(response.statusCode).toBe(200);
-    expect(response.json()).toMatchObject({ id: childGenerationId, status: "queued" });
+    expect(response.json()).toMatchObject({
+      id: childGenerationId,
+      status: "queued",
+      outputs: [{ generationId: childGenerationId, status: "queued" }],
+    });
     expect(harness.repository.retryAiContentOutput).toHaveBeenCalledWith(expect.objectContaining({
       workspaceId,
       brandId,
@@ -850,6 +859,11 @@ describe("V3 manual generation HTTP boundary", () => {
       usageDate: expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/),
       dailyGenerationLimit: 10,
     }));
+    expect(harness.repository.getAiContentGeneration).toHaveBeenCalledWith({
+      workspaceId,
+      brandId,
+      generationId: childGenerationId,
+    });
     await harness.app.close();
   });
 

@@ -677,7 +677,10 @@ export function createAiContentApiGateway(client = apiClient(), blobPut: typeof 
         },
       ));
       retryIdempotencyKeys.delete(retryKey);
-      if (generation.outputs.length !== 1 || generation.outputs[0]?.status !== "queued") {
+      const childOutput = generation.outputs[0];
+      if (generation.outputs.length !== 1
+        || childOutput?.generationId !== generation.id
+        || !["queued", "planning", "generating", "completed", "failed"].includes(childOutput.status)) {
         throw new Error("ai_content_generation_retry_response_invalid");
       }
       return generation;
