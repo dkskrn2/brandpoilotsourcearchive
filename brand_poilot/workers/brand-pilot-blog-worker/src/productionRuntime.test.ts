@@ -73,6 +73,9 @@ describe("blog production runtime", () => {
     const args = runner.buildCodexArgs(path.resolve("v3-blog-output"));
     const prompt = runner.buildCodexPrompt("writer input");
     const schema = JSON.parse(await read("../scripts/blog-plan-v2.schema.json")) as Record<string, unknown>;
+    const modelFlag = args.indexOf("--model");
+    expect(modelFlag).toBeGreaterThanOrEqual(0);
+    expect(args[modelFlag + 1]).toBe("gpt-5.6-terra");
     expect(args.join(" ")).toContain("permissions.writer.network.enabled=false");
     expect(args.join(" ")).toContain('permissions.writer.filesystem={":minimal"="read","/codex"="deny","/codex-accounts"="deny",":workspace_roots"={"."="deny"}}');
     for (const feature of ["shell_tool", "image_generation", "shell_snapshot"]) expect(args).toEqual(expect.arrayContaining(["--disable", feature]));

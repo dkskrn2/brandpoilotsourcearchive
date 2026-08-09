@@ -9,7 +9,11 @@ import {
   type CodexAccountProfile,
   type ControlledSearchInput,
 } from "@brand-pilot/worker-runtime";
-import type { ContentGenerationInputV3, ResearchEvidenceSnapshotV1 } from "@brand-pilot/content-contracts";
+import {
+  CONTENT_PLANNER_MODEL_ID,
+  type ContentGenerationInputV3,
+  type ResearchEvidenceSnapshotV1,
+} from "@brand-pilot/content-contracts";
 
 export interface BlogResearchDecision { decision: "needed" | "not_needed"; reason: string }
 export interface BlogResearch {
@@ -55,6 +59,7 @@ function publicResearchContext(input: ContentGenerationInputV3): ControlledSearc
 
 export function buildResearchAssessmentArgs(): string[] {
   return [
+    "--model", CONTENT_PLANNER_MODEL_ID,
     "--strict-config", "-c", 'default_permissions="assessor"',
     "-c", 'permissions.assessor.filesystem={":minimal"="read","/codex"="deny","/codex-accounts"="deny",":workspace_roots"={"."="deny"}}',
     "-c", "permissions.assessor.network.enabled=false",

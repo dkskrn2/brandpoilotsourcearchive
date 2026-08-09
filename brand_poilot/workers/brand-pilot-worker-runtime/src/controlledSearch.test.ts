@@ -8,7 +8,7 @@ it("imports controlled-search content types directly from the canonical contract
   const source = readFileSync(new URL("./controlledSearch.ts", import.meta.url), "utf8");
 
   expect(source).toMatch(
-    /import type \{ ContentPurpose, ResearchEvidenceSnapshotV1 \} from "@brand-pilot\/content-contracts";/,
+    /import\s*\{[^}]*\bCONTENT_PLANNER_MODEL_ID\b[^}]*\btype ContentPurpose\b[^}]*\btype ResearchEvidenceSnapshotV1\b[^}]*\}\s*from "@brand-pilot\/content-contracts";/,
   );
   expect(source).not.toMatch(/from "\.\/aiContentV3\.js"/);
 });
@@ -218,6 +218,9 @@ describe("controlled proposal search", () => {
     }, { runChild: runner.run, now: () => new Date("2026-07-31T01:00:00.000Z") });
 
     expect(runner.calls).toHaveLength(1);
+    const modelFlag = runner.calls[0]!.args.indexOf("--model");
+    expect(modelFlag).toBeGreaterThanOrEqual(0);
+    expect(runner.calls[0]!.args[modelFlag + 1]).toBe("gpt-5.6-terra");
     expect(runner.calls[0]!.args).toContain("--search");
     expect(runner.calls[0]!.args).toContain("--json");
     expect(runner.calls[0]!.args).not.toContain("--enable");

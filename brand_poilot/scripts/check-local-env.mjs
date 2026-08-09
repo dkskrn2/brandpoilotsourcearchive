@@ -161,8 +161,8 @@ if (processName === "dm-worker") {
 }
 
 const dedicatedWorkers = {
-  "card-news-worker": ["cardNewsWorker", "CARD_NEWS_CODEX_COMMAND"],
-  "blog-worker": ["blogWorker", "BLOG_CODEX_COMMAND"],
+  "card-news-worker": ["cardNewsWorker", "CARD_NEWS_CODEX_PLAN_COMMAND"],
+  "blog-worker": ["blogWorker", "BLOG_CODEX_PLAN_COMMAND"],
   "reel-worker": ["reelWorker", "REEL_CODEX_PLAN_COMMAND", ["WORKER_API_TOKEN", "REEL_CODEX_PLAN_COMMAND"]],
   "subject-analysis-worker": ["subjectAnalysisWorker", "SUBJECT_ANALYSIS_CODEX_COMMAND", ["WORKER_API_TOKEN", "SUBJECT_ANALYSIS_CODEX_COMMAND"]],
   "brand-intelligence-worker": ["brandIntelligenceWorker", "BRAND_INTELLIGENCE_CODEX_COMMAND", ["WORKER_API_TOKEN", "BRAND_INTELLIGENCE_CODEX_COMMAND"]]
