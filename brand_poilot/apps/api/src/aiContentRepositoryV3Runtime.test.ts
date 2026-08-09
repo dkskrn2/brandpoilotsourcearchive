@@ -143,7 +143,7 @@ function runtimeHarness(initialStatus: "queued" | "processing") {
       if (sql.includes("select status,operation_id from ai_content_generations")) {
         return { rows: [{ status: generationStatus, operation_id: uid(10) }], rowCount: 1 };
       }
-      if (sql.includes("for update of operation,reservation")) {
+      if (sql.includes("for update of operation")) {
         return { rows: [{
           operation_id: uid(10), operation_status: operationStatus, reservation_id: uid(11),
           workspace_id: uid(8), brand_id: uid(9), quantity: 1, usage_date: "2026-08-06",

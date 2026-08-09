@@ -33,7 +33,7 @@ describe("AI content generation operation terminal accounting", () => {
     const client = { query: vi.fn(async (sql: string, params: unknown[] = []) => {
       statements.push({ sql, params });
       if (sql.includes("from ai_content_generations")) return { rows: [{ status: "failed", operation_id: "operation-1" }] };
-      if (sql.includes("for update of operation,reservation")) return { rows: [{
+      if (sql.includes("for update of operation")) return { rows: [{
         operation_id: "operation-1", operation_status: operationStatus, reservation_id: "reservation-1",
         workspace_id: "workspace-1", brand_id: "brand-1", quantity: 1, usage_date: "2026-08-06",
       }] };
@@ -62,9 +62,11 @@ describe("AI content generation operation terminal accounting", () => {
       -1, "2026-08-06", "generation-reversal:operation-1", "operation-1", "reservation-1",
     ]);
     expect(statements.filter(({ sql }) => sql.includes("transition_ai_content_generation_operation"))).toHaveLength(1);
-    const lockIndex = statements.findIndex(({ sql }) => sql.includes("for update of operation,reservation"));
+    const lockStatement = statements.find(({ sql }) => sql.includes("for update of operation"))?.sql ?? "";
+    const lockIndex = statements.findIndex(({ sql }) => sql === lockStatement);
     const recheckIndex = statements.findIndex(({ sql }) => sql.includes("left join ai_content_usage_ledger reversal"));
     expect(lockIndex).toBeGreaterThanOrEqual(0);
+    expect(lockStatement).not.toContain("for update of operation,reservation");
     expect(recheckIndex).toBeGreaterThan(lockIndex);
   });
 
