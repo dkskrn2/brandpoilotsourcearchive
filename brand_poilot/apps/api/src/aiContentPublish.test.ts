@@ -66,7 +66,8 @@ function setup(options: {
     if (sql.includes("insert into content_topics")) return { rowCount: 1, rows: [{ id: "topic-1" }] };
     if (sql.includes("insert into master_drafts")) return { rowCount: 1, rows: [{ id: "master-1" }] };
     if (sql.includes("insert into topic_publish_groups")) return { rowCount: 1, rows: [{ id: "publish-group-1" }] };
-    if (sql.includes("insert into storage_artifacts")) return { rowCount: 1, rows: [{
+    if (sql.includes("insert into storage_artifacts")) return { rowCount: 1, rows: [] };
+    if (sql.includes("from storage_artifacts") && sql.includes("where bucket = $1 and path = $2")) return { rowCount: 1, rows: [{
       id: "artifact-1",
       workspace_id: options.artifactOwner?.workspaceId ?? staticPublishActionFixture.workspaceId,
       brand_id: options.artifactOwner?.brandId ?? staticPublishActionFixture.brandId,
@@ -162,13 +163,19 @@ describe("AI content direct publishing", () => {
   });
 
   it("preserves same-tenant manifest artifact idempotency", async () => {
-    const { repository, query } = setup();
+    const { repository, query, statements } = setup();
 
     await expect(repository.prepareAiContentPublish(staticPublishActionFixture)).resolves.toMatchObject({
       publishGroupId: "publish-group-1",
     });
     const channelInsert = query.mock.calls.find(([sql]) => String(sql).includes("insert into channel_outputs"));
     expect(channelInsert?.[1]?.[9]).toBe("artifact-1");
+    const artifactInsert = statements.find((sql) => sql.includes("insert into storage_artifacts"));
+    expect(artifactInsert).toContain("on conflict (bucket, path) do nothing");
+    expect(artifactInsert).not.toContain("do update");
+    const artifactSelect = statements.find((sql) => sql.includes("from storage_artifacts") && sql.includes("where bucket = $1 and path = $2"));
+    expect(artifactSelect).toBeDefined();
+    expect(artifactSelect).not.toMatch(/\bfor\s+(?:key\s+)?(?:share|update)\b/i);
   });
 
   it("treats uppercase request UUIDs and lowercase PostgreSQL owner UUIDs as the same tenant", async () => {
