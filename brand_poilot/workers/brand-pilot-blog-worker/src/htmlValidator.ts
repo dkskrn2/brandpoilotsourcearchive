@@ -49,6 +49,18 @@ function normalizeImageSource(source: string): string {
   return source.trim().replace(/^\.\//, "");
 }
 
+export function ensureEmptyBlogReferencesSection(html: string, hasUsedEvidence: boolean): string {
+  if (hasUsedEvidence) return html;
+  const $ = cheerio.load(html, null, false);
+  const article = $("article");
+  if (article.length !== 1 || $('section[data-references="true"]').length !== 0) return html;
+  article.append(
+    '<section data-references="true"><h2>어떤 자료를 참고했나요?</h2>'
+      + '<p>제공된 고정 근거 없이 승인된 브랜드와 제품 스냅샷만 사용했습니다.</p></section>',
+  );
+  return $.html();
+}
+
 export function validateGeneratedBlogHtml(html: string, inlineFileNames?: string[]) {
   const $ = cheerio.load(html, null, false);
   validatePassiveSemanticHtml($);

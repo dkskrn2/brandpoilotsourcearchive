@@ -6,7 +6,7 @@ import {
   type ContentGenerationInputV3,
   type ResearchEvidenceSnapshotV1,
 } from "@brand-pilot/content-contracts";
-import { validateBlogPlanHtml } from "./htmlValidator.js";
+import { ensureEmptyBlogReferencesSection, validateBlogPlanHtml } from "./htmlValidator.js";
 
 export interface BlogJob {
   id: string;
@@ -81,12 +81,19 @@ export function parseBlogPlanV2(
       || plan.imagePackage.channelTargets[0] !== input.outputSettings.channelTargets[0]
       || plan.imagePackage.assets.some((asset) => asset.evidenceIds.some((id) => !evidenceIds.has(id)))
     )) throw new Error("blog_plan_binding_invalid");
-    validateBlogPlanHtml(plan.content.htmlTemplate, {
+    const htmlTemplate = ensureEmptyBlogReferencesSection(
+      plan.content.htmlTemplate,
+      plan.content.usedEvidenceIds.length > 0,
+    );
+    const normalizedPlan = htmlTemplate === plan.content.htmlTemplate
+      ? plan
+      : { ...plan, content: { ...plan.content, htmlTemplate } };
+    validateBlogPlanHtml(normalizedPlan.content.htmlTemplate, {
       evidenceItems,
-      usedEvidenceIds: plan.content.usedEvidenceIds,
-      assetCount: plan.imagePackage?.assetCount ?? 0,
+      usedEvidenceIds: normalizedPlan.content.usedEvidenceIds,
+      assetCount: normalizedPlan.imagePackage?.assetCount ?? 0,
     });
-    return plan;
+    return normalizedPlan;
   } catch (error) {
     if (error instanceof Error && error.message.startsWith("blog_html_")) throw error;
     throw new Error("blog_plan_invalid");

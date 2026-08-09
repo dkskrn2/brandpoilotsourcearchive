@@ -1,10 +1,18 @@
-import { describe, expect, it } from "vitest"; import { validateBlogPlanHtml, validateGeneratedBlogHtml } from "./htmlValidator.js";
+import { describe, expect, it } from "vitest"; import { ensureEmptyBlogReferencesSection, validateBlogPlanHtml, validateGeneratedBlogHtml } from "./htmlValidator.js";
 
 const evidenceId = "10000000-0000-4000-8000-000000000005";
 const body = "구체적인 판단 기준과 적용 방법을 독자가 이해하기 쉽게 설명합니다. ".repeat(75);
 const validPlanHtml = (bodyLink = `<a href="https://example.com/source" data-evidence-id="${evidenceId}">근거</a>`, referencesLink = bodyLink) => `<article><h1>좋은 글은 어떻게 구성할까요?</h1><section data-summary="true"><p>핵심을 먼저 답합니다.</p><p>근거를 구조에 연결합니다.</p><p>실행 기준을 정리합니다.</p></section><section><h2>무엇을 먼저 확인해야 할까요?</h2><p>${body}${bodyLink}</p><h3>어떻게 적용하면 좋을까요?</h3><p>${body}</p></section><section data-references="true"><h2>어떤 자료를 참고했나요?</h2><p>본문에서 사용한 자료입니다.</p><ul><li>${referencesLink}</li></ul></section></article>`;
 const options = { evidenceItems: [{ id: evidenceId, url: "https://example.com/source" }], usedEvidenceIds: [evidenceId], assetCount: 0 };
 describe("blog HTML validation", () => {
+  it("restores the required empty references section only when no evidence exists", () => {
+    const withoutReferences = validPlanHtml("", "").replace(/<section data-references="true">[\s\S]*?<\/section>/, "");
+    const restored = ensureEmptyBlogReferencesSection(withoutReferences, false);
+    expect(restored).toContain('section data-references="true"');
+    expect(restored).toContain("어떤 자료를 참고했나요?");
+    expect(ensureEmptyBlogReferencesSection(withoutReferences, true)).toBe(withoutReferences);
+    expect(ensureEmptyBlogReferencesSection(validPlanHtml(), false)).toBe(validPlanHtml());
+  });
   it("rejects active content", () => { expect(() => validateGeneratedBlogHtml('<article><h1>제목</h1><script>alert(1)</script></article>')).toThrow("blog_html_script_forbidden"); expect(() => validateGeneratedBlogHtml('<article><h1 onclick="x()">제목</h1></article>')).toThrow("blog_html_event_handler_forbidden"); });
   it("accepts one semantic article", () => { expect(validateGeneratedBlogHtml('<article><h1>제목</h1><section><h2>기준</h2><p>본문</p></section></article>').h1Count).toBe(1); });
   it("requires every declared inline image in the article with useful alt text", () => {
