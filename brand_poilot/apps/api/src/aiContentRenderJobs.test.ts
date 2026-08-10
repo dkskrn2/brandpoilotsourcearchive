@@ -44,7 +44,7 @@ describe("ai-content render job boundary helpers", () => {
 
   it("proves manual lineage with a SELECT-only query", async () => {
     const query = vi.fn(async (sql: string) => {
-      if (/\bfor\s+share\b/i.test(sql)) {
+      if (/\bfor\s+(?:share|update)\b/i.test(sql)) {
         throw Object.assign(new Error("permission denied for table ai_content_generation_prompt_bindings"), {
           code: "42501",
         });
