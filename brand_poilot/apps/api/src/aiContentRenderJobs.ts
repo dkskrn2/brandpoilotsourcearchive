@@ -342,7 +342,7 @@ async function manualImageAssetPayloadV2(
         and research.workspace_id=output.workspace_id and research.brand_id=output.brand_id
       where output.id=$1 and output.generation_id=$2
         and output.workspace_id=$3 and output.brand_id=$4
-      for share of generation,output,binding,proposal,batch`,
+      for share of generation,output`,
     [row.output_id, row.generation_id, row.workspace_id, row.brand_id],
   );
   if (state.rows.length !== 1 || state.rows[0]?.origin !== "manual") {

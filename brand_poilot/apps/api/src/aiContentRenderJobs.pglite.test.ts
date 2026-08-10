@@ -217,6 +217,27 @@ describe("AiContentRenderJobsRepository with postgres semantics", () => {
     expect(after.rows[0]?.payload_json).toEqual(before.rows[0]?.payload_json);
   });
 
+  it("hydrates a manual v2 image claim when proposal lineage tables are SELECT-only", async () => {
+    await enqueueManualV2();
+    await db.exec(`
+      create role content_application;
+      grant select,update on ai_content_generations,ai_content_generation_outputs,ai_content_generation_render_jobs to content_application;
+      grant select on ai_content_generation_input_snapshots,ai_content_generation_prompt_bindings,
+        ai_content_proposals,ai_content_proposal_batches,ai_content_output_research_snapshots to content_application;
+      set role content_application;
+    `);
+
+    const job = await repository.claim({ workerId: "manual-image-worker", leaseSeconds: 180 });
+
+    expect(job?.payload).toMatchObject({
+      contractVersion: "ai-content-render-job.v2",
+      generationId: ids.generation,
+      outputId: ids.output,
+      contentGenerationInput: { contractVersion: "content-generation-input.v3" },
+      contentPlan: { contractVersion: "card-news-plan.v2" },
+    });
+  });
+
   it.each([
     ["stored generation identity", async () => {
       await db.query("update ai_content_generation_render_jobs set generation_id='30000000-0000-4000-8000-000000000099'");
