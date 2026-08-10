@@ -275,6 +275,74 @@ describe("V3 AI content Blob storage", () => {
     expect(put).not.toHaveBeenCalled();
   });
 
+  it("normalizes legacy image metadata before a constrained owned read", async () => {
+    const bytes = await sharp({ create: { width: 2, height: 2, channels: 4, background: "white" } }).jpeg().toBuffer();
+    vi.mocked(get).mockResolvedValue({
+      statusCode: 200,
+      stream: new Blob([bytes]).stream(),
+      headers: new Headers(),
+      blob: { url: "https://blob.example.com/input", downloadUrl: "", pathname: "owned/input.jpg", contentType: "IMAGE/JPG; charset=binary", size: bytes.length, uploadedAt: new Date() },
+    } as never);
+    const storage = createAiContentBlobStorage({ token: "token" });
+
+    await expect(storage.readOwned("owned/input.jpg", {
+      maxBytes: 5_000_000,
+      expectedSizeBytes: bytes.length,
+      expectedContentType: "image/jpeg",
+    })).resolves.toEqual(bytes);
+  });
+
+  it("rejects a declared attachment above 5 MB before Blob lookup even if the caller supplies a larger maximum", async () => {
+    const storage = createAiContentBlobStorage({ token: "token" });
+
+    await expect(storage.readOwned("owned/input.png", {
+      maxBytes: 6_000_000,
+      expectedSizeBytes: 5_000_001,
+      expectedContentType: "image/png",
+    })).rejects.toThrow("ai_content_owned_blob_size_limit_exceeded");
+    expect(get).not.toHaveBeenCalled();
+  });
+
+  it("rejects oversized Blob metadata before accessing or consuming the stream", async () => {
+    const streamAccess = vi.fn(() => { throw new Error("stream_must_not_be_accessed"); });
+    const result = {
+      statusCode: 200,
+      get stream() { return streamAccess(); },
+      headers: new Headers(),
+      blob: { url: "https://blob.example.com/input", downloadUrl: "", pathname: "owned/input.png", contentType: "image/png", size: 5_000_001, uploadedAt: new Date() },
+    };
+    vi.mocked(get).mockResolvedValue(result as never);
+    const storage = createAiContentBlobStorage({ token: "token" });
+
+    await expect(storage.readOwned("owned/input.png", {
+      maxBytes: 5_000_000,
+      expectedSizeBytes: 1,
+      expectedContentType: "image/png",
+    })).rejects.toThrow("ai_content_owned_blob_size_limit_exceeded");
+    expect(streamAccess).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["metadata size", { size: 4, contentType: "image/png" }, "ai_content_owned_blob_size_mismatch"],
+    ["metadata content type", { size: 3, contentType: "image/webp" }, "ai_content_owned_blob_content_type_mismatch"],
+  ])("rejects a constrained owned read with mismatched %s before reading bytes", async (_label, metadata, code) => {
+    const streamAccess = vi.fn(() => { throw new Error("stream_must_not_be_accessed"); });
+    vi.mocked(get).mockResolvedValue({
+      statusCode: 200,
+      get stream() { return streamAccess(); },
+      headers: new Headers(),
+      blob: { url: "https://blob.example.com/input", downloadUrl: "", pathname: "owned/input.png", ...metadata, uploadedAt: new Date() },
+    } as never);
+    const storage = createAiContentBlobStorage({ token: "token" });
+
+    await expect(storage.readOwned("owned/input.png", {
+      maxBytes: 5_000_000,
+      expectedSizeBytes: 3,
+      expectedContentType: "image/png",
+    })).rejects.toThrow(code);
+    expect(streamAccess).not.toHaveBeenCalled();
+  });
+
   it("refuses to overwrite a deterministic asset when existing bytes differ", async () => {
     const existing = Buffer.from("existing");
     vi.mocked(get).mockResolvedValue({ statusCode: 200, stream: new Blob([existing]).stream(), headers: new Headers(), blob: { url: "https://blob.example.com/path", downloadUrl: "", pathname: "path", contentType: "image/png", size: existing.length, uploadedAt: new Date() } } as never);

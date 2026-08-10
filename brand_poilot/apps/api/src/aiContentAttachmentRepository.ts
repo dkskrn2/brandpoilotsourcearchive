@@ -168,7 +168,7 @@ function safeEqual(left: string, right: string) {
 
 async function lockGeneration(client: Queryable, scope: BrandGenerationScope) {
   const result = await client.query(
-    `select id, attachments_locked_at
+    `select id, status, draft_json, attachments_locked_at
        from ai_content_generations
       where id = $1 and workspace_id = $2 and brand_id = $3
       for update`,
@@ -180,6 +180,31 @@ async function lockGeneration(client: Queryable, scope: BrandGenerationScope) {
 
 function assertMutable(generation: Record<string, unknown>) {
   if (generation.attachments_locked_at) throw new Error("ai_content_attachments_locked");
+}
+
+function proposalDraftAfterAttachmentRemoval(
+  generation: Record<string, unknown>,
+  attachmentId: string,
+): Record<string, unknown> | null {
+  if (generation.status !== "draft") return null;
+  const draft = generation.draft_json;
+  if (!draft || typeof draft !== "object" || Array.isArray(draft)) return null;
+  const proposalDraft = draft as Record<string, unknown>;
+  if (proposalDraft.origin !== "proposal-v2") return null;
+  const finalization = proposalDraft.finalization;
+  if (!finalization || typeof finalization !== "object" || Array.isArray(finalization)) return null;
+  const finalizationDraft = finalization as Record<string, unknown>;
+  const attachmentIds = finalizationDraft.attachmentIds;
+  if (!Array.isArray(attachmentIds) || attachmentIds.some((id) => typeof id !== "string")) return null;
+  const remainingAttachmentIds = attachmentIds.filter((id) => id !== attachmentId);
+  if (remainingAttachmentIds.length === attachmentIds.length) return null;
+  return {
+    ...proposalDraft,
+    finalization: {
+      ...finalizationDraft,
+      attachmentIds: remainingAttachmentIds,
+    },
+  };
 }
 
 function connectionError(error: unknown): Error {
@@ -635,7 +660,8 @@ export function createAiContentAttachmentRepository(
       const scope = validateScope(input);
       const attachmentId = requireUuid(input.attachmentId, "ai_content_attachment_id_invalid");
       return inTransaction(pool, async (client) => {
-        assertMutable(await lockGeneration(client, scope));
+        const generation = await lockGeneration(client, scope);
+        assertMutable(generation);
         const removed = await client.query(
           `update ai_content_generation_attachments
               set deleted_at = statement_timestamp(), deletion_reason = 'user_removed',
@@ -647,6 +673,19 @@ export function createAiContentAttachmentRepository(
         );
         if (!removed.rowCount) throw new Error("ai_content_attachment_not_found");
         const attachment = removed.rows[0] as Record<string, unknown>;
+        const nextDraft = proposalDraftAfterAttachmentRemoval(generation, attachmentId);
+        if (nextDraft) {
+          const updated = await client.query(
+            `update ai_content_generations
+                set draft_json=$4::jsonb, updated_at=statement_timestamp()
+              where id=$1 and workspace_id=$2 and brand_id=$3
+                and status='draft' and attachments_locked_at is null
+                and draft_json->>'origin'='proposal-v2'
+              returning id`,
+            [scope.generationId, scope.workspaceId, scope.brandId, JSON.stringify(nextDraft)],
+          );
+          if (!updated.rowCount) throw new Error("ai_content_generation_draft_update_conflict");
+        }
         await scheduleCleanup(client, {
           ...attachment,
           confirmed_attachment_id: attachment.id,

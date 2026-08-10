@@ -72,11 +72,17 @@ export function parseContentFinalizationDraftV2(value: unknown): ContentFinaliza
 
 export function parseContentGenerationStartV2(value: unknown): ContentGenerationStartV2 {
   try {
-    const source = exactObject(value, ["contractVersion", "idempotencyKey"]);
+    const hasExpectedFinalization = Object.prototype.hasOwnProperty.call(value, "expectedFinalization");
+    const source = exactObject(value, hasExpectedFinalization
+      ? ["contractVersion", "idempotencyKey", "expectedFinalization"]
+      : ["contractVersion", "idempotencyKey"]);
     if (source.contractVersion !== "content-generation-start.v2") throw new Error();
     return {
       contractVersion: source.contractVersion,
       idempotencyKey: boundedString(source.idempotencyKey, 200),
+      ...(hasExpectedFinalization
+        ? { expectedFinalization: parseContentFinalizationDraftV2(source.expectedFinalization) }
+        : {}),
     };
   } catch {
     throw new Error("content_generation_start_v2_invalid");

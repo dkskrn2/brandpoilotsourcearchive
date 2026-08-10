@@ -38,15 +38,55 @@ describe("blog HTML validation", () => {
     expect(() => validateBlogPlanHtml(validPlanHtml().replace(body, "짧은 본문"), options)).toThrow("blog_html_length_invalid");
   });
 
+  it("requires every h1, image, and link in the document to belong to the one article", () => {
+    expect(() => validateBlogPlanHtml(`${validPlanHtml()}<h1>문서 밖 제목</h1>`, options))
+      .toThrow("blog_html_h1_count_invalid");
+    expect(() => validateBlogPlanHtml(`${validPlanHtml()}<img src="https://attacker.example/outside.png" alt="문서 밖 이미지">`, options))
+      .toThrow("blog_html_image_placement_invalid");
+    expect(() => validateBlogPlanHtml(`${validPlanHtml()}<a href="https://example.com/source" data-evidence-id="${evidenceId}">문서 밖 링크</a>`, options))
+      .toThrow("blog_html_evidence_url_invalid");
+  });
+
   it("requires exactly one references section", () => {
     const duplicate = validPlanHtml().replace("</article>", '<section data-references="true"><h2>다른 자료가 있나요?</h2><p>중복 자료입니다.</p></section></article>');
     expect(() => validateBlogPlanHtml(duplicate, options)).toThrow("blog_html_references_invalid");
   });
 
-  it("requires claim-near HTTPS evidence links and the same frozen set in references", () => {
+  it("accepts unused frozen HTTP evidence when usedEvidenceIds is empty", () => {
+    expect(validateBlogPlanHtml(validPlanHtml("", ""), {
+      evidenceItems: [{ id: evidenceId, url: "http://example.com/source" }],
+      usedEvidenceIds: [],
+      assetCount: 0,
+    })).toBeTruthy();
+  });
+
+  it("accepts the exact frozen HTTP evidence URL in the body and references", () => {
+    const url = "http://example.com/source";
+    const link = `<a href="${url}" data-evidence-id="${evidenceId}">근거</a>`;
+    expect(validateBlogPlanHtml(validPlanHtml(link, link), {
+      evidenceItems: [{ id: evidenceId, url }],
+      usedEvidenceIds: [evidenceId],
+      assetCount: 0,
+    })).toBeTruthy();
+  });
+
+  it.each([
+    ["javascript", "javascript:alert(1)"],
+    ["data", "data:text/html,unsafe"],
+    ["file", "file:///tmp/source"],
+    ["relative", "/source"],
+  ])("rejects an unsupported %s evidence URL", (_name, url) => {
+    const link = `<a href="${url}" data-evidence-id="${evidenceId}">근거</a>`;
+    expect(() => validateBlogPlanHtml(validPlanHtml(link, link), {
+      evidenceItems: [{ id: evidenceId, url }],
+      usedEvidenceIds: [evidenceId],
+      assetCount: 0,
+    })).toThrow();
+  });
+
+  it("requires claim-near exact evidence links and the same frozen set in references", () => {
     expect(() => validateBlogPlanHtml(validPlanHtml("", `<a href="https://example.com/source" data-evidence-id="${evidenceId}">근거</a>`), options)).toThrow("blog_html_evidence_set_invalid");
     expect(() => validateBlogPlanHtml(validPlanHtml().replaceAll("https://example.com/source", "https://attacker.example/source"), options)).toThrow("blog_html_evidence_url_invalid");
-    expect(() => validateBlogPlanHtml(validPlanHtml().replaceAll("https://", "http://"), options)).toThrow("blog_html_evidence_url_invalid");
   });
 
   it("allows only exact continuous asset placeholders and forbids active styling or external image sources", () => {

@@ -1292,7 +1292,7 @@ test("all CLI worker images install the pinned Codex runtime and run real entryp
     ["reel", {
       path: "workers/brand-pilot-reel-worker/Dockerfile",
       entrypoint: /workers\/brand-pilot-reel-worker\/dist\/index\.js/,
-      assets: [/run-codex-reel-plan\.mjs/, /reel-plan-v2\.schema\.json/],
+      assets: [/run-codex-reel-plan\.mjs/],
     }],
   ]);
 

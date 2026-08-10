@@ -13,7 +13,10 @@ import {
 import { buildImageWorkerChildEnvironment } from "./childEnvironment.mjs";
 import { signalProcessTree } from "./processTermination.mjs";
 import { buildAiContentAssetPrompt, type StagedAiContentAssetInputs } from "./aiContentAssetPrompt.js";
+import { buildAiContentManualAssetPromptV2 } from "./aiContentManualAssetPromptV2.js";
 import type { AiContentImageAssetJob } from "./aiContentRenderClient.js";
+import { buildAiContentManualRenderContract } from "./aiContentManualRenderContract.js";
+import { AI_CONTENT_OWNED_IMAGE_MAX_BYTES, type AiContentOwnedBlobReadConstraints } from "./storage.js";
 
 export interface LocallyRenderedAiContentAsset {
   index: number;
@@ -56,6 +59,11 @@ function extension(mimeType: string): string {
 
 async function makeReadOnly(filePath: string): Promise<void> {
   await chmod(filePath, 0o444);
+}
+
+async function writeReadOnlyJson(filePath: string, value: unknown): Promise<void> {
+  await writeFile(filePath, `${JSON.stringify(value, null, 2)}\n`, { encoding: "utf8", mode: 0o444 });
+  await makeReadOnly(filePath);
 }
 
 type AiContentAssetChild = {
@@ -227,10 +235,20 @@ async function defaultChildRunner(input: {
   outputFile: string;
   prompt: string;
   signal: AbortSignal;
+  resultContractVersion: "ai-content-asset-render.v1" | "ai-content-asset-render.v2";
+  assetIndex: number;
 }): Promise<void> {
   if (input.signal.aborted) throw input.signal.reason instanceof Error ? input.signal.reason : new Error("ai_content_asset_render_aborted");
   const jobFile = path.join(input.workspaceDir, "asset-job.json");
-  await writeFile(jobFile, JSON.stringify({ prompt: input.prompt, selectedAssetCount: 1 }), { encoding: "utf8", mode: 0o444 });
+  if (input.resultContractVersion === "ai-content-asset-render.v1") {
+    await writeFile(jobFile, JSON.stringify({ prompt: input.prompt, selectedAssetCount: 1 }), { encoding: "utf8", mode: 0o444 });
+  } else {
+    await writeFile(jobFile, JSON.stringify({
+      prompt: input.prompt,
+      contractVersion: "ai-content-asset-render.v2",
+      assetIndex: input.assetIndex,
+    }), { encoding: "utf8", mode: 0o444 });
+  }
   await runAiContentAssetChildProcess({
     accountPool: input.accountPool,
     command: process.execPath,
@@ -300,7 +318,7 @@ export function createAiContentAssetRenderer({
 }: {
   accountPool?: CodexAccountPool;
   workerRoot: string;
-  readOwned(storagePath: string): Promise<Buffer>;
+  readOwned(storagePath: string, constraints?: AiContentOwnedBlobReadConstraints): Promise<Buffer>;
   runChild?: AiContentAssetChildRunner;
   timeoutMs?: number;
 }): AiContentAssetRenderer {
@@ -309,6 +327,22 @@ export function createAiContentAssetRenderer({
       const imagePackage = job.payload.imagePackage;
       const asset = imagePackage.assets[job.assetIndex - 1];
       if (!asset || asset.index !== job.assetIndex) throw new Error("ai_content_asset_index_invalid");
+      const manualRenderContract = job.payload.contractVersion === "ai-content-render-job.v2"
+        ? buildAiContentManualRenderContract({
+          identity: {
+            id: job.id, generationId: job.generationId, outputId: job.outputId,
+            workspaceId: job.workspaceId, brandId: job.brandId, assetIndex: job.assetIndex,
+          },
+          payload: job.payload,
+        })
+        : null;
+      if (job.payload.contractVersion === "ai-content-render-job.v2") {
+        for (const attachment of imagePackage.attachments) {
+          if (attachment.sizeBytes > AI_CONTENT_OWNED_IMAGE_MAX_BYTES) {
+            throw new Error("ai_content_owned_blob_size_limit_exceeded");
+          }
+        }
+      }
       const workDir = await mkdtemp(path.join(os.tmpdir(), "brand-pilot-ai-content-asset-"));
       try {
         const workspaceDir = path.join(workDir, "workspace");
@@ -324,10 +358,42 @@ export function createAiContentAssetRenderer({
         ]);
         await Promise.all([makeReadOnly(agentFile), makeReadOnly(skillFile)]);
 
+        if (manualRenderContract !== null && job.payload.contractVersion === "ai-content-render-job.v2") {
+          const attachmentDir = path.join(inputDir, "attachments");
+          await mkdir(attachmentDir, { recursive: true });
+          await Promise.all([
+            writeReadOnlyJson(path.join(inputDir, "content-generation-input.json"), job.payload.contentGenerationInput),
+            writeReadOnlyJson(path.join(inputDir, "content-plan.json"), job.payload.contentPlan),
+            writeReadOnlyJson(path.join(inputDir, "render-contract.json"), manualRenderContract),
+            ...(manualRenderContract.blogInsertionContext === null
+              ? []
+              : [writeReadOnlyJson(path.join(inputDir, "blog-insertion-context.json"), manualRenderContract.blogInsertionContext)]),
+          ]);
+        }
+
         const staged: StagedAiContentAssetInputs = { productImages: [], styleImages: [], references: [], attachments: [] };
-        const stage = async (storagePath: string, checksum: string, fileName: string): Promise<string> => {
-          const bytes = await readOwned(storagePath);
+        const stage = async (
+          storagePath: string,
+          checksum: string,
+          fileName: string,
+          attachmentConstraints?: { sizeBytes: number; mimeType: "image/png" | "image/jpeg" | "image/webp" },
+        ): Promise<string> => {
+          const bytes = attachmentConstraints
+            ? await readOwned(storagePath, {
+              maxBytes: AI_CONTENT_OWNED_IMAGE_MAX_BYTES,
+              expectedSizeBytes: attachmentConstraints.sizeBytes,
+              expectedContentType: attachmentConstraints.mimeType,
+            })
+            : await readOwned(storagePath);
           if (sha256(bytes) !== checksum.toLowerCase()) throw new Error("ai_content_owned_blob_checksum_mismatch");
+          if (attachmentConstraints && bytes.byteLength !== attachmentConstraints.sizeBytes) throw new Error("ai_content_owned_blob_size_mismatch");
+          if (attachmentConstraints) {
+            const metadata = await sharp(bytes, { failOn: "error" }).metadata().catch(() => null);
+            const expectedFormat = attachmentConstraints.mimeType === "image/jpeg"
+              ? "jpeg"
+              : attachmentConstraints.mimeType.slice("image/".length);
+            if (metadata?.format !== expectedFormat) throw new Error("ai_content_owned_blob_content_type_mismatch");
+          }
           const target = path.join(inputDir, fileName);
           await writeFile(target, bytes, { mode: 0o444 });
           await makeReadOnly(target);
@@ -348,16 +414,63 @@ export function createAiContentAssetRenderer({
             roles: reference.roles, title: reference.title, text: reference.text,
           });
         }
+        const manualV2 = job.payload.contractVersion === "ai-content-render-job.v2";
         const selectedAttachmentIds = new Set(asset.attachmentIds);
-        for (const [offset, attachment] of imagePackage.attachments.filter((item) => selectedAttachmentIds.has(item.id)).entries()) {
-          staged.attachments.push({ id: attachment.id, path: await stage(attachment.storagePath, attachment.checksum, `attachment-${String(offset + 1).padStart(2, "0")}${extension(attachment.mimeType)}`), role: attachment.role });
+        const attachmentsToStage = manualV2
+          ? imagePackage.attachments
+          : imagePackage.attachments.filter((item) => selectedAttachmentIds.has(item.id));
+        for (const [offset, attachment] of attachmentsToStage.entries()) {
+          const fileName = manualV2
+            ? path.posix.join("attachments", `attachment-${String(offset + 1).padStart(2, "0")}${extension(attachment.mimeType)}`)
+            : `attachment-${String(offset + 1).padStart(2, "0")}${extension(attachment.mimeType)}`;
+          staged.attachments.push({
+            id: attachment.id,
+            path: manualV2
+              ? await stage(attachment.storagePath, attachment.checksum, fileName, {
+                sizeBytes: attachment.sizeBytes,
+                mimeType: attachment.mimeType,
+              })
+              : await stage(attachment.storagePath, attachment.checksum, fileName),
+            role: attachment.role,
+          });
         }
-        if (staged.productImages.length !== selectedProductIds.size || staged.attachments.length !== selectedAttachmentIds.size) throw new Error("ai_content_asset_binding_invalid");
+        if (
+          staged.productImages.length !== selectedProductIds.size
+          || (manualV2 ? staged.attachments.length !== imagePackage.attachments.length : staged.attachments.length !== selectedAttachmentIds.size)
+        ) throw new Error("ai_content_asset_binding_invalid");
         if (imagePackage.avatarStyleImageId !== null && staged.styleImages.filter((item) => item.avatar).length !== 1) throw new Error("ai_content_avatar_stage_invalid");
 
-        const prompt = buildAiContentAssetPrompt({ imagePackage, assetIndex: job.assetIndex, staged });
+        if (manualV2) {
+          await writeReadOnlyJson(path.join(inputDir, "attachments", "index.json"), {
+            contractVersion: "ai-content-attachment-index.v1",
+            referenceSemantics: "optional_visual_reference",
+            attachments: imagePackage.attachments.map((attachment, offset) => ({
+              index: offset + 1,
+              id: attachment.id,
+              role: attachment.role,
+              originalFileName: attachment.fileName,
+              mimeType: attachment.mimeType,
+              sizeBytes: attachment.sizeBytes,
+              checksum: attachment.checksum,
+              path: staged.attachments[offset]!.path,
+            })),
+          });
+        }
+
+        const prompt = manualRenderContract === null
+          ? buildAiContentAssetPrompt({ imagePackage, assetIndex: job.assetIndex, staged })
+          : buildAiContentManualAssetPromptV2({ renderContract: manualRenderContract, staged });
         const childRunner = runChild ?? (accountPool
-          ? ((input) => defaultChildRunner({ ...input, accountPool, workerRoot, timeoutMs }))
+          ? ((input) => defaultChildRunner({
+            ...input,
+            accountPool,
+            workerRoot,
+            timeoutMs,
+            resultContractVersion: manualRenderContract === null
+              ? "ai-content-asset-render.v1"
+              : "ai-content-asset-render.v2",
+            assetIndex: job.assetIndex,
+          }))
           : undefined);
         if (!childRunner) throw new Error("codex_account_pool_required");
         await childRunner({ workspaceDir, outputFile, prompt, signal });

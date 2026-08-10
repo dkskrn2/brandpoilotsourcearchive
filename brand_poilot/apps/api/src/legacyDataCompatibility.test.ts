@@ -63,6 +63,7 @@ function orchestration(outputFormat: unknown) {
 describe("legacy data compatibility", () => {
   it("reads a legacy draft and Reel result without exposing mutation capabilities", async () => {
     const query = vi.fn(async (sql: string) => {
+      if (/^(begin|commit|rollback)/i.test(sql)) return { rowCount: 0, rows: [] };
       if (sql.includes("from ai_content_generation_outputs")) {
         return {
           rowCount: 1,
@@ -85,9 +86,13 @@ describe("legacy data compatibility", () => {
         };
       }
       if (sql.includes("from ai_content_generation_references")) return { rowCount: 0, rows: [] };
+      if (sql.includes("from ai_content_generation_attachments")) return { rowCount: 0, rows: [] };
       return { rowCount: 1, rows: [legacyGenerationRow()] };
     });
-    const repository = createAiContentRepository({ query } as never);
+    const repository = createAiContentRepository({
+      query,
+      connect: vi.fn(async () => ({ query, release: vi.fn() })),
+    } as never);
 
     const generation = await repository.getAiContentGeneration(generationScope);
 

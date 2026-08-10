@@ -15,7 +15,9 @@ describe("card-news V3 production runtime", () => {
     expect(dockerfile).toContain("run-codex-card-news-v2-plan.mjs");
     expect(dockerfile).not.toContain("run-codex-card-news.mjs");
     expect(dockerfile).not.toContain("run-codex-card-news-plan.mjs");
-    expect(skill).toContain("card-news-plan.v2");
+    expect(dockerfile).toContain("card-news-plan-draft-v1.schema.json");
+    expect(skill).toContain("card-news-plan-draft.v1");
+    expect(skill).not.toContain("ImageGenerationPackageV1");
     expect(skill).not.toContain("content-generation-input.v2");
   });
 
@@ -27,6 +29,12 @@ describe("card-news V3 production runtime", () => {
     const args = runner.buildCodexArgs(path.resolve("plan-output"));
     expect(args.slice(0, 3)).toEqual(["--model", "gpt-5.6-terra", "--strict-config"]);
     expect(args.join(" ")).toContain("permissions.planner.network.enabled=false");
+    const schemaPath = args[args.indexOf("--output-schema") + 1];
+    expect(schemaPath).toMatch(/card-news-plan-draft-v1\.schema\.json$/);
+    const schema = await readFile(schemaPath!, "utf8");
+    expect(schema).toContain('"card-news-plan-draft.v1"');
+    expect(schema).not.toContain("imagePackage");
+    expect(schema).not.toContain("attachmentIds");
     expect(args).toEqual(expect.arrayContaining(["--disable", "shell_tool", "--disable", "image_generation"]));
     expect(runner.buildCodexPrompt("fixed input")).toContain("fixed input");
   });

@@ -93,6 +93,201 @@ function transactionFailurePool(options: {
 }
 
 describe("AiContentAttachmentLifecycleRepository", () => {
+  it("removes only the deleted attachment id from a proposal-v2 finalization in the same scoped transaction", async () => {
+    const removedId = "80000000-0000-4000-8000-000000000001";
+    const retainedBefore = "80000000-0000-4000-8000-000000000002";
+    const retainedAfter = "80000000-0000-4000-8000-000000000003";
+    const draft = {
+      origin: "proposal-v2",
+      proposalBatchId: "50000000-0000-4000-8000-000000000001",
+      proposalId: "60000000-0000-4000-8000-000000000001",
+      finalization: {
+        contractVersion: "content-finalization-draft.v2",
+        avatarStyleImageId: null,
+        userImageInstruction: "기존 지시 유지",
+        attachmentIds: [retainedBefore, removedId, retainedAfter],
+      },
+    };
+    const calls: Array<{ sql: string; params: unknown[] }> = [];
+    const client = {
+      async query(sql: string, params: unknown[] = []) {
+        calls.push({ sql, params });
+        if (["BEGIN", "COMMIT", "ROLLBACK"].includes(sql)) return { rows: [], rowCount: 0 };
+        if (sql.includes("from ai_content_generations")) {
+          return { rows: [{ id: SCOPE.generationId, status: "draft", attachments_locked_at: null, draft_json: draft }], rowCount: 1 };
+        }
+        if (sql.includes("update ai_content_generation_attachments")) {
+          return {
+            rows: [{
+              id: removedId,
+              generation_id: SCOPE.generationId,
+              workspace_id: SCOPE.workspaceId,
+              brand_id: SCOPE.brandId,
+              upload_session_id: "50000000-0000-4000-8000-000000000009",
+              storage_url: "https://blob.example/removed.png",
+              storage_path: "removed.png",
+              created_at: "2026-08-09T00:00:00.000Z",
+            }],
+            rowCount: 1,
+          };
+        }
+        if (sql.includes("update ai_content_generations")) {
+          return { rows: [{ id: SCOPE.generationId }], rowCount: 1 };
+        }
+        if (sql.includes("insert into ai_content_attachment_deletion_jobs")) {
+          return { rows: [], rowCount: 1 };
+        }
+        throw new Error(`unexpected_sql:${sql}`);
+      },
+      release() {},
+    };
+    const repository = createAiContentAttachmentRepository({
+      connect: async () => client,
+      query: client.query,
+    } as never);
+
+    await repository.removeAiContentAttachment({ ...SCOPE, attachmentId: removedId });
+
+    const attachmentUpdate = calls.findIndex(({ sql }) => sql.includes("update ai_content_generation_attachments"));
+    const generationUpdate = calls.findIndex(({ sql }) => sql.includes("update ai_content_generations"));
+    const cleanupInsert = calls.findIndex(({ sql }) => sql.includes("insert into ai_content_attachment_deletion_jobs"));
+    expect(generationUpdate).toBeGreaterThan(attachmentUpdate);
+    expect(cleanupInsert).toBeGreaterThan(generationUpdate);
+    const update = calls[generationUpdate]!;
+    expect(update.sql).toContain("where id=$1 and workspace_id=$2 and brand_id=$3");
+    expect(update.sql).toContain("status='draft'");
+    expect(update.params.slice(0, 3)).toEqual([SCOPE.generationId, SCOPE.workspaceId, SCOPE.brandId]);
+    expect(JSON.parse(String(update.params[3]))).toEqual({
+      ...draft,
+      finalization: {
+        ...draft.finalization,
+        attachmentIds: [retainedBefore, retainedAfter],
+      },
+    });
+    expect(calls.map(({ sql }) => sql).at(-1)).toBe("COMMIT");
+  });
+
+  it("rolls back the attachment soft-delete when the proposal-v2 draft rewrite fails", async () => {
+    const removedId = "80000000-0000-4000-8000-000000000001";
+    const commands: string[] = [];
+    const client = {
+      async query(sql: string) {
+        commands.push(sql);
+        if (["BEGIN", "COMMIT", "ROLLBACK"].includes(sql)) return { rows: [], rowCount: 0 };
+        if (sql.includes("from ai_content_generations")) {
+          return {
+            rows: [{
+              id: SCOPE.generationId,
+              status: "draft",
+              attachments_locked_at: null,
+              draft_json: {
+                origin: "proposal-v2",
+                finalization: {
+                  contractVersion: "content-finalization-draft.v2",
+                  avatarStyleImageId: null,
+                  userImageInstruction: null,
+                  attachmentIds: [removedId],
+                },
+              },
+            }],
+            rowCount: 1,
+          };
+        }
+        if (sql.includes("update ai_content_generation_attachments")) {
+          return {
+            rows: [{ id: removedId, generation_id: SCOPE.generationId }],
+            rowCount: 1,
+          };
+        }
+        if (sql.includes("update ai_content_generations")) throw new Error("draft_rewrite_failed");
+        if (sql.includes("insert into ai_content_attachment_deletion_jobs")) {
+          return { rows: [], rowCount: 1 };
+        }
+        throw new Error(`unexpected_sql:${sql}`);
+      },
+      release() {},
+    };
+    const repository = createAiContentAttachmentRepository({
+      connect: async () => client,
+      query: client.query,
+    } as never);
+
+    await expect(repository.removeAiContentAttachment({ ...SCOPE, attachmentId: removedId }))
+      .rejects.toThrow("draft_rewrite_failed");
+    expect(commands.at(-1)).toBe("ROLLBACK");
+    expect(commands).not.toContain("COMMIT");
+    expect(commands.some((sql) => sql.includes("insert into ai_content_attachment_deletion_jobs"))).toBe(false);
+  });
+
+  it("does not rewrite non-proposal legacy draft data when removing an attachment", async () => {
+    const removedId = "80000000-0000-4000-8000-000000000001";
+    const sql: string[] = [];
+    const client = {
+      async query(query: string) {
+        sql.push(query);
+        if (["BEGIN", "COMMIT", "ROLLBACK"].includes(query)) return { rows: [], rowCount: 0 };
+        if (query.includes("from ai_content_generations")) {
+          return {
+            rows: [{
+              id: SCOPE.generationId,
+              status: "draft",
+              attachments_locked_at: null,
+              draft_json: { origin: "manual", brief: { attachments: ["legacy-owned-shape"] } },
+            }],
+            rowCount: 1,
+          };
+        }
+        if (query.includes("update ai_content_generation_attachments")) {
+          return {
+            rows: [{
+              id: removedId,
+              generation_id: SCOPE.generationId,
+              upload_session_id: "50000000-0000-4000-8000-000000000009",
+              storage_url: "https://blob.example/legacy.png",
+              storage_path: "legacy.png",
+              created_at: "2026-08-09T00:00:00.000Z",
+            }],
+            rowCount: 1,
+          };
+        }
+        if (query.includes("insert into ai_content_attachment_deletion_jobs")) return { rows: [], rowCount: 1 };
+        throw new Error(`unexpected_sql:${query}`);
+      },
+      release() {},
+    };
+    const repository = createAiContentAttachmentRepository({
+      connect: async () => client,
+      query: client.query,
+    } as never);
+
+    await repository.removeAiContentAttachment({ ...SCOPE, attachmentId: removedId });
+
+    expect(sql.some((query) => query.includes("update ai_content_generations"))).toBe(false);
+    expect(sql.at(-1)).toBe("COMMIT");
+  });
+
+  it("keeps deletion prohibited for a queued generation whose attachments are locked", async () => {
+    const pool = scriptedPool([{
+      rows: [{
+        id: SCOPE.generationId,
+        status: "queued",
+        draft_json: { origin: "proposal-v2" },
+        attachments_locked_at: "2026-08-09T00:00:00.000Z",
+      }],
+      rowCount: 1,
+    }]);
+    const repository = createAiContentAttachmentRepository(pool as never);
+
+    await expect(repository.removeAiContentAttachment({
+      ...SCOPE,
+      attachmentId: "80000000-0000-4000-8000-000000000001",
+    })).rejects.toThrow("ai_content_attachments_locked");
+
+    expect(pool.sql).toHaveLength(1);
+    expect(pool.sql[0]).toContain("from ai_content_generations");
+    expect(pool.commands.at(-1)).toBe("ROLLBACK");
+  });
+
   it("does not rollback when BEGIN fails and destroys the questionable connection", async () => {
     const beginError = new Error("begin_failed");
     const pool = transactionFailurePool({ beginError });

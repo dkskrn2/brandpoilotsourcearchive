@@ -161,6 +161,69 @@ describe("AI content worker routes", () => {
     await app.close();
   });
 
+  it("forwards a creative planner draft through the additive completion ingress", async () => {
+    const { app, repository } = setup();
+    const planDraft = {
+      contractVersion: "blog-plan-draft.v1",
+      content: { title: "Tea", htmlTemplate: "<article></article>", metaTitle: "Tea", metaDescription: "Guide", usedEvidenceIds: [] },
+      imageDraft: null,
+    };
+    const response = await app.inject({
+      method: "POST", url: "/worker/ai-content-jobs/job-1/complete",
+      headers: { authorization: "Bearer worker-token" },
+      payload: { workerId: "worker-1", leaseToken: "lease-1", skillVersion: "blog-plan-draft.v1", jobType: "generate", planDraft },
+    });
+    expect(response.statusCode).toBe(200);
+    expect(repository.completeAiContentJob).toHaveBeenCalledWith(expect.objectContaining({
+      jobType: "generate", planDraft,
+    }));
+    await app.close();
+  });
+
+  it("maps a completion lease loss to the same 409 contract as heartbeat", async () => {
+    const { app, repository } = setup();
+    vi.mocked(repository.completeAiContentJob).mockRejectedValueOnce(
+      new Error("ai_content_job_lease_invalid"),
+    );
+    const response = await app.inject({
+      method: "POST",
+      url: "/worker/ai-content-jobs/job-1/complete",
+      headers: { authorization: "Bearer worker-token" },
+      payload: {
+        workerId: "worker-1",
+        leaseToken: "lease-1",
+        skillVersion: "blog-plan-draft.v1",
+        jobType: "generate",
+        planDraft: { contractVersion: "blog-plan-draft.v1" },
+      },
+    });
+
+    expect(response.statusCode).toBe(409);
+    expect(response.json()).toEqual({ error: "ai_content_job_lease_invalid" });
+    expect(repository.failAiContentJob).not.toHaveBeenCalled();
+    await app.close();
+  });
+
+  it.each([
+    ["both plan representations", { plan: {}, planDraft: {} }],
+    ["neither plan representation", {}],
+    ["unknown field with a draft", { planDraft: {}, unexpected: true }],
+  ])("rejects %s at the exact completion boundary", async (_name, completionFields) => {
+    const { app, repository } = setup();
+    const response = await app.inject({
+      method: "POST", url: "/worker/ai-content-jobs/job-1/complete",
+      headers: { authorization: "Bearer worker-token" },
+      payload: {
+        workerId: "worker-1", leaseToken: "lease-1", skillVersion: "planner-v3", jobType: "generate",
+        ...completionFields,
+      },
+    });
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toEqual({ error: "ai_content_plan_completion_invalid" });
+    expect(repository.completeAiContentJob).not.toHaveBeenCalled();
+    await app.close();
+  });
+
   it("leases, extracts, archives, persists, and returns a subject-analysis.v1 payload", async () => {
     const { app, repository, extractPage, archiveImage } = setup();
     const response = await app.inject({

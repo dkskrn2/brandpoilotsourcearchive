@@ -35,10 +35,11 @@ import {
   parseProposalInputSnapshotV2,
 } from "./aiContentGenerationInputV3.js";
 import type { AiContentSnapshotRepository } from "./aiContentSnapshotRepository.js";
-import { parseContentPlanResultV2 } from "./aiContentPlanContracts.js";
+import { assembleContentPlanResultV2, parseContentPlanResultV2 } from "./aiContentPlanContracts.js";
 import {
   createAiContentRenderJobsRepository,
   enqueueAiContentRenderJobs,
+  resolveManualRenderTransport,
 } from "./aiContentRenderJobs.js";
 import { assertAiContentWritable, withAiContentTransactionFence } from "./aiContentMaintenance.js";
 import {
@@ -116,6 +117,7 @@ export interface AiContentGenerationRecord {
     proposal: Record<string, unknown> | null;
   };
   outputs?: AiContentOutputRecord[];
+  attachments?: AiContentAttachmentRecord[];
 }
 
 export interface AiContentOutputRecord {
@@ -2039,6 +2041,10 @@ async function startAiContentGenerationV3Transaction(input: {
       throw new Error("ai_content_generation_not_draft");
     }
     const finalization = parseContentFinalizationDraftV2(generationDraft.finalization);
+    if (command.expectedFinalization
+      && !isDeepStrictEqual(finalization, command.expectedFinalization)) {
+      throw new Error("ai_content_finalization_changed");
+    }
     const requestFingerprint = proposalSha256({
       generationId: command.generationId,
       contractVersion: command.contractVersion,
@@ -2668,16 +2674,31 @@ export function createAiContentRepository(pool: Pool, options: AiContentReposito
     },
 
     async getAiContentGeneration(input) {
-      const row = await scopedGeneration(pool, input);
-      if (!row) return null;
-      const generation = mapGeneration(row);
-      const outputs = await outputsForGenerations(pool, [generation.id]);
-      const evidenceSnapshot = await generationEvidenceSnapshot(pool, input, row);
-      return {
-        ...generation,
-        ...(evidenceSnapshot ? { evidenceSnapshot } : {}),
-        outputs: outputs.get(generation.id) ?? [],
-      };
+      const client = await pool.connect();
+      try {
+        await client.query("BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY");
+        const row = await scopedGeneration(client, input);
+        if (!row) {
+          await client.query("COMMIT");
+          return null;
+        }
+        const generation = mapGeneration(row);
+        const outputs = await outputsForGenerations(client, [generation.id]);
+        const evidenceSnapshot = await generationEvidenceSnapshot(client, input, row);
+        const attachments = await loadGenerationAttachments(client, input);
+        await client.query("COMMIT");
+        return {
+          ...generation,
+          ...(evidenceSnapshot ? { evidenceSnapshot } : {}),
+          outputs: outputs.get(generation.id) ?? [],
+          attachments,
+        };
+      } catch (error) {
+        await client.query("ROLLBACK").catch(() => undefined);
+        throw error;
+      } finally {
+        client.release();
+      }
     },
 
     async listAiContentUsage(input) {
@@ -3136,7 +3157,9 @@ export function createAiContentRepository(pool: Pool, options: AiContentReposito
         await assertAiContentWritable(client);
         const job = await lockAiContentJobContext(client, input.jobId);
         if (job.job_type !== "generate" || !job.output_id) throw new Error("ai_content_job_contract_invalid");
-        if (job.job_type !== "generate" || !job.output_id || !("plan" in input)) {
+        const hasPlan = "plan" in input;
+        const hasPlanDraft = "planDraft" in input;
+        if (job.job_type !== "generate" || !job.output_id || hasPlan === hasPlanDraft) {
           throw new Error("ai_content_job_completion_contract_mismatch");
         }
         const snapshot = await client.query(
@@ -3153,7 +3176,9 @@ export function createAiContentRepository(pool: Pool, options: AiContentReposito
           || finalInput.outputSettings.outputFormat !== job.output_format) {
           throw new Error("ai_content_generation_input_mismatch");
         }
-        const plan = parseContentPlanResultV2(input.plan, finalInput, snapshot.rows[0].evidence_json);
+        const plan = hasPlan
+          ? parseContentPlanResultV2(input.plan, finalInput, snapshot.rows[0].evidence_json)
+          : assembleContentPlanResultV2(input.planDraft, finalInput, snapshot.rows[0].evidence_json);
         if (job.status === "succeeded") {
           if (job.worker_id !== input.workerId || job.lease_token !== input.leaseToken) throw new Error("ai_content_job_lease_invalid");
           const stored = await client.query(
@@ -3192,9 +3217,16 @@ export function createAiContentRepository(pool: Pool, options: AiContentReposito
             where id=$1`,
           [job.output_id, JSON.stringify(plan)],
         );
+        const imageAssetTransport = await resolveManualRenderTransport(client, {
+          generationId: String(job.generation_id),
+          workspaceId: String(job.workspace_id),
+          brandId: String(job.brand_id),
+          selectedProposalId: finalInput.selectedProposal.id,
+        });
         await enqueueAiContentRenderJobs(client, {
           workspaceId: String(job.workspace_id), brandId: String(job.brand_id),
           generationId: String(job.generation_id), outputId: String(job.output_id), plan, finalInput,
+          imageAssetTransport,
         });
         await client.query(
           "update ai_content_generations set status='generating',current_stage='generation',error_code=null,error_message=null,updated_at=now() where id=$1",

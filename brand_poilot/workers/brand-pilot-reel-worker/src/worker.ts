@@ -2,13 +2,16 @@ import { access, mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promise
 import os from "node:os";
 import path from "node:path";
 import {
+  ContentWorkerApiError,
   isRetryableContentWorkerError,
+  replayContentWorkerCompletion,
   runShellCommandWithAccountFailover,
   runShellCommandWithTimeout,
   startJobLeaseGuard,
   type CodexAccountPool,
 } from "@brand-pilot/worker-runtime";
-import { parseReelInput, parseReelPlanForInput, type ReelClient, type ReelJob } from "./contracts.js";
+import type { ReelPlanDraftV1 } from "@brand-pilot/content-contracts/planner-drafts";
+import { parseReelInput, parseReelPlanDraftForInput, type ReelClient, type ReelJob } from "./contracts.js";
 import { buildReelPlanPrompt, reelPlanSkillVersion } from "./promptBuilder.js";
 
 export interface ReelPlanner {
@@ -73,27 +76,43 @@ export async function runOnce(input: { workerId: string; client: ReelClient; pla
   try {
     const finalInput = parseReelInput(job.payload.contentGenerationInput, job);
     let repairError: string | undefined;
+    let planDraft: ReelPlanDraftV1 | undefined;
     for (let attempt = 0; attempt < 2; attempt += 1) {
       const run = await input.planner.run(job, buildReelPlanPrompt(finalInput, repairError), lease.signal);
       runs.push(run);
       try {
-        const plan = parseReelPlanForInput(JSON.parse(await readFile(path.join(run.outputDir, "reel-plan.json"), "utf8")), finalInput);
-        const state = await lease.state();
-        if (state !== "active") return cancellation(state);
-        await input.client.complete(job.id, { workerId: input.workerId, leaseToken: job.leaseToken, skillVersion: reelPlanSkillVersion, jobType: "generate", plan });
-        return { status: "completed" as const, jobId: job.id };
+        planDraft = parseReelPlanDraftForInput(
+          JSON.parse(await readFile(path.join(run.outputDir, "reel-plan.json"), "utf8")),
+          finalInput,
+        );
+        break;
       } catch (error) {
         if (attempt === 1) throw error;
         repairError = error instanceof Error ? error.message : String(error);
       }
     }
-    throw new Error("reel_plan_invalid");
+    if (!planDraft) throw new Error("reel_plan_draft_invalid");
+    const completionBody = {
+      workerId: input.workerId,
+      leaseToken: job.leaseToken,
+      skillVersion: reelPlanSkillVersion,
+      jobType: "generate",
+      planDraft,
+    };
+    const completion = await replayContentWorkerCompletion({
+      body: completionBody,
+      complete: (body) => input.client.complete(job.id, body),
+      leaseState: () => lease.state(),
+    });
+    if (completion === "conflict") return cancellation("lease_lost");
+    if (completion !== "completed") return cancellation(completion);
+    return { status: "completed" as const, jobId: job.id };
   } catch (error) {
     const state = await lease.state();
     if (state !== "active") return cancellation(state);
     await input.client.fail(job.id, {
       workerId: input.workerId, leaseToken: job.leaseToken,
-      errorCode: error instanceof Error ? error.message.split(":")[0] : "reel_worker_failed",
+      errorCode: error instanceof ContentWorkerApiError && error.errorCode ? error.errorCode : error instanceof Error ? error.message.split(":")[0] : "reel_worker_failed",
       errorMessage: error instanceof Error ? error.message : String(error),
       retryable: isRetryableContentWorkerError(error),
     });

@@ -574,6 +574,35 @@ describe("final input and image package contracts", () => {
     }
   });
 
+  it("accepts an exact expected finalization while preserving the legacy start body", () => {
+    const expectedFinalization = {
+      contractVersion: "content-finalization-draft.v2",
+      avatarStyleImageId: id(11),
+      userImageInstruction: "  natural editorial light  ",
+      attachmentIds: [id(20)],
+    };
+
+    expect(parseContentGenerationStartV2({
+      contractVersion: "content-generation-start.v2",
+      idempotencyKey: " final-start-1 ",
+      expectedFinalization,
+    })).toEqual({
+      contractVersion: "content-generation-start.v2",
+      idempotencyKey: "final-start-1",
+      expectedFinalization: {
+        ...expectedFinalization,
+        userImageInstruction: "natural editorial light",
+      },
+    });
+    expect(parseContentGenerationStartV2({
+      contractVersion: "content-generation-start.v2",
+      idempotencyKey: "legacy-start-1",
+    })).toEqual({
+      contractVersion: "content-generation-start.v2",
+      idempotencyKey: "legacy-start-1",
+    });
+  });
+
   it("allows style images that are separate from selected content references", () => {
     const parsed = parseContentGenerationInputV3(finalInput());
     expect(parsed.references.selected[0]?.referenceItemId).toBe(id(6));

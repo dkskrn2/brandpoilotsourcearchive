@@ -23,13 +23,19 @@ function subjectTitle(job: ContentProposalResearchJob): string | null {
   return combined ? combined.slice(0, 1_000) : null;
 }
 
-function publicResearchContext(job: ContentProposalResearchJob): ControlledSearchInput["publicResearchContext"] {
+function publicResearchContext(job: ContentProposalResearchJob) {
   const snapshot = job.baseInput;
   const purpose = job.request.purpose;
   return {
     purpose,
     subjectKind: snapshot.subject.kind,
     subjectTitle: subjectTitle(job),
+    sourceUrls: snapshot.subject.kind === "topic_url"
+      ? {
+          requestedUrl: snapshot.subject.requestedUrl,
+          canonicalUrl: snapshot.subject.canonicalUrl,
+        }
+      : null,
     contentInstruction: snapshot.contentInstruction,
     primaryCategory: snapshot.brandCore.primaryCategory,
     detailedCategory: snapshot.brandCore.detailedCategory,

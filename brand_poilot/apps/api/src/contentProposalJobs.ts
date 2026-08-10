@@ -207,11 +207,17 @@ function validateResearchEvidence(value: unknown): ResearchEvidenceSnapshotV1 {
   try { evidence = parseResearchEvidenceSnapshotV1(value); }
   catch { throw new Error("content_proposal_research_invalid"); }
   if (evidence.queries.length > 4 || evidence.items.some((item) => {
+    let parsedUrl: URL;
     try {
-      if (new URL(item.url).protocol !== "https:") return true;
+      parsedUrl = new URL(item.url);
     } catch {
       return true;
     }
+    if (
+      (parsedUrl.protocol !== "http:" && parsedUrl.protocol !== "https:")
+      || parsedUrl.username
+      || parsedUrl.password
+    ) return true;
     const observedFields = {
       title: item.title,
       url: item.url,

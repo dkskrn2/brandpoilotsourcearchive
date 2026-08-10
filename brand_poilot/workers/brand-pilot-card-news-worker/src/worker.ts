@@ -2,7 +2,9 @@ import { access, copyFile, mkdtemp, mkdir, readdir, rm, writeFile } from "node:f
 import os from "node:os";
 import path from "node:path";
 import {
+  ContentWorkerApiError,
   isRetryableContentWorkerError,
+  replayContentWorkerCompletion,
   runShellCommandWithAccountFailover,
   runShellCommandWithTimeout,
   startJobLeaseGuard,
@@ -10,7 +12,7 @@ import {
 } from "@brand-pilot/worker-runtime";
 import { parseCardNewsInput, type AiContentJob, type WorkerClient } from "./contracts.js";
 import { buildCardNewsPlanPrompt, cardNewsPlanSkillVersion } from "./promptBuilder.js";
-import { loadCardNewsPlanV2 } from "./editorialPlan.js";
+import { loadCardNewsPlanDraftV1 } from "./editorialPlan.js";
 import { withResource } from "./resourceLease.js";
 
 export interface CodexRunner {
@@ -125,33 +127,38 @@ export async function runOnce({ workerId, client, planner, shutdownSignal }: { w
     try {
       const parsedInput = parseCardNewsInput(job.payload.contentGenerationInput, job);
       let repairError: string | undefined;
-      let plan: Awaited<ReturnType<typeof loadCardNewsPlanV2>> | undefined;
+      let planDraft: Awaited<ReturnType<typeof loadCardNewsPlanDraftV1>> | undefined;
       for (let attempt = 0; attempt < 2; attempt += 1) {
         const current = await planner.run(job, buildCardNewsPlanPrompt(job, parsedInput, repairError), lease.signal);
         planned.push(current);
         try {
-          plan = await loadCardNewsPlanV2(current.outputDir, parsedInput);
+          planDraft = await loadCardNewsPlanDraftV1(current.outputDir, parsedInput);
           break;
         } catch (error) {
           if (attempt === 1) throw error;
           repairError = error instanceof Error ? error.message : String(error);
         }
       }
-      if (!plan) throw new Error("card_news_plan_invalid");
-      const state = await lease.state();
-      if (state !== "active") return cancellation(state);
-      await client.complete(job.id, {
+      if (!planDraft) throw new Error("card_news_plan_invalid");
+      const completionBody = {
         workerId,
         leaseToken: job.leaseToken,
         skillVersion: cardNewsPlanSkillVersion,
         jobType: "generate",
-        plan,
+        planDraft,
+      };
+      const completion = await replayContentWorkerCompletion({
+        body: completionBody,
+        complete: (body) => client.complete(job.id, body),
+        leaseState: () => lease.state(),
       });
+      if (completion === "conflict") return cancellation("lease_lost");
+      if (completion !== "completed") return cancellation(completion);
       return { status: "completed" as const, jobId: job.id };
     } catch (error) {
       const state = await lease.state();
       if (state !== "active") return cancellation(state);
-      await client.fail(job.id, { workerId, leaseToken: job.leaseToken, errorCode: error instanceof Error ? error.message.split(":")[0] : "card_news_worker_failed", errorMessage: error instanceof Error ? error.message : String(error), retryable: isRetryableContentWorkerError(error) });
+      await client.fail(job.id, { workerId, leaseToken: job.leaseToken, errorCode: error instanceof ContentWorkerApiError && error.errorCode ? error.errorCode : error instanceof Error ? error.message.split(":")[0] : "card_news_worker_failed", errorMessage: error instanceof Error ? error.message : String(error), retryable: isRetryableContentWorkerError(error) });
       return { status: "failed" as const, jobId: job.id };
     } finally {
       await lease.finish();

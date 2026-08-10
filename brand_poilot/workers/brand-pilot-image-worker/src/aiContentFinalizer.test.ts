@@ -60,6 +60,13 @@ function storage() {
   };
 }
 
+const blogBody = "검색 근거를 바탕으로 설명합니다. ".repeat(180);
+
+function blogHtml(evidence: Array<{ id: string; url: string }>): string {
+  const links = evidence.map((item) => `<a data-evidence-id="${item.id}" href="${item.url}">근거</a>`).join(" ");
+  return `<article><h1>Tea</h1><section data-summary="true"><p>요약 하나</p><p>요약 둘</p><p>요약 셋</p></section><h2>무엇을 확인하나요?</h2><p>${blogBody}${links}</p><section data-references="true">${links}</section></article>`;
+}
+
 describe("V3 non-Reel package finalizer", () => {
   it("sorts card assets and preserves planner caption, hashtags, and CTA", async () => {
     const plan = { contractVersion: "card-news-plan.v2", content: { caption: "Caption", hashtags: ["#tea"], cta: "Save" }, imagePackage: imagePackage("card_news", 2) };
@@ -100,6 +107,80 @@ describe("V3 non-Reel package finalizer", () => {
     const result = await finalizeAiContentPackage(job("blog", plan, []), storage());
     expect(result.manifest.assets).toHaveLength(1);
     expect(result.manifest.assets[0]).toMatchObject({ role: "html" });
+  });
+
+  it.each(["fixed", "supplemental", "unused"] as const)(
+    "accepts exact frozen HTTP %s evidence in an HTML-only blog",
+    async (source) => {
+      const input = finalInput("blog");
+      const fixed = { ...input.researchEvidence.items[0]!, url: "http://evidence.example/fixed" };
+      const supplemental = { ...fixed, id: uid(31), url: "http://evidence.example/supplemental" };
+      if (source !== "supplemental") input.researchEvidence.items = [fixed];
+      const usedEvidence = source === "fixed" ? [fixed] : source === "supplemental" ? [supplemental] : [];
+      const plan = {
+        contractVersion: "blog-plan.v2",
+        content: {
+          title: "Tea",
+          htmlTemplate: blogHtml(usedEvidence),
+          metaTitle: "Tea meta",
+          metaDescription: "Tea desc",
+          usedEvidenceIds: usedEvidence.map((item) => item.id),
+        },
+        imagePackage: null,
+      };
+      const target = job("blog", plan, []);
+      target.payload.finalInput = input;
+      target.payload.supplementalResearch = source === "supplemental" ? { items: [supplemental] } : null;
+
+      const result = await finalizeAiContentPackage(target, storage());
+
+      expect(result.manifest.content.html).toBe(blogHtml(usedEvidence));
+    },
+  );
+
+  it.each([
+    ["javascript", "javascript:alert(1)"],
+    ["data", "data:text/html,unsafe"],
+    ["file", "file:///tmp/source"],
+    ["relative", "/source"],
+    ["HTTPS upgrade", "https://evidence.example/fixed"],
+    ["host mismatch", "http://attacker.example/fixed"],
+  ])("rejects a %s href instead of the exact frozen HTTP evidence URL", async (_name, href) => {
+    const input = finalInput("blog");
+    const fixed = { ...input.researchEvidence.items[0]!, url: "http://evidence.example/fixed" };
+    input.researchEvidence.items = [fixed];
+    const plan = {
+      contractVersion: "blog-plan.v2",
+      content: {
+        title: "Tea",
+        htmlTemplate: blogHtml([{ id: fixed.id, url: href }]),
+        metaTitle: "Tea meta",
+        metaDescription: "Tea desc",
+        usedEvidenceIds: [fixed.id],
+      },
+      imagePackage: null,
+    };
+    const target = job("blog", plan, []);
+    target.payload.finalInput = input;
+
+    await expect(finalizeAiContentPackage(target, storage())).rejects.toThrow("ai_content_blog_html_invalid");
+  });
+
+  it.each([
+    ["javascript", "javascript:alert(1)"],
+    ["data", "data:text/html,unsafe"],
+    ["file", "file:///tmp/source"],
+    ["relative", "/source"],
+  ])("rejects an unused supplemental %s evidence URL", async (_name, url) => {
+    const plan = {
+      contractVersion: "blog-plan.v2",
+      content: { title: "Tea", htmlTemplate: blogHtml([]), metaTitle: "Tea meta", metaDescription: "Tea desc", usedEvidenceIds: [] },
+      imagePackage: null,
+    };
+    const target = job("blog", plan, []);
+    target.payload.supplementalResearch = { items: [{ ...finalInput("blog").researchEvidence.items[0]!, id: uid(31), url }] };
+
+    await expect(finalizeAiContentPackage(target, storage())).rejects.toThrow("ai_content_blog_html_invalid");
   });
 
   it("reuses successful scenes in index order, uses scene one as cover, and uploads one deterministic silent MP4", async () => {

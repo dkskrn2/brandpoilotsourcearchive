@@ -174,11 +174,19 @@ export function createBlobStorage({ token, model }: { token: string; model: stri
 }
 
 export interface AiContentBlobStorage {
-  readOwned(storagePath: string): Promise<Buffer>;
+  readOwned(storagePath: string, constraints?: AiContentOwnedBlobReadConstraints): Promise<Buffer>;
   uploadAsset(input: { path: string; bytes: Buffer; index: number; width: number; height: number }): Promise<AiContentRenderedAsset>;
   uploadVideo(input: { path: string; bytes: Buffer; width: number; height: number; durationSeconds: number; videoCodec: "h264"; audioCodec: null; fps: 30 }): Promise<{ url: string; checksum: string }>;
   uploadText(input: { path: string; text: string; contentType: "text/html; charset=utf-8" | "application/json" }): Promise<{ url: string; checksum: string }>;
 }
+
+export interface AiContentOwnedBlobReadConstraints {
+  maxBytes: number;
+  expectedSizeBytes: number;
+  expectedContentType: "image/png" | "image/jpeg" | "image/webp";
+}
+
+export const AI_CONTENT_OWNED_IMAGE_MAX_BYTES = 5_000_000;
 
 function ownedPath(value: string): string {
   if (!value || value.startsWith("/") || value.includes("\\") || value.split("/").some((segment) => !segment || segment === "." || segment === "..") || /^[a-z][a-z0-9+.-]*:/i.test(value)) {
@@ -201,16 +209,58 @@ async function bufferFromBlobResult(result: Awaited<ReturnType<typeof get>>): Pr
   return Buffer.from(await new Response(result.stream).arrayBuffer());
 }
 
+function normalizedImageContentType(value: unknown): "image/png" | "image/jpeg" | "image/webp" | null {
+  if (typeof value !== "string") return null;
+  const normalized = value.split(";", 1)[0]?.trim().toLowerCase();
+  if (normalized === "image/png" || normalized === "image/x-png") return "image/png";
+  if (normalized === "image/jpeg" || normalized === "image/jpg" || normalized === "image/pjpeg") return "image/jpeg";
+  if (normalized === "image/webp" || normalized === "image/x-webp") return "image/webp";
+  return null;
+}
+
+function assertDeclaredReadConstraints(constraints: AiContentOwnedBlobReadConstraints): void {
+  if (!Number.isSafeInteger(constraints.maxBytes) || constraints.maxBytes < 1
+    || !Number.isSafeInteger(constraints.expectedSizeBytes) || constraints.expectedSizeBytes < 1) {
+    throw new Error("ai_content_owned_blob_size_mismatch");
+  }
+  if (constraints.expectedSizeBytes > Math.min(constraints.maxBytes, AI_CONTENT_OWNED_IMAGE_MAX_BYTES)) {
+    throw new Error("ai_content_owned_blob_size_limit_exceeded");
+  }
+  if (normalizedImageContentType(constraints.expectedContentType) !== constraints.expectedContentType) {
+    throw new Error("ai_content_owned_blob_content_type_mismatch");
+  }
+}
+
+function assertBlobMetadata(
+  result: NonNullable<Awaited<ReturnType<typeof get>>>,
+  constraints: AiContentOwnedBlobReadConstraints,
+): void {
+  const metadataSize = result.blob.size;
+  if (typeof metadataSize !== "number" || !Number.isSafeInteger(metadataSize) || metadataSize < 1) {
+    throw new Error("ai_content_owned_blob_size_mismatch");
+  }
+  if (metadataSize > Math.min(constraints.maxBytes, AI_CONTENT_OWNED_IMAGE_MAX_BYTES)) {
+    throw new Error("ai_content_owned_blob_size_limit_exceeded");
+  }
+  if (metadataSize !== constraints.expectedSizeBytes) throw new Error("ai_content_owned_blob_size_mismatch");
+  const metadataContentType = normalizedImageContentType(result.blob.contentType);
+  if (metadataContentType === null || metadataContentType !== constraints.expectedContentType) {
+    throw new Error("ai_content_owned_blob_content_type_mismatch");
+  }
+}
+
 export function createAiContentBlobStorage({ token }: { token: string }): AiContentBlobStorage {
-  const read = async (storagePath: string) => {
+  const read = async (storagePath: string, constraints?: AiContentOwnedBlobReadConstraints) => {
     const pathname = ownedPath(storagePath);
+    if (constraints) assertDeclaredReadConstraints(constraints);
     const result = await get(pathname, { access: "public", token, useCache: false });
+    if (constraints && result && result.statusCode !== 304) assertBlobMetadata(result, constraints);
     const bytes = await bufferFromBlobResult(result);
     return { result, bytes };
   };
   return {
-    async readOwned(storagePath) {
-      const { bytes } = await read(storagePath);
+    async readOwned(storagePath, constraints) {
+      const { bytes } = await read(storagePath, constraints);
       if (!bytes) throw new Error("ai_content_owned_blob_unavailable");
       return bytes;
     },

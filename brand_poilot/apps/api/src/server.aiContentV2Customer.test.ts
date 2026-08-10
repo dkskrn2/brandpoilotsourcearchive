@@ -452,13 +452,14 @@ describe("V2 customer proposal batches", () => {
   });
 
   it("persists the safely resolved URL snapshot but never echoes crawled text", async () => {
+    const sensitiveBody = "민감한 수집 본문이 실제 기사로 판정될 만큼 충분한 내용을 포함합니다. ".repeat(3).trim();
     const harness = setup({
       crawlUrl: async () => ({
         finalUrl: "https://example.test/canonical",
         title: "수집 제목",
-        text: "민감한 수집 본문",
+        text: sensitiveBody,
         contentHash: "ignored",
-        rawText: "<main>민감한 수집 본문</main>",
+        rawText: `<main>${sensitiveBody}</main>`,
         httpStatus: 200,
         canonicalUrl: null,
         metaDescription: null,
@@ -473,11 +474,11 @@ describe("V2 customer proposal batches", () => {
         subject: expect.objectContaining({
           kind: "topic_url",
           canonicalUrl: "https://example.test/canonical",
-          text: "민감한 수집 본문",
+          text: sensitiveBody,
         }),
       }),
     }));
-    expect(response.body).not.toContain("민감한 수집 본문");
+    expect(response.body).not.toContain(sensitiveBody);
     await harness.app.close();
   });
 
@@ -664,6 +665,53 @@ describe("V2 finalization customer boundary", () => {
       }),
       harness.dependencies.snapshotRepository,
     );
+    await harness.app.close();
+  });
+
+  it("delegates an exact expected finalization while accepting legacy start bodies", async () => {
+    const harness = setup();
+    const expectedFinalization = {
+      contractVersion: "content-finalization-draft.v2",
+      avatarStyleImageId: null,
+      userImageInstruction: "editorial light",
+      attachmentIds: [],
+    };
+    const response = await harness.app.inject({
+      method: "POST",
+      url: `/brands/${brandId}/ai-content/generations/${generationId}/generate`,
+      headers: auth,
+      payload: {
+        contractVersion: "content-generation-start.v2",
+        idempotencyKey: "expected-finalization-start",
+        expectedFinalization,
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(harness.repository.startAiContentGenerationV3).toHaveBeenCalledWith(
+      expect.objectContaining({ expectedFinalization }),
+      harness.dependencies.snapshotRepository,
+    );
+    await harness.app.close();
+  });
+
+  it("maps a changed expected finalization to an explicit 409", async () => {
+    const harness = setup();
+    vi.mocked(harness.repository.startAiContentGenerationV3)
+      .mockRejectedValueOnce(new Error("ai_content_finalization_changed"));
+
+    const response = await harness.app.inject({
+      method: "POST",
+      url: `/brands/${brandId}/ai-content/generations/${generationId}/generate`,
+      headers: auth,
+      payload: {
+        contractVersion: "content-generation-start.v2",
+        idempotencyKey: "changed-finalization-start",
+      },
+    });
+
+    expect(response.statusCode).toBe(409);
+    expect(response.json()).toEqual({ error: "ai_content_finalization_changed" });
     await harness.app.close();
   });
 

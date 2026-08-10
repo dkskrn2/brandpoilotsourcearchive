@@ -1,5 +1,6 @@
 import { parseContentOrchestrationV1 } from "./contentOrchestration.js";
 import type { ApprovedBrandRulesSnapshotV1 } from "@brand-pilot/content-contracts";
+import type { ContentPlanDraftV1 } from "@brand-pilot/content-contracts/planner-drafts";
 
 export type AiContentType = "card_news" | "blog" | "marketing";
 export type ContentFamily = "informational" | "marketing";
@@ -455,6 +456,7 @@ export interface ContentFinalizationDraftV2 {
 export interface ContentGenerationStartV2 {
   contractVersion: "content-generation-start.v2";
   idempotencyKey: string;
+  expectedFinalization?: ContentFinalizationDraftV2;
 }
 
 export interface ContentGenerationRetryV1 {
@@ -521,10 +523,19 @@ export interface CompleteAiContentGenerationJobInput extends CompleteAiContentJo
   manifestUrl: string;
 }
 
-export interface CompleteAiContentPlanningJobInput extends CompleteAiContentJobBase {
+export interface CompleteAiContentCanonicalPlanningJobInput extends CompleteAiContentJobBase {
   jobType: "generate";
   plan: import("./aiContentPlanContracts.js").ContentPlanResultV2;
 }
+
+export interface CompleteAiContentDraftPlanningJobInput extends CompleteAiContentJobBase {
+  jobType: "generate";
+  planDraft: ContentPlanDraftV1;
+}
+
+export type CompleteAiContentPlanningJobInput =
+  | CompleteAiContentCanonicalPlanningJobInput
+  | CompleteAiContentDraftPlanningJobInput;
 
 export type CompleteAiContentJobInput = CompleteAiContentPlanningJobInput;
 

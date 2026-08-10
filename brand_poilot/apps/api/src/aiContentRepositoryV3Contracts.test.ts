@@ -96,6 +96,7 @@ describe("AI content repository V3 read privacy", () => {
   it("reads tenant-scoped V3 evidence while redacting private resource data", async () => {
     const privatePath = "private/attachments/reference.png";
     const query = vi.fn(async (sql: string, params: unknown[] = []) => {
+      if (/^(begin|commit|rollback)/i.test(sql)) return { rows: [], rowCount: 0 };
       if (sql.includes("from ai_content_generation_outputs")) {
         expect(params).toEqual([[ids.generation]]);
         return { rows: [], rowCount: 0 };
@@ -148,6 +149,10 @@ describe("AI content repository V3 read privacy", () => {
         expect(params).toEqual([ids.generation, ids.workspace, ids.brand]);
         return { rows: [], rowCount: 0 };
       }
+      if (sql.includes("from ai_content_generation_attachments")) {
+        expect(params).toEqual([ids.generation, ids.workspace, ids.brand]);
+        return { rows: [], rowCount: 0 };
+      }
       expect(sql).toContain("from ai_content_generations");
       expect(params).toEqual([ids.generation, ids.workspace, ids.brand]);
       return {
@@ -156,7 +161,10 @@ describe("AI content repository V3 read privacy", () => {
       };
     });
 
-    const generation = await createAiContentRepository({ query } as never)
+    const generation = await createAiContentRepository({
+      query,
+      connect: vi.fn(async () => ({ query, release: vi.fn() })),
+    } as never)
       .getAiContentGeneration({ ...scope, generationId: ids.generation });
 
     expect(generation).toMatchObject({

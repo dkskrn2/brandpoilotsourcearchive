@@ -83,7 +83,7 @@ async function main() {
   const aiContentRenderer = createAiContentAssetRenderer({
     accountPool,
     workerRoot,
-    readOwned: (storagePath) => aiContentStorage.readOwned(storagePath),
+    readOwned: (storagePath, constraints) => aiContentStorage.readOwned(storagePath, constraints),
     timeoutMs: Math.max(1000, Number(process.env.AI_CONTENT_ASSET_TIMEOUT_MS ?? "1200000")),
   });
   const renderer = createConfiguredRenderer({

@@ -7,6 +7,7 @@ import { createAiContentRenderJobsRepository, enqueueAiContentRenderJobs, type A
 const ids = {
   workspace: "10000000-0000-4000-8000-000000000001", brand: "20000000-0000-4000-8000-000000000001",
   generation: "30000000-0000-4000-8000-000000000001", output: "40000000-0000-4000-8000-000000000001",
+  batch: "50000000-0000-4000-8000-000000000001", proposal: "90000000-0000-4000-8000-000000000001",
 };
 const blobOutputPrefix = `https://assets.public.blob.vercel-storage.com/ai-content/${ids.brand}/${ids.generation}/${ids.output}`;
 const blobAssetUrl = (index: number) => `${blobOutputPrefix}/assets/${String(index).padStart(2, "0")}.png`;
@@ -104,6 +105,9 @@ describe("AiContentRenderJobsRepository with postgres semantics", () => {
       create table ai_content_generations(id uuid primary key,workspace_id uuid,brand_id uuid,output_format text,purpose text,title text,status text,current_stage text,draft_json jsonb default '{}',analysis_json jsonb default '{}',operation_id uuid,error_code text,error_message text,created_at timestamptz default now(),updated_at timestamptz default now(),completed_at timestamptz,attachments_locked_at timestamptz,terminal_at timestamptz,retryable_until timestamptz);
       create table ai_content_generation_outputs(id uuid primary key,generation_id uuid,workspace_id uuid,brand_id uuid,output_index integer default 1,title text,status text,content_json jsonb default '{}',artifact_manifest_json jsonb default '{}',manifest_url text,failure_code text,failure_message text,downloaded_at timestamptz,created_at timestamptz default now(),updated_at timestamptz default now(),completed_at timestamptz,plan_json jsonb);
       create table ai_content_generation_input_snapshots(generation_id uuid,workspace_id uuid,brand_id uuid,input_json jsonb);
+      create table ai_content_proposal_batches(id uuid primary key,workspace_id uuid,brand_id uuid,origin text);
+      create table ai_content_proposals(id uuid primary key,batch_id uuid,workspace_id uuid,brand_id uuid);
+      create table ai_content_generation_prompt_bindings(generation_id uuid primary key,workspace_id uuid,brand_id uuid,selected_proposal_id uuid);
       create table ai_content_output_research_snapshots(output_id uuid unique,generation_id uuid,workspace_id uuid,brand_id uuid,evidence_json jsonb,created_at timestamptz default now());
       create table ai_content_generation_jobs(id uuid primary key,generation_id uuid,output_id uuid,workspace_id uuid,brand_id uuid,job_type text,output_format text,status text,worker_id text,lease_token uuid,lease_expires_at timestamptz,payload_json jsonb default '{}',created_at timestamptz default now());
       create table ai_content_generation_operations(id uuid primary key,generation_id uuid,status text);
@@ -132,6 +136,7 @@ describe("AiContentRenderJobsRepository with postgres semantics", () => {
     for (const index of [1, 3]) {
       const job = await repository.claim({ workerId: "image-worker", leaseSeconds: 180 });
       expect(job?.jobKind).toBe("image_asset");
+      expect(job?.payload.contractVersion).toBe("ai-content-render-job.v1");
       await repository.completeAsset({ jobId: job!.id, workerId: "image-worker", leaseToken: job!.leaseToken, jobKind: "image_asset", asset: { index: job!.assetIndex!, url: blobAssetUrl(job!.assetIndex!), storagePath: `ai-content/${ids.brand}/${ids.generation}/${ids.output}/assets/${String(job!.assetIndex).padStart(2, "0")}.png`, mimeType: "image/png", width: 1080, height: 1080, checksum: String(index).repeat(64) } });
     }
     const failed = await repository.claim({ workerId: "image-worker", leaseSeconds: 180 });
@@ -147,8 +152,104 @@ describe("AiContentRenderJobsRepository with postgres semantics", () => {
 
   it("queues one finalizer immediately for a blog plan without images", async () => {
     await enqueueAiContentRenderJobs(db as never, { workspaceId: ids.workspace, brandId: ids.brand, generationId: ids.generation, outputId: ids.output, plan: { contractVersion: "blog-plan.v2", content: { title: "Tea", htmlTemplate: "<article><h1>Tea</h1></article>", metaTitle: "Tea", metaDescription: "Guide", usedEvidenceIds: [] }, imagePackage: null }, finalInput: { contractVersion: "content-generation-input.v3" } as never });
-    const rows = await db.query<{ job_kind: string; asset_index: number | null }>("select job_kind,asset_index from ai_content_generation_render_jobs");
-    expect(rows.rows).toEqual([{ job_kind: "package_finalize", asset_index: null }]);
+    const rows = await db.query<{ job_kind: string; asset_index: number | null; payload_json: Record<string, unknown> }>("select job_kind,asset_index,payload_json from ai_content_generation_render_jobs");
+    expect(rows.rows).toEqual([{
+      job_kind: "package_finalize",
+      asset_index: null,
+      payload_json: {
+        contractVersion: "ai-content-render-job.v1",
+        jobKind: "package_finalize",
+        generationId: ids.generation,
+        outputId: ids.output,
+      },
+    }]);
+  });
+
+  async function enqueueManualV2() {
+    const baseInput = finalInput();
+    const input = {
+      ...baseInput,
+      selectedProposal: {
+        ...baseInput.selectedProposal,
+        assetCount: 1,
+        outline: baseInput.selectedProposal.outline.slice(0, 1),
+      },
+    };
+    const plan = {
+      contractVersion: "card-news-plan.v2" as const,
+      content: { caption: "Tea", hashtags: [] as string[], cta: "Read" },
+      imagePackage: imagePackage(1),
+    };
+    await db.query("insert into ai_content_proposal_batches(id,workspace_id,brand_id,origin) values($1,$2,$3,'manual')", [ids.batch, ids.workspace, ids.brand]);
+    await db.query("insert into ai_content_proposals(id,batch_id,workspace_id,brand_id) values($1,$2,$3,$4)", [ids.proposal, ids.batch, ids.workspace, ids.brand]);
+    await db.query("insert into ai_content_generation_prompt_bindings(generation_id,workspace_id,brand_id,selected_proposal_id) values($1,$2,$3,$4)", [ids.generation, ids.workspace, ids.brand, ids.proposal]);
+    await db.query("insert into ai_content_generation_input_snapshots(generation_id,workspace_id,brand_id,input_json) values($1,$2,$3,$4::jsonb)", [ids.generation, ids.workspace, ids.brand, JSON.stringify(input)]);
+    await db.query("update ai_content_generation_outputs set plan_json=$2::jsonb where id=$1", [ids.output, JSON.stringify(plan)]);
+    await enqueueAiContentRenderJobs(db as never, {
+      workspaceId: ids.workspace, brandId: ids.brand, generationId: ids.generation, outputId: ids.output,
+      plan, finalInput: input, imageAssetTransport: "manual-v2",
+    });
+    return { input, plan };
+  }
+
+  it("hydrates a proven manual v2 image claim from immutable input and canonical plan without rewriting the row", async () => {
+    const { input, plan } = await enqueueManualV2();
+    const before = await db.query<{ payload_json: Record<string, unknown> }>("select payload_json from ai_content_generation_render_jobs");
+    expect(before.rows[0]?.payload_json).not.toHaveProperty("contentGenerationInput");
+    expect(before.rows[0]?.payload_json).not.toHaveProperty("contentPlan");
+
+    const job = await repository.claim({ workerId: "manual-image-worker", leaseSeconds: 180 });
+
+    expect(job?.payload).toEqual({
+      contractVersion: "ai-content-render-job.v2",
+      jobKind: "image_asset",
+      generationId: ids.generation,
+      outputId: ids.output,
+      assetIndex: 1,
+      assetKey: `${ids.generation}:1`,
+      storagePath: `ai-content/${ids.brand}/${ids.generation}/${ids.output}/assets/01.png`,
+      imagePackage: plan.imagePackage,
+      contentGenerationInput: input,
+      contentPlan: plan,
+      rendererPromptVersion: "image-final-pixels.v2",
+    });
+    const after = await db.query<{ payload_json: Record<string, unknown> }>("select payload_json from ai_content_generation_render_jobs");
+    expect(after.rows[0]?.payload_json).toEqual(before.rows[0]?.payload_json);
+  });
+
+  it.each([
+    ["stored generation identity", async () => {
+      await db.query("update ai_content_generation_render_jobs set generation_id='30000000-0000-4000-8000-000000000099'");
+    }],
+    ["stored output identity", async () => {
+      await db.query("update ai_content_generation_render_jobs set output_id='40000000-0000-4000-8000-000000000099'");
+    }],
+    ["stored workspace identity", async () => {
+      await db.query("update ai_content_generation_render_jobs set workspace_id='10000000-0000-4000-8000-000000000099'");
+    }],
+    ["stored brand identity", async () => {
+      await db.query("update ai_content_generation_render_jobs set brand_id='20000000-0000-4000-8000-000000000099'");
+    }],
+    ["asset index", async () => {
+      await db.query("update ai_content_generation_render_jobs set asset_index=2");
+    }],
+    ["queued package", async () => {
+      await db.query("update ai_content_generation_render_jobs set payload_json=jsonb_set(payload_json,'{imagePackage,assets,0,copy}','\"tampered\"'::jsonb)");
+    }],
+    ["manual lineage", async () => {
+      await db.query("update ai_content_proposal_batches set origin='scheduled_crawl'");
+    }],
+  ])("rolls back a v2 claim when %s no longer matches", async (_label, mutate) => {
+    await enqueueManualV2();
+    await mutate();
+
+    await expect(repository.claim({ workerId: "manual-image-worker", leaseSeconds: 180 }))
+      .rejects.toThrow();
+
+    const row = await db.query<{ status: string; attempt_count: number; worker_id: string | null; lease_token: string | null }>(
+      "select status,attempt_count,worker_id,lease_token from ai_content_generation_render_jobs",
+    );
+    expect(row.rows[0]).toEqual({ status: "queued", attempt_count: 0, worker_id: null, lease_token: null });
   });
 
   it("binds supplemental blog research immutably to the current generate lease and output", async () => {
@@ -303,7 +404,7 @@ describe("AiContentRenderJobsRepository with postgres semantics", () => {
     await expect(complete(html.replaceAll(wrongSupplementUrl, supplemental.items[0].url))).resolves.toMatchObject({ id: ids.generation });
   });
 
-  it("rejects a blog plan before finalization when its frozen evidence URL uses HTTP", async () => {
+  it("accepts exact frozen HTTP evidence at finalization and rejects unsafe or mismatched hrefs", async () => {
     const input = blogFinalInput();
     input.researchEvidence.items[0].url = "http://source.example/study";
     const evidenceId = input.researchEvidence.items[0].id;
@@ -323,11 +424,24 @@ describe("AiContentRenderJobsRepository with postgres semantics", () => {
     const link = `<a data-evidence-id="${evidenceId}" href="${input.researchEvidence.items[0].url}">근거</a>`;
     const html = `<article><h1>Tea</h1><div><p>한 줄 요약</p><p>두 줄 요약</p><p>세 줄 요약</p></div><h2>차를 어떻게 고를까요?</h2><p>${"충분한 본문 ".repeat(700)} ${link}</p><section id="references">${link}</section></article>`;
 
-    await expect(repository.completePackage({
+    const complete = (finalHtml: string) => repository.completePackage({
       jobId: finalizer!.id, workerId: "blog-finalizer", leaseToken: finalizer!.leaseToken, jobKind: "package_finalize",
-      manifest: { version: "ai-content.v3", purpose: "informational", outputFormat: "blog", title: "Tea", assets: [{ role: "html", index: 1, url: blobHtmlUrl, fileName: "article.html", mimeType: "text/html" }], content: { title: "Tea", summary: "Summary", metaTitle: "Tea guide", metaDescription: "Tea description", html } },
+      manifest: { version: "ai-content.v3", purpose: "informational", outputFormat: "blog", title: "Tea", assets: [{ role: "html", index: 1, url: blobHtmlUrl, fileName: "article.html", mimeType: "text/html" }], content: { title: "Tea", summary: "Summary", metaTitle: "Tea guide", metaDescription: "Tea description", html: finalHtml } },
       manifestUrl: blobManifestUrl,
-    })).rejects.toThrow("ai_content_plan_invalid");
+    });
+
+    for (const invalidHref of [
+      "javascript:alert(1)",
+      "data:text/html,unsafe",
+      "file:///tmp/source",
+      "/source",
+      "https://source.example/study",
+      "http://attacker.example/study",
+    ]) {
+      await expect(complete(html.replaceAll(input.researchEvidence.items[0].url, invalidHref)))
+        .rejects.toThrow("ai_content_render_manifest_invalid");
+    }
+    await expect(complete(html)).resolves.toMatchObject({ id: ids.generation });
   });
 
   it("requires an image-free blog package to have no PNG manifest assets and no final HTML images", async () => {

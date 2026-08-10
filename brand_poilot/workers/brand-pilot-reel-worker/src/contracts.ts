@@ -1,9 +1,11 @@
 import {
   parseContentGenerationInputV3,
-  parseReelPlanV2,
   type ContentGenerationInputV3,
-  type ReelPlanV2,
 } from "@brand-pilot/content-contracts";
+import {
+  parseReelPlanDraftV1,
+  type ReelPlanDraftV1,
+} from "@brand-pilot/content-contracts/planner-drafts";
 
 export interface ReelJob {
   id: string;
@@ -34,6 +36,16 @@ function nonEmpty(value: unknown): value is string {
   return typeof value === "string" && value.trim().length > 0;
 }
 
+function assertDuplicateFreeSubset(
+  values: readonly string[],
+  allowed: ReadonlySet<string>,
+  duplicateCode: string,
+  unknownCode: string,
+): void {
+  if (new Set(values).size !== values.length) throw new Error(duplicateCode);
+  if (values.some((value) => !allowed.has(value))) throw new Error(unknownCode);
+}
+
 export function parseReelJob(value: unknown): ReelJob {
   const source = record(value);
   const keys = ["id", "generationId", "outputId", "workspaceId", "brandId", "jobType", "outputFormat", "status", "payload", "leaseToken"];
@@ -54,13 +66,43 @@ export function parseReelInput(value: unknown, job: ReelJob): ContentGenerationI
   return input;
 }
 
-export function parseReelPlanForInput(value: unknown, input: ContentGenerationInputV3): ReelPlanV2 {
-  const plan = parseReelPlanV2(value);
-  if (plan.imagePackage.generationId !== input.generationId
-    || plan.imagePackage.outputFormat !== "reel"
-    || plan.imagePackage.purpose !== input.outputSettings.purpose
-    || plan.imagePackage.assetCount !== input.selectedProposal.assetCount) {
-    throw new Error("reel_plan_input_mismatch");
+export function parseReelPlanDraftForInput(value: unknown, input: ContentGenerationInputV3): ReelPlanDraftV1 {
+  const draft = parseReelPlanDraftV1(value);
+  const hashtags = draft.content.hashtags.map((hashtag) => hashtag.trim());
+  if (!draft.content.caption.trim()
+    || !draft.content.cta.trim()
+    || hashtags.some((hashtag) => !hashtag)) {
+    throw new Error("reel_plan_draft_content_invalid");
   }
-  return plan;
+  if (new Set(hashtags).size !== hashtags.length) {
+    throw new Error("reel_plan_draft_hashtag_duplicate");
+  }
+  const expectedCount = input.selectedProposal.assetCount;
+  const outline = input.selectedProposal.outline;
+  if (expectedCount === null
+    || outline.length !== expectedCount
+    || draft.assets.length !== expectedCount
+    || draft.assets.some((asset, position) => {
+      const expected = outline[position];
+      return !expected || asset.index !== expected.index || asset.role !== expected.role;
+    })) {
+    throw new Error("reel_plan_draft_outline_mismatch");
+  }
+  const allowedEvidenceIds = new Set(input.researchEvidence.items.map((item) => item.id));
+  const allowedProductImageIds = new Set(input.product?.images.map((image) => image.assetId) ?? []);
+  for (const asset of draft.assets) {
+    assertDuplicateFreeSubset(
+      asset.evidenceIds,
+      allowedEvidenceIds,
+      "reel_plan_draft_evidence_id_duplicate",
+      "reel_plan_draft_evidence_id_unknown",
+    );
+    assertDuplicateFreeSubset(
+      asset.productImageAssetIds,
+      allowedProductImageIds,
+      "reel_plan_draft_product_image_id_duplicate",
+      "reel_plan_draft_product_image_id_unknown",
+    );
+  }
+  return draft;
 }

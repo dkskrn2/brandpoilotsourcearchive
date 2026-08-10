@@ -96,7 +96,7 @@ export function validateBlogPlanHtml(html: string, options: BlogPlanHtmlOptions)
   const article = $("article");
   if (article.length !== 1) throw new Error("blog_html_article_required");
   const h1 = article.find("h1");
-  if (h1.length !== 1) throw new Error("blog_html_h1_count_invalid");
+  if (h1.length !== 1 || $("h1").length !== 1) throw new Error("blog_html_h1_count_invalid");
   const summary = h1.first().next();
   if (!summary.is('section[data-summary="true"]')) throw new Error("blog_html_summary_invalid");
   const summaryChildren = summary.children();
@@ -123,7 +123,9 @@ export function validateBlogPlanHtml(html: string, options: BlogPlanHtmlOptions)
     throw new Error("blog_html_fabricated_experience_forbidden");
   }
 
-  const imageSources = article.find("img").toArray().map((element) => {
+  const articleImages = article.find("img");
+  if ($("img").length !== articleImages.length) throw new Error("blog_html_image_placement_invalid");
+  const imageSources = articleImages.toArray().map((element) => {
     const source = $(element).attr("src")?.trim() ?? "";
     if (!$(element).attr("alt")?.trim()) throw new Error("blog_html_image_alt_required");
     if (!/^asset:\/\/\d{2}$/.test(source)) throw new Error("blog_html_image_source_invalid");
@@ -138,7 +140,7 @@ export function validateBlogPlanHtml(html: string, options: BlogPlanHtmlOptions)
   for (const item of options.evidenceItems) {
     let parsed: URL;
     try { parsed = new URL(item.url); } catch { throw new Error("blog_html_evidence_url_invalid"); }
-    if (parsed.protocol !== "https:") throw new Error("blog_html_evidence_url_invalid");
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") throw new Error("blog_html_evidence_url_invalid");
     const previous = evidenceUrls.get(item.id);
     if (previous !== undefined && previous !== item.url) throw new Error("blog_html_evidence_url_invalid");
     evidenceUrls.set(item.id, item.url);
@@ -147,11 +149,15 @@ export function validateBlogPlanHtml(html: string, options: BlogPlanHtmlOptions)
   if (referenceSections.length !== 1 || article.find('section[data-references="true"]').length !== 1) throw new Error("blog_html_references_invalid");
   const referenceSection = referenceSections.first();
   const allEvidenceLinks = article.find("a[data-evidence-id]").toArray();
+  if ($("a").length !== article.find("a").length) throw new Error("blog_html_evidence_url_invalid");
   for (const link of allEvidenceLinks) {
     const id = $(link).attr("data-evidence-id") ?? "";
     const href = $(link).attr("href") ?? "";
     if (!id || evidenceUrls.get(id) !== href) throw new Error("blog_html_evidence_url_invalid");
-    try { if (new URL(href).protocol !== "https:") throw new Error(); } catch { throw new Error("blog_html_evidence_url_invalid"); }
+    try {
+      const protocol = new URL(href).protocol;
+      if (protocol !== "http:" && protocol !== "https:") throw new Error();
+    } catch { throw new Error("blog_html_evidence_url_invalid"); }
   }
   if (article.find("a").length !== allEvidenceLinks.length) throw new Error("blog_html_evidence_url_invalid");
   const expectedIds = new Set(options.usedEvidenceIds);

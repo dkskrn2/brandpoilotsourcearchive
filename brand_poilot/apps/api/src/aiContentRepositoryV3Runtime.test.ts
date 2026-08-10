@@ -71,8 +71,16 @@ const plan: ReelPlanV2 = {
     },
   },
 };
+const planDraft = {
+  contractVersion: "reel-plan-draft.v1" as const,
+  content: plan.content,
+  assets: plan.imagePackage.assets.map(({ attachmentIds: _attachmentIds, ...asset }) => asset),
+};
 
-function runtimeHarness(initialStatus: "queued" | "processing") {
+function runtimeHarness(
+  initialStatus: "queued" | "processing",
+  lineageOrigin: "manual" | "scheduled_crawl" | null = null,
+) {
   const statements: Array<{ sql: string; params: unknown[] }> = [];
   let generationStatus = initialStatus === "queued" ? "queued" : "planning";
   let operationStatus = "started";
@@ -129,6 +137,11 @@ function runtimeHarness(initialStatus: "queued" | "processing") {
       }
       if (sql.includes("select input.input_json,research.evidence_json")) {
         return { rows: [{ input_json: finalInput, evidence_json: evidence }], rowCount: 1 };
+      }
+      if (sql.includes("from ai_content_generation_prompt_bindings binding") && sql.includes("join ai_content_proposal_batches batch")) {
+        return lineageOrigin === null
+          ? { rows: [], rowCount: 0 }
+          : { rows: [{ selected_proposal_id: uid(5), origin: lineageOrigin }], rowCount: 1 };
       }
       if (sql.includes("select plan_json from ai_content_generation_outputs")) {
         return { rows: [{ plan_json: null }], rowCount: 1 };
@@ -210,6 +223,75 @@ describe("V3 generation runtime contract", () => {
     expect(sql).toMatch(/set plan_json=coalesce[\s\S]*insert into ai_content_generation_render_jobs[\s\S]*status = 'succeeded'/i);
     expect(sql).not.toMatch(/artifact_manifest_json\s*=|insert into ai_content_usage_ledger/i);
     expect(run.statements.at(-1)?.sql).toBe("COMMIT");
+  });
+
+  it.each([
+    ["manual", "ai-content-render-job.v2", "image-final-pixels.v2"],
+    ["scheduled_crawl", "ai-content-render-job.v1", undefined],
+  ] as const)("selects the private render transport from %s proposal lineage at planning completion", async (
+    origin,
+    contractVersion,
+    rendererPromptVersion,
+  ) => {
+    const run = runtimeHarness("processing", origin);
+
+    await run.repository.completeAiContentJob({
+      jobId: uid(6), workerId: "worker-1", leaseToken: "lease-1", skillVersion: "reel-draft.v1",
+      jobType: "generate", planDraft,
+    });
+
+    const lineageQuery = run.statements.find(({ sql }) => (
+      sql.includes("from ai_content_generation_prompt_bindings binding")
+      && sql.includes("join ai_content_proposal_batches batch")
+    ));
+    expect(lineageQuery?.params).toEqual([uid(1), uid(8), uid(9), uid(5)]);
+    expect(lineageQuery?.sql).not.toContain("draft_json");
+    const renderWrite = run.statements.find(({ sql }) => sql.includes("insert into ai_content_generation_render_jobs"));
+    expect(JSON.parse(String(renderWrite?.params[5]))).toMatchObject({
+      contractVersion,
+      ...(rendererPromptVersion ? { rendererPromptVersion } : {}),
+    });
+  });
+
+  it("assembles a draft into the same canonical plan and render payload as legacy completion", async () => {
+    const legacy = runtimeHarness("processing");
+    await legacy.repository.completeAiContentJob({
+      jobId: uid(6), workerId: "worker-1", leaseToken: "lease-1", skillVersion: "reel.v3",
+      jobType: "generate", plan,
+    });
+    const draft = runtimeHarness("processing");
+    await draft.repository.completeAiContentJob({
+      jobId: uid(6), workerId: "worker-1", leaseToken: "lease-1", skillVersion: "reel-draft.v1",
+      jobType: "generate", planDraft,
+    });
+
+    const storedPlan = (statements: Array<{ sql: string; params: unknown[] }>) => {
+      const write = statements.find(({ sql }) => sql.includes("set plan_json=coalesce"));
+      return JSON.parse(String(write?.params[1]));
+    };
+    const renderPayloads = (statements: Array<{ sql: string; params: unknown[] }>) => statements
+      .filter(({ sql }) => sql.includes("insert into ai_content_generation_render_jobs"))
+      .map(({ params }) => JSON.parse(String(params[5] ?? params[4])));
+
+    expect(storedPlan(draft.statements)).toEqual(plan);
+    expect(storedPlan(draft.statements)).toEqual(storedPlan(legacy.statements));
+    expect(renderPayloads(draft.statements)).toEqual(renderPayloads(legacy.statements));
+    expect(draft.statements.at(-1)?.sql).toBe("COMMIT");
+  });
+
+  it("rolls back an invalid draft before writing a plan, transition, or render job", async () => {
+    const run = runtimeHarness("processing");
+    await expect(run.repository.completeAiContentJob({
+      jobId: uid(6), workerId: "worker-1", leaseToken: "lease-1", skillVersion: "reel-draft.v1",
+      jobType: "generate",
+      planDraft: {
+        ...planDraft,
+        assets: [{ ...planDraft.assets[0]!, evidenceIds: [uid(99)] }],
+      },
+    })).rejects.toThrow("ai_content_plan_invalid");
+    const sql = run.statements.map(({ sql }) => sql).join("\n");
+    expect(sql).not.toMatch(/set plan_json=coalesce|insert into ai_content_generation_render_jobs|set status='generating'/i);
+    expect(run.statements.at(-1)?.sql).toBe("ROLLBACK");
   });
 
   it("returns the reserved quota exactly once after a permanent planner failure", async () => {

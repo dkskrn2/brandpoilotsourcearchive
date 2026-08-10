@@ -2,6 +2,7 @@ import { mkdtemp, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { ContentWorkerApiError } from "@brand-pilot/worker-runtime";
 import type { AiContentJob, WorkerClient } from "./contracts.js";
 import { runOnce } from "./worker.js";
 
@@ -39,23 +40,14 @@ function v3Input(purpose: "informational" | "marketing") {
   };
 }
 
-function v3Plan(input: ReturnType<typeof v3Input>) {
+function v3Draft(input: ReturnType<typeof v3Input>) {
   return {
-    contractVersion: "card-news-plan.v2",
+    contractVersion: "card-news-plan-draft.v1",
     content: { caption: "Tea guide", hashtags: ["tea"], cta: "Save this" },
-    imagePackage: {
-      contractVersion: "image-generation-package.v1", generationId: input.generationId,
-      outputFormat: "card_news", purpose: input.outputSettings.purpose, assetCount: 2, aspectRatio: "4:5",
-      channelTargets: ["instagram"],
-      assets: [
-        { index: 1, role: "hook", copy: "Start with a clear reason and useful context.", visualDirection: "Readable opening card.", evidenceIds: [], productImageAssetIds: [], attachmentIds: [] },
-        { index: 2, role: "guide", copy: "Use the fixed facts to explain a practical next step.", visualDirection: "Mobile-friendly two-step guide.", evidenceIds: input.product ? [] : [uid(7)], productImageAssetIds: input.product ? [uid(4)] : [], attachmentIds: [uid(8)] },
-      ],
-      product: input.product, references: input.references.selected, brandStyleImages: input.references.brandStyleImages,
-      avatarStyleImageId: input.references.avatarStyleImageId, attachments: input.references.attachments,
-      userImageInstruction: input.userImageInstruction,
-      logoPolicy: { allowGeneratedLogo: false, allowReservedLogoArea: false, allowExternalReferenceLogo: false, allowExistingProductPackagingLogo: true },
-    },
+    assets: [
+      { index: 1, role: "hook", copy: "Start with a clear reason and useful context.", visualDirection: "Readable opening card.", evidenceIds: [], productImageAssetIds: [] },
+      { index: 2, role: "guide", copy: "Use the fixed facts to explain a practical next step.", visualDirection: "Mobile-friendly two-step guide.", evidenceIds: input.product ? [] : [uid(7)], productImageAssetIds: input.product ? [uid(4)] : [] },
+    ],
   };
 }
 
@@ -91,32 +83,37 @@ describe("card-news worker", () => {
     const item = v3Job(purpose);
     const api = client(item);
     const dir = await mkdtemp(path.join(os.tmpdir(), "card-v3-plan-"));
-    const expectedPlan = v3Plan(v3Input(purpose));
-    await writeFile(path.join(dir, "card-news-plan.json"), JSON.stringify(expectedPlan));
+    const expectedDraft = v3Draft(v3Input(purpose));
+    await writeFile(path.join(dir, "card-news-plan.json"), JSON.stringify(expectedDraft));
     const planner = { run: vi.fn(async () => ({ outputDir: dir, cleanup: vi.fn() })) };
     await runOnce({ workerId: "worker-1", client: api, planner });
 
     expect(planner.run).toHaveBeenCalledOnce();
     expect(api.complete).toHaveBeenCalledWith(item.id, {
       workerId: "worker-1", leaseToken: "lease-v3", jobType: "generate",
-      skillVersion: expect.any(String), plan: expectedPlan,
+      skillVersion: expect.any(String), planDraft: expectedDraft,
     });
   });
 
   it.each([
-    ["count", "asset_count_mismatch", (plan: ReturnType<typeof v3Plan>) => { plan.imagePackage.assetCount = 1; }],
-    ["index", "asset_index_mismatch", (plan: ReturnType<typeof v3Plan>) => { plan.imagePackage.assets[0]!.index = 2; }],
-    ["no-logo", "logo_policy_mismatch", (plan: ReturnType<typeof v3Plan>) => { plan.imagePackage.logoPolicy.allowGeneratedLogo = true as false; }],
-    ["unknown evidence", "evidence_id_unknown", (plan: ReturnType<typeof v3Plan>) => { plan.imagePackage.assets[0]!.evidenceIds = [uid(99)]; }],
-    ["duplicate evidence", "evidence_id_duplicate", (plan: ReturnType<typeof v3Plan>) => { plan.imagePackage.assets[1]!.evidenceIds = [uid(7), uid(7)]; }],
-    ["malformed evidence", "evidence_ids_malformed", (plan: ReturnType<typeof v3Plan>) => { plan.imagePackage.assets[0]!.evidenceIds = ["not-a-uuid"]; }],
+    ["count", "asset_count_mismatch", (plan: ReturnType<typeof v3Draft>) => { plan.assets.pop(); }],
+    ["index", "asset_index_mismatch", (plan: ReturnType<typeof v3Draft>) => { plan.assets[0]!.index = 2; }],
+    ["role", "asset_role_mismatch", (plan: ReturnType<typeof v3Draft>) => { plan.assets[0]!.role = "guide"; }],
+    ["unknown evidence", "evidence_id_unknown", (plan: ReturnType<typeof v3Draft>) => { plan.assets[0]!.evidenceIds = [uid(99)]; }],
+    ["duplicate evidence", "evidence_id_duplicate", (plan: ReturnType<typeof v3Draft>) => { plan.assets[1]!.evidenceIds = [uid(7), uid(7)]; }],
+    ["malformed evidence", "card_news_plan_draft_invalid", (plan: ReturnType<typeof v3Draft>) => { plan.assets[0]!.evidenceIds = ["not-a-uuid"]; }],
+    ["unknown product image", "product_image_id_unknown", (plan: ReturnType<typeof v3Draft>) => { plan.assets[0]!.productImageAssetIds = [uid(99)]; }],
+    ["duplicate hashtag", "hashtag_duplicate", (plan: ReturnType<typeof v3Draft>) => { plan.content.hashtags = ["tea", "tea"]; }],
+    ["blank caption", "content_invalid", (plan: ReturnType<typeof v3Draft>) => { plan.content.caption = "   "; }],
+    ["immutable generation field", "card_news_plan_draft_invalid", (plan: ReturnType<typeof v3Draft>) => { Object.assign(plan, { generationId: uid(10) }); }],
+    ["attachment selection", "card_news_plan_draft_invalid", (plan: ReturnType<typeof v3Draft>) => { Object.assign(plan.assets[0]!, { attachmentIds: [uid(8)] }); }],
   ])("repairs one invalid v3 %s plan with the validator error", async (_name, expectedError, mutate) => {
     const item = v3Job("informational");
     const api = client(item);
     const invalidDir = await mkdtemp(path.join(os.tmpdir(), "card-v3-invalid-"));
     const validDir = await mkdtemp(path.join(os.tmpdir(), "card-v3-valid-"));
-    const invalid = v3Plan(v3Input("informational"));
-    const valid = v3Plan(v3Input("informational"));
+    const invalid = v3Draft(v3Input("informational"));
+    const valid = v3Draft(v3Input("informational"));
     mutate(invalid);
     await writeFile(path.join(invalidDir, "card-news-plan.json"), JSON.stringify(invalid));
     await writeFile(path.join(validDir, "card-news-plan.json"), JSON.stringify(valid));
@@ -127,7 +124,7 @@ describe("card-news worker", () => {
 
     expect(planner.run).toHaveBeenCalledTimes(2);
     expect(planner.run.mock.calls[1]![1]).toContain(`card_news_plan_invalid:${expectedError}`);
-    expect(api.complete).toHaveBeenCalledWith(item.id, expect.objectContaining({ plan: valid }));
+    expect(api.complete).toHaveBeenCalledWith(item.id, expect.objectContaining({ planDraft: valid }));
   });
 
   it("fails after one v3 repair and never queues image work locally", async () => {
@@ -135,8 +132,8 @@ describe("card-news worker", () => {
     const api = client(item);
     const firstDir = await mkdtemp(path.join(os.tmpdir(), "card-v3-invalid-"));
     const secondDir = await mkdtemp(path.join(os.tmpdir(), "card-v3-invalid-"));
-    const invalid = v3Plan(v3Input("informational"));
-    invalid.imagePackage.assetCount = 1;
+    const invalid = v3Draft(v3Input("informational"));
+    invalid.assets.pop();
     await writeFile(path.join(firstDir, "card-news-plan.json"), JSON.stringify(invalid));
     await writeFile(path.join(secondDir, "card-news-plan.json"), JSON.stringify(invalid));
     const planner = { run: vi.fn()
@@ -147,5 +144,26 @@ describe("card-news worker", () => {
     expect(planner.run).toHaveBeenCalledTimes(2);
     expect(api.complete).not.toHaveBeenCalled();
     expect(api.fail).toHaveBeenCalledWith(item.id, expect.objectContaining({ errorCode: "card_news_plan_invalid", retryable: false }));
+  });
+
+  it("does not re-plan or retry a terminal API 400 completion error", async () => {
+    const item = v3Job("informational");
+    const api = client(item);
+    api.complete = vi.fn(async () => {
+      throw new ContentWorkerApiError(400, "ai_content_plan_invalid");
+    });
+    const dir = await mkdtemp(path.join(os.tmpdir(), "card-v3-plan-"));
+    await writeFile(path.join(dir, "card-news-plan.json"), JSON.stringify(v3Draft(v3Input("informational"))));
+    const planner = { run: vi.fn(async () => ({ outputDir: dir, cleanup: vi.fn() })) };
+
+    const result = await runOnce({ workerId: "worker-1", client: api, planner });
+
+    expect(result).toEqual({ status: "failed", jobId: item.id });
+    expect(planner.run).toHaveBeenCalledOnce();
+    expect(api.complete).toHaveBeenCalledOnce();
+    expect(api.fail).toHaveBeenCalledWith(item.id, expect.objectContaining({
+      errorCode: "ai_content_plan_invalid",
+      retryable: false,
+    }));
   });
 });

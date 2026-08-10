@@ -55,7 +55,9 @@ function authoredSourceFiles(directory: string): string[] {
       else if (entry.endsWith(".ts")
         && !entry.endsWith(".test.ts")
         && entry !== "generateArtifacts.ts"
-        && entry !== "checkGenerated.ts") files.push(absolute);
+        && entry !== "checkGenerated.ts"
+        // Planner drafts are private transient worker/API transport, never stored or bound canonical contracts.
+        && entry !== "plannerDrafts.ts") files.push(absolute);
     }
   };
   visit(directory);

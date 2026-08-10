@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import type { ContentReferenceRoleV2, ContentSeedV2 } from "./aiContentContracts.js";
-import { crawlSourceUrl } from "./sourceCrawler.js";
+import { crawlSourceUrl, isLikelyContentPage } from "./sourceCrawler.js";
 
 export type ResolvedAiContentSubjectV2 =
   | { kind: "topic_text"; title: string }
@@ -49,11 +49,11 @@ function normalizedHttpUrl(value: unknown, fail: () => never): string {
   }
 }
 
-function normalizedSnapshotText(value: unknown): string {
+function normalizedSnapshotText(value: unknown): string | null {
   if (typeof value !== "string") return resolutionFailed();
   const normalized = value.replace(/\s+/g, " ").trim();
-  if (!normalized || normalized.length > 50_000) return resolutionFailed();
-  return normalized;
+  if (normalized.length > 50_000) return resolutionFailed();
+  return normalized || null;
 }
 
 function normalizedSnapshotTitle(value: unknown): string | null {
@@ -83,6 +83,57 @@ function urlTopicHint(value: string): string {
     .replace(/\s+\d{5,}$/, "")
     .trim();
   return (title || url.hostname.replace(/^www\./i, "")).slice(0, 500);
+}
+
+function boundedMetadataHint(value: unknown, maxLength: number): string | null {
+  if (typeof value !== "string") return null;
+  const normalized = value.replace(/\s+/g, " ").trim();
+  return normalized ? normalized.slice(0, maxLength) : null;
+}
+
+function contentMarkup(rawText: string): string {
+  return rawText
+    .replace(/<script\b[\s\S]*?<\/script>/gi, " ")
+    .replace(/<style\b[\s\S]*?<\/style>/gi, " ")
+    .replace(/<noscript\b[\s\S]*?<\/noscript>/gi, " ")
+    .replace(/<template\b[\s\S]*?<\/template>/gi, " ");
+}
+
+function normalizedMarkupText(markup: string): string {
+  return contentMarkup(markup).replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
+}
+
+function hasAmbiguousArticleOnlyBody(rawText: string, selectedText: string): boolean {
+  const markup = contentMarkup(rawText);
+  const articleCount = Array.from(markup.matchAll(/<article\b/gi)).length;
+  if (articleCount <= 1) return false;
+  const trustedMainTexts = Array.from(
+    markup.matchAll(/<main\b[^>]*>([\s\S]*?)<\/main>/gi),
+    (match) => {
+      const mainMarkup = match[1] ?? "";
+      const descendantArticleCount = Array.from(mainMarkup.matchAll(/<article\b/gi)).length;
+      return descendantArticleCount <= 1 ? normalizedMarkupText(mainMarkup) : "";
+    },
+  ).filter(Boolean);
+  return !trustedMainTexts.includes(selectedText);
+}
+
+function incompletePageFallbackText(input: {
+  canonicalUrl: string;
+  title: string | null;
+  metaDescription: unknown;
+}): string {
+  const url = input.canonicalUrl.slice(0, 1_000);
+  const slug = urlTopicHint(input.canonicalUrl);
+  const title = input.title ?? "확인 필요";
+  const metaDescription = boundedMetadataHint(input.metaDescription, 1_000) ?? "확인 필요";
+  return [
+    "원문 전체 본문을 안정적으로 수집하지 못했습니다. 아래 메타데이터는 주제 단서일 뿐이며 온라인 검색으로 원문 내용을 검증해야 합니다.",
+    `원문 URL: ${url}`,
+    `수집 제목: ${title}`,
+    `URL 주제: ${slug}`,
+    `메타 설명: ${metaDescription}`,
+  ].join("\n").slice(0, 4_000);
 }
 
 function canonicalReferenceIds(seed: Extract<ContentSeedV2, { kind: "reference" }>): string[] {
@@ -145,8 +196,28 @@ export async function resolveAiContentSeed(
 
   try {
     const canonicalUrl = normalizedHttpUrl(snapshot?.finalUrl, resolutionFailed);
-    const title = normalizedSnapshotTitle(snapshot?.title);
-    const text = normalizedSnapshotText(snapshot?.text);
+    let title = normalizedSnapshotTitle(snapshot?.title);
+    let text = normalizedSnapshotText(snapshot?.text);
+    if (typeof snapshot?.rawText !== "string") return resolutionFailed();
+    if (text === null) {
+      if (title === null && boundedMetadataHint(snapshot.metaDescription, 1_000) === null) return resolutionFailed();
+      title ??= urlTopicHint(canonicalUrl);
+      text = incompletePageFallbackText({
+        canonicalUrl,
+        title,
+        metaDescription: snapshot.metaDescription,
+      });
+    } else if (
+      !isLikelyContentPage(canonicalUrl, snapshot.rawText, { text }) ||
+      hasAmbiguousArticleOnlyBody(snapshot.rawText, text)
+    ) {
+      title ??= urlTopicHint(canonicalUrl);
+      text = incompletePageFallbackText({
+        canonicalUrl,
+        title,
+        metaDescription: snapshot.metaDescription,
+      });
+    }
     const contentHash = createHash("sha256").update(text, "utf8").digest("hex");
     const capturedAt = deps.now().toISOString();
     return {

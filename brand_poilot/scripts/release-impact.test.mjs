@@ -78,6 +78,21 @@ test("limits controlled search and its static harness to the workers that execut
   assert.deepEqual(impact.unknownPaths, []);
 });
 
+test("limits private planner draft contracts to the manual V3 plan consumers", () => {
+  const impact = classifyChangedPaths([
+    "brand_poilot/packages/brand-pilot-content-contracts/package.json",
+    "brand_poilot/packages/brand-pilot-content-contracts/src/generateArtifacts.ts",
+    "brand_poilot/packages/brand-pilot-content-contracts/src/generatedArtifacts.test.ts",
+    "brand_poilot/packages/brand-pilot-content-contracts/src/plannerDrafts.test.ts",
+    "brand_poilot/packages/brand-pilot-content-contracts/src/plannerDrafts.ts",
+  ]);
+
+  assert.deepEqual(enabled(impact), ["api", "blogWorker", "cardNewsWorker", "reelWorker"]);
+  assert.equal(impact.buildAllServer, false);
+  assert.equal(impact.deployBundleChanged, false);
+  assert.deepEqual(impact.unknownPaths, []);
+});
+
 test("marks migration changes and never treats them as an automatic deploy", () => {
   const impact = classifyChangedPaths(["brand_poilot/db/migrations/074_example.sql"]);
   assert.equal(impact.migrationChanged, true);

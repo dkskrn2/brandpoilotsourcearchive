@@ -62,6 +62,7 @@ function publicContext(purpose: "informational" | "marketing") {
     purpose,
     subjectKind: "topic_text" as const,
     subjectTitle: "브랜드 운영",
+    sourceUrls: null,
     contentInstruction: null,
     primaryCategory: "교육",
     detailedCategory: "온라인",
@@ -81,6 +82,10 @@ describe("controlled proposal search", () => {
         purpose: "informational",
         subjectKind: "topic_url",
         subjectTitle: "PUBLIC_SUBJECT_TITLE",
+        sourceUrls: {
+          requestedUrl: "https://publisher.example/original",
+          canonicalUrl: "https://publisher.example/canonical",
+        },
         contentInstruction: injectedInstruction,
         primaryCategory: "PUBLIC_PRIMARY_CATEGORY",
         detailedCategory: "PUBLIC_DETAILED_CATEGORY",
@@ -92,6 +97,8 @@ describe("controlled proposal search", () => {
     for (const allowed of [
       "PUBLIC_SUBJECT_TITLE", "PUBLIC_INSTRUCTION", "PUBLIC_PRIMARY_CATEGORY",
       "PUBLIC_DETAILED_CATEGORY", '"subjectKind":"topic_url"',
+      '"requestedUrl":"https://publisher.example/original"',
+      '"canonicalUrl":"https://publisher.example/canonical"',
     ]) {
       expect(prompt).toContain(allowed);
     }
@@ -107,15 +114,124 @@ describe("controlled proposal search", () => {
   it.each([
     ["unknown key", {
       purpose: "informational", subjectKind: "topic_text", subjectTitle: "주제",
+      sourceUrls: null,
       contentInstruction: null, primaryCategory: "교육", detailedCategory: "온라인",
       selectedProduct: null, privateSnapshot: "SECRET_PRIVATE_SNAPSHOT",
     }],
     ["overlong text", {
       purpose: "informational", subjectKind: "topic_text", subjectTitle: "x".repeat(1_001),
+      sourceUrls: null,
       contentInstruction: null, primaryCategory: "교육", detailedCategory: "온라인",
       selectedProduct: null,
     }],
   ])("rejects public research context with an %s before spawning", async (_label, publicResearchContext) => {
+    const runChild = vi.fn(async () => ({ stdout: `${webEvent()}\n${searchedResult()}`, stderr: "" }));
+
+    await expect(runControlledSearch({
+      purpose: "informational", mode: "required", publicResearchContext,
+    } as unknown as Parameters<typeof runControlledSearch>[0], { runChild }))
+      .rejects.toThrow("controlled_search_public_context_invalid");
+
+    expect(runChild).not.toHaveBeenCalled();
+  });
+
+  it("keeps the existing blog-supplement caller compatible until it adopts URL context", async () => {
+    const runner = injectedRunner(`${webEvent()}\n${searchedResult()}`);
+    const { sourceUrls: _sourceUrls, ...legacyContext } = publicContext("informational");
+
+    await expect(runControlledSearch({
+      purpose: "informational",
+      mode: "blog_supplement",
+      publicResearchContext: legacyContext,
+    } as unknown as Parameters<typeof runControlledSearch>[0], { runChild: runner.run }))
+      .resolves.toMatchObject({ decision: "searched" });
+  });
+
+  it("instructs topic URL research to inspect the requested URL before fallback evidence", async () => {
+    const runner = injectedRunner(`${webEvent()}\n${searchedResult()}`);
+
+    await runControlledSearch({
+      purpose: "informational",
+      mode: "required",
+      publicResearchContext: {
+        ...publicContext("informational"),
+        subjectKind: "topic_url",
+        sourceUrls: {
+          requestedUrl: "https://publisher.example/original",
+          canonicalUrl: "https://publisher.example/canonical",
+        },
+      },
+    }, { runChild: runner.run });
+
+    const prompt = runner.calls[0]!.prompt;
+    expect(prompt).toContain("topic_url이면 requestedUrl을 먼저 직접 확인하세요.");
+    expect(prompt).toContain("redirect 또는 접근 실패가 있으면 canonicalUrl을 확인하세요.");
+    expect(prompt).toContain("실제 search audit에서 관찰하지 않은 URL을 읽었다고 주장하지 마세요.");
+    expect(prompt.indexOf("requestedUrl을 먼저 직접 확인"))
+      .toBeLessThan(prompt.indexOf("추가 공개 근거"));
+  });
+
+  it("accepts normalized HTTP topic URLs and audited HTTP evidence", async () => {
+    const sourceUrl = "http://publisher.example/article";
+    const runner = injectedRunner(`${webEvent(`${sourceUrl}#section`)}\n${searchedResult(sourceUrl)}`);
+
+    const result = await runControlledSearch({
+      purpose: "informational",
+      mode: "required",
+      publicResearchContext: {
+        ...publicContext("informational"),
+        subjectKind: "topic_url",
+        sourceUrls: {
+          requestedUrl: "http://publisher.example/original",
+          canonicalUrl: sourceUrl,
+        },
+      },
+    }, { runChild: runner.run });
+
+    expect(runner.calls[0]!.prompt).toContain('"requestedUrl":"http://publisher.example/original"');
+    expect(runner.calls[0]!.prompt).toContain(`"canonicalUrl":"${sourceUrl}"`);
+    expect(result.items).toMatchObject([{ url: sourceUrl }]);
+  });
+
+  it("tells the search model to visit identical requested and canonical URLs only once", async () => {
+    const runner = injectedRunner(`${webEvent()}\n${searchedResult()}`);
+
+    await runControlledSearch({
+      purpose: "informational",
+      mode: "required",
+      publicResearchContext: {
+        ...publicContext("informational"),
+        subjectKind: "topic_url",
+        sourceUrls: {
+          requestedUrl: "https://publisher.example/article",
+          canonicalUrl: "https://publisher.example/article",
+        },
+      },
+    }, { runChild: runner.run });
+
+    expect(runner.calls[0]!.prompt).toContain(
+      "requestedUrl과 canonicalUrl이 같으면 같은 URL을 한 번만 확인하세요.",
+    );
+  });
+
+  it.each([
+    ["topic_text", { ...publicContext("informational"), subjectKind: "topic_text", sourceUrls: {
+      requestedUrl: "https://publisher.example/a", canonicalUrl: "https://publisher.example/b",
+    } }],
+    ["reference", { ...publicContext("informational"), subjectKind: "reference", sourceUrls: {
+      requestedUrl: "https://publisher.example/a", canonicalUrl: "https://publisher.example/b",
+    } }],
+    ["topic_url without URLs", { ...publicContext("informational"), subjectKind: "topic_url", sourceUrls: null }],
+    ["topic_url with credentials", { ...publicContext("informational"), subjectKind: "topic_url", sourceUrls: {
+      requestedUrl: "https://user:password@publisher.example/a", canonicalUrl: "https://publisher.example/b",
+    } }],
+    ["topic_url with an unsafe scheme", { ...publicContext("informational"), subjectKind: "topic_url", sourceUrls: {
+      requestedUrl: "ftp://publisher.example/a", canonicalUrl: "https://publisher.example/b",
+    } }],
+    ["topic_url with an overlong canonical URL", { ...publicContext("informational"), subjectKind: "topic_url", sourceUrls: {
+      requestedUrl: "https://publisher.example/a", canonicalUrl: `https://publisher.example/${"x".repeat(2_000)}`,
+    } }],
+  ])("rejects invalid source URL binding for %s before spawning", async (_label, publicResearchContext) => {
     const runChild = vi.fn(async () => ({ stdout: `${webEvent()}\n${searchedResult()}`, stderr: "" }));
 
     await expect(runControlledSearch({
@@ -296,7 +412,7 @@ describe("controlled proposal search", () => {
   });
 
   it.each([
-    ["http URL", `${JSON.stringify({ type: "item.completed", item: { type: "web_search", url: "http://source.example/a" } })}\n${searchedResult("http://source.example/a")}`, "controlled_search_source_url_invalid"],
+    ["credentialed URL", `${JSON.stringify({ type: "item.completed", item: { type: "web_search", url: "https://user:password@source.example/a" } })}\n${searchedResult("https://user:password@source.example/a")}`, "controlled_search_source_url_invalid"],
     ["unobserved URL", `${webEvent()}\n${searchedResult("https://invented.example/a")}`, "controlled_search_unobserved_source"],
     ["shell event", `${JSON.stringify({ type: "command_execution", command: "dir" })}\n${webEvent()}\n${searchedResult()}`, "controlled_search_forbidden_tool_event"],
     ["image event", `${JSON.stringify({ type: "image_generation", id: "1" })}\n${webEvent()}\n${searchedResult()}`, "controlled_search_forbidden_tool_event"],

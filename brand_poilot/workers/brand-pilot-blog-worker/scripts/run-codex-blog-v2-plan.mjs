@@ -26,7 +26,7 @@ export function buildCodexArgs(outputDir) {
     "--ask-for-approval", "never", "exec", "--ignore-user-config", "--skip-git-repo-check", "--ignore-rules", "--ephemeral",
     "--output-schema", path.resolve(
       import.meta.dirname,
-      "../../../packages/brand-pilot-content-contracts/generated/blog-plan-v2.schema.json",
+      "./blog-plan-draft-v1.schema.json",
     ),
     "--output-last-message", path.join(outputDir, "blog-plan.json"), "-C", outputDir, "-",
   ];

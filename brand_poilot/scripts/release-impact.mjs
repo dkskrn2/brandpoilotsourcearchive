@@ -37,6 +37,14 @@ const AI_CONTENT_CONTROLLED_SEARCH_RUNTIME_PATHS = new Set([
   "workers/brand-pilot-worker-runtime/src/controlledSearch.ts",
 ]);
 
+const AI_CONTENT_PLANNER_DRAFT_CONTRACT_PATHS = new Set([
+  "packages/brand-pilot-content-contracts/package.json",
+  "packages/brand-pilot-content-contracts/src/generateArtifacts.ts",
+  "packages/brand-pilot-content-contracts/src/generatedArtifacts.test.ts",
+  "packages/brand-pilot-content-contracts/src/plannerDrafts.test.ts",
+  "packages/brand-pilot-content-contracts/src/plannerDrafts.ts",
+]);
+
 const AI_CONTENT_SCOPED_TOOLING_PATHS = new Set([
   "scripts/check-local-env.mjs",
   "scripts/three-format-cutover-static-check.mjs",
@@ -243,6 +251,13 @@ export function classifyChangedPaths(values, options = {}) {
     if (AI_CONTENT_CONTROLLED_SEARCH_RUNTIME_PATHS.has(path)) {
       components.contentProposalWorker = true;
       components.blogWorker = true;
+      continue;
+    }
+    if (AI_CONTENT_PLANNER_DRAFT_CONTRACT_PATHS.has(path)) {
+      components.api = true;
+      components.cardNewsWorker = true;
+      components.blogWorker = true;
+      components.reelWorker = true;
       continue;
     }
     if (AI_CONTENT_SCOPED_TOOLING_PATHS.has(path)) continue;

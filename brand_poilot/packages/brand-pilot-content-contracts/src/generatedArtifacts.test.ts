@@ -1,11 +1,16 @@
 import { createHash } from "node:crypto";
-import { mkdtempSync, readFileSync, readdirSync, statSync } from "node:fs";
+import { mkdtempSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { compareUnicodeCodePoints } from "./catalog.js";
-import { computeContractSourceHash, generateArtifacts, stableJson } from "./generateArtifacts.js";
+import {
+  computeContractSourceHash,
+  generateArtifactSet,
+  generateArtifacts,
+  stableJson,
+} from "./generateArtifacts.js";
 
 const SCHEMA_FILENAMES = [
   "ai-content-v3.schema.json",
@@ -52,6 +57,26 @@ function schemaProblems(value: unknown): { oneOf: boolean; uniqueItems: boolean;
 }
 
 describe("generated content contract artifacts", () => {
+  it("keeps private planner drafts outside canonical source hashing and artifacts", async () => {
+    const source = mkdtempSync(join(tmpdir(), "content-contract-private-source-"));
+    const canonicalPath = join(source, "canonical.ts");
+    const privateDraftPath = join(source, "plannerDrafts.ts");
+    writeFileSync(canonicalPath, "export const canonical = 'v1';\n", "utf8");
+    writeFileSync(privateDraftPath, "export const privateDraft = 'v1';\n", "utf8");
+
+    const originalHash = computeContractSourceHash(source);
+    const originalArtifacts = await generateArtifactSet(source);
+
+    writeFileSync(privateDraftPath, "export const privateDraft = 'v2';\n", "utf8");
+    expect(computeContractSourceHash(source)).toBe(originalHash);
+    expect(await generateArtifactSet(source)).toEqual(originalArtifacts);
+
+    writeFileSync(canonicalPath, "export const canonical = 'v2';\n", "utf8");
+    expect(computeContractSourceHash(source)).not.toBe(originalHash);
+    expect((await generateArtifactSet(source)).get("content-catalog.json"))
+      .not.toBe(originalArtifacts.get("content-catalog.json"));
+  });
+
   it("orders Unicode scalar values instead of UTF-16 code units", () => {
     expect(["\u{10000}", "\uE000"].sort(compareUnicodeCodePoints)).toEqual(["\uE000", "\u{10000}"]);
   });
@@ -86,7 +111,8 @@ describe("generated content contract artifacts", () => {
         const absolute = join(directory, name);
         if (statSync(absolute).isDirectory()) visit(absolute);
         else if (name.endsWith(".ts") && !name.endsWith(".test.ts")
-          && name !== "generateArtifacts.ts" && name !== "checkGenerated.ts") files.push(absolute);
+          && name !== "generateArtifacts.ts" && name !== "checkGenerated.ts"
+          && name !== "plannerDrafts.ts") files.push(absolute);
       }
     };
     visit(sourceDirectory);

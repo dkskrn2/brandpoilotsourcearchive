@@ -83,6 +83,21 @@ function evidence(contentHash?: string) {
   };
 }
 
+function evidenceAtUrl(url: string) {
+  const value = evidence();
+  const item = value.items[0]!;
+  const normalizedUrl = url.trim();
+  item.url = url;
+  item.contentHash = createHash("sha256").update(JSON.stringify({
+    title: item.title,
+    url: normalizedUrl,
+    publisher: item.publisher,
+    publishedAt: item.publishedAt,
+    claimSummary: item.claimSummary,
+  })).digest("hex");
+  return value;
+}
+
 function composedInput() {
   const { contractVersion: _contractVersion, ...fields } = baseInput;
   return {
@@ -432,7 +447,31 @@ describe("content proposal research boundary", () => {
     expect(connect).not.toHaveBeenCalled();
   });
 
-  it("seals research through the 075 function and returns the immutable composition identity", async () => {
+  it.each([
+    ["credentials", "https://user:pass@source.example/article"],
+    ["javascript", "javascript:alert(1)"],
+    ["data", "data:text/html,unsafe"],
+    ["file", "file:///tmp/source"],
+    ["relative", "/source"],
+  ])("rejects a research item with a %s URL before database access", async (_name, url) => {
+    const connect = vi.fn(async () => { throw new Error("unexpected_database_access"); });
+    const repository = createContentProposalJobsRepository({ connect } as unknown as Pool);
+
+    await expect(repository.completeContentProposalResearch({
+      jobId: ids.job,
+      workerId: "proposal-worker-1",
+      leaseToken: ids.lease,
+      researchAttemptId: ids.researchAttempt,
+      evidence: evidenceAtUrl(url),
+    })).rejects.toThrow("content_proposal_research_invalid");
+
+    expect(connect).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["HTTPS", "https://source.example/article", "https://source.example/article"],
+    ["HTTP", "  http://source.example/article  ", "http://source.example/article"],
+  ] as const)("seals normalized %s research through the 075 function", async (_scheme, rawUrl, normalizedUrl) => {
     const statements: Array<{ sql: string; params: unknown[] }> = [];
     const row = claimRow("research", {
       status: "processing",
@@ -477,13 +516,14 @@ describe("content proposal research boundary", () => {
     const repository = createContentProposalJobsRepository({
       connect: vi.fn(async () => client), query,
     } as unknown as Pool);
+    const researchEvidence = evidenceAtUrl(rawUrl);
 
     const result = await repository.completeContentProposalResearch({
       jobId: ids.job,
       workerId: "proposal-worker-1",
       leaseToken: ids.lease,
       researchAttemptId: ids.researchAttempt,
-      evidence: evidence(),
+      evidence: researchEvidence,
     });
 
     expect(result).toMatchObject({
@@ -495,6 +535,9 @@ describe("content proposal research boundary", () => {
       evidenceSetSha256: "b".repeat(64),
       composedInputSha256: "c".repeat(64),
     });
+    expect(result.composedInput.researchEvidence.items[0]?.url).toBe(normalizedUrl);
+    const snapshotInsert = statements.find(({ sql }) => sql.includes("insert into ai_content_proposal_research_snapshots"));
+    expect(JSON.parse(String(snapshotInsert?.params[3])).items[0].url).toBe(normalizedUrl);
     expect(statements.some(({ sql }) => sql.includes("complete_ai_content_proposal_research"))).toBe(true);
     const attemptLock = statements.findIndex(({ sql }) => (
       sql.includes("from ai_content_proposal_research_attempts") && sql.includes("for update")

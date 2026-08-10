@@ -3,7 +3,11 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
-  "exports": { ".": "./dist/index.js", "./generated/*": "./generated/*" },
+  "exports": {
+    ".": "./dist/index.js",
+    "./planner-drafts": "./dist/plannerDrafts.js",
+    "./generated/*": "./generated/*"
+  },
   "types": "./dist/index.d.ts",
   "scripts": {
     "build": "tsc -p tsconfig.json",

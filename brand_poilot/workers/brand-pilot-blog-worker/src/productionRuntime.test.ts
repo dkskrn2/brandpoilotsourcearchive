@@ -72,7 +72,7 @@ describe("blog production runtime", () => {
     const runner = await import(runnerUrl) as { buildCodexArgs(outputDir: string): string[]; buildCodexPrompt(prompt: string): string };
     const args = runner.buildCodexArgs(path.resolve("v3-blog-output"));
     const prompt = runner.buildCodexPrompt("writer input");
-    const schema = JSON.parse(await read("../scripts/blog-plan-v2.schema.json")) as Record<string, unknown>;
+    const schema = JSON.parse(await read("../scripts/blog-plan-draft-v1.schema.json")) as Record<string, unknown>;
     const modelFlag = args.indexOf("--model");
     expect(modelFlag).toBeGreaterThanOrEqual(0);
     expect(args[modelFlag + 1]).toBe("gpt-5.6-terra");
@@ -81,14 +81,19 @@ describe("blog production runtime", () => {
     for (const feature of ["shell_tool", "image_generation", "shell_snapshot"]) expect(args).toEqual(expect.arrayContaining(["--disable", feature]));
     expect(args.join(" ")).not.toContain("--search");
     expect(prompt).toContain("파일이나 웹을 조회하지 마세요");
-    expect(schema).toMatchObject({ type: "object", additionalProperties: false, required: ["contractVersion", "content", "imagePackage"] });
+    expect(args[args.indexOf("--output-schema") + 1]).toMatch(/blog-plan-draft-v1\.schema\.json$/);
+    expect(schema).toMatchObject({ type: "object", additionalProperties: false, required: ["contractVersion", "content", "imageDraft"] });
     const properties = schema.properties as Record<string, Record<string, unknown>>;
-    expect(properties.imagePackage.anyOf).toBeTruthy();
+    expect(properties.contractVersion.const).toBe("blog-plan-draft.v1");
+    expect(properties.imageDraft.anyOf).toBeTruthy();
     const contentProperties = (properties.content.properties as Record<string, Record<string, unknown>>);
     expect(contentProperties.title.maxLength).toBe(500);
     expect(contentProperties.metaTitle.maxLength).toBe(500);
     expect(contentProperties.metaDescription.maxLength).toBe(2_000);
     const serializedSchema = JSON.stringify(schema);
+    for (const forbidden of ["generationId", "outputFormat", "purpose", "storagePath", "checksum", "attachmentIds", "logoPolicy", "references", "attachments"]) {
+      expect(serializedSchema).not.toContain(`\"${forbidden}\"`);
+    }
     expect(serializedSchema).not.toContain('"oneOf"');
     expect(serializedSchema).not.toContain('"uniqueItems"');
   });
@@ -142,6 +147,7 @@ describe("blog production runtime", () => {
     expect(dockerfile).toContain("CODEX_ACCOUNT_POOL_ROOT=/codex-accounts");
     expect(dockerfile).not.toMatch(/COPY[^\n]*run-codex-blog\.mjs/);
     expect(dockerfile).toContain("run-codex-blog-v2-plan.mjs");
+    expect(dockerfile).toContain("blog-plan-draft-v1.schema.json");
     expect(dockerfile).toContain("content-contracts/generated");
     expect(dockerfile).toContain("blog-writer/SKILL.md");
     expect(dockerfile).toContain("workers/brand-pilot-blog-worker/dist/index.js");

@@ -1,4 +1,5 @@
 import { EventEmitter } from "node:events";
+import { createHash } from "node:crypto";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -8,6 +9,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createCodexAccountPool, type CodexAccountPool } from "@brand-pilot/worker-runtime";
 import { createAiContentAssetRenderer, dimensionsForAspectRatio, runAiContentAssetChildProcess } from "./aiContentAssetRenderer.js";
 import type { AiContentImageAssetJob } from "./aiContentRenderClient.js";
+import { cloneManualImageJobV2 } from "../test/fixtures/manualRender.js";
 
 const uid = (n: number) => `30000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 const sha = (c: string) => c.repeat(64);
@@ -52,6 +54,73 @@ function job(): AiContentImageAssetJob {
   };
 }
 
+function manualBlogJob(): any {
+  const target: any = cloneManualImageJobV2();
+  const imagePackage = target.payload.imagePackage;
+  imagePackage.outputFormat = "blog";
+  imagePackage.aspectRatio = "16:9";
+  imagePackage.channelTargets = ["blog_export"];
+  imagePackage.assetCount = 2;
+  imagePackage.assets = [
+    { ...imagePackage.assets[0], index: 1, role: "hero" },
+    { ...imagePackage.assets[1], index: 2, role: "diagram" },
+  ];
+  target.assetIndex = 1;
+  target.payload.assetIndex = 1;
+  target.payload.assetKey = `${target.generationId}:1`;
+  target.payload.storagePath = `ai-content/${target.brandId}/${target.generationId}/${target.outputId}/assets/01.png`;
+  target.payload.contentGenerationInput.selectedProposal.outputFormat = "blog";
+  target.payload.contentGenerationInput.selectedProposal.channelTargets = ["blog_export"];
+  target.payload.contentGenerationInput.selectedProposal.assetCount = null;
+  target.payload.contentGenerationInput.selectedProposal.outline = [{ index: 1, role: "article", headline: "차 안내", purpose: "설명" }];
+  target.payload.contentGenerationInput.outputSettings = { outputFormat: "blog", channelTargets: ["blog_export"], aspectRatio: null, outputCount: 1, purpose: "marketing" };
+  target.payload.contentPlan = {
+    contractVersion: "blog-plan.v2",
+    content: {
+      title: "차 안내",
+      htmlTemplate: '<article><h1>차 안내</h1><p>첫 이미지 앞 문단</p><img src="asset://01" alt="차 제품 대표 이미지"><h2>선택 기준</h2><p>첫 이미지 뒤 문단</p><img src="asset://02" alt="차 선택 기준 도식"><p>마지막 문단</p></article>',
+      metaTitle: "차 안내", metaDescription: "차 제품을 안내합니다.", usedEvidenceIds: [],
+    },
+    imagePackage,
+  };
+  return target;
+}
+
+async function bindManualOwnedBytes(target: any) {
+  const [attachmentPng, attachmentJpeg, attachmentWebp] = await Promise.all([
+    sharp({ create: { width: 2, height: 2, channels: 4, background: "red" } }).png().toBuffer(),
+    sharp({ create: { width: 2, height: 2, channels: 3, background: "green" } }).jpeg().toBuffer(),
+    sharp({ create: { width: 2, height: 2, channels: 4, background: "blue" } }).webp().toBuffer(),
+  ]);
+  const bytesByPath = new Map<string, Buffer>([
+    ["owned/product.png", Buffer.from("product")],
+    ["owned/style.png", Buffer.from("style")],
+    ["owned/reference.png", Buffer.from("reference")],
+    ["owned/attachment-one", attachmentPng],
+    ["owned/attachment-two", attachmentJpeg],
+    ["owned/attachment-three", attachmentWebp],
+  ]);
+  const checksum = (storagePath: string) => createHash("sha256").update(bytesByPath.get(storagePath)!).digest("hex");
+  for (const imagePackage of [target.payload.imagePackage, target.payload.contentPlan.imagePackage]) {
+    imagePackage.product.images[0].checksum = checksum("owned/product.png");
+    imagePackage.brandStyleImages[0].checksum = checksum("owned/style.png");
+    imagePackage.references[0].image.checksum = checksum("owned/reference.png");
+    for (const attachment of imagePackage.attachments) {
+      attachment.checksum = checksum(attachment.storagePath);
+      attachment.sizeBytes = bytesByPath.get(attachment.storagePath)!.byteLength;
+    }
+  }
+  const input = target.payload.contentGenerationInput;
+  input.product.images[0].checksum = checksum("owned/product.png");
+  input.references.brandStyleImages[0].checksum = checksum("owned/style.png");
+  input.references.selected[0].image.checksum = checksum("owned/reference.png");
+  for (const attachment of input.references.attachments) {
+    attachment.checksum = checksum(attachment.storagePath);
+    attachment.sizeBytes = bytesByPath.get(attachment.storagePath)!.byteLength;
+  }
+  return { bytesByPath, readOwned: vi.fn(async (storagePath: string) => bytesByPath.get(storagePath)!) };
+}
+
 describe("V3 single asset renderer", () => {
   it("maps every contract ratio to its exact dimensions", () => {
     expect(dimensionsForAspectRatio("1:1")).toEqual({ width: 1080, height: 1080 });
@@ -94,6 +163,171 @@ describe("V3 single asset renderer", () => {
     expect(runChild).toHaveBeenCalledTimes(1);
     expect(result).toMatchObject({ index: 2, mimeType: "image/png", width: 8, height: 8 });
     expect((await sharp(result.bytes).metadata())).toMatchObject({ width: 8, height: 8, format: "png" });
+  });
+
+  it("stages the full immutable v2 context and every frozen attachment as read-only optional references", async () => {
+    const input: any = cloneManualImageJobV2();
+    expect(input.payload.imagePackage.assets[1].attachmentIds).toEqual([]);
+    const { bytesByPath, readOwned } = await bindManualOwnedBytes(input);
+    const rendered = await sharp({ create: { width: 8, height: 12, channels: 4, background: "white" } }).png().toBuffer();
+    const runChild = vi.fn(async ({ workspaceDir, outputFile, prompt }: { workspaceDir: string; outputFile: string; prompt: string }) => {
+      const inputDir = path.join(workspaceDir, "inputs");
+      expect(prompt).toContain("ai-content-asset-render.v2");
+      expect(prompt).toMatch(/완성된.*카드뉴스|카드뉴스.*완성/s);
+      expect(prompt).toMatch(/배경.*이미지만.*만들지 마세요/s);
+      expect(prompt).toContain("inputs/content-generation-input.json");
+      expect(prompt).toContain("inputs/attachments/attachment-03.webp");
+      expect(JSON.parse(await readFile(path.join(inputDir, "content-generation-input.json"), "utf8"))).toEqual(input.payload.contentGenerationInput);
+      expect(JSON.parse(await readFile(path.join(inputDir, "content-plan.json"), "utf8"))).toEqual(input.payload.contentPlan);
+      expect(JSON.parse(await readFile(path.join(inputDir, "render-contract.json"), "utf8"))).toMatchObject({
+        contractVersion: "ai-content-manual-render.v2",
+        rendererPromptVersion: "image-final-pixels.v2",
+        workspaceId: input.workspaceId,
+        brandId: input.brandId,
+        currentAsset: { index: 2, role: "detail" },
+        blogInsertionContext: null,
+      });
+      await expect(readFile(path.join(inputDir, "blog-insertion-context.json"), "utf8"))
+        .rejects.toMatchObject({ code: "ENOENT" });
+      const index = JSON.parse(await readFile(path.join(inputDir, "attachments", "index.json"), "utf8"));
+      expect(index).toEqual({
+        contractVersion: "ai-content-attachment-index.v1",
+        referenceSemantics: "optional_visual_reference",
+        attachments: [
+          expect.objectContaining({ index: 1, id: uid(20), originalFileName: "first unsafe name.png", path: "inputs/attachments/attachment-01.png" }),
+          expect.objectContaining({ index: 2, id: uid(21), originalFileName: "../../second.jpg", path: "inputs/attachments/attachment-02.jpg" }),
+          expect.objectContaining({ index: 3, id: uid(22), originalFileName: "third.webp", path: "inputs/attachments/attachment-03.webp" }),
+        ],
+      });
+      for (const relative of [
+        "content-generation-input.json", "content-plan.json", "render-contract.json", path.join("attachments", "index.json"),
+        path.join("attachments", "attachment-01.png"), path.join("attachments", "attachment-02.jpg"), path.join("attachments", "attachment-03.webp"),
+      ]) {
+        await expect((await import("node:fs/promises")).stat(path.join(inputDir, relative)).then((stat) => stat.mode & 0o222)).resolves.toBe(0);
+      }
+      expect(await readFile(path.join(inputDir, "attachments", "attachment-01.png"))).toEqual(bytesByPath.get("owned/attachment-one"));
+      expect(await readFile(path.join(inputDir, "attachments", "attachment-02.jpg"))).toEqual(bytesByPath.get("owned/attachment-two"));
+      expect(await readFile(path.join(inputDir, "attachments", "attachment-03.webp"))).toEqual(bytesByPath.get("owned/attachment-three"));
+      await mkdir(path.dirname(outputFile), { recursive: true });
+      await writeFile(outputFile, rendered);
+    });
+    const renderer = createAiContentAssetRenderer({ workerRoot: path.resolve("."), readOwned, runChild });
+
+    await expect(renderer.renderAsset(input as AiContentImageAssetJob, new AbortController().signal)).resolves.toMatchObject({ index: 2 });
+
+    expect(readOwned.mock.calls.map(([storagePath]) => storagePath)).toEqual([
+      "owned/product.png", "owned/style.png", "owned/reference.png",
+      "owned/attachment-one", "owned/attachment-two", "owned/attachment-three",
+    ]);
+    expect(readOwned).toHaveBeenCalledWith("owned/attachment-one", {
+      maxBytes: 5_000_000,
+      expectedSizeBytes: bytesByPath.get("owned/attachment-one")!.byteLength,
+      expectedContentType: "image/png",
+    });
+    expect(readOwned).toHaveBeenCalledWith("owned/attachment-two", {
+      maxBytes: 5_000_000,
+      expectedSizeBytes: bytesByPath.get("owned/attachment-two")!.byteLength,
+      expectedContentType: "image/jpeg",
+    });
+    expect(runChild).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects an oversized declared v2 attachment before reading any owned blob", async () => {
+    const input: any = cloneManualImageJobV2();
+    for (const attachments of [
+      input.payload.imagePackage.attachments,
+      input.payload.contentPlan.imagePackage.attachments,
+      input.payload.contentGenerationInput.references.attachments,
+    ]) attachments[0].sizeBytes = 5_000_001;
+    const readOwned = vi.fn();
+    const runChild = vi.fn();
+    const renderer = createAiContentAssetRenderer({ workerRoot: path.resolve("."), readOwned, runChild });
+
+    await expect(renderer.renderAsset(input as AiContentImageAssetJob, new AbortController().signal))
+      .rejects.toThrow("ai_content_owned_blob_size_limit_exceeded");
+    expect(readOwned).not.toHaveBeenCalled();
+    expect(runChild).not.toHaveBeenCalled();
+  });
+
+  it("rejects v2 attachment bytes whose decoded image format disagrees with the declared MIME", async () => {
+    const input: any = cloneManualImageJobV2();
+    const { readOwned: validReadOwned } = await bindManualOwnedBytes(input);
+    const jpegBytes = await sharp({ create: { width: 2, height: 2, channels: 3, background: "white" } }).jpeg().toBuffer();
+    const jpegChecksum = createHash("sha256").update(jpegBytes).digest("hex");
+    for (const attachments of [
+      input.payload.imagePackage.attachments,
+      input.payload.contentPlan.imagePackage.attachments,
+      input.payload.contentGenerationInput.references.attachments,
+    ]) {
+      attachments[0].checksum = jpegChecksum;
+      attachments[0].sizeBytes = jpegBytes.byteLength;
+    }
+    const readOwned = vi.fn(async (storagePath: string) => storagePath === "owned/attachment-one"
+      ? jpegBytes
+      : validReadOwned(storagePath));
+    const runChild = vi.fn();
+    const renderer = createAiContentAssetRenderer({ workerRoot: path.resolve("."), readOwned, runChild });
+
+    await expect(renderer.renderAsset(input as AiContentImageAssetJob, new AbortController().signal))
+      .rejects.toThrow("ai_content_owned_blob_content_type_mismatch");
+    expect(runChild).not.toHaveBeenCalled();
+  });
+
+  it("checksum-verifies every v2 attachment even when the current asset selects none", async () => {
+    const input: any = cloneManualImageJobV2();
+    const { readOwned: validReadOwned } = await bindManualOwnedBytes(input);
+    const readOwned = vi.fn(async (storagePath: string) => storagePath === "owned/attachment-two"
+      ? Buffer.from("tampered")
+      : validReadOwned(storagePath));
+    const runChild = vi.fn();
+    const renderer = createAiContentAssetRenderer({ workerRoot: path.resolve("."), readOwned, runChild });
+
+    await expect(renderer.renderAsset(input as AiContentImageAssetJob, new AbortController().signal)).rejects.toThrow("ai_content_owned_blob_checksum_mismatch");
+    expect(readOwned).toHaveBeenCalledWith("owned/attachment-two", {
+      maxBytes: 5_000_000,
+      expectedSizeBytes: input.payload.imagePackage.attachments[1].sizeBytes,
+      expectedContentType: "image/jpeg",
+    });
+    expect(runChild).not.toHaveBeenCalled();
+  });
+
+  it("derives and stages deterministic blog insertion context from the final HTML placeholder", async () => {
+    const input = manualBlogJob();
+    const { readOwned } = await bindManualOwnedBytes(input);
+    const rendered = await sharp({ create: { width: 8, height: 12, channels: 4, background: "white" } }).png().toBuffer();
+    const runChild = vi.fn(async ({ workspaceDir, outputFile }: { workspaceDir: string; outputFile: string }) => {
+      const inputDir = path.join(workspaceDir, "inputs");
+      const contract = JSON.parse(await readFile(path.join(inputDir, "render-contract.json"), "utf8"));
+      const expectedInsertionContext = {
+        placeholder: "asset://01",
+        altText: "차 제품 대표 이미지",
+        nearestHeading: "차 안내",
+        previousParagraph: "첫 이미지 앞 문단",
+        nextParagraph: "첫 이미지 뒤 문단",
+        role: "hero",
+      };
+      expect(contract.blogInsertionContext).toEqual(expectedInsertionContext);
+      expect(JSON.parse(await readFile(path.join(inputDir, "blog-insertion-context.json"), "utf8")))
+        .toEqual(expectedInsertionContext);
+      await expect((await import("node:fs/promises")).stat(path.join(inputDir, "blog-insertion-context.json")).then((stat) => stat.mode & 0o222))
+        .resolves.toBe(0);
+      await mkdir(path.dirname(outputFile), { recursive: true });
+      await writeFile(outputFile, rendered);
+    });
+    const renderer = createAiContentAssetRenderer({ workerRoot: path.resolve("."), readOwned, runChild });
+
+    await expect(renderer.renderAsset(input as AiContentImageAssetJob, new AbortController().signal)).resolves.toMatchObject({ index: 1 });
+    expect(runChild).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects a blog placeholder binding mismatch before invoking the image CLI", async () => {
+    const input = manualBlogJob();
+    input.payload.contentPlan.content.htmlTemplate = input.payload.contentPlan.content.htmlTemplate.replace("asset://02", "asset://01");
+    const runChild = vi.fn();
+    const renderer = createAiContentAssetRenderer({ workerRoot: path.resolve("."), readOwned: vi.fn(), runChild });
+
+    await expect(renderer.renderAsset(input as AiContentImageAssetJob, new AbortController().signal)).rejects.toThrow("ai_content_blog_insertion_binding_invalid");
+    expect(runChild).not.toHaveBeenCalled();
   });
 
   it("rejects staged checksum mismatches before starting the child", async () => {

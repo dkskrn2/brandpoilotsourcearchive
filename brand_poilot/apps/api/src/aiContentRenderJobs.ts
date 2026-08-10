@@ -25,6 +25,8 @@ import {
 
 type Queryable = Pick<PoolClient, "query">;
 
+export type AiContentImageAssetTransport = "v1" | "manual-v2";
+
 export interface AiContentRenderedAsset {
   index: number;
   url: string;
@@ -196,6 +198,34 @@ export function parseRenderAssetResult(
   }
 }
 
+export async function resolveManualRenderTransport(client: Queryable, input: {
+  generationId: string;
+  workspaceId: string;
+  brandId: string;
+  selectedProposalId: string;
+}): Promise<AiContentImageAssetTransport> {
+  const lineage = await client.query(
+    `select binding.selected_proposal_id,batch.origin
+       from ai_content_generation_prompt_bindings binding
+       join ai_content_proposals proposal
+         on proposal.id=binding.selected_proposal_id
+        and proposal.workspace_id=binding.workspace_id and proposal.brand_id=binding.brand_id
+       join ai_content_proposal_batches batch
+         on batch.id=proposal.batch_id
+        and batch.workspace_id=proposal.workspace_id and batch.brand_id=proposal.brand_id
+      where binding.generation_id=$1 and binding.workspace_id=$2 and binding.brand_id=$3
+        and binding.selected_proposal_id=$4
+      for share of binding,proposal,batch`,
+    [input.generationId, input.workspaceId, input.brandId, input.selectedProposalId],
+  );
+  if (
+    lineage.rows.length !== 1
+    || String(lineage.rows[0]?.selected_proposal_id) !== input.selectedProposalId
+    || lineage.rows[0]?.origin !== "manual"
+  ) return "v1";
+  return "manual-v2";
+}
+
 export async function enqueueAiContentRenderJobs(client: Queryable, input: {
   workspaceId: string;
   brandId: string;
@@ -203,12 +233,15 @@ export async function enqueueAiContentRenderJobs(client: Queryable, input: {
   outputId: string;
   plan: ContentPlanResultV2;
   finalInput: ContentGenerationInputV3;
+  imageAssetTransport?: AiContentImageAssetTransport;
 }): Promise<void> {
   const imagePackage = input.plan.imagePackage;
   if (imagePackage) {
     for (const asset of imagePackage.assets) {
       const payload = {
-        contractVersion: "ai-content-render-job.v1",
+        contractVersion: input.imageAssetTransport === "manual-v2"
+          ? "ai-content-render-job.v2"
+          : "ai-content-render-job.v1",
         jobKind: "image_asset",
         generationId: input.generationId,
         outputId: input.outputId,
@@ -216,6 +249,9 @@ export async function enqueueAiContentRenderJobs(client: Queryable, input: {
         assetIndex: asset.index,
         assetKey: `${input.generationId}:${asset.index}`,
         storagePath: expectedAiContentAssetStoragePath({ ...input, assetIndex: asset.index }),
+        ...(input.imageAssetTransport === "manual-v2"
+          ? { rendererPromptVersion: "image-final-pixels.v2" }
+          : {}),
       };
       await client.query(
         `insert into ai_content_generation_render_jobs
@@ -247,6 +283,93 @@ async function insertFinalizer(client: Queryable, input: {
 
 function record(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
+}
+
+function requireExactObjectKeys(value: Record<string, unknown>, keys: readonly string[]): void {
+  if (Object.keys(value).length !== keys.length || keys.some((key) => !(key in value))) {
+    throw new Error("ai_content_render_snapshot_mismatch");
+  }
+}
+
+async function manualImageAssetPayloadV2(
+  client: Queryable,
+  row: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  const storedPayload = record(row.payload_json);
+  requireExactObjectKeys(storedPayload, [
+    "contractVersion", "jobKind", "generationId", "outputId", "imagePackage",
+    "assetIndex", "assetKey", "storagePath", "rendererPromptVersion",
+  ]);
+  const assetIndex = Number(row.asset_index);
+  if (
+    row.job_kind !== "image_asset"
+    || !Number.isSafeInteger(assetIndex)
+    || storedPayload.contractVersion !== "ai-content-render-job.v2"
+    || storedPayload.jobKind !== "image_asset"
+    || storedPayload.generationId !== String(row.generation_id)
+    || storedPayload.outputId !== String(row.output_id)
+    || storedPayload.assetIndex !== assetIndex
+    || storedPayload.assetKey !== `${String(row.generation_id)}:${assetIndex}`
+    || storedPayload.storagePath !== expectedAiContentAssetStoragePath({
+      brandId: String(row.brand_id),
+      generationId: String(row.generation_id),
+      outputId: String(row.output_id),
+      assetIndex,
+    })
+    || storedPayload.rendererPromptVersion !== "image-final-pixels.v2"
+  ) throw new Error("ai_content_render_snapshot_mismatch");
+
+  const state = await client.query(
+    `select output.plan_json,input.input_json,research.evidence_json,
+            binding.selected_proposal_id,batch.origin
+       from ai_content_generation_outputs output
+       join ai_content_generations generation
+         on generation.id=output.generation_id
+        and generation.workspace_id=output.workspace_id and generation.brand_id=output.brand_id
+       join ai_content_generation_input_snapshots input
+         on input.generation_id=output.generation_id
+        and input.workspace_id=output.workspace_id and input.brand_id=output.brand_id
+       join ai_content_generation_prompt_bindings binding
+         on binding.generation_id=output.generation_id
+        and binding.workspace_id=output.workspace_id and binding.brand_id=output.brand_id
+       join ai_content_proposals proposal
+         on proposal.id=binding.selected_proposal_id
+        and proposal.workspace_id=binding.workspace_id and proposal.brand_id=binding.brand_id
+       join ai_content_proposal_batches batch
+         on batch.id=proposal.batch_id
+        and batch.workspace_id=proposal.workspace_id and batch.brand_id=proposal.brand_id
+       left join ai_content_output_research_snapshots research
+         on research.output_id=output.id and research.generation_id=output.generation_id
+        and research.workspace_id=output.workspace_id and research.brand_id=output.brand_id
+      where output.id=$1 and output.generation_id=$2
+        and output.workspace_id=$3 and output.brand_id=$4
+      for share of generation,output,binding,proposal,batch`,
+    [row.output_id, row.generation_id, row.workspace_id, row.brand_id],
+  );
+  if (state.rows.length !== 1 || state.rows[0]?.origin !== "manual") {
+    throw new Error("ai_content_render_lineage_mismatch");
+  }
+  const contentGenerationInput = parseContentGenerationInputV3(state.rows[0].input_json);
+  if (
+    contentGenerationInput.generationId !== String(row.generation_id)
+    || contentGenerationInput.selectedProposal.id !== String(state.rows[0].selected_proposal_id)
+  ) throw new Error("ai_content_render_lineage_mismatch");
+  const contentPlan = parseContentPlanResultV2(
+    state.rows[0].plan_json,
+    contentGenerationInput,
+    state.rows[0].evidence_json,
+  );
+  if (
+    contentPlan.imagePackage === null
+    || !isDeepStrictEqual(contentPlan.imagePackage, storedPayload.imagePackage)
+    || !contentPlan.imagePackage.assets.some((asset) => asset.index === assetIndex)
+  ) throw new Error("ai_content_render_snapshot_mismatch");
+
+  return {
+    ...storedPayload,
+    contentGenerationInput,
+    contentPlan,
+  };
 }
 
 function renderJob(row: Record<string, unknown>, payload: Record<string, unknown>): AiContentRenderJob {
@@ -443,7 +566,11 @@ function validateBlogFinalHtml(
     const evidenceId = $(link).attr("data-evidence-id");
     let parsedHref: URL;
     try { parsedHref = new URL(String(href)); } catch { throw new Error("ai_content_render_manifest_invalid"); }
-    if (!evidenceId || parsedHref.protocol !== "https:" || href !== evidenceUrls.get(evidenceId)) {
+    if (
+      !evidenceId
+      || (parsedHref.protocol !== "http:" && parsedHref.protocol !== "https:")
+      || href !== evidenceUrls.get(evidenceId)
+    ) {
       throw new Error("ai_content_render_manifest_invalid");
     }
   }
@@ -588,7 +715,12 @@ export function createAiContentRenderJobsRepository(
           return null;
         }
         const row = claimed.rows[0] as Record<string, unknown>;
-        const payload = row.job_kind === "package_finalize" ? await finalizerPayload(client, row) : record(row.payload_json);
+        const storedPayload = record(row.payload_json);
+        const payload = row.job_kind === "package_finalize"
+          ? await finalizerPayload(client, row)
+          : storedPayload.contractVersion === "ai-content-render-job.v2"
+            ? await manualImageAssetPayloadV2(client, row)
+            : storedPayload;
         await client.query("COMMIT");
         return renderJob(row, payload);
       } catch (error) {

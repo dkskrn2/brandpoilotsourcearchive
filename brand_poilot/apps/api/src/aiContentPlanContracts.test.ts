@@ -6,7 +6,7 @@ import type {
   FrozenStyleImageV2,
   ImageGenerationPackageV1,
 } from "./aiContentContracts.js";
-import { parseContentPlanResultV2 } from "./aiContentPlanContracts.js";
+import { assembleContentPlanResultV2, parseContentPlanResultV2 } from "./aiContentPlanContracts.js";
 
 const id = (tail: number) => `00000000-0000-4000-8000-${String(tail).padStart(12, "0")}`;
 const now = "2026-07-31T00:00:00.000Z";
@@ -108,6 +108,312 @@ function frozenVisualInputs(): {
   };
   return { reference, style, attachment };
 }
+
+function creativeAssets(
+  outputFormat: "card_news" | "blog" | "reel",
+  count: number,
+  options: { evidenceIds?: string[]; productImageAssetIds?: string[] } = {},
+) {
+  const input = finalInput(outputFormat);
+  return Array.from({ length: count }, (_, index) => ({
+    index: index + 1,
+    role: outputFormat === "blog"
+      ? `illustration-${index + 1}`
+      : input.selectedProposal.outline[index]!.role,
+    copy: `Copy ${index + 1}`,
+    visualDirection: `Visual ${index + 1}`,
+    evidenceIds: options.evidenceIds ?? [id(3)],
+    productImageAssetIds: options.productImageAssetIds ?? [],
+  }));
+}
+
+function socialDraft(outputFormat: "card_news" | "reel", assets = creativeAssets(outputFormat, 2)) {
+  return {
+    contractVersion: outputFormat === "card_news" ? "card-news-plan-draft.v1" : "reel-plan-draft.v1",
+    content: { caption: "Caption", hashtags: ["#tea"], cta: "Read" },
+    assets,
+  };
+}
+
+function marketingInput(outputFormat: "card_news" | "blog" | "reel" = "card_news"): ContentGenerationInputV3 {
+  const input = finalInput(outputFormat);
+  const productImage = {
+    assetId: id(20), role: "hero" as const,
+    storageUrl: "https://blob.example/product.png", storagePath: "products/product.png",
+    mimeType: "image/png", checksum: sha("9"),
+  };
+  const product = {
+    id: id(21), versionId: id(22), kind: "product" as const, name: "Tea set",
+    description: "A complete tea set", features: ["Simple"], benefits: ["Convenient"],
+    cautions: ["Handle carefully"], evergreenPurchaseInfo: "Available online", images: [productImage],
+  };
+  return {
+    ...input,
+    product,
+    selectedProposal: {
+      ...input.selectedProposal,
+      informationalType: null,
+      purposeDetails: {
+        kind: "marketing", campaignObjective: "Awareness", situationAndNeed: "Make tea easily",
+        productId: product.id, targetSegment: "Adults", strengths: ["Simple"], limitations: ["Fragile"],
+        appeal: "Make tea simply", buyingBarriers: ["Learning curve"], cta: "Explore",
+      },
+    },
+    outputSettings: { ...input.outputSettings, purpose: "marketing" },
+  };
+}
+
+describe("content plan v2 API assembler", () => {
+  it("copies every immutable field from the frozen input and never lets the draft select attachments", () => {
+    const input = marketingInput();
+    const { reference, style, attachment } = frozenVisualInputs();
+    input.references = {
+      selected: [reference], brandStyleImages: [style], avatarStyleImageId: style.referenceItemId,
+      attachments: [attachment],
+    };
+    input.userImageInstruction = "Use a warm editorial mood";
+    const draft = socialDraft("card_news", creativeAssets("card_news", 2, {
+      evidenceIds: [id(3)], productImageAssetIds: [input.product!.images[0]!.assetId],
+    }));
+
+    const plan = assembleContentPlanResultV2(draft, input);
+
+    expect(plan).toMatchObject({ contractVersion: "card-news-plan.v2", content: draft.content });
+    expect(plan.imagePackage).toMatchObject({
+      contractVersion: "image-generation-package.v1",
+      generationId: input.generationId,
+      outputFormat: input.outputSettings.outputFormat,
+      purpose: input.outputSettings.purpose,
+      assetCount: 2,
+      aspectRatio: input.outputSettings.aspectRatio,
+      channelTargets: input.outputSettings.channelTargets,
+      product: input.product,
+      references: input.references.selected,
+      brandStyleImages: input.references.brandStyleImages,
+      avatarStyleImageId: input.references.avatarStyleImageId,
+      attachments: input.references.attachments,
+      userImageInstruction: input.userImageInstruction,
+      logoPolicy: {
+        allowGeneratedLogo: false,
+        allowReservedLogoArea: false,
+        allowExternalReferenceLogo: false,
+        allowExistingProductPackagingLogo: true,
+      },
+    });
+    expect(plan.imagePackage?.assets.every((asset) => asset.attachmentIds.length === 0)).toBe(true);
+  });
+
+  it.each(["card_news", "reel"] as const)(
+    "locks %s draft count, order, indexes, and roles to the selected outline",
+    (outputFormat) => {
+      const input = finalInput(outputFormat);
+      expect(assembleContentPlanResultV2(socialDraft(outputFormat), input).imagePackage?.assetCount).toBe(2);
+
+      const valid = creativeAssets(outputFormat, 2);
+      for (const assets of [
+        valid.slice(0, 1),
+        [{ ...valid[0]!, index: 2 }, valid[1]!],
+        [valid[1]!, valid[0]!],
+        [{ ...valid[0]!, role: "wrong-role" }, valid[1]!],
+      ]) {
+        expect(() => assembleContentPlanResultV2(socialDraft(outputFormat, assets), input))
+          .toThrow("ai_content_plan_invalid");
+      }
+    },
+  );
+
+  it.each([0, 1, 5])("assembles a blog draft with %i images and validates exact placeholders", (count) => {
+    const input = finalInput("blog");
+    const assetSources = Array.from({ length: count }, (_, index) => `asset://${String(index + 1).padStart(2, "0")}`);
+    const draft = {
+      contractVersion: "blog-plan-draft.v1",
+      content: {
+        title: "Tea", htmlTemplate: validBlogHtml({ assetSources }), metaTitle: "Tea",
+        metaDescription: "Guide", usedEvidenceIds: [id(3)],
+      },
+      imageDraft: count === 0 ? null : { aspectRatio: "4:5", assets: creativeAssets("blog", count) },
+    };
+
+    const plan = assembleContentPlanResultV2(draft, input);
+    expect(plan.contractVersion).toBe("blog-plan.v2");
+    expect(plan.imagePackage?.assetCount ?? 0).toBe(count);
+    expect(plan.imagePackage?.assets.map((asset) => asset.index) ?? []).toEqual(
+      Array.from({ length: count }, (_, index) => index + 1),
+    );
+
+    if (count > 0) {
+      const invalid = {
+        ...draft,
+        content: { ...draft.content, htmlTemplate: validBlogHtml({ assetSources: assetSources.slice(0, -1) }) },
+      };
+      expect(() => assembleContentPlanResultV2(invalid, input)).toThrow("ai_content_plan_invalid");
+      expect(() => assembleContentPlanResultV2({
+        ...draft,
+        imageDraft: {
+          ...draft.imageDraft!,
+          assets: draft.imageDraft!.assets.map((asset) => ({ ...asset, index: 2 })),
+        },
+      }, input)).toThrow("ai_content_plan_invalid");
+    }
+  });
+
+  it("accepts only duplicate-free frozen evidence and product image subsets", () => {
+    const informational = finalInput();
+    for (const evidenceIds of [[id(3), id(3)], [id(99)]]) {
+      expect(() => assembleContentPlanResultV2(
+        socialDraft("card_news", creativeAssets("card_news", 2, { evidenceIds })),
+        informational,
+      )).toThrow("ai_content_plan_invalid");
+    }
+
+    const marketing = marketingInput();
+    const allowed = marketing.product!.images[0]!.assetId;
+    expect(() => assembleContentPlanResultV2(
+      socialDraft("card_news", creativeAssets("card_news", 2, { productImageAssetIds: [allowed] })),
+      marketing,
+    )).not.toThrow();
+    for (const productImageAssetIds of [[allowed, allowed], [id(99)]]) {
+      expect(() => assembleContentPlanResultV2(
+        socialDraft("card_news", creativeAssets("card_news", 2, { productImageAssetIds })),
+        marketing,
+      )).toThrow("ai_content_plan_invalid");
+    }
+  });
+
+  it("rejects a frozen input that violates the informational or marketing product invariant", () => {
+    const informationalWithProduct = {
+      ...finalInput(), product: marketingInput().product,
+    } as ContentGenerationInputV3;
+    const marketingWithoutProduct = {
+      ...marketingInput(), product: null,
+    } as ContentGenerationInputV3;
+    const informationalWithMarketingDetails = {
+      ...finalInput(),
+      selectedProposal: {
+        ...finalInput().selectedProposal,
+        purposeDetails: marketingInput().selectedProposal.purposeDetails,
+      },
+    } as ContentGenerationInputV3;
+    const marketingWithWrongProductBinding = {
+      ...marketingInput(),
+      selectedProposal: {
+        ...marketingInput().selectedProposal,
+        purposeDetails: {
+          ...marketingInput().selectedProposal.purposeDetails as Extract<ContentGenerationInputV3["selectedProposal"]["purposeDetails"], { kind: "marketing" }>,
+          productId: id(99),
+        },
+      },
+    } as ContentGenerationInputV3;
+    expect(() => assembleContentPlanResultV2(socialDraft("card_news"), informationalWithProduct))
+      .toThrow("ai_content_plan_invalid");
+    expect(() => assembleContentPlanResultV2(socialDraft("card_news"), marketingWithoutProduct))
+      .toThrow("ai_content_plan_invalid");
+    expect(() => assembleContentPlanResultV2(socialDraft("card_news"), informationalWithMarketingDetails))
+      .toThrow("ai_content_plan_invalid");
+    expect(() => assembleContentPlanResultV2(socialDraft("card_news"), marketingWithWrongProductBinding))
+      .toThrow("ai_content_plan_invalid");
+  });
+
+  it("allows supplemental blog evidence only when the HTML and image draft both declare it", () => {
+    const input = finalInput("blog");
+    const draft = {
+      contractVersion: "blog-plan-draft.v1",
+      content: {
+        title: "Tea",
+        htmlTemplate: validBlogHtml({
+          assetSources: ["asset://01"],
+          evidence: [
+            { id: id(3), url: "https://source.example/study" },
+            { id: id(7), url: "https://source.example/supplement" },
+          ],
+        }),
+        metaTitle: "Tea", metaDescription: "Guide", usedEvidenceIds: [id(3), id(7)],
+      },
+      imageDraft: {
+        aspectRatio: "4:5",
+        assets: creativeAssets("blog", 1, { evidenceIds: [id(7)] }),
+      },
+    };
+    expect(assembleContentPlanResultV2(draft, input, supplementalResearch).imagePackage?.assets[0]?.evidenceIds)
+      .toEqual([id(7)]);
+    expect(() => assembleContentPlanResultV2(draft, input)).toThrow("ai_content_plan_invalid");
+  });
+
+  it.each(["fixed", "supplemental"] as const)(
+    "accepts exact HTTP %s evidence through draft assembly and canonical completion",
+    (evidenceSource) => {
+      const input = finalInput("blog");
+      const httpUrl = evidenceSource === "fixed"
+        ? "http://source.example/study"
+        : "http://source.example/supplement";
+      const evidenceId = evidenceSource === "fixed" ? id(3) : id(7);
+      if (evidenceSource === "fixed") input.researchEvidence.items[0]!.url = httpUrl;
+      const supplemental = evidenceSource === "supplemental"
+        ? {
+            ...supplementalResearch,
+            items: supplementalResearch.items.map((item) => ({ ...item, url: httpUrl })),
+          }
+        : undefined;
+      const draft = {
+        contractVersion: "blog-plan-draft.v1",
+        content: {
+          title: "Tea",
+          htmlTemplate: validBlogHtml({ evidence: [{ id: evidenceId, url: httpUrl }] }),
+          metaTitle: "Tea",
+          metaDescription: "Guide",
+          usedEvidenceIds: [evidenceId],
+        },
+        imageDraft: null,
+      };
+
+      const assembled = assembleContentPlanResultV2(draft, input, supplemental);
+
+      expect(assembled.contractVersion).toBe("blog-plan.v2");
+      expect(parseContentPlanResultV2(assembled, input, supplemental)).toEqual(assembled);
+    },
+  );
+
+  it("accepts unused frozen HTTP evidence when a blog declares no used evidence", () => {
+    const input = finalInput("blog");
+    input.researchEvidence.items[0]!.url = "http://source.example/study";
+    const draft = {
+      contractVersion: "blog-plan-draft.v1",
+      content: {
+        title: "Tea",
+        htmlTemplate: validBlogHtml({ evidence: [] }),
+        metaTitle: "Tea",
+        metaDescription: "Guide",
+        usedEvidenceIds: [],
+      },
+      imageDraft: null,
+    };
+
+    expect(assembleContentPlanResultV2(draft, input).contractVersion).toBe("blog-plan.v2");
+  });
+
+  it.each([
+    ["javascript", "javascript:alert(1)"],
+    ["data", "data:text/html,unsafe"],
+    ["file", "file:///tmp/source"],
+    ["relative", "/source"],
+  ])("rejects an unsupported %s frozen evidence URL", (_name, url) => {
+    const input = finalInput("blog");
+    input.researchEvidence.items[0]!.url = url;
+    const draft = {
+      contractVersion: "blog-plan-draft.v1",
+      content: {
+        title: "Tea",
+        htmlTemplate: validBlogHtml({ evidence: [{ id: id(3), url }] }),
+        metaTitle: "Tea",
+        metaDescription: "Guide",
+        usedEvidenceIds: [id(3)],
+      },
+      imageDraft: null,
+    };
+
+    expect(() => assembleContentPlanResultV2(draft, input)).toThrow("ai_content_plan_invalid");
+  });
+});
 
 describe("content plan v2 contracts", () => {
   it("accepts only reel-plan.v2 for reel generation and rejects the retired marketing plan", () => {
@@ -317,7 +623,7 @@ describe("content plan v2 contracts", () => {
     expect(() => parseContentPlanResultV2(plan, input)).toThrow("ai_content_plan_invalid");
   });
 
-  it("requires frozen HTTPS evidence in body and exactly one matching references section", () => {
+  it("requires the exact frozen evidence URL in the body and exactly one matching references section", () => {
     const input = finalInput("blog"); const valid = validBlogHtml();
     const plan = { contractVersion: "blog-plan.v2", imagePackage: null, content: { title: "Tea", htmlTemplate: valid, metaTitle: "Tea", metaDescription: "Guide", usedEvidenceIds: [id(3)] } };
     const bodyLink = `<a href="https://source.example/study" data-evidence-id="${id(3)}">근거</a>`;

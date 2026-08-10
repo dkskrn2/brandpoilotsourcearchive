@@ -12,6 +12,12 @@ import {
   type ImageGenerationPackageV1,
   type ReelPlanV2,
 } from "@brand-pilot/content-contracts";
+import {
+  parseBlogPlanDraftV1,
+  parseCardNewsPlanDraftV1,
+  parseReelPlanDraftV1,
+  type CreativeAssetDraftV1,
+} from "@brand-pilot/content-contracts/planner-drafts";
 import { parseResearchEvidenceSnapshotV1 } from "./aiContentGenerationInputV3.js";
 
 export const BLOG_PASSIVE_HTML_FORBIDDEN_TAGS = [
@@ -22,6 +28,13 @@ export const BLOG_PASSIVE_HTML_FORBIDDEN_ATTRIBUTES = new Set([
 ]);
 
 export type ContentPlanResultV2 = CardNewsPlanV2 | BlogPlanV2 | ReelPlanV2;
+
+const FIXED_LOGO_POLICY = {
+  allowGeneratedLogo: false,
+  allowReservedLogoArea: false,
+  allowExternalReferenceLogo: false,
+  allowExistingProductPackagingLogo: true,
+} as const;
 
 function object(value: unknown, keys: readonly string[]): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error();
@@ -47,6 +60,135 @@ function hashtags(value: unknown): string[] {
 function socialContent(value: unknown) {
   const source = object(value, ["caption", "hashtags", "cta"]);
   return { caption: text(source.caption, 20_000), hashtags: hashtags(source.hashtags), cta: text(source.cta, 2_000) };
+}
+
+function assertPurposeProductInvariant(input: ContentGenerationInputV3): void {
+  if (input.outputSettings.purpose === "informational") {
+    if (input.product !== null || input.selectedProposal.purposeDetails.kind !== "informational") throw new Error();
+    return;
+  }
+  if (
+    input.product === null
+    || input.selectedProposal.purposeDetails.kind !== "marketing"
+    || input.selectedProposal.purposeDetails.productId !== input.product.id
+  ) throw new Error();
+}
+
+function assertDuplicateFreeSubset(values: readonly string[], allowed: ReadonlySet<string>): void {
+  if (new Set(values).size !== values.length || values.some((value) => !allowed.has(value))) throw new Error();
+}
+
+function assembleAssets(
+  drafts: readonly CreativeAssetDraftV1[],
+  input: ContentGenerationInputV3,
+  allowedEvidenceIds: ReadonlySet<string>,
+  lockOutline: boolean,
+) {
+  const allowedProductImageIds = new Set(input.product?.images.map((image) => image.assetId) ?? []);
+  if (lockOutline) {
+    if (
+      input.selectedProposal.assetCount === null
+      || drafts.length !== input.selectedProposal.assetCount
+      || input.selectedProposal.outline.length !== input.selectedProposal.assetCount
+    ) throw new Error();
+  }
+  return drafts.map((asset, offset) => {
+    if (lockOutline) {
+      const outline = input.selectedProposal.outline[offset];
+      if (!outline || outline.index !== offset + 1 || asset.index !== outline.index || asset.role !== outline.role) {
+        throw new Error();
+      }
+    } else if (asset.index !== offset + 1) {
+      throw new Error();
+    }
+    assertDuplicateFreeSubset(asset.evidenceIds, allowedEvidenceIds);
+    assertDuplicateFreeSubset(asset.productImageAssetIds, allowedProductImageIds);
+    return { ...asset, attachmentIds: [] };
+  });
+}
+
+function fixedImagePackage(
+  input: ContentGenerationInputV3,
+  assets: ReturnType<typeof assembleAssets>,
+  aspectRatio: ImageGenerationPackageV1["aspectRatio"],
+): ImageGenerationPackageV1 {
+  return {
+    contractVersion: "image-generation-package.v1",
+    generationId: input.generationId,
+    outputFormat: input.outputSettings.outputFormat,
+    purpose: input.outputSettings.purpose,
+    assetCount: assets.length,
+    aspectRatio,
+    channelTargets: input.outputSettings.channelTargets,
+    assets,
+    product: input.product,
+    references: input.references.selected,
+    brandStyleImages: input.references.brandStyleImages,
+    avatarStyleImageId: input.references.avatarStyleImageId,
+    attachments: input.references.attachments,
+    userImageInstruction: input.userImageInstruction,
+    logoPolicy: FIXED_LOGO_POLICY,
+  };
+}
+
+export function assembleContentPlanResultV2(
+  draft: unknown,
+  rawInput: unknown,
+  supplementalResearch?: unknown,
+): ContentPlanResultV2 {
+  try {
+    const input = parseContentGenerationInputV3(rawInput);
+    assertPurposeProductInvariant(input);
+    const frozenEvidenceIds = new Set(input.researchEvidence.items.map((item) => item.id));
+
+    if (input.outputSettings.outputFormat === "card_news") {
+      const parsedDraft = parseCardNewsPlanDraftV1(draft);
+      if (input.outputSettings.aspectRatio === null) throw new Error();
+      const assets = assembleAssets(parsedDraft.assets, input, frozenEvidenceIds, true);
+      return parseContentPlanResultV2({
+        contractVersion: "card-news-plan.v2",
+        content: parsedDraft.content,
+        imagePackage: fixedImagePackage(input, assets, input.outputSettings.aspectRatio),
+      }, input, supplementalResearch);
+    }
+
+    if (input.outputSettings.outputFormat === "reel") {
+      const parsedDraft = parseReelPlanDraftV1(draft);
+      if (input.outputSettings.aspectRatio === null) throw new Error();
+      const assets = assembleAssets(parsedDraft.assets, input, frozenEvidenceIds, true);
+      return parseContentPlanResultV2({
+        contractVersion: "reel-plan.v2",
+        outputFormat: "reel",
+        content: parsedDraft.content,
+        imagePackage: fixedImagePackage(input, assets, input.outputSettings.aspectRatio),
+      }, input, supplementalResearch);
+    }
+
+    const parsedDraft = parseBlogPlanDraftV1(draft);
+    const supplemental = supplementalResearch === undefined || supplementalResearch === null
+      ? null
+      : parseResearchEvidenceSnapshotV1(supplementalResearch);
+    const allEvidenceIds = new Set([
+      ...frozenEvidenceIds,
+      ...(supplemental?.items.map((item) => item.id) ?? []),
+    ]);
+    assertDuplicateFreeSubset(parsedDraft.content.usedEvidenceIds, allEvidenceIds);
+    const usedEvidenceIds = new Set(parsedDraft.content.usedEvidenceIds);
+    const imagePackage = parsedDraft.imageDraft === null
+      ? null
+      : fixedImagePackage(
+        input,
+        assembleAssets(parsedDraft.imageDraft.assets, input, usedEvidenceIds, false),
+        parsedDraft.imageDraft.aspectRatio,
+      );
+    return parseContentPlanResultV2({
+      contractVersion: "blog-plan.v2",
+      content: parsedDraft.content,
+      imagePackage,
+    }, input, supplementalResearch);
+  } catch {
+    throw new Error("ai_content_plan_invalid");
+  }
 }
 
 function validatePackage(
@@ -137,7 +279,7 @@ function validateBlogHtml(
   for (const item of evidenceItems) {
     let url: URL;
     try { url = new URL(item.url); } catch { throw new Error(); }
-    if (url.protocol !== "https:") throw new Error();
+    if (url.protocol !== "http:" && url.protocol !== "https:") throw new Error();
     const existing = evidenceUrls.get(item.id);
     if (existing !== undefined && existing !== item.url) throw new Error();
     evidenceUrls.set(item.id, item.url);
@@ -151,7 +293,10 @@ function validateBlogHtml(
     const evidenceId = $(link).attr("data-evidence-id");
     const href = $(link).attr("href");
     if (!evidenceId || !href || evidenceUrls.get(evidenceId) !== href) throw new Error();
-    try { if (new URL(href).protocol !== "https:") throw new Error(); } catch { throw new Error(); }
+    try {
+      const protocol = new URL(href).protocol;
+      if (protocol !== "http:" && protocol !== "https:") throw new Error();
+    } catch { throw new Error(); }
   }
   const expectedIds = new Set(usedEvidenceIds);
   if (expectedIds.size !== usedEvidenceIds.length || [...expectedIds].some((id) => !evidenceUrls.has(id))) throw new Error();

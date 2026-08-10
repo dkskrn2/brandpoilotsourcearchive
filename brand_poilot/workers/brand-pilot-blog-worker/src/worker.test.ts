@@ -2,6 +2,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { contentWorkerApiError } from "@brand-pilot/worker-runtime";
 import type { BlogClient, BlogJob } from "./contracts.js";
 import { runOnce } from "./worker.js";
 
@@ -32,7 +33,7 @@ async function output(plan: Record<string, unknown>) {
 }
 
 function plan(htmlTemplate = html()) {
-  return { contractVersion: "blog-plan.v2", content: { title: "좋은 글 구조", htmlTemplate, metaTitle: "좋은 글 구조 가이드", metaDescription: "좋은 글 구조를 구체적으로 설명합니다.", usedEvidenceIds: [uid(5)] }, imagePackage: null };
+  return { contractVersion: "blog-plan-draft.v1", content: { title: "좋은 글 구조", htmlTemplate, metaTitle: "좋은 글 구조 가이드", metaDescription: "좋은 글 구조를 구체적으로 설명합니다.", usedEvidenceIds: [uid(5)] }, imageDraft: null };
 }
 
 function v3Job(extraPayload: Record<string, unknown> = {}): BlogJob {
@@ -77,7 +78,11 @@ describe("blog worker attachment preflight", () => {
     expect(result).toMatchObject({ status: "completed" });
     expect(research.search).not.toHaveBeenCalled();
     expect(client.completeResearch).not.toHaveBeenCalled();
-    expect(client.complete).toHaveBeenCalledWith(job.id, expect.objectContaining({ jobType: "generate", plan: expect.objectContaining({ contractVersion: "blog-plan.v2", imagePackage: null }) }));
+    expect(client.complete).toHaveBeenCalledWith(job.id, expect.objectContaining({
+      jobType: "generate",
+      planDraft: expect.objectContaining({ contractVersion: "blog-plan-draft.v1", imageDraft: null }),
+    }));
+    expect(client.complete.mock.calls[0]?.[1]).not.toHaveProperty("plan");
   });
 
   it("freezes one controlled supplement before the network-disabled writer runs", async () => {
@@ -116,5 +121,30 @@ describe("blog worker attachment preflight", () => {
     expect(runner.run).toHaveBeenCalledTimes(2);
     expect(client.complete).not.toHaveBeenCalled();
     expect(client.fail).toHaveBeenCalledWith(job.id, expect.objectContaining({ errorCode: expect.stringMatching(/^blog_(?:html|plan)_/) }));
+  });
+
+  it("cancels a conflicting completion without re-planning or publishing failure", async () => {
+    const job = v3Job();
+    const client = clientFor(job);
+    const conflict = await contentWorkerApiError(new Response(
+      JSON.stringify({ error: "ai_content_job_lease_invalid" }),
+      { status: 409, headers: { "content-type": "application/json" } },
+    ));
+    client.complete = vi.fn(async () => {
+      throw conflict;
+    });
+    const runner = { run: vi.fn(async () => output(plan())) };
+
+    const result = await runOnce({
+      workerId: "worker",
+      client,
+      runner,
+      research: { assess: vi.fn(async () => ({ decision: "not_needed" as const, reason: "enough" })), search: vi.fn() },
+    });
+
+    expect(result).toEqual({ status: "lease_lost", jobId: job.id });
+    expect(runner.run).toHaveBeenCalledOnce();
+    expect(client.complete).toHaveBeenCalledOnce();
+    expect(client.fail).not.toHaveBeenCalled();
   });
 });

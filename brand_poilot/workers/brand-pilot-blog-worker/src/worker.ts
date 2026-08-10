@@ -2,13 +2,15 @@ import { access, copyFile, mkdtemp, mkdir, readFile, readdir, rm, writeFile } fr
 import os from "node:os";
 import path from "node:path";
 import {
+  ContentWorkerApiError,
   isRetryableContentWorkerError,
+  replayContentWorkerCompletion,
   runShellCommandWithAccountFailover,
   runShellCommandWithTimeout,
   startJobLeaseGuard,
   type CodexAccountPool,
 } from "@brand-pilot/worker-runtime";
-import { parseBlogInput, parseBlogPlanV2, parseBlogResearchEvidence, type BlogClient, type BlogJob } from "./contracts.js";
+import { parseBlogInput, parseBlogPlanDraftV1, parseBlogResearchEvidence, type BlogClient, type BlogJob } from "./contracts.js";
 import { blogPlanSkillVersion, buildBlogPlanPrompt } from "./promptBuilder.js";
 import { createBlogResearch, type BlogResearch } from "./research.js";
 import { withResource } from "./resourceLease.js";
@@ -135,23 +137,28 @@ export async function runOnce({ workerId, client, runner, research, shutdownSign
         }
       }
       let repairErrors: string[] | undefined;
-      let plan: ReturnType<typeof parseBlogPlanV2> | undefined;
+      let planDraft: ReturnType<typeof parseBlogPlanDraftV1> | undefined;
       for (let attempt = 0; attempt < 2; attempt += 1) {
         const current = await runner.run(job, buildBlogPlanPrompt(job, parsedInput, supplementalResearch, repairErrors), lease.signal);
         planned.push(current);
         try {
           const rawPlan = JSON.parse(await readFile(path.join(current.outputDir, "blog-plan.json"), "utf8"));
-          plan = parseBlogPlanV2(rawPlan, parsedInput, supplementalResearch);
+          planDraft = parseBlogPlanDraftV1(rawPlan, parsedInput, supplementalResearch);
           break;
         } catch (error) {
           if (attempt === 1) throw error;
           repairErrors = [error instanceof Error ? error.message : String(error)];
         }
       }
-      if (!plan) throw new Error("blog_plan_invalid");
-      const state = await lease.state();
-      if (state !== "active") return cancellation(state);
-      await client.complete(job.id, { workerId, leaseToken: job.leaseToken, skillVersion: blogPlanSkillVersion, jobType: "generate", plan });
+      if (!planDraft) throw new Error("blog_plan_draft_invalid");
+      const completionBody = { workerId, leaseToken: job.leaseToken, skillVersion: blogPlanSkillVersion, jobType: "generate", planDraft };
+      const completion = await replayContentWorkerCompletion({
+        body: completionBody,
+        complete: (body) => client.complete(job.id, body),
+        leaseState: () => lease.state(),
+      });
+      if (completion === "conflict") return cancellation("lease_lost");
+      if (completion !== "completed") return cancellation(completion);
       return { status: "completed" as const, jobId: job.id };
     } catch (error) {
       const state = await lease.state();
@@ -159,7 +166,7 @@ export async function runOnce({ workerId, client, runner, research, shutdownSign
       await client.fail(job.id, {
         workerId,
         leaseToken: job.leaseToken,
-        errorCode: error instanceof Error ? error.message.split(":")[0] : "blog_worker_failed",
+        errorCode: error instanceof ContentWorkerApiError && error.errorCode ? error.errorCode : error instanceof Error ? error.message.split(":")[0] : "blog_worker_failed",
         errorMessage: error instanceof Error ? error.message : String(error),
         retryable: isRetryableContentWorkerError(error),
       });

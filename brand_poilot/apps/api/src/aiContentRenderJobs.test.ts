@@ -1,13 +1,101 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   createAiContentRenderJobsRepository,
+  enqueueAiContentRenderJobs,
   expectedAiContentAssetDimensions,
   expectedAiContentAssetStoragePath,
   parseRenderManifestUrl,
   parseRenderAssetResult,
+  resolveManualRenderTransport,
 } from "./aiContentRenderJobs.js";
 
 describe("ai-content render job boundary helpers", () => {
+  it.each([
+    ["manual", "manual-v2"],
+    ["scheduled_crawl", "v1"],
+  ] as const)("selects %s proposal lineage without consulting generation draft metadata", async (origin, expected) => {
+    const query = vi.fn(async (sql: string, params: unknown[]) => {
+      expect(sql).toContain("from ai_content_generation_prompt_bindings binding");
+      expect(sql).toContain("join ai_content_proposals proposal");
+      expect(sql).toContain("join ai_content_proposal_batches batch");
+      expect(sql).not.toContain("draft_json");
+      expect(params).toEqual(["generation", "workspace", "brand", "proposal"]);
+      return { rows: [{ selected_proposal_id: "proposal", origin }], rowCount: 1 };
+    });
+
+    await expect(resolveManualRenderTransport({ query } as never, {
+      generationId: "generation",
+      workspaceId: "workspace",
+      brandId: "brand",
+      selectedProposalId: "proposal",
+    })).resolves.toBe(expected);
+  });
+
+  it("falls back to v1 when manual proposal lineage cannot be proven", async () => {
+    const query = vi.fn(async () => ({ rows: [], rowCount: 0 }));
+
+    await expect(resolveManualRenderTransport({ query } as never, {
+      generationId: "generation",
+      workspaceId: "workspace",
+      brandId: "brand",
+      selectedProposalId: "proposal",
+    })).resolves.toBe("v1");
+  });
+
+  it("stores only a private v2 marker at enqueue time for proven manual image assets", async () => {
+    const writes: unknown[][] = [];
+    const query = vi.fn(async (_sql: string, params: unknown[]) => {
+      writes.push(params);
+      return { rows: [], rowCount: 1 };
+    });
+    const imagePackage = {
+      contractVersion: "image-generation-package.v1" as const,
+      generationId: "generation",
+      outputFormat: "reel" as const,
+      purpose: "informational" as const,
+      assetCount: 1,
+      aspectRatio: "9:16" as const,
+      channelTargets: ["instagram"] as ["instagram"],
+      assets: [{
+        index: 1, role: "scene", copy: "Copy", visualDirection: "Visual",
+        evidenceIds: [], productImageAssetIds: [], attachmentIds: [],
+      }],
+      product: null, references: [], brandStyleImages: [], avatarStyleImageId: null,
+      attachments: [], userImageInstruction: null,
+      logoPolicy: {
+        allowGeneratedLogo: false as const,
+        allowReservedLogoArea: false as const,
+        allowExternalReferenceLogo: false as const,
+        allowExistingProductPackagingLogo: true as const,
+      },
+    };
+
+    await enqueueAiContentRenderJobs({ query } as never, {
+      workspaceId: "workspace", brandId: "brand", generationId: "generation", outputId: "output",
+      plan: {
+        contractVersion: "reel-plan.v2", outputFormat: "reel",
+        content: { caption: "Caption", hashtags: [], cta: "Save" }, imagePackage,
+      },
+      finalInput: { contractVersion: "content-generation-input.v3" } as never,
+      imageAssetTransport: "manual-v2",
+    });
+
+    const payload = JSON.parse(String(writes[0]?.[5]));
+    expect(payload).toEqual({
+      contractVersion: "ai-content-render-job.v2",
+      jobKind: "image_asset",
+      generationId: "generation",
+      outputId: "output",
+      imagePackage,
+      assetIndex: 1,
+      assetKey: "generation:1",
+      storagePath: "ai-content/brand/generation/output/assets/01.png",
+      rendererPromptVersion: "image-final-pixels.v2",
+    });
+    expect(payload).not.toHaveProperty("contentGenerationInput");
+    expect(payload).not.toHaveProperty("contentPlan");
+  });
+
   it("derives one deterministic path and exact dimensions from the frozen identity", () => {
     expect(expectedAiContentAssetStoragePath({ brandId: "brand", generationId: "generation", outputId: "output", assetIndex: 2 }))
       .toBe("ai-content/brand/generation/output/assets/02.png");

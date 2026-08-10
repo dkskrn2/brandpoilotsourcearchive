@@ -59,7 +59,10 @@ function evidenceUrls(finalInput: ContentGenerationInputV3, supplemental: Record
     const item = record(raw);
     const id = text(item.id);
     const url = text(item.url);
-    try { if (new URL(url).protocol !== "https:") throw new Error(); } catch { throw new Error("ai_content_blog_html_invalid"); }
+    try {
+      const protocol = new URL(url).protocol;
+      if (protocol !== "http:" && protocol !== "https:") throw new Error();
+    } catch { throw new Error("ai_content_blog_html_invalid"); }
     const existing = map.get(id);
     if (existing !== undefined && existing !== url) throw new Error("ai_content_blog_html_invalid");
     map.set(id, url);

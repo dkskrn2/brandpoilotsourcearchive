@@ -87,6 +87,11 @@ describe("production image worker runtime", () => {
     expect(skillSource).toContain("16:9");
     expect(skillSource).toContain("9:16");
     expect(skillSource).toContain("콜라주");
+    expect(skillSource).toContain("ai-content-render-job.v2");
+    expect(skillSource).toMatch(/최종 픽셀/);
+    expect(skillSource).toMatch(/배경.*이미지만.*만들지/);
+    expect(skillSource).toMatch(/서버.*텍스트.*합성.*없/);
+    expect(skillSource).toContain("ai-content-asset-render.v2");
     expect(dockerfile).toContain("run-codex-ai-content-asset.mjs");
   });
 

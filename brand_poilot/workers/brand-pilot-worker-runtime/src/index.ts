@@ -275,11 +275,66 @@ function parseCommandLine(value: string): [command: string, args: string[]] {
   return [command, args];
 }
 
+export type ContentWorkerErrorClassification = "terminal" | "conflict" | "retryable";
+
+function classifyContentWorkerStatus(status: number): ContentWorkerErrorClassification {
+  if (status === 409) return "conflict";
+  if (status === 408 || status === 429 || status >= 500) return "retryable";
+  return "terminal";
+}
+
+export class ContentWorkerApiError extends Error {
+  readonly retryable: boolean;
+
+  constructor(
+    readonly status: number,
+    readonly errorCode: string | null,
+  ) {
+    super(`worker_api_failed:${status}${errorCode ? `:${errorCode}` : ""}`);
+    this.name = "ContentWorkerApiError";
+    this.retryable = classifyContentWorkerStatus(status) === "retryable";
+  }
+}
+
+export function classifyContentWorkerError(error: unknown): ContentWorkerErrorClassification {
+  if (error instanceof ContentWorkerApiError) return classifyContentWorkerStatus(error.status);
+  return isRetryableContentWorkerError(error) ? "retryable" : "terminal";
+}
+
 export function isRetryableContentWorkerError(error: unknown): boolean {
+  if (error instanceof ContentWorkerApiError) return error.retryable;
   if (error instanceof SyntaxError) return false;
   const code = error instanceof Error ? error.message.split(":")[0] : String(error);
   if (code === "ENOENT" || code.includes("output_id_required")) return false;
   return !/_(?:invalid|required|mismatch)$/.test(code);
+}
+
+export async function replayContentWorkerCompletion<T>(input: {
+  body: T;
+  complete(body: T): Promise<void>;
+  leaseState(): Promise<"active" | "lease_lost" | "cancelled">;
+}, dependencies: {
+  wait?(delayMs: number): Promise<void>;
+} = {}): Promise<"completed" | "conflict" | "lease_lost" | "cancelled"> {
+  const retryDelaysMs = [250, 750, 1_500] as const;
+  const wait = dependencies.wait ?? ((delayMs: number) => new Promise<void>((resolve) => {
+    setTimeout(resolve, delayMs);
+  }));
+
+  for (let attempt = 0; attempt <= retryDelaysMs.length; attempt += 1) {
+    if (attempt > 0) await wait(retryDelaysMs[attempt - 1]!);
+    const state = await input.leaseState();
+    if (state !== "active") return state;
+    try {
+      await input.complete(input.body);
+      return "completed";
+    } catch (error) {
+      const classification = classifyContentWorkerError(error);
+      if (classification === "conflict") return "conflict";
+      if (classification === "terminal" || attempt === retryDelaysMs.length) throw error;
+    }
+  }
+  throw new Error("content_worker_completion_unreachable");
 }
 
 export type ContentWorkerPollObservation = Readonly<{
@@ -294,19 +349,17 @@ export function contentWorkerPollDelayMs(value: unknown, fallbackMs: number): nu
   return Math.max(1_000, Number.isFinite(parsed) ? parsed : fallbackMs);
 }
 
-export async function contentWorkerApiError(response: Response): Promise<Error> {
-  let maintenance = false;
-  if (response.status === 503) {
-    try {
-      const body = await response.json() as { error?: unknown };
-      maintenance = body.error === "ai_content_maintenance";
-    } catch {
-      // Preserve a stable status-only error when the response has no JSON contract.
+export async function contentWorkerApiError(response: Response): Promise<ContentWorkerApiError> {
+  let errorCode: string | null = null;
+  try {
+    const body = await response.json() as { error?: unknown };
+    if (typeof body.error === "string" && /^[a-z][a-z0-9_]{0,119}$/.test(body.error)) {
+      errorCode = body.error;
     }
+  } catch {
+    // Preserve a stable status-only error when the response has no JSON contract.
   }
-  return new Error(
-    `worker_api_failed:${response.status}${maintenance ? ":ai_content_maintenance" : ""}`,
-  );
+  return new ContentWorkerApiError(response.status, errorCode);
 }
 
 export function contentWorkerPollObservation(error: unknown): ContentWorkerPollObservation {

@@ -1196,6 +1196,8 @@ export function createServer(
         || message === "ai_content_proposal_already_selected"
         || message === "ai_content_proposal_not_selectable"
         || message === "ai_content_proposal_not_dismissible"
+        || message === "ai_content_finalization_changed"
+        || message === "ai_content_job_lease_invalid"
         || message.endsWith("_conflict")
       ) {
         reply.code(409).send({ error: message });
@@ -4471,19 +4473,21 @@ export function createServer(
         leaseToken: requiredAiContentField(body.leaseToken, "ai_content_lease_token_required", 200),
         skillVersion: requiredAiContentField(body.skillVersion, "ai_content_skill_version_required", 100),
       };
+      const hasPlan = Object.prototype.hasOwnProperty.call(body, "plan");
+      const hasPlanDraft = Object.prototype.hasOwnProperty.call(body, "planDraft");
+      if (hasPlan === hasPlanDraft) throw new Error("ai_content_plan_completion_invalid");
       assertExactAiContentWorkerBody(
         body,
-        ["workerId", "leaseToken", "skillVersion", "jobType", "plan"],
+        ["workerId", "leaseToken", "skillVersion", "jobType", hasPlan ? "plan" : "planDraft"],
         "ai_content_plan_completion_invalid",
       );
-      if (body.jobType !== "generate" || !isObject(body.plan)) {
+      const submittedPlan = hasPlan ? body.plan : body.planDraft;
+      if (body.jobType !== "generate" || !isObject(submittedPlan)) {
         throw new Error("ai_content_plan_completion_invalid");
       }
-      const completion: CompleteAiContentJobInput = {
-        ...common,
-        jobType: "generate",
-        plan: body.plan as never,
-      };
+      const completion: CompleteAiContentJobInput = hasPlan
+        ? { ...common, jobType: "generate", plan: submittedPlan as never }
+        : { ...common, jobType: "generate", planDraft: submittedPlan as never };
       return repository.completeAiContentJob(completion);
     },
   );

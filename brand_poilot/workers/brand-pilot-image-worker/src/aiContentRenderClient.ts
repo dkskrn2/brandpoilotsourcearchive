@@ -1,4 +1,8 @@
 import { parseImageGenerationPackageV1, type ImageGenerationPackageV1 } from "@brand-pilot/content-contracts";
+import {
+  parseAiContentManualImageAssetPayloadV2,
+  type AiContentManualImageAssetPayloadV2,
+} from "./aiContentManualRenderContract.js";
 
 export interface AiContentRenderedAsset {
   index: number;
@@ -20,7 +24,7 @@ interface AiContentRenderJobBase {
   attemptCount: number;
 }
 
-export interface AiContentImageAssetJob extends AiContentRenderJobBase {
+export interface AiContentImageAssetJobV1 extends AiContentRenderJobBase {
   jobKind: "image_asset";
   assetIndex: number;
   payload: {
@@ -34,6 +38,14 @@ export interface AiContentImageAssetJob extends AiContentRenderJobBase {
     storagePath: string;
   };
 }
+
+export interface AiContentImageAssetJobV2 extends AiContentRenderJobBase {
+  jobKind: "image_asset";
+  assetIndex: number;
+  payload: AiContentManualImageAssetPayloadV2;
+}
+
+export type AiContentImageAssetJob = AiContentImageAssetJobV1 | AiContentImageAssetJobV2;
 
 export interface AiContentPackageFinalizeJob extends AiContentRenderJobBase {
   jobKind: "package_finalize";
@@ -102,6 +114,15 @@ function parseJob(value: unknown): AiContentRenderJob {
   };
   if (!Number.isSafeInteger(common.attemptCount) || common.attemptCount < 1) throw new Error("ai_content_render_job_invalid");
   if (source.jobKind === "image_asset") {
+    const rawPayload = record(source.payload);
+    if (rawPayload.contractVersion === "ai-content-render-job.v2") {
+      const assetIndex = Number(source.assetIndex);
+      if (!Number.isSafeInteger(assetIndex) || assetIndex < 1 || source.assetIndex !== assetIndex) {
+        throw new Error("ai_content_render_job_invalid");
+      }
+      const payload = parseAiContentManualImageAssetPayloadV2(rawPayload, { ...common, id: common.id, assetIndex });
+      return { ...common, jobKind: "image_asset", assetIndex, payload };
+    }
     const payload = exact(source.payload, ["contractVersion", "jobKind", "generationId", "outputId", "imagePackage", "assetIndex", "assetKey", "storagePath"]);
     const assetIndex = Number(source.assetIndex);
     const imagePackage = parseImageGenerationPackageV1(payload.imagePackage);

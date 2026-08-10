@@ -6,6 +6,7 @@ import { buildImageWorkerChildEnvironment, resolveGeneratedImagesDirectory } fro
 import { buildCodexExecArguments, resolveCodexInvocation } from "../dist/codexCommand.mjs";
 import { findGeneratedImages, parseCodexFinalMessage, parseCodexThreadId, resolveCodexGeneratedImagesDirectory } from "../dist/codexImageOutput.mjs";
 import { forwardParentTermination } from "../dist/processTermination.mjs";
+import { parseAiContentAssetRenderResult, parseAiContentAssetRunnerJob } from "../dist/aiContentAssetRunnerContract.js";
 
 function argument(name) {
   const index = process.argv.indexOf(name);
@@ -18,8 +19,7 @@ async function main() {
   const jobFile = argument("--job");
   const outputFile = path.resolve(argument("--output"));
   const workspaceDir = path.resolve(argument("--workspace"));
-  const job = JSON.parse(await readFile(jobFile, "utf8"));
-  if (job.selectedAssetCount !== 1 || typeof job.prompt !== "string" || !job.prompt.trim()) throw new Error("ai_content_asset_job_invalid");
+  const job = parseAiContentAssetRunnerJob(JSON.parse(await readFile(jobFile, "utf8")));
   await Promise.all([
     readFile(path.join(workspaceDir, "AGENTS.md"), "utf8"),
     readFile(path.join(workspaceDir, ".codex", "skills", "image-render", "SKILL.md"), "utf8"),
@@ -69,9 +69,9 @@ async function main() {
       termination = forwardParentTermination({ child });
       child.stdin.end(job.prompt, "utf8");
     });
-    let final;
-    try { final = JSON.parse(result.finalMessage); } catch { throw new Error("ai_content_asset_final_message_invalid"); }
-    if (final?.contractVersion !== "ai-content-asset-render.v1" || final?.selectedAssetCount !== 1 || Object.keys(final).length !== 2) {
+    try {
+      parseAiContentAssetRenderResult(JSON.parse(result.finalMessage), job);
+    } catch {
       throw new Error("ai_content_asset_final_message_invalid");
     }
     const generated = await findGeneratedImages({ directory: imagegenOutputDir, threadId: result.sessionId, maxImages: 1, selectedAssetCount: 1 });

@@ -193,7 +193,10 @@ describe("V3 generation start transaction", () => {
 
   it("returns an exact replay without writes and rejects a drifted binding", async () => {
     const replay = harness({ replay: true });
-    await replay.repository.startAiContentGenerationV3(replay.command as never, {} as never, () => new Date(NOW));
+    await replay.repository.startAiContentGenerationV3({
+      ...replay.command,
+      expectedFinalization: finalization,
+    } as never, {} as never, () => new Date(NOW));
     expect(replay.statements.map(({ sql }) => sql).filter((sql) => /^(?:insert|update|delete)\b/i.test(sql.trim()))).toEqual([]);
     expect(replay.statements.at(-1)?.sql).toBe("COMMIT");
 
@@ -201,6 +204,27 @@ describe("V3 generation start transaction", () => {
     await expect(corrupt.repository.startAiContentGenerationV3(corrupt.command as never, {} as never, () => new Date(NOW)))
       .rejects.toThrow("ai_content_generation_start_conflict");
     expect(corrupt.statements.at(-1)?.sql).toBe("ROLLBACK");
+  });
+
+  it("rejects a changed expected finalization under the generation row lock before writes", async () => {
+    const promptBinding = await binding();
+    assembler.assemble.mockReturnValue({ input: frozenInput, canonicalJson: JSON.stringify(frozenInput), contentHash: proposalSha256(frozenInput), binding: promptBinding, provenance: { selectedProposalId: id.proposal, proposalJobId: id.job, proposalContractId: id.contract, successfulModelAttemptId: id.attempt } });
+    const run = harness();
+
+    await expect(run.repository.startAiContentGenerationV3({
+      ...run.command,
+      expectedFinalization: {
+        ...finalization,
+        userImageInstruction: "changed in another tab",
+      },
+    } as never, {} as never, () => new Date(NOW)))
+      .rejects.toThrow("ai_content_finalization_changed");
+
+    expect(run.statements.find(({ sql }) => sql.includes("from ai_content_generations") && sql.includes("for update")))
+      .toBeDefined();
+    expect(run.statements.map(({ sql }) => sql).filter((sql) => /^(?:insert|update|delete)\b/i.test(sql.trim())))
+      .toEqual([]);
+    expect(run.statements.at(-1)?.sql).toBe("ROLLBACK");
   });
 
   it("rolls back every start write when binding persistence fails", async () => {

@@ -2,6 +2,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { ContentWorkerApiError } from "@brand-pilot/worker-runtime";
 import type { ReelClient, ReelJob } from "./contracts.js";
 import { runOnce } from "./worker.js";
 
@@ -29,28 +30,11 @@ function job(): ReelJob {
   return { id: "job-reel", generationId: uid(1), outputId: uid(6), workspaceId: "workspace", brandId: "brand", jobType: "generate", outputFormat: "reel", status: "processing", payload: { contentGenerationInput: reelInput() }, leaseToken: "lease" };
 }
 
-function reelPlan() {
+function reelDraft() {
   return {
-    contractVersion: "reel-plan.v2",
-    outputFormat: "reel",
+    contractVersion: "reel-plan-draft.v1",
     content: { caption: "Useful caption", hashtags: ["guide"], cta: "Save" },
-    imagePackage: {
-      contractVersion: "image-generation-package.v1",
-      generationId: uid(1),
-      outputFormat: "reel",
-      purpose: "informational",
-      assetCount: 1,
-      aspectRatio: "9:16",
-      channelTargets: ["instagram"],
-      assets: [{ index: 1, role: "scene", copy: "Explain the fixed evidence clearly.", visualDirection: "Vertical editorial scene.", evidenceIds: [uid(4)], productImageAssetIds: [], attachmentIds: [] }],
-      product: null,
-      references: [],
-      brandStyleImages: [],
-      avatarStyleImageId: null,
-      attachments: [],
-      userImageInstruction: null,
-      logoPolicy: { allowGeneratedLogo: false, allowReservedLogoArea: false, allowExternalReferenceLogo: false, allowExistingProductPackagingLogo: true },
-    },
+    assets: [{ index: 1, role: "scene", copy: "Explain the fixed evidence clearly.", visualDirection: "Vertical editorial scene.", evidenceIds: [uid(4)], productImageAssetIds: [] }],
   };
 }
 
@@ -72,7 +56,7 @@ describe("reel worker", () => {
     vi.useFakeTimers();
     const item = job();
     const client = { claim: vi.fn(async () => item), heartbeat: vi.fn(), complete: vi.fn(), fail: vi.fn() } as unknown as ReelClient;
-    const run = await output(reelPlan());
+    const run = await output(reelDraft());
     const planner = { run: vi.fn(async () => run) };
 
     const result = await runOnce({ workerId: "worker", client, planner });
@@ -84,7 +68,7 @@ describe("reel worker", () => {
       leaseToken: "lease",
       skillVersion: expect.any(String),
       jobType: "generate",
-      plan: reelPlan(),
+      planDraft: reelDraft(),
     });
     expect(client.fail).not.toHaveBeenCalled();
     expect(client.heartbeat).not.toHaveBeenCalled();
@@ -94,17 +78,17 @@ describe("reel worker", () => {
   it("repairs one invalid plan and completes the valid replacement", async () => {
     const item = job();
     const client = { claim: vi.fn(async () => item), heartbeat: vi.fn(), complete: vi.fn(), fail: vi.fn() } as unknown as ReelClient;
-    const invalid = reelPlan();
-    invalid.imagePackage.assetCount = 2;
+    const invalid = reelDraft();
+    invalid.assets[0]!.role = "wrong-role";
     const first = await output(invalid);
-    const second = await output(reelPlan());
+    const second = await output(reelDraft());
     const planner = { run: vi.fn().mockResolvedValueOnce(first).mockResolvedValueOnce(second) };
 
     await runOnce({ workerId: "worker", client, planner });
 
     expect(planner.run).toHaveBeenCalledTimes(2);
-    expect(planner.run.mock.calls[1]?.[1]).toContain("reel_plan_input_mismatch");
-    expect(client.complete).toHaveBeenCalledWith(item.id, expect.objectContaining({ plan: reelPlan() }));
+    expect(planner.run.mock.calls[1]?.[1]).toContain("reel_plan_draft_outline_mismatch");
+    expect(client.complete).toHaveBeenCalledWith(item.id, expect.objectContaining({ planDraft: reelDraft() }));
     expect(first.cleanup).toHaveBeenCalledOnce();
     expect(second.cleanup).toHaveBeenCalledOnce();
   });
@@ -112,15 +96,59 @@ describe("reel worker", () => {
   it("classifies two invalid plans as a permanent failure", async () => {
     const item = job();
     const client = { claim: vi.fn(async () => item), heartbeat: vi.fn(), complete: vi.fn(), fail: vi.fn() } as unknown as ReelClient;
-    const invalid = reelPlan();
-    invalid.imagePackage.assetCount = 2;
+    const invalid = reelDraft();
+    invalid.assets[0]!.role = "wrong-role";
     const planner = { run: vi.fn().mockResolvedValueOnce(await output(invalid)).mockResolvedValueOnce(await output(invalid)) };
 
     const result = await runOnce({ workerId: "worker", client, planner });
 
     expect(result).toEqual({ status: "failed", jobId: item.id });
     expect(client.complete).not.toHaveBeenCalled();
-    expect(client.fail).toHaveBeenCalledWith(item.id, expect.objectContaining({ errorCode: "reel_plan_input_mismatch", retryable: false }));
+    expect(client.fail).toHaveBeenCalledWith(item.id, expect.objectContaining({ errorCode: "reel_plan_draft_outline_mismatch", retryable: false }));
+  });
+
+  it("does not call the planner again when API completion fails", async () => {
+    const item = job();
+    const client = {
+      claim: vi.fn(async () => item), heartbeat: vi.fn(),
+      complete: vi.fn(async () => { throw new ContentWorkerApiError(400, "ai_content_plan_invalid"); }), fail: vi.fn(),
+    } as unknown as ReelClient;
+    const planner = { run: vi.fn(async () => output(reelDraft())) };
+
+    const result = await runOnce({ workerId: "worker", client, planner });
+
+    expect(result).toEqual({ status: "failed", jobId: item.id });
+    expect(planner.run).toHaveBeenCalledOnce();
+    expect(client.complete).toHaveBeenCalledOnce();
+    expect(client.fail).toHaveBeenCalledWith(item.id, expect.objectContaining({
+      errorCode: "ai_content_plan_invalid",
+      retryable: false,
+    }));
+  });
+
+  it.each([
+    ["429", new ContentWorkerApiError(429, "rate_limited")],
+    ["503 maintenance", new ContentWorkerApiError(503, "ai_content_maintenance")],
+    ["network", new TypeError("fetch failed")],
+  ])("replays the identical completion body after a transient %s error without re-planning", async (_name, completionError) => {
+    vi.useFakeTimers();
+    const item = job();
+    const client = {
+      claim: vi.fn(async () => item), heartbeat: vi.fn(),
+      complete: vi.fn().mockRejectedValueOnce(completionError).mockResolvedValueOnce(undefined), fail: vi.fn(),
+    } as unknown as ReelClient;
+    const planner = { run: vi.fn(async () => output(reelDraft())) };
+
+    const running = runOnce({ workerId: "worker", client, planner });
+    await vi.waitFor(() => expect(client.complete).toHaveBeenCalledOnce());
+    await vi.advanceTimersByTimeAsync(250);
+    const result = await running;
+
+    expect(result).toEqual({ status: "completed", jobId: item.id });
+    expect(planner.run).toHaveBeenCalledOnce();
+    expect(client.complete).toHaveBeenCalledTimes(2);
+    expect(client.complete.mock.calls[1]?.[1]).toBe(client.complete.mock.calls[0]?.[1]);
+    expect(client.fail).not.toHaveBeenCalled();
   });
 
   it("classifies a transient runner failure as retryable", async () => {

@@ -5,11 +5,14 @@ import path from "node:path";
 import { PassThrough } from "node:stream";
 import { describe, expect, it, vi } from "vitest";
 import {
+  ContentWorkerApiError,
+  classifyContentWorkerError,
   contentWorkerApiError,
   contentWorkerPollDelayMs,
   contentWorkerPollObservation,
   createCodexAccountPool,
   isRetryableContentWorkerError,
+  replayContentWorkerCompletion,
   runShellCommandWithAccountFailover,
   runShellCommandWithTimeout,
   terminateProcessTree,
@@ -252,6 +255,108 @@ describe("worker runtime process helpers", () => {
 
     expect(maintenance.message).toBe("worker_api_failed:503:ai_content_maintenance");
     expect(ordinary503.message).toBe("worker_api_failed:503");
+  });
+
+  it("preserves HTTP status and a stable API error code without exposing arbitrary detail", async () => {
+    const invalidPlan = await contentWorkerApiError(new Response(
+      JSON.stringify({ error: "ai_content_plan_invalid" }),
+      { status: 400, headers: { "content-type": "application/json" } },
+    ));
+    const unsafeDetail = await contentWorkerApiError(new Response(
+      JSON.stringify({ error: "upstream included SECRET_DETAIL" }),
+      { status: 503, headers: { "content-type": "application/json" } },
+    ));
+
+    expect(invalidPlan).toBeInstanceOf(ContentWorkerApiError);
+    expect(invalidPlan).toMatchObject({
+      status: 400,
+      errorCode: "ai_content_plan_invalid",
+      retryable: false,
+    });
+    expect(invalidPlan.message).toBe("worker_api_failed:400:ai_content_plan_invalid");
+    expect(unsafeDetail).toMatchObject({ status: 503, errorCode: null, retryable: true });
+    expect(unsafeDetail.message).not.toContain("SECRET_DETAIL");
+  });
+
+  it.each([
+    [400, "terminal"],
+    [401, "terminal"],
+    [403, "terminal"],
+    [404, "terminal"],
+    [422, "terminal"],
+    [409, "conflict"],
+    [408, "retryable"],
+    [429, "retryable"],
+    [500, "retryable"],
+    [503, "retryable"],
+  ] as const)("classifies HTTP %i as %s before message suffix rules", (status, expected) => {
+    const error = new ContentWorkerApiError(status, "ai_content_plan_invalid");
+
+    expect(classifyContentWorkerError(error)).toBe(expected);
+    expect(isRetryableContentWorkerError(error)).toBe(expected === "retryable");
+  });
+
+  it("replays one immutable completion body with bounded delays and a lease check per attempt", async () => {
+    const body = Object.freeze({ workerId: "worker", leaseToken: "lease", planDraft: { title: "fixed" } });
+    const errors = [
+      new ContentWorkerApiError(503, "ai_content_maintenance"),
+      new TypeError("fetch failed"),
+      new ContentWorkerApiError(429, "rate_limited"),
+    ];
+    const complete = vi.fn(async (submitted: typeof body) => {
+      const error = errors.shift();
+      if (error) throw error;
+      expect(submitted).toBe(body);
+    });
+    const leaseState = vi.fn(async () => "active" as const);
+    const waits: number[] = [];
+
+    const result = await replayContentWorkerCompletion({ body, complete, leaseState }, {
+      wait: async (delayMs) => { waits.push(delayMs); },
+    });
+
+    expect(result).toBe("completed");
+    expect(complete).toHaveBeenCalledTimes(4);
+    expect(complete.mock.calls.every(([submitted]) => submitted === body)).toBe(true);
+    expect(leaseState).toHaveBeenCalledTimes(4);
+    expect(waits).toEqual([250, 750, 1_500]);
+  });
+
+  it("does not replay terminal or conflict completion responses", async () => {
+    const terminalComplete = vi.fn(async () => {
+      throw new ContentWorkerApiError(400, "ai_content_plan_invalid");
+    });
+    const conflictComplete = vi.fn(async () => {
+      throw new ContentWorkerApiError(409, "ai_content_job_lease_invalid");
+    });
+    const active = async () => "active" as const;
+
+    await expect(replayContentWorkerCompletion({
+      body: { planDraft: {} }, complete: terminalComplete, leaseState: active,
+    }, { wait: vi.fn() })).rejects.toMatchObject({ status: 400 });
+    await expect(replayContentWorkerCompletion({
+      body: { planDraft: {} }, complete: conflictComplete, leaseState: active,
+    }, { wait: vi.fn() })).resolves.toBe("conflict");
+
+    expect(terminalComplete).toHaveBeenCalledOnce();
+    expect(conflictComplete).toHaveBeenCalledOnce();
+  });
+
+  it("stops completion replay when the lease is no longer active", async () => {
+    const body = { planDraft: { title: "fixed" } };
+    const complete = vi.fn(async () => {
+      throw new ContentWorkerApiError(503, null);
+    });
+    const leaseState = vi.fn()
+      .mockResolvedValueOnce("active")
+      .mockResolvedValueOnce("lease_lost");
+
+    await expect(replayContentWorkerCompletion({ body, complete, leaseState }, {
+      wait: async () => undefined,
+    })).resolves.toBe("lease_lost");
+
+    expect(complete).toHaveBeenCalledOnce();
+    expect(leaseState).toHaveBeenCalledTimes(2);
   });
 
   it("emits non-secret poll observations that distinguish maintenance from other errors", () => {
