@@ -32,7 +32,13 @@ describe("card-news V3 production runtime", () => {
     const schemaPath = args[args.indexOf("--output-schema") + 1];
     expect(schemaPath).toMatch(/card-news-plan-draft-v1\.schema\.json$/);
     const schema = await readFile(schemaPath!, "utf8");
-    expect(schema).toContain('"card-news-plan-draft.v1"');
+    const parsedSchema = JSON.parse(schema) as {
+      properties: { contractVersion: Record<string, unknown> };
+    };
+    expect(parsedSchema.properties.contractVersion).toEqual({
+      type: "string",
+      const: "card-news-plan-draft.v1",
+    });
     expect(schema).not.toContain("imagePackage");
     expect(schema).not.toContain("attachmentIds");
     expect(args).toEqual(expect.arrayContaining(["--disable", "shell_tool", "--disable", "image_generation"]));

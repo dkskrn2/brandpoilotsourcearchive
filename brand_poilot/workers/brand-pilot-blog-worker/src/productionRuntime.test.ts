@@ -84,7 +84,10 @@ describe("blog production runtime", () => {
     expect(args[args.indexOf("--output-schema") + 1]).toMatch(/blog-plan-draft-v1\.schema\.json$/);
     expect(schema).toMatchObject({ type: "object", additionalProperties: false, required: ["contractVersion", "content", "imageDraft"] });
     const properties = schema.properties as Record<string, Record<string, unknown>>;
-    expect(properties.contractVersion.const).toBe("blog-plan-draft.v1");
+    expect(properties.contractVersion).toEqual({
+      type: "string",
+      const: "blog-plan-draft.v1",
+    });
     expect(properties.imageDraft.anyOf).toBeTruthy();
     const contentProperties = (properties.content.properties as Record<string, Record<string, unknown>>);
     expect(contentProperties.title.maxLength).toBe(500);

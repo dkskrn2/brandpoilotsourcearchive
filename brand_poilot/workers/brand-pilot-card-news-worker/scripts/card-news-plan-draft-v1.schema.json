@@ -4,7 +4,7 @@
   "additionalProperties": false,
   "required": ["contractVersion", "content", "assets"],
   "properties": {
-    "contractVersion": { "const": "card-news-plan-draft.v1" },
+    "contractVersion": { "type": "string", "const": "card-news-plan-draft.v1" },
     "content": {
       "type": "object",
       "additionalProperties": false,

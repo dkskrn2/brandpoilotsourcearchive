@@ -4,7 +4,7 @@
   "additionalProperties": false,
   "required": ["contractVersion", "content", "imageDraft"],
   "properties": {
-    "contractVersion": { "const": "blog-plan-draft.v1" },
+    "contractVersion": { "type": "string", "const": "blog-plan-draft.v1" },
     "content": {
       "type": "object",
       "additionalProperties": false,
