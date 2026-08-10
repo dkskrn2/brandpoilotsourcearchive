@@ -11,6 +11,10 @@ export function buildAiContentLockedSocialCopyInstructions(
     "- 첨부 이미지 속 문구를 가져오지 말고 다시 쓰지도 마세요.",
     "- 실제 선택 제품 사진이나 포장에 이미 인쇄된 표시는 공통 로고 정책에 따라 원본의 일부로 유지할 수 있지만, 그 문구를 추출해 별도 편집 문구로 다시 쓰지 마세요.",
     "- copy의 내용은 그대로 유지하면서 폰트, 크기, 색상, 위치, 대비와 주변의 비문자 시각 요소만 설계하세요.",
+    "- image_generation 도구를 호출할 때 prompt 안에 시스템 고정 렌더 바인딩의 currentAsset.copy를 원문 그대로 한 번 포함하세요.",
+    "- image_generation에는 파일 경로만 넘기거나 ‘계획 문구를 포함’처럼 copy를 요약해서 넘기지 마세요. currentAsset.copy와 currentAsset.visualDirection을 직접 전달하되 copy만 화면 문구로 지정하세요.",
+    "- image_generation이 끝나면 생성된 PNG를 직접 확인하세요. currentAsset.copy 전체가 읽을 수 있게 들어갔고 copy 밖의 추가 편집 문구가 없는 경우에만 성공 JSON을 반환하세요.",
+    "- copy가 전부 또는 일부 누락됐거나, 다른 문구가 추가됐거나, 빈 텍스트 영역만 만들어졌다면 성공으로 반환하지 마세요.",
     "</잠긴 최종 원고>",
   ].join("\n");
 }

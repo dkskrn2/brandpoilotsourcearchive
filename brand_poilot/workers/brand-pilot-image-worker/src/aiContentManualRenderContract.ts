@@ -57,7 +57,7 @@ export interface AiContentManualRenderContractV2 {
   outputFormat: ImageGenerationPackageV1["outputFormat"];
   purpose: ImageGenerationPackageV1["purpose"];
   aspectRatio: ImageGenerationPackageV1["aspectRatio"];
-  currentAsset: { index: number; role: string };
+  currentAsset: { index: number; role: string; copy: string; visualDirection: string };
   blogInsertionContext: BlogInsertionContextV2 | null;
 }
 
@@ -270,7 +270,12 @@ export function buildAiContentManualRenderContract(input: {
     outputFormat: input.payload.imagePackage.outputFormat,
     purpose: input.payload.imagePackage.purpose,
     aspectRatio: input.payload.imagePackage.aspectRatio,
-    currentAsset: { index: currentAsset.index, role: currentAsset.role },
+    currentAsset: {
+      index: currentAsset.index,
+      role: currentAsset.role,
+      copy: currentAsset.copy,
+      visualDirection: currentAsset.visualDirection,
+    },
     blogInsertionContext: deriveBlogInsertionContext(input.payload),
   };
 }

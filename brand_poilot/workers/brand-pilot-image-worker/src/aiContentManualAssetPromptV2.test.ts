@@ -22,7 +22,12 @@ function renderContract(
     outputFormat,
     purpose: "informational",
     aspectRatio: outputFormat === "card_news" ? "1:1" : outputFormat === "reel" ? "9:16" : "16:9",
-    currentAsset: { index: 2, role: "detail" },
+    currentAsset: {
+      index: 2,
+      role: "detail",
+      copy: "확정 문구 첫 줄\n확정 문구 둘째 줄",
+      visualDirection: "가독성 높은 카드",
+    },
     blogInsertionContext: isBlog ? {
       placeholder: "asset://02",
       altText: "선택 기준을 설명하는 보조 이미지",
@@ -117,6 +122,11 @@ describe("manual final-pixel asset prompt v2", () => {
     expect(prompt).toMatch(/visualDirection.*문구.*출처.*아니/s);
     expect(prompt).toMatch(/첨부.*문구.*가져오지/s);
     expect(prompt).toMatch(/제품.*포장.*이미.*인쇄.*유지/s);
+    expect(prompt).toContain('"copy": "확정 문구 첫 줄\\n확정 문구 둘째 줄"');
+    expect(prompt).toMatch(/image_generation.*prompt.*currentAsset\.copy.*원문 그대로/s);
+    expect(prompt).toMatch(/파일 경로만.*요약.*넘기지/s);
+    expect(prompt).toMatch(/생성.*PNG.*직접 확인/s);
+    expect(prompt).toMatch(/누락.*다른 문구.*성공.*반환하지/s);
     expect(prompt).not.toMatch(/한국어 문구를 직접 작성하세요/);
     expect(prompt).not.toMatch(/자연스러운 한국어로 압축하세요/);
   });
@@ -155,6 +165,11 @@ describe("manual final-pixel asset prompt v2", () => {
     expect(prompt).toMatch(/visualDirection.*문구.*출처.*아니/s);
     expect(prompt).toMatch(/첨부.*문구.*가져오지/s);
     expect(prompt).toMatch(/제품.*포장.*이미.*인쇄.*유지/s);
+    expect(prompt).toContain('"copy": "확정 문구 첫 줄\\n확정 문구 둘째 줄"');
+    expect(prompt).toMatch(/image_generation.*prompt.*currentAsset\.copy.*원문 그대로/s);
+    expect(prompt).toMatch(/파일 경로만.*요약.*넘기지/s);
+    expect(prompt).toMatch(/생성.*PNG.*직접 확인/s);
+    expect(prompt).toMatch(/누락.*다른 문구.*성공.*반환하지/s);
     expect(prompt).not.toMatch(/한국어 문구를 직접 작성하세요/);
     expect(prompt).not.toMatch(/자연스러운 한국어로 압축하세요/);
   });

@@ -184,7 +184,12 @@ describe("V3 single asset renderer", () => {
         rendererPromptVersion: "image-final-pixels.v2",
         workspaceId: input.workspaceId,
         brandId: input.brandId,
-        currentAsset: { index: 2, role: "detail" },
+        currentAsset: {
+          index: 2,
+          role: "detail",
+          copy: "두 번째 장면",
+          visualDirection: "두 번째 장면 비주얼",
+        },
         blogInsertionContext: null,
       });
       await expect(readFile(path.join(inputDir, "blog-insertion-context.json"), "utf8"))
