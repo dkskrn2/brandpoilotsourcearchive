@@ -214,8 +214,7 @@ export async function resolveManualRenderTransport(client: Queryable, input: {
          on batch.id=proposal.batch_id
         and batch.workspace_id=proposal.workspace_id and batch.brand_id=proposal.brand_id
       where binding.generation_id=$1 and binding.workspace_id=$2 and binding.brand_id=$3
-        and binding.selected_proposal_id=$4
-      for share of binding,proposal,batch`,
+        and binding.selected_proposal_id=$4`,
     [input.generationId, input.workspaceId, input.brandId, input.selectedProposalId],
   );
   if (

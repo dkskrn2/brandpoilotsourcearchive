@@ -42,6 +42,24 @@ describe("ai-content render job boundary helpers", () => {
     })).resolves.toBe("v1");
   });
 
+  it("proves manual lineage with a SELECT-only query", async () => {
+    const query = vi.fn(async (sql: string) => {
+      if (/\bfor\s+share\b/i.test(sql)) {
+        throw Object.assign(new Error("permission denied for table ai_content_generation_prompt_bindings"), {
+          code: "42501",
+        });
+      }
+      return { rows: [{ selected_proposal_id: "proposal", origin: "manual" }], rowCount: 1 };
+    });
+
+    await expect(resolveManualRenderTransport({ query } as never, {
+      generationId: "generation",
+      workspaceId: "workspace",
+      brandId: "brand",
+      selectedProposalId: "proposal",
+    })).resolves.toBe("manual-v2");
+  });
+
   it("stores only a private v2 marker at enqueue time for proven manual image assets", async () => {
     const writes: unknown[][] = [];
     const query = vi.fn(async (_sql: string, params: unknown[]) => {
