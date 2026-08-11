@@ -127,25 +127,26 @@ export async function runOnce({ workerId, client, planner, shutdownSignal }: { w
     try {
       const parsedInput = parseCardNewsInput(job.payload.contentGenerationInput, job);
       let repairError: string | undefined;
-      let planDraft: Awaited<ReturnType<typeof loadStructuredCardNewsPlanDraft>> | undefined;
+      let submission: Awaited<ReturnType<typeof loadStructuredCardNewsPlanDraft>> | undefined;
       for (let attempt = 0; attempt < 2; attempt += 1) {
         const current = await planner.run(job, buildCardNewsPlanPrompt(job, parsedInput, repairError), lease.signal);
         planned.push(current);
         try {
-          planDraft = await loadStructuredCardNewsPlanDraft(current.outputDir, parsedInput);
+          submission = await loadStructuredCardNewsPlanDraft(current.outputDir, parsedInput);
           break;
         } catch (error) {
           if (attempt === 1) throw error;
           repairError = error instanceof Error ? error.message : String(error);
         }
       }
-      if (!planDraft) throw new Error("card_news_plan_invalid");
+      if (!submission) throw new Error("card_news_plan_invalid");
       const completionBody = {
         workerId,
         leaseToken: job.leaseToken,
         skillVersion: cardNewsPlanSkillVersion,
         jobType: "generate",
-        planDraft,
+        planDraft: submission.planDraft,
+        renderSemanticContract: submission.renderSemanticContract,
       };
       const completion = await replayContentWorkerCompletion({
         body: completionBody,

@@ -61,6 +61,8 @@ describe("card-news V3 prompt", () => {
     expect(prompt).toContain("coreMessage");
     expect(prompt).toContain("headline");
     expect(prompt).toContain("keyVisual");
+    expect(prompt).toContain('"entries": []');
+    expect(prompt).not.toContain('"texts": []');
     expect(prompt).toContain("supportingTexts");
     expect(prompt).toContain("footnote");
     expect(prompt).toContain("visualDirection");
@@ -72,6 +74,11 @@ describe("card-news V3 prompt", () => {
     expect(prompt).toContain("한 카드에는 하나의 핵심 메시지만");
     expect(prompt).toContain("구성안 outline의 headline은 최종 카피가 아닌 참고값");
     expect(prompt).toContain("불필요한 supportingTexts나 footnote는 비워");
+    expect(prompt).toContain("headline은 coreMessage의 축약본");
+    expect(prompt).toContain("supportingTexts를 모두 삭제해도 장면의 의미가 완전하다면");
+    expect(prompt).toContain("모든 장면의 headline만 순서대로 읽어도");
+    expect(prompt).toContain("선택된 구성안의 서사 구조를 유지");
+    expect(prompt).toContain("before, after");
     expect(prompt).not.toContain("한 장이 부실하지 않게");
   });
 

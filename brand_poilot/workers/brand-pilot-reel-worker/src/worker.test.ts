@@ -39,7 +39,7 @@ function reelDraft() {
       role: "scene",
       coreMessage: "Explain the fixed evidence clearly.",
       headline: "Use the verified process",
-      keyVisual: { type: "none", texts: [] },
+      keyVisual: { type: "none", entries: [] },
       supportingTexts: ["Explain the fixed evidence clearly."],
       footnote: null,
       visualDirection: "Vertical editorial scene.",
@@ -57,7 +57,7 @@ function compiledDraft() {
       index: 1,
       role: "scene",
       copy: "Use the verified process\nExplain the fixed evidence clearly.",
-      visualDirection: "정보 위계(서버 고정): headline=1; keyVisual=none:0; supportingTexts=1; footnote=0\nVertical editorial scene.",
+      visualDirection: "Vertical editorial scene.",
       evidenceIds: [uid(4)],
       productImageAssetIds: [],
     }],
@@ -92,9 +92,14 @@ describe("reel worker", () => {
     expect(client.complete).toHaveBeenCalledWith(item.id, {
       workerId: "worker",
       leaseToken: "lease",
-      skillVersion: "reel-plan-skill.v5",
+      skillVersion: "reel-plan-skill.v6",
       jobType: "generate",
       planDraft: compiledDraft(),
+      renderSemanticContract: {
+        contractVersion: "structured-scene-copy.v1",
+        outputFormat: "reel",
+        scenes: reelDraft().assets,
+      },
     });
     expect(client.fail).not.toHaveBeenCalled();
     expect(client.heartbeat).not.toHaveBeenCalled();

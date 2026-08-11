@@ -1,7 +1,7 @@
 import type { ContentGenerationInputV3 } from "@brand-pilot/content-contracts";
 import type { AiContentJob } from "./contracts.js";
 
-export const cardNewsPlanSkillVersion = "card-news-plan-skill.v4";
+export const cardNewsPlanSkillVersion = "card-news-plan-skill.v5";
 
 function safePromptJson(value: unknown): string {
   return JSON.stringify(value, null, 2).replace(/[<>&\u2028\u2029]/g, (character) => {
@@ -125,7 +125,7 @@ export function buildCardNewsPlanPrompt(
       role: "선택 구성안 outline의 동일 순번 role",
       coreMessage: "이 카드에서 사용자가 기억해야 할 하나의 메시지",
       headline: "최종 화면에 표시할 결론형 헤드라인",
-      keyVisual: { type: "none | number | before_after | comparison | steps | quote", texts: [] },
+      keyVisual: { type: "none | number | before_after | comparison | steps | quote", entries: [] },
       supportingTexts: [],
       footnote: null,
       visualDirection: "headline, keyVisual, supportingTexts, footnote의 위계를 반영한 시각 방향",
@@ -151,11 +151,16 @@ export function buildCardNewsPlanPrompt(
     `선택 구성안에 잠긴 정확히 ${lockedCount}장을 유지하고 outline의 index, role, order를 한 글자도 바꾸지 마세요. 장수를 다시 판단하거나 장면을 추가·삭제·병합하지 마세요.`,
     ...purposeRules,
     "한 카드에는 하나의 핵심 메시지만 담으세요. coreMessage는 내부 판단용이며 최종 화면 문구가 아닙니다.",
+    "headline은 coreMessage의 축약본이어야 하며 coreMessage에 없는 사실, 수치, 효능 또는 결론을 추가하지 마세요. 주제를 설명하는 제목보다 내용을 읽지 않아도 카드의 결론을 알 수 있는 제목을 우선하세요.",
     "구성안 outline의 headline은 최종 카피가 아닌 참고값입니다. index, role, purpose와 의미는 유지하되 실제 headline은 결과, 변화, 차이 또는 의미가 바로 드러나게 다시 작성하세요.",
-    "핵심 숫자, 비교, 단계 또는 인용이 있으면 문장 속에 묻지 말고 keyVisual로 분리하세요. 필요하지 않으면 type을 none으로 하고 texts는 []로 두세요.",
-    "supportingTexts는 핵심을 이해하는 데 반드시 필요한 짧은 보조 정보만 최대 2개 작성하세요. 정확성에 필요한 단서만 footnote로 내리세요.",
+    "핵심 숫자, 비교, 단계 또는 인용이 있으면 문장 속에 묻지 말고 keyVisual로 분리하세요. 필요하지 않으면 type을 none으로 하고 entries는 []로 두세요.",
+    "keyVisual.entries 관계 규칙: none은 0개, number는 role=value 1~4개, before_after는 정확히 before, after 순서, comparison은 label이 있는 left, right 순서, steps는 role=step 2~4개, quote는 quote 뒤 선택적으로 attribution 1개입니다.",
+    "supportingTexts는 headline 또는 keyVisual에 없는 새로운 정보만 최대 2개 제공하세요. headline이나 keyVisual을 다시 풀어 쓴 문장을 만들지 마세요.",
+    "supportingTexts를 모두 삭제해도 장면의 의미가 완전하다면 supportingTexts를 생성하지 마세요. 정확성에 필요한 단서만 footnote로 내리세요.",
+    "모든 장면의 headline만 순서대로 읽어도 콘텐츠의 핵심 흐름과 각 장면의 관계를 이해할 수 있어야 합니다. 동일한 내용을 반복하거나 각 장면이 서로 단절된 제목이 되지 않도록 하고 선택된 구성안의 서사 구조를 유지하세요.",
+    "첫 장면이 선택 구성안에서 표지, 도입 또는 훅 기능을 담당한다면 headline 외에 넘겨보았을 때 얻는 내용을 한 줄 이하의 supportingTexts promise로 포함할 수 있습니다.",
     "정보량을 문장 수로 판단하지 마세요. headline 하나만으로 완결되면 충분합니다. 불필요한 supportingTexts나 footnote는 비워 두고 카드를 채우기 위한 문장을 만들지 마세요.",
-    "headline, keyVisual.texts, supportingTexts와 footnote의 사실 근거는 제공된 브랜드 맥락, 조사 근거, 선택 레퍼런스 텍스트와 제품 사실로만 제한하세요. 근거 ID 자체를 독자용 카피에 노출하지 마세요.",
+    "headline, keyVisual.entries, supportingTexts와 footnote의 사실 근거는 제공된 브랜드 맥락, 조사 근거, 선택 레퍼런스 텍스트와 제품 사실로만 제한하세요. 근거 ID 자체를 독자용 카피에 노출하지 마세요.",
     "브랜드 규칙의 필수·금지 문구, 과장 제한, CTA·채널·디자인 규칙을 문구와 시각 지시에 적용하세요.",
     "각 장의 사실, 수치, 최신 주장에는 조사 근거의 해당 UUID만 evidenceIds에 넣으세요. 근거가 필요 없는 질문형 훅이나 CTA는 []를 사용하고 ID를 발명하지 마세요.",
     "제품 사실에는 조사 근거 ID를 발명하지 마세요. 제공된 제품 사실 안에서만 기능, 가격, 장점, 한계, 구매 조건을 작성하세요.",

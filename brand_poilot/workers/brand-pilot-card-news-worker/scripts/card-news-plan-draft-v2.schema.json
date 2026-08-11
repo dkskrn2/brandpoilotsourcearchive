@@ -31,10 +31,23 @@
           "keyVisual": {
             "type": "object",
             "additionalProperties": false,
-            "required": ["type", "texts"],
+            "required": ["type", "entries"],
             "properties": {
               "type": { "type": "string", "enum": ["none", "number", "before_after", "comparison", "steps", "quote"] },
-              "texts": { "type": "array", "maxItems": 4, "items": { "type": "string", "minLength": 1, "maxLength": 300 } }
+              "entries": {
+                "type": "array",
+                "maxItems": 4,
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["role", "label", "value"],
+                  "properties": {
+                    "role": { "type": "string", "enum": ["value", "before", "after", "left", "right", "step", "quote", "attribution"] },
+                    "label": { "anyOf": [{ "type": "string", "minLength": 1, "maxLength": 100 }, { "type": "null" }] },
+                    "value": { "type": "string", "minLength": 1, "maxLength": 300 }
+                  }
+                }
+              }
             }
           },
           "supportingTexts": { "type": "array", "maxItems": 2, "items": { "type": "string", "minLength": 1, "maxLength": 300 } },

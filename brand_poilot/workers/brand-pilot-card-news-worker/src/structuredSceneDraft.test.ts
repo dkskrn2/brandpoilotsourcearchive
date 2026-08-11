@@ -22,7 +22,10 @@ function draft() {
       role: "comparison",
       coreMessage: "롱폼 시청시간 기준이 두 배가 된다.",
       headline: "롱폼은 2배",
-      keyVisual: { type: "before_after", texts: ["4,000시간", "8,000시간"] },
+      keyVisual: { type: "before_after", entries: [
+        { role: "before", label: null, value: "4,000시간" },
+        { role: "after", label: null, value: "8,000시간" },
+      ] },
       supportingTexts: ["최근 12개월"],
       footnote: "신규 YPP 기준",
       visualDirection: "두 수치를 좌우로 명확하게 비교",
@@ -53,7 +56,7 @@ describe("structured card-news scene draft", () => {
       index: 1,
       role: "comparison",
       copy: "롱폼은 2배\n4,000시간\n8,000시간\n최근 12개월\n신규 YPP 기준",
-      visualDirection: expect.stringMatching(/keyVisual=before_after:2.*supportingTexts=1.*footnote=1.*두 수치를 좌우로 명확하게 비교/s),
+      visualDirection: "두 수치를 좌우로 명확하게 비교",
       evidenceIds: [uid(1)],
       productImageAssetIds: [uid(2)],
     });
@@ -65,19 +68,19 @@ describe("structured card-news scene draft", () => {
   it("keeps optional visual text empty without inventing filler", async () => {
     const module = await editorial();
     const value = draft();
-    value.assets[0]!.keyVisual = { type: "none", texts: [] };
+    value.assets[0]!.keyVisual = { type: "none", entries: [] };
     value.assets[0]!.supportingTexts = [];
     value.assets[0]!.footnote = null as never;
 
     const compiled = module.parseStructuredCardNewsPlanDraftForInput(value, input());
 
     expect(compiled.assets[0]!.copy).toBe("롱폼은 2배");
-    expect(compiled.assets[0]!.visualDirection).toMatch(/keyVisual=none:0.*supportingTexts=0.*footnote=0/s);
+    expect(compiled.assets[0]!.visualDirection).toBe("두 수치를 좌우로 명확하게 비교");
   });
 
   it.each([
     ["blank headline", (value: ReturnType<typeof draft>) => { value.assets[0]!.headline = "   "; }],
-    ["too many key visual texts", (value: ReturnType<typeof draft>) => { value.assets[0]!.keyVisual.texts = ["1", "2", "3", "4", "5"]; }],
+    ["too many key visual entries", (value: ReturnType<typeof draft>) => { value.assets[0]!.keyVisual.entries = Array.from({ length: 5 }, (_, index) => ({ role: "value", label: null, value: String(index) })); }],
     ["too many supporting texts", (value: ReturnType<typeof draft>) => { value.assets[0]!.supportingTexts = ["1", "2", "3"]; }],
     ["unknown field", (value: ReturnType<typeof draft>) => { Object.assign(value.assets[0]!, { copy: "forbidden" }); }],
   ])("rejects %s before API completion", async (_name, mutate) => {

@@ -157,10 +157,17 @@ describe("reel purpose prompt", () => {
     expect(prompt).toContain("coreMessage");
     expect(prompt).toContain("headline");
     expect(prompt).toContain("keyVisual");
+    expect(prompt).toContain('"entries": []');
+    expect(prompt).not.toContain('"texts": []');
     expect(prompt).toContain("supportingTexts");
     expect(prompt).toContain("footnote");
     expect(prompt).toContain("한 장면에는 하나의 핵심 메시지만");
     expect(prompt).toContain("정보량을 문장 수로 판단하지 마세요");
+    expect(prompt).toContain("headline은 coreMessage의 축약본");
+    expect(prompt).toContain("supportingTexts를 모두 삭제해도 장면의 의미가 완전하다면");
+    expect(prompt).toContain("모든 장면의 headline만 순서대로 읽어도");
+    expect(prompt).toContain("선택된 구성안의 서사 구조를 유지");
+    expect(prompt).toContain("before, after");
     expect(prompt).not.toContain("장면을 채우기 위한 문장");
     expect(prompt).toContain("attachment 선택");
   });

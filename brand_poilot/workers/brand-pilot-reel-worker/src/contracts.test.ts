@@ -43,7 +43,7 @@ function structuredDraft() {
         role: "hook",
         coreMessage: "온도 하나가 맛을 바꿉니다.",
         headline: "차 맛은 온도에서 갈립니다",
-        keyVisual: { type: "number", texts: ["80°C"] },
+        keyVisual: { type: "number", entries: [{ role: "value", label: null, value: "80°C" }] },
         supportingTexts: ["떫은맛은 줄이고 향은 살립니다"],
         footnote: "차 종류에 따라 달라질 수 있습니다",
         visualDirection: "헤드라인과 숫자를 세로 화면 중앙에 크게 배치",
@@ -55,7 +55,11 @@ function structuredDraft() {
         role: "explanation",
         coreMessage: "순서대로 따르면 됩니다.",
         headline: "세 단계로 끝내세요",
-        keyVisual: { type: "steps", texts: ["데우기", "우리기", "마시기"] },
+        keyVisual: { type: "steps", entries: [
+          { role: "step", label: null, value: "데우기" },
+          { role: "step", label: null, value: "우리기" },
+          { role: "step", label: null, value: "마시기" },
+        ] },
         supportingTexts: [],
         footnote: null,
         visualDirection: "세 단계를 위에서 아래로 연결",
@@ -76,7 +80,7 @@ describe("reel worker contract", () => {
           index: 1,
           role: "hook",
           copy: "차 맛은 온도에서 갈립니다\n80°C\n떫은맛은 줄이고 향은 살립니다\n차 종류에 따라 달라질 수 있습니다",
-          visualDirection: "정보 위계(서버 고정): headline=1; keyVisual=number:1; supportingTexts=1; footnote=1\n헤드라인과 숫자를 세로 화면 중앙에 크게 배치",
+          visualDirection: "헤드라인과 숫자를 세로 화면 중앙에 크게 배치",
           evidenceIds: [uid(1)],
           productImageAssetIds: [uid(2)],
         },
@@ -84,7 +88,7 @@ describe("reel worker contract", () => {
           index: 2,
           role: "explanation",
           copy: "세 단계로 끝내세요\n데우기\n우리기\n마시기",
-          visualDirection: "정보 위계(서버 고정): headline=1; keyVisual=steps:3; supportingTexts=0; footnote=0\n세 단계를 위에서 아래로 연결",
+          visualDirection: "세 단계를 위에서 아래로 연결",
           evidenceIds: [uid(1)],
           productImageAssetIds: [],
         },
@@ -99,7 +103,7 @@ describe("reel worker contract", () => {
     }, input())).toThrow("reel_structured_draft_invalid");
     expect(() => parseStructuredReelPlanDraftForInput({
       ...structuredDraft(),
-      assets: [{ ...structuredDraft().assets[0], keyVisual: { type: "none", texts: ["불필요"] } }, structuredDraft().assets[1]],
+      assets: [{ ...structuredDraft().assets[0], keyVisual: { type: "none", entries: [{ role: "value", label: null, value: "불필요" }] } }, structuredDraft().assets[1]],
     }, input())).toThrow("reel_structured_draft_invalid");
     expect(() => parseStructuredReelPlanDraftForInput({
       ...structuredDraft(),
