@@ -3,6 +3,7 @@ import { useNavigate, useParams } from "react-router-dom";
 import { AiGenerationOutputList } from "../components/ai-content/AiGenerationOutputList";
 import { aiContentPublishErrorMessage } from "../components/ai-content/AiContentPublishPanel";
 import { AiContentGenerationStatusPanel } from "../components/ai-content/AiContentGenerationStatusPanel";
+import { AiContentAssetProgress } from "../components/ai-content/AiContentAssetProgress";
 import { AiContentPhaseProgress } from "../components/ai-content/AiContentPhaseProgress";
 import { PageHeader } from "../components/layout/PageHeader";
 import { PageSkeleton } from "../components/ui/LoadingState";
@@ -341,6 +342,9 @@ export function AiContentGenerationPage({
         completedCount={completedOutputIds.length}
         outputCount={generation.outputs.length}
       />
+      {!reviewing && generation.progress
+        ? <AiContentAssetProgress progress={generation.progress} />
+        : null}
       {actionError ? <div className="alert bad" role="alert">{actionError}</div> : null}
       {!reviewing ? outputList : (
         <section className="ai-content-review" aria-label="변경·검토·보완">

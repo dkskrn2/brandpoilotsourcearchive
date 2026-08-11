@@ -135,9 +135,13 @@ describe("ContentProposalCard", () => {
 
     expect(screen.getByRole("heading", { name: "초보자를 위한 피부 장벽 가이드" })).toBeVisible();
     expect(screen.getAllByText("복잡한 선택을 한 번에 이해시킵니다.")[0]).toBeVisible();
+    const highlights = document.querySelector<HTMLElement>(".proposal-card-highlights")!;
+    expect(within(highlights).getByText("민감 피부를 처음 관리하는 고객")).toBeVisible();
+    expect(within(highlights).getByText("세 단계만 지키면 됩니다.")).toBeVisible();
+    expect(screen.getByRole("list", { name: "장면 흐름 미리보기" })).toHaveTextContent("피부가 보내는 신호");
     await user.click(screen.getByText("구성안 상세 보기"));
     for (const label of [
-      "이 안의 차별점", "기획 의도", "대상", "상황", "핵심 메시지", "훅", "선택 이유",
+      "이 안의 차별점", "기획 의도", "대상", "상황", "핵심 메시지", "선택 이유",
       "정보 유형", "독자 질문", "제공 가치", "지금 다룰 이유", "핵심 학습 포인트",
       "검색 근거", "사용 레퍼런스", "출력 형식·채널", "제안 장수", "장면별 개요",
     ]) expect(screen.getByText(label)).toBeVisible();

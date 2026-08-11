@@ -324,6 +324,36 @@ describe("AiContentGenerationPage", () => {
     expect(screen.getByRole("status")).toHaveTextContent("선택한 구성안으로 콘텐츠를 기획하고 있습니다.");
   });
 
+  it("shows asset-index progress when the detail API provides it", async () => {
+    renderGeneration("generation-planning", false, (configuredGateway) => {
+      const getGeneration = configuredGateway.getGeneration.bind(configuredGateway);
+      configuredGateway.getGeneration = vi.fn(async (brandId, generationId) => ({
+        ...(await getGeneration(brandId, generationId)),
+        progress: {
+          phase: "rendering" as const,
+          totalAssets: 2,
+          completedAssets: 1,
+          failedAssets: 0,
+          items: [
+            { index: 1, role: "cover", status: "completed" as const },
+            { index: 2, role: "cta", status: "processing" as const },
+          ],
+          startedAt: "2026-08-11T00:00:00.000Z",
+          updatedAt: "2026-08-11T00:04:00.000Z",
+        },
+      }));
+    });
+
+    expect(await screen.findByRole("region", { name: "콘텐츠 제작 진행률" })).toHaveTextContent("1 / 2개 완료");
+  });
+
+  it("keeps the legacy planning view when progress is unavailable", async () => {
+    renderGeneration("generation-planning");
+
+    expect(await screen.findByText("선택한 구성안으로 콘텐츠를 기획하고 있습니다.")).toBeVisible();
+    expect(screen.queryByRole("region", { name: "콘텐츠 제작 진행률" })).not.toBeInTheDocument();
+  });
+
   it("shows reel contracts with selected and all ZIP actions", async () => {
     renderGeneration("generation-partial");
 

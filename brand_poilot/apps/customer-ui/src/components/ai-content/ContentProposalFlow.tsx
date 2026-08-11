@@ -33,8 +33,10 @@ import { PageGuideButton } from "../layout/PageHeader";
 import { api, ApiRequestError } from "../../lib/apiClient";
 import { brandCenterGateway } from "../../features/brand-center/brandCenterGateway";
 
-const sections: Array<[ContentSetupSection, string]> = [
-  ["intent", "1. 목적"], ["sources", "2. 주제·자료"], ["delivery", "3. 채널·형식"],
+const sections: Array<[ContentSetupSection, string, string, string]> = [
+  ["intent", "1. 목적", "01", "콘텐츠의 역할과 목표를 정합니다"],
+  ["sources", "2. 주제·자료", "02", "원문과 참고 자료를 연결합니다"],
+  ["delivery", "3. 채널·형식", "03", "게시 채널과 결과 형식을 선택합니다"],
 ];
 
 type IdempotencyKeySlot = { fingerprint: string; key: string };
@@ -168,16 +170,16 @@ export function ContentProposalFlow({
   const proposals = batch?.proposals ?? [];
   const selectedProduct = products.find((item) => item.id === selectedProductId);
   const summary = useMemo(() => [
-    family === "informational" ? "정보성" : family === "marketing" ? "마케팅성" : "목적 미정",
+    { label: "목적", value: family === "informational" ? "정보성" : family === "marketing" ? "마케팅성" : "미정" },
     subjectMode === "reference"
-      ? `레퍼런스 ${selectedReferences.length}개`
+      ? { label: "원문·자료", value: `레퍼런스 ${selectedReferences.length}개` }
       : subjectMode === "topic_url"
-        ? topicUrl || "URL 미정"
-        : topic || "주제 미정",
-    family === "marketing" ? selectedProduct?.displayName ?? "제품·서비스 미정" : null,
-    format || "형식 미정",
-    channel ?? "업로드 방식 미정",
-  ].filter((item): item is string => Boolean(item)), [channel, family, format, selectedProduct?.displayName, selectedReferences.length, subjectMode, topic, topicUrl]);
+        ? { label: "원문·자료", value: topicUrl || "URL 미정" }
+        : { label: "원문·자료", value: topic || "주제 미정" },
+    family === "marketing" ? { label: "제품·서비스", value: selectedProduct?.displayName ?? "미정" } : null,
+    { label: "결과 형식", value: format || "미정" },
+    { label: "게시 채널", value: channel ?? "미정" },
+  ].filter((item): item is { label: string; value: string } => Boolean(item)), [channel, family, format, selectedProduct?.displayName, selectedReferences.length, subjectMode, topic, topicUrl]);
 
   async function loadBatch(batchId: string, signal?: AbortSignal, requestedBrandId = brandId) {
     const next = await gateway.getProposalBatch(requestedBrandId, batchId, signal);
@@ -539,12 +541,14 @@ export function ContentProposalFlow({
     </header>
     <AiContentPhaseProgress current={displayPhase} />
     {machine.phase === "setup" ? <div className="content-setup-layout">
-      <main className="content-setup-accordions" data-guide="content-setup">{sections.map(([section, title]) => {
+      <main className="content-setup-accordions" data-guide="content-setup">{sections.map(([section, title, number, description]) => {
         const open = machine.activeSection === section;
         const completeSection = machine.completedSections.includes(section);
         return <section className={`content-setup-section${open ? " is-open" : ""}`} key={section}>
-          <button type="button" className="content-accordion-trigger" aria-expanded={open} onClick={() => setMachine((current) => transitionContentWizard(current, { type: "open_section", section }))}>
-            <span>{title}</span>{completeSection ? <small>완료 · 수정 가능</small> : null}
+          <button type="button" className="content-accordion-trigger" aria-label={title} aria-expanded={open} onClick={() => setMachine((current) => transitionContentWizard(current, { type: "open_section", section }))}>
+            <span className="content-step-number">{number}</span>
+            <span className="content-step-copy"><strong>{title.replace(/^\d+\.\s*/, "")}</strong><small>{description}</small></span>
+            <span className={`content-step-state${completeSection ? " is-complete" : ""}`}>{completeSection ? "완료 · 수정 가능" : open ? "입력 중" : "대기"}</span>
           </button>
           {open ? <div className="content-accordion-panel">
             {section === "intent" ? <ContentFamilyStep value={family} onChange={(next) => {
@@ -607,11 +611,11 @@ export function ContentProposalFlow({
           </div> : null}
         </section>;
       })}</main>
-      <aside className="content-input-summary"><h2>입력 요약</h2><ul>{summary.map((item) => <li key={item}>{item}</li>)}</ul>{loadingProposal ? <p>검증된 입력으로 구성안을 만들고 있습니다.</p> : null}</aside>
+      <aside className="content-input-summary"><span className="content-input-summary__eyebrow">현재 설정</span><h2>입력 요약</h2><dl>{summary.map((item) => <div key={item.label}><dt>{item.label}</dt><dd>{item.value}</dd></div>)}</dl>{loadingProposal ? <p>검증된 입력으로 구성안을 만들고 있습니다.</p> : null}</aside>
     </div> : null}
     {machine.phase === "proposal_selection" && proposals.length
       ? <><aside className="content-input-summary proposal-input-summary" aria-label="복원된 입력 요약">
-          <h2>입력 요약</h2><ul>{summary.map((item) => <li key={item}>{item}</li>)}</ul>
+          <span className="content-input-summary__eyebrow">선택 기준</span><h2>입력 요약</h2><dl>{summary.map((item) => <div key={item.label}><dt>{item.label}</dt><dd>{item.value}</dd></div>)}</dl>
         </aside>
         <div data-guide="content-proposal-selection"><ContentProposalComparison
           proposals={proposals}

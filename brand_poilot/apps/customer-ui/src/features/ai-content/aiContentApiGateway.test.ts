@@ -270,6 +270,45 @@ describe("createAiContentApiGateway", () => {
     });
   });
 
+  it("maps a valid optional asset progress snapshot", async () => {
+    const requestJson = vi.fn(async () => ({
+      ...generation("generating"),
+      progress: {
+        phase: "rendering",
+        totalAssets: 2,
+        completedAssets: 1,
+        failedAssets: 0,
+        items: [
+          { index: 1, role: "cover", status: "completed" },
+          { index: 2, role: "detail", status: "processing" },
+        ],
+        startedAt: "2026-08-11T00:00:00.000Z",
+        updatedAt: "2026-08-11T00:04:00.000Z",
+      },
+    }));
+
+    await expect(createAiContentApiGateway(clientWith(requestJson)).getGeneration("brand-1", "generation-1"))
+      .resolves.toMatchObject({ progress: { totalAssets: 2, completedAssets: 1 } });
+  });
+
+  it("drops only malformed progress while preserving the generation", async () => {
+    const requestJson = vi.fn(async () => ({
+      ...generation("generating"),
+      progress: {
+        phase: "rendering", totalAssets: 2, completedAssets: 2, failedAssets: 0,
+        items: [
+          { index: 1, role: "cover", status: "completed" },
+          { index: 1, role: "duplicate", status: "completed" },
+        ],
+        startedAt: null, updatedAt: "2026-08-11T00:04:00.000Z",
+      },
+    }));
+
+    const result = await createAiContentApiGateway(clientWith(requestJson)).getGeneration("brand-1", "generation-1");
+    expect(result.status).toBe("generating");
+    expect(result.progress).toBeNull();
+  });
+
   it("rejects a retry response that does not contain exactly one child output", async () => {
     vi.spyOn(globalThis.crypto, "randomUUID").mockReturnValue("11111111-1111-4111-8111-111111111111");
     const requestJson = vi.fn().mockResolvedValueOnce({ ...generation("queued"), outputs: undefined });

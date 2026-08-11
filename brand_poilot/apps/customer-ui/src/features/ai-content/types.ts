@@ -438,6 +438,20 @@ export interface AiContentGenerationEvidenceSnapshot {
   proposal: Record<string, unknown> | null;
 }
 
+export interface AiContentGenerationProgress {
+  phase: "queued" | "planning" | "rendering" | "finalizing";
+  totalAssets: number;
+  completedAssets: number;
+  failedAssets: number;
+  items: Array<{
+    index: number;
+    role: string;
+    status: "queued" | "processing" | "completed" | "failed";
+  }>;
+  startedAt: string | null;
+  updatedAt: string;
+}
+
 export interface AiContentGeneration {
   id: string;
   brandId: string;
@@ -453,6 +467,7 @@ export interface AiContentGeneration {
   attachmentsLockedAt: string | null;
   terminalAt: string | null;
   retryableUntil: string | null;
+  progress?: AiContentGenerationProgress | null;
   createdAt: string;
   updatedAt: string;
 }

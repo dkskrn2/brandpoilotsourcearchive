@@ -115,7 +115,45 @@ interface ApiGeneration {
   currentStage: string | null; draft: Partial<AiContentDraft> | null; analysis: Record<string, unknown>; outputs?: ApiOutput[];
   attachmentsLockedAt?: string | null; terminalAt?: string | null; retryableUntil?: string | null;
   evidenceSnapshot?: AiContentGeneration["evidenceSnapshot"];
+  progress?: unknown;
   createdAt: string; updatedAt: string;
+}
+
+const progressPhases = new Set(["queued", "planning", "rendering", "finalizing"]);
+const progressStatuses = new Set(["queued", "processing", "completed", "failed"]);
+
+function generationProgress(value: unknown): NonNullable<AiContentGeneration["progress"]> | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const source = value as Record<string, unknown>;
+  const keys = Object.keys(source).sort();
+  const expected = ["completedAssets", "failedAssets", "items", "phase", "startedAt", "totalAssets", "updatedAt"].sort();
+  if (keys.length !== expected.length || keys.some((key, index) => key !== expected[index])) return null;
+  if (typeof source.phase !== "string" || !progressPhases.has(source.phase)) return null;
+  if (!Number.isSafeInteger(source.totalAssets) || Number(source.totalAssets) < 0
+    || !Number.isSafeInteger(source.completedAssets) || Number(source.completedAssets) < 0
+    || !Number.isSafeInteger(source.failedAssets) || Number(source.failedAssets) < 0
+    || !Array.isArray(source.items)
+    || source.items.length !== Number(source.totalAssets)
+    || source.startedAt !== null && typeof source.startedAt !== "string"
+    || typeof source.updatedAt !== "string") return null;
+  const items = source.items.map((value, position) => {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+    const item = value as Record<string, unknown>;
+    if (Object.keys(item).sort().join(",") !== "index,role,status"
+      || item.index !== position + 1
+      || typeof item.role !== "string" || !item.role.trim()
+      || typeof item.status !== "string" || !progressStatuses.has(item.status)) return null;
+    return { index: Number(item.index), role: item.role, status: item.status as "queued" | "processing" | "completed" | "failed" };
+  });
+  if (items.some((item) => item === null)) return null;
+  const validItems = items as NonNullable<AiContentGeneration["progress"]>["items"];
+  if (validItems.filter((item) => item.status === "completed").length !== source.completedAssets
+    || validItems.filter((item) => item.status === "failed").length !== source.failedAssets) return null;
+  return {
+    phase: source.phase as NonNullable<AiContentGeneration["progress"]>["phase"],
+    totalAssets: Number(source.totalAssets), completedAssets: Number(source.completedAssets), failedAssets: Number(source.failedAssets),
+    items: validItems, startedAt: source.startedAt as string | null, updatedAt: source.updatedAt,
+  };
 }
 
 interface ApiSubjectAnalysis {
@@ -486,6 +524,7 @@ function mapGeneration(value: ApiGeneration): AiContentGeneration {
       };
     }),
     evidenceSnapshot: value.evidenceSnapshot ?? null,
+    progress: generationProgress(value.progress),
     attachmentsLockedAt: value.attachmentsLockedAt ?? null,
     terminalAt: value.terminalAt ?? null,
     retryableUntil: value.retryableUntil ?? null,

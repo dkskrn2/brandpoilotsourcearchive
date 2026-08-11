@@ -63,6 +63,10 @@ import {
   reverseGenerationReservationIfTerminalFailure,
 } from "./aiContentGenerationOperations.js";
 import {
+  loadAiContentGenerationProgress,
+  type AiContentGenerationProgress,
+} from "./aiContentGenerationProgress.js";
+import {
   canonicalProposalJson,
   proposalSha256,
   type EnqueueProposalV2Input,
@@ -103,6 +107,7 @@ export interface AiContentGenerationRecord {
   attachmentsLockedAt: string | null;
   terminalAt: string | null;
   retryableUntil: string | null;
+  progress?: AiContentGenerationProgress;
   evidenceSnapshot?: {
     orchestration: Record<string, unknown>;
     generationInput: Record<string, unknown>;
@@ -2687,9 +2692,27 @@ export function createAiContentRepository(pool: Pool, options: AiContentReposito
         const evidenceSnapshot = await generationEvidenceSnapshot(client, input, row);
         const attachments = await loadGenerationAttachments(client, input);
         await client.query("COMMIT");
+        const progress = await loadAiContentGenerationProgress(
+          (sql, params) => client.query(sql, params),
+          {
+            generationId: generation.id,
+            workspaceId: generation.workspaceId,
+            brandId: generation.brandId,
+            status: generation.status,
+            createdAt: generation.createdAt,
+            updatedAt: generation.updatedAt,
+          },
+        ).catch((progressError) => {
+          console.warn("ai_content_generation_progress_unavailable", {
+            generationId: generation.id,
+            error: progressError instanceof Error ? progressError.message : "unknown_error",
+          });
+          return null;
+        });
         return {
           ...generation,
           ...(evidenceSnapshot ? { evidenceSnapshot } : {}),
+          ...(progress ? { progress } : {}),
           outputs: outputs.get(generation.id) ?? [],
           attachments,
         };

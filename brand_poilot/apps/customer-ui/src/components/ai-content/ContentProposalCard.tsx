@@ -81,6 +81,17 @@ export function ContentProposalCard({
     </header>
     <p className="proposal-card-intent">{proposal.oneLineIntent}</p>
     <p className="proposal-card-differentiator"><strong>이 안의 차별점</strong>{proposal.differentiator}</p>
+    <dl className="proposal-card-highlights" aria-label="핵심 비교 정보">
+      <div><dt>대상</dt><dd>{proposal.target}</dd></div>
+      <div><dt>핵심 메시지</dt><dd>{proposal.keyMessage}</dd></div>
+      <div><dt>시작 문구</dt><dd>{proposal.hook}</dd></div>
+    </dl>
+    <ol className="proposal-outline-preview" aria-label={isBlog ? "글 흐름 미리보기" : "장면 흐름 미리보기"}>
+      {proposal.outline.slice(0, 3).map((outline) => <li key={outline.index}>
+        <span>{String(outline.index).padStart(2, "0")}</span>
+        <strong>{outline.headline}</strong>
+      </li>)}
+    </ol>
     <div className="proposal-card-summary" aria-label="구성안 요약">
       <span>{proposal.outputFormat}</span>
       <span>{proposal.channelTargets.join(", ")}</span>
@@ -90,10 +101,7 @@ export function ContentProposalCard({
       <summary>구성안 상세 보기</summary>
       <dl className="proposal-details">
         <div><dt>기획 의도</dt><dd>{proposal.oneLineIntent}</dd></div>
-        <div><dt>대상</dt><dd>{proposal.target}</dd></div>
         <div><dt>상황</dt><dd>{proposal.customerContext}</dd></div>
-        <div><dt>핵심 메시지</dt><dd>{proposal.keyMessage}</dd></div>
-        <div><dt>훅</dt><dd>{proposal.hook}</dd></div>
         <div><dt>선택 이유</dt><dd>{proposal.selectionReason}</dd></div>
         <div><dt>출력 형식·채널</dt><dd>{proposal.outputFormat} · {proposal.channelTargets.join(", ")}</dd></div>
         {details.kind === "informational" ? <>

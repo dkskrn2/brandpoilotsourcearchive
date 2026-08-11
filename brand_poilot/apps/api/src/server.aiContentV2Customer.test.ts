@@ -535,6 +535,49 @@ describe("V2 customer proposal batches", () => {
 });
 
 describe("V2 finalization customer boundary", () => {
+  it("returns optional generation progress without exposing render internals", async () => {
+    const harness = setup();
+    vi.mocked(harness.repository.getAiContentGeneration).mockResolvedValueOnce({
+      id: generationId,
+      status: "generating",
+      outputs: [],
+      progress: {
+        phase: "rendering",
+        totalAssets: 2,
+        completedAssets: 1,
+        failedAssets: 0,
+        items: [
+          { index: 1, role: "cover", status: "completed" },
+          { index: 2, role: "detail", status: "processing" },
+        ],
+        startedAt: "2026-08-11T00:00:00.000Z",
+        updatedAt: "2026-08-11T00:04:00.000Z",
+      },
+    } as never);
+
+    const response = await harness.app.inject({
+      method: "GET",
+      url: `/brands/${brandId}/ai-content/generations/${generationId}`,
+      headers: auth,
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json().progress).toEqual({
+      phase: "rendering",
+      totalAssets: 2,
+      completedAssets: 1,
+      failedAssets: 0,
+      items: [
+        { index: 1, role: "cover", status: "completed" },
+        { index: 2, role: "detail", status: "processing" },
+      ],
+      startedAt: "2026-08-11T00:00:00.000Z",
+      updatedAt: "2026-08-11T00:04:00.000Z",
+    });
+    expect(JSON.stringify(response.json())).not.toMatch(/payload_json|lease_token|storage_path|prompt/i);
+    await harness.app.close();
+  });
+
   it("returns 409 when generation cannot load active approved Brand Rules", async () => {
     const harness = setup();
     vi.mocked(harness.repository.startAiContentGenerationV3)
