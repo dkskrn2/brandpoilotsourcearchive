@@ -5,6 +5,10 @@ import {
   parseCardNewsPlanDraftV1 as parseContractDraft,
   type CardNewsPlanDraftV1,
 } from "@brand-pilot/content-contracts/planner-drafts";
+import {
+  compileStructuredCardNewsPlanDraftV2,
+  parseStructuredCardNewsPlanDraftV2,
+} from "./structuredSceneDraft.js";
 
 function planMismatch(detail: string): never {
   throw new Error(`card_news_plan_invalid:${detail}`);
@@ -64,7 +68,20 @@ export function parseCardNewsPlanDraftV1(
   return draft;
 }
 
-export async function loadCardNewsPlanDraftV1(outputDir: string, input: ContentGenerationInputV3) {
+export function parseStructuredCardNewsPlanDraftForInput(
+  value: unknown,
+  input: ContentGenerationInputV3,
+): CardNewsPlanDraftV1 {
+  try {
+    const draft = parseStructuredCardNewsPlanDraftV2(value);
+    return parseCardNewsPlanDraftV1(compileStructuredCardNewsPlanDraftV2(draft), input);
+  } catch (error) {
+    if (error instanceof Error && error.message.startsWith("card_news_plan_invalid:")) throw error;
+    planMismatch("card_news_plan_draft_invalid");
+  }
+}
+
+export async function loadStructuredCardNewsPlanDraft(outputDir: string, input: ContentGenerationInputV3) {
   const value = JSON.parse(await readFile(path.join(outputDir, "card-news-plan.json"), "utf8"));
-  return parseCardNewsPlanDraftV1(value, input);
+  return parseStructuredCardNewsPlanDraftForInput(value, input);
 }

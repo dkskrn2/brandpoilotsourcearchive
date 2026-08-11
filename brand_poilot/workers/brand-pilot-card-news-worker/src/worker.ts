@@ -12,7 +12,7 @@ import {
 } from "@brand-pilot/worker-runtime";
 import { parseCardNewsInput, type AiContentJob, type WorkerClient } from "./contracts.js";
 import { buildCardNewsPlanPrompt, cardNewsPlanSkillVersion } from "./promptBuilder.js";
-import { loadCardNewsPlanDraftV1 } from "./editorialPlan.js";
+import { loadStructuredCardNewsPlanDraft } from "./editorialPlan.js";
 import { withResource } from "./resourceLease.js";
 
 export interface CodexRunner {
@@ -127,12 +127,12 @@ export async function runOnce({ workerId, client, planner, shutdownSignal }: { w
     try {
       const parsedInput = parseCardNewsInput(job.payload.contentGenerationInput, job);
       let repairError: string | undefined;
-      let planDraft: Awaited<ReturnType<typeof loadCardNewsPlanDraftV1>> | undefined;
+      let planDraft: Awaited<ReturnType<typeof loadStructuredCardNewsPlanDraft>> | undefined;
       for (let attempt = 0; attempt < 2; attempt += 1) {
         const current = await planner.run(job, buildCardNewsPlanPrompt(job, parsedInput, repairError), lease.signal);
         planned.push(current);
         try {
-          planDraft = await loadCardNewsPlanDraftV1(current.outputDir, parsedInput);
+          planDraft = await loadStructuredCardNewsPlanDraft(current.outputDir, parsedInput);
           break;
         } catch (error) {
           if (attempt === 1) throw error;
