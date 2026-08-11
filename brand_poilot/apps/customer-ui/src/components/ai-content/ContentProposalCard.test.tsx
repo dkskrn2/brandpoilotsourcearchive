@@ -1,5 +1,6 @@
 import "@testing-library/jest-dom/vitest";
 import { cleanup, render, screen, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ContentProposalRecord } from "../../features/ai-content/types";
 import { ContentProposalCard } from "./ContentProposalCard";
@@ -121,7 +122,8 @@ describe("ContentProposalCard", () => {
     expect(screen.getByRole("button", { name: "구성안 선택: 여름 피부 관리" })).toBeVisible();
   });
 
-  it("shows the complete informational text plan without an image or placeholder", () => {
+  it("keeps the complete informational plan in an expandable detail section", async () => {
+    const user = userEvent.setup();
     render(<ContentProposalCard
       item={proposal("informational")}
       position={1}
@@ -132,6 +134,8 @@ describe("ContentProposalCard", () => {
     />);
 
     expect(screen.getByRole("heading", { name: "초보자를 위한 피부 장벽 가이드" })).toBeVisible();
+    expect(screen.getAllByText("복잡한 선택을 한 번에 이해시킵니다.")[0]).toBeVisible();
+    await user.click(screen.getByText("구성안 상세 보기"));
     for (const label of [
       "이 안의 차별점", "기획 의도", "대상", "상황", "핵심 메시지", "훅", "선택 이유",
       "정보 유형", "독자 질문", "제공 가치", "지금 다룰 이유", "핵심 학습 포인트",
@@ -139,14 +143,15 @@ describe("ContentProposalCard", () => {
     ]) expect(screen.getByText(label)).toBeVisible();
     expect(screen.getByRole("link", { name: "피부 장벽 연구 요약" })).toHaveAttribute("href", "https://evidence.example/article");
     expect(screen.getByRole("link", { name: "인기 카드뉴스 미리보기" })).toHaveAttribute("href", "https://reference.example/preview.jpg");
-    expect(screen.getByText("2장")).toBeVisible();
+    expect(screen.getAllByText("2장")[0]).toBeVisible();
     expect(screen.getByText("1. hook · 피부가 보내는 신호")).toBeVisible();
     expect(screen.queryByRole("img")).not.toBeInTheDocument();
     expect(screen.queryByText(/placeholder|이미지 생성/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/rationale|chain.of.thought|추론/i)).not.toBeInTheDocument();
   });
 
-  it("shows marketing-specific fields without exposing hidden reasoning", () => {
+  it("shows marketing-specific fields without exposing hidden reasoning", async () => {
+    const user = userEvent.setup();
     render(<ContentProposalCard
       item={proposal("marketing")}
       position={2}
@@ -155,6 +160,8 @@ describe("ContentProposalCard", () => {
       references={references}
       onSelect={vi.fn()}
     />);
+
+    await user.click(screen.getByText("구성안 상세 보기"));
 
     for (const label of [
       "캠페인 목적", "고객 상황·니즈", "제품", "타깃 세그먼트", "강점", "한계",
@@ -165,7 +172,8 @@ describe("ContentProposalCard", () => {
     expect(screen.getByRole("button", { name: "구성안 선택: 민감 피부 세럼 캠페인" })).toHaveAttribute("aria-pressed", "true");
   });
 
-  it("defers blog image count and shows the article outline", () => {
+  it("defers blog image count and shows the article outline", async () => {
+    const user = userEvent.setup();
     render(<ContentProposalCard
       item={proposal("informational", "blog")}
       position={3}
@@ -174,6 +182,8 @@ describe("ContentProposalCard", () => {
       references={references}
       onSelect={vi.fn()}
     />);
+
+    await user.click(screen.getByText("구성안 상세 보기"));
 
     expect(screen.getByText("이미지는 최종 작성 중 필요할 때 결정")).toBeVisible();
     const outline = screen.getByRole("list", { name: "글 개요" });

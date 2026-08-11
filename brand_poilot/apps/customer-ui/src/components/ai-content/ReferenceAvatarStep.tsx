@@ -54,6 +54,7 @@ export function ReferenceAvatarStep({
       <section aria-labelledby="brand-style-images-title">
         <h3 id="brand-style-images-title">자동 적용할 브랜드 스타일</h3>
         {styleImages.length ? <div className="brand-style-preview-grid">{styleImages.map((image) => <article key={image.referenceItemId}>
+          <span className="brand-style-auto-badge">자동 적용</span>
           {image.previewUrl
             ? <img src={image.previewUrl} alt={image.title} />
             : <p>미리보기를 표시할 수 없습니다.</p>}

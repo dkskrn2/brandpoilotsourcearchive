@@ -28,11 +28,11 @@ import { ContentStrategyStep } from "./ContentStrategyStep";
 import { ContentProposalComparison } from "./ContentProposalComparison";
 import { ReferenceAvatarStep, type BrandStyleImagePreview } from "./ReferenceAvatarStep";
 import { AiContentAttachmentUploader } from "./AiContentAttachmentUploader";
+import { AiContentPhaseProgress } from "./AiContentPhaseProgress";
 import { PageGuideButton } from "../layout/PageHeader";
 import { api, ApiRequestError } from "../../lib/apiClient";
 import { brandCenterGateway } from "../../features/brand-center/brandCenterGateway";
 
-const phases = ["콘텐츠 생성", "구성안 선택", "생성", "변경·검토·보완"];
 const sections: Array<[ContentSetupSection, string]> = [
   ["intent", "1. 목적"], ["sources", "2. 주제·자료"], ["delivery", "3. 채널·형식"],
 ];
@@ -81,6 +81,13 @@ function requestRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value)
     ? value as Record<string, unknown>
     : {};
+}
+
+function isAbortedRequest(error: unknown) {
+  return typeof error === "object"
+    && error !== null
+    && "name" in error
+    && error.name === "AbortError";
 }
 
 export function ContentProposalFlow({
@@ -228,7 +235,9 @@ export function ContentProposalFlow({
     }
     window.setTimeout(() => {
       if (!signal?.aborted && activeBrandId.current === requestedBrandId) {
-        void loadBatch(batchId, signal, requestedBrandId).catch(() => handleBatchError(requestedBrandId));
+        void loadBatch(batchId, signal, requestedBrandId).catch((caught) => {
+          if (!isAbortedRequest(caught)) handleBatchError(requestedBrandId);
+        });
       }
     }, 900);
   }
@@ -284,7 +293,9 @@ export function ContentProposalFlow({
     const controller = new AbortController();
     const requestedBrandId = brandId;
     setLoadingProposal(true);
-    void loadBatch(initialBatchId, controller.signal, requestedBrandId).catch(() => handleBatchError(requestedBrandId));
+    void loadBatch(initialBatchId, controller.signal, requestedBrandId).catch((caught) => {
+      if (!isAbortedRequest(caught)) handleBatchError(requestedBrandId);
+    });
     return () => controller.abort();
   // initialBatchId identifies the one resumable request; gateway identity must not restart polling.
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -498,16 +509,35 @@ export function ContentProposalFlow({
     }
   }
 
-  return <div className="content ai-content-wizard content-proposal-flow">
+  const displayPhase = machine.phase === "setup"
+    ? "setup"
+    : machine.phase === "proposal_selection"
+      ? "proposal_selection"
+      : machine.phase === "generating"
+        ? "generating"
+        : "reviewing";
+  const heading = displayPhase === "setup"
+    ? {
+      step: "STEP 1 OF 4",
+      title: "어떤 콘텐츠를 만들까요?",
+      description: "목적과 원문, 출력 형식을 먼저 정리합니다. 입력한 내용은 다음 단계까지 그대로 유지됩니다.",
+    }
+    : {
+      step: "STEP 2 OF 4",
+      title: "가장 좋은 방향을 선택하세요",
+      description: "구성안의 핵심 메시지와 전체 흐름을 비교하고, 브랜드 스타일과 참고 이미지를 확인합니다.",
+    };
+
+  return <div className="content ai-content-wizard content-proposal-flow ai-content-flow">
     <header className="wizard-header" data-guide="content-proposal-header">
-      <div><p>AI 콘텐츠 스튜디오</p><h1>새 AI 콘텐츠</h1></div>
+      <div>
+        <p>{heading.step}</p>
+        <h1>{heading.title}</h1>
+        <p className="wizard-header-description">{heading.description}</p>
+      </div>
       <PageGuideButton />
     </header>
-    <ol className="content-phase-progress" aria-label="콘텐츠 생성 단계">{phases.map((phase, index) =>
-      <li key={phase} aria-current={phases[index] === (machine.phase === "setup" ? phases[0] : machine.phase === "proposal_selection" ? phases[1] : machine.phase === "generating" ? phases[2] : phases[3]) ? "step" : undefined}>
-        <span>{index + 1}</span>{phase}
-      </li>,
-    )}</ol>
+    <AiContentPhaseProgress current={displayPhase} />
     {machine.phase === "setup" ? <div className="content-setup-layout">
       <main className="content-setup-accordions" data-guide="content-setup">{sections.map(([section, title]) => {
         const open = machine.activeSection === section;

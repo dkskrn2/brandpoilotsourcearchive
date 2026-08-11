@@ -2,6 +2,8 @@ import { useEffect, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { AiGenerationOutputList } from "../components/ai-content/AiGenerationOutputList";
 import { aiContentPublishErrorMessage } from "../components/ai-content/AiContentPublishPanel";
+import { AiContentGenerationStatusPanel } from "../components/ai-content/AiContentGenerationStatusPanel";
+import { AiContentPhaseProgress } from "../components/ai-content/AiContentPhaseProgress";
 import { PageHeader } from "../components/layout/PageHeader";
 import { PageSkeleton } from "../components/ui/LoadingState";
 import { aiContentApiGateway } from "../features/ai-content/aiContentApiGateway";
@@ -190,6 +192,7 @@ export function AiContentGenerationPage({
   }
 
   const completedOutputIds = generation.outputs.filter((output) => output.status === "completed").map((output) => output.id);
+  const displayFormat = v3FormatLabels[generation.outputFormat] ?? generation.outputFormat;
   const terminal = ["completed", "partial_failed", "failed"].includes(generation.status);
   const reviewing = terminal || generation.outputs.some((output) =>
     output.status === "completed" || output.status === "failed",
@@ -325,11 +328,18 @@ export function AiContentGenerationPage({
   );
 
   return (
-    <div className="content ai-content-generation-page">
+    <div className="content ai-content-generation-page ai-content-flow">
+      <AiContentPhaseProgress current={reviewing ? "reviewing" : "generating"} />
       <PageHeader
-        title="AI 콘텐츠 생성 결과"
+        title={reviewing ? "생성 결과를 확인하세요" : "콘텐츠를 만들고 있습니다"}
         description={`${generation.title}`}
         actions={<span className="muted small">생성 작업 상태: {generationStatusLabels[generation.status]}</span>}
+      />
+      <AiContentGenerationStatusPanel
+        status={generation.status}
+        generationId={generation.id}
+        completedCount={completedOutputIds.length}
+        outputCount={generation.outputs.length}
       />
       {actionError ? <div className="alert bad" role="alert">{actionError}</div> : null}
       {!reviewing ? outputList : (
@@ -424,14 +434,28 @@ export function AiContentGenerationPage({
               </section>
             ) : null}
 
-            {activeReviewTab === "final" ? (
-              <>
-                <p className="small muted">개별·선택·전체 ZIP을 받을 수 있으며 이미 받은 파일을 다시 다운로드해도 신규 다운로드 사용량은 차감되지 않습니다.</p>
-                {outputList}
-              </>
+            {activeReviewTab === "final" || activeReviewTab === "publish" ? (
+              <div className="ai-content-result-layout">
+                <div className="ai-content-result-primary">
+                  {activeReviewTab === "final" ? (
+                    <p className="small muted">개별·선택·전체 ZIP을 받을 수 있으며 이미 받은 파일을 다시 다운로드해도 신규 다운로드 사용량은 차감되지 않습니다.</p>
+                  ) : null}
+                  {outputList}
+                </div>
+                <aside className="ai-content-result-summary" aria-label="결과 정보">
+                  <span className="ai-content-result-summary__eyebrow">RESULT DETAILS</span>
+                  <h2>결과 정보</h2>
+                  <dl>
+                    <div><dt>상태</dt><dd>{generationStatusLabels[generation.status]}</dd></div>
+                    <div><dt>형식</dt><dd>{displayFormat}</dd></div>
+                    <div><dt>완료 결과</dt><dd>{completedOutputIds.length} / {generation.outputs.length}</dd></div>
+                    <div><dt>콘텐츠 제목</dt><dd>{generation.title}</dd></div>
+                    <div><dt>생성 ID</dt><dd><code>{generation.id}</code></dd></div>
+                  </dl>
+                  <p>다운로드와 게시는 각각 실행되며, 기존 결과 파일과 게시 기능은 그대로 유지됩니다.</p>
+                </aside>
+              </div>
             ) : null}
-
-            {activeReviewTab === "publish" ? outputList : null}
           </div>
         </section>
       )}

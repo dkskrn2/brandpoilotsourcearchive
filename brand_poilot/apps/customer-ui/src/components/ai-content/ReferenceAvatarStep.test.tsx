@@ -66,6 +66,7 @@ describe("ReferenceAvatarStep", () => {
     expect(screen.getByRole("heading", { name: "브랜드 스타일과 이미지 설정" })).toBeVisible();
     expect(screen.getByRole("img", { name: "차분한 편집 스타일" })).toHaveAttribute("src", styles[0]!.previewUrl);
     expect(screen.getByRole("img", { name: "선명한 제품 스타일" })).toHaveAttribute("src", styles[1]!.previewUrl);
+    expect(screen.getAllByText("자동 적용")).toHaveLength(styles.length);
     await user.click(screen.getByRole("radio", { name: /차분한 편집 스타일/ }));
     await user.click(screen.getByRole("radio", { name: /선명한 제품 스타일/ }));
     expect(screen.getByRole("radio", { name: /차분한 편집 스타일/ })).not.toBeChecked();

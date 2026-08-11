@@ -79,51 +79,60 @@ export function ContentProposalCard({
       <span>구성안 {position}</span>
       <h3>{proposal.title}</h3>
     </header>
-    <dl className="proposal-details">
-      <div><dt>기획 의도</dt><dd>{proposal.oneLineIntent}</dd></div>
-      <div><dt>이 안의 차별점</dt><dd>{proposal.differentiator}</dd></div>
-      <div><dt>대상</dt><dd>{proposal.target}</dd></div>
-      <div><dt>상황</dt><dd>{proposal.customerContext}</dd></div>
-      <div><dt>핵심 메시지</dt><dd>{proposal.keyMessage}</dd></div>
-      <div><dt>훅</dt><dd>{proposal.hook}</dd></div>
-      <div><dt>선택 이유</dt><dd>{proposal.selectionReason}</dd></div>
-      <div><dt>출력 형식·채널</dt><dd>{proposal.outputFormat} · {proposal.channelTargets.join(", ")}</dd></div>
-      {details.kind === "informational" ? <>
-        <div><dt>정보 유형</dt><dd>{informationalTypeLabel[proposal.informationalType!]}</dd></div>
-        <div><dt>독자 질문</dt><dd>{details.question}</dd></div>
-        <div><dt>제공 가치</dt><dd>{details.value}</dd></div>
-        <div><dt>지금 다룰 이유</dt><dd>{details.whyNow}</dd></div>
-        <div><dt>핵심 학습 포인트</dt><dd><TextList values={details.learningPoints} /></dd></div>
-      </> : <>
-        <div><dt>캠페인 목적</dt><dd>{details.campaignObjective}</dd></div>
-        <div><dt>고객 상황·니즈</dt><dd>{details.situationAndNeed}</dd></div>
-        <div><dt>제품</dt><dd>{details.productId}</dd></div>
-        <div><dt>타깃 세그먼트</dt><dd>{details.targetSegment}</dd></div>
-        <div><dt>강점</dt><dd><TextList values={details.strengths} /></dd></div>
-        <div><dt>한계</dt><dd><TextList values={details.limitations} /></dd></div>
-        <div><dt>소구점</dt><dd>{details.appeal}</dd></div>
-        <div><dt>구매 장벽</dt><dd><TextList values={details.buyingBarriers} /></dd></div>
-        <div><dt>CTA</dt><dd>{details.cta}</dd></div>
-      </>}
-      <div><dt>검색 근거</dt><dd>{usedEvidence.length ? <ul>{usedEvidence.map((source) => <li key={source.id}>
-        <a href={source.url} target="_blank" rel="noreferrer">{source.title}</a>{source.publisher ? ` · ${source.publisher}` : ""}
-      </li>)}</ul> : "없음"}</dd></div>
-      <div><dt>사용 레퍼런스</dt><dd>{usedReferences.length ? <ul>{usedReferences.map((reference) => <li key={reference.id}>
-        <span>{reference.title}</span>{reference.preview.url ? <> · <a href={reference.preview.url} target="_blank" rel="noreferrer">{reference.title} 미리보기</a></> : null}
-      </li>)}</ul> : "없음"}</dd></div>
-      {isBlog
-        ? <div><dt>이미지</dt><dd>이미지는 최종 작성 중 필요할 때 결정</dd></div>
-        : <div><dt>제안 장수</dt><dd>{proposal.assetCount}장</dd></div>}
-    </dl>
-    <section>
-      <h4>{isBlog ? "글 개요" : "장면별 개요"}</h4>
-      <ol aria-label={isBlog ? "글 개요" : "장면별 개요"} className="proposal-outline">
-        {proposal.outline.map((outline) => <li key={outline.index}>
-          <strong>{outline.index}. {outline.role} · {outline.headline}</strong>
-          <span>{outline.purpose}</span>
-        </li>)}
-      </ol>
-    </section>
+    <p className="proposal-card-intent">{proposal.oneLineIntent}</p>
+    <p className="proposal-card-differentiator"><strong>이 안의 차별점</strong>{proposal.differentiator}</p>
+    <div className="proposal-card-summary" aria-label="구성안 요약">
+      <span>{proposal.outputFormat}</span>
+      <span>{proposal.channelTargets.join(", ")}</span>
+      <span>{isBlog ? "글 구성" : `${proposal.assetCount}장`}</span>
+    </div>
+    <details className="proposal-card-details">
+      <summary>구성안 상세 보기</summary>
+      <dl className="proposal-details">
+        <div><dt>기획 의도</dt><dd>{proposal.oneLineIntent}</dd></div>
+        <div><dt>대상</dt><dd>{proposal.target}</dd></div>
+        <div><dt>상황</dt><dd>{proposal.customerContext}</dd></div>
+        <div><dt>핵심 메시지</dt><dd>{proposal.keyMessage}</dd></div>
+        <div><dt>훅</dt><dd>{proposal.hook}</dd></div>
+        <div><dt>선택 이유</dt><dd>{proposal.selectionReason}</dd></div>
+        <div><dt>출력 형식·채널</dt><dd>{proposal.outputFormat} · {proposal.channelTargets.join(", ")}</dd></div>
+        {details.kind === "informational" ? <>
+          <div><dt>정보 유형</dt><dd>{informationalTypeLabel[proposal.informationalType!]}</dd></div>
+          <div><dt>독자 질문</dt><dd>{details.question}</dd></div>
+          <div><dt>제공 가치</dt><dd>{details.value}</dd></div>
+          <div><dt>지금 다룰 이유</dt><dd>{details.whyNow}</dd></div>
+          <div><dt>핵심 학습 포인트</dt><dd><TextList values={details.learningPoints} /></dd></div>
+        </> : <>
+          <div><dt>캠페인 목적</dt><dd>{details.campaignObjective}</dd></div>
+          <div><dt>고객 상황·니즈</dt><dd>{details.situationAndNeed}</dd></div>
+          <div><dt>제품</dt><dd>{details.productId}</dd></div>
+          <div><dt>타깃 세그먼트</dt><dd>{details.targetSegment}</dd></div>
+          <div><dt>강점</dt><dd><TextList values={details.strengths} /></dd></div>
+          <div><dt>한계</dt><dd><TextList values={details.limitations} /></dd></div>
+          <div><dt>소구점</dt><dd>{details.appeal}</dd></div>
+          <div><dt>구매 장벽</dt><dd><TextList values={details.buyingBarriers} /></dd></div>
+          <div><dt>CTA</dt><dd>{details.cta}</dd></div>
+        </>}
+        <div><dt>검색 근거</dt><dd>{usedEvidence.length ? <ul>{usedEvidence.map((source) => <li key={source.id}>
+          <a href={source.url} target="_blank" rel="noreferrer">{source.title}</a>{source.publisher ? ` · ${source.publisher}` : ""}
+        </li>)}</ul> : "없음"}</dd></div>
+        <div><dt>사용 레퍼런스</dt><dd>{usedReferences.length ? <ul>{usedReferences.map((reference) => <li key={reference.id}>
+          <span>{reference.title}</span>{reference.preview.url ? <> · <a href={reference.preview.url} target="_blank" rel="noreferrer">{reference.title} 미리보기</a></> : null}
+        </li>)}</ul> : "없음"}</dd></div>
+        {isBlog
+          ? <div><dt>이미지</dt><dd>이미지는 최종 작성 중 필요할 때 결정</dd></div>
+          : <div><dt>제안 장수</dt><dd>{proposal.assetCount}장</dd></div>}
+      </dl>
+      <section>
+        <h4>{isBlog ? "글 개요" : "장면별 개요"}</h4>
+        <ol aria-label={isBlog ? "글 개요" : "장면별 개요"} className="proposal-outline">
+          {proposal.outline.map((outline) => <li key={outline.index}>
+            <strong>{outline.index}. {outline.role} · {outline.headline}</strong>
+            <span>{outline.purpose}</span>
+          </li>)}
+        </ol>
+      </section>
+    </details>
     <button type="button" className="button primary" aria-pressed={selected} disabled={disabled} onClick={onSelect}>
       구성안 선택: {proposal.title}
     </button>

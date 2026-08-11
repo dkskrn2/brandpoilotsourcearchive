@@ -1,4 +1,5 @@
 import "@testing-library/jest-dom/vitest";
+import { StrictMode } from "react";
 import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
@@ -115,14 +116,26 @@ function renderFlow(options: {
   productLoader?: (brandId: string) => Promise<ProductServiceItem[]>;
   rulesLoader?: (brandId: string) => Promise<unknown>;
   styleReferenceLoader?: (brandId: string, referenceId: string) => Promise<unknown>;
+  strictMode?: boolean;
+  abortFirstBatchLoad?: boolean;
 } = {}) {
   const gateway = createMockAiContentGateway();
   const create = vi.spyOn(gateway, "createProposalBatch").mockResolvedValue({ batchId: "batch-1", status: "queued" });
-  const getBatch = vi.spyOn(gateway, "getProposalBatch").mockResolvedValue({
+  const readyBatch: Awaited<ReturnType<typeof gateway.getProposalBatch>> = {
     id: "batch-1", workspaceId: "workspace-1", brandId: "brand-demo", origin: "manual",
     contentFamily: "informational", request: options.batchRequest ?? {}, sourceSnapshots: [{ title: "브랜드 가이드" }],
     status: "ready", proposals, errorCode: null, errorMessage: null,
     createdAt: "2026-07-28T00:00:00.000Z", updatedAt: "2026-07-28T00:00:00.000Z",
+  };
+  let batchLoadCount = 0;
+  const getBatch = vi.spyOn(gateway, "getProposalBatch").mockImplementation((_brandId, _batchId, signal) => {
+    batchLoadCount += 1;
+    if (options.abortFirstBatchLoad && batchLoadCount === 1) {
+      return new Promise((_resolve, reject) => {
+        signal?.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")), { once: true });
+      });
+    }
+    return Promise.resolve(readyBatch);
   });
   const listReferences = vi.spyOn(gateway, "listReferences").mockResolvedValue([
     {
@@ -221,7 +234,7 @@ function renderFlow(options: {
     saveInstagramTrendSource: vi.fn(),
   };
 
-  const view = (brandId: string) => <MemoryRouter><ContentProposalFlow
+  const flow = (brandId: string) => <MemoryRouter><ContentProposalFlow
     brandId={brandId}
     gateway={gateway}
     libraries={libraries}
@@ -232,6 +245,9 @@ function renderFlow(options: {
     referenceTrendGateway={referenceTrendGateway}
     {...({ rulesGateway: { getRules }, assetGateway: { getReference } } as object)}
   /></MemoryRouter>;
+  const view = (brandId: string) => options.strictMode
+    ? <StrictMode>{flow(brandId)}</StrictMode>
+    : flow(brandId);
   const rendered = render(view(options.brandId ?? "brand-demo"));
   return {
     gateway, create, getBatch, listReferences, listReferenceSeeds, libraries,
@@ -347,9 +363,14 @@ describe("ContentProposalFlow", () => {
     const user = userEvent.setup();
     const { create, listReferences, listReferenceSeeds, getRules } = renderFlow();
 
+    expect(screen.getByRole("heading", { name: "어떤 콘텐츠를 만들까요?" })).toBeVisible();
     expect(screen.getAllByRole("listitem").slice(0, 4).map((item) => item.textContent)).toEqual([
-      "1콘텐츠 생성", "2구성안 선택", "3생성", "4변경·검토·보완",
+      "1콘텐츠 설정목적·원문·형식",
+      "2구성안·스타일방향·첨부 선택",
+      "3콘텐츠 생성기획·이미지 제작",
+      "4결과 확인검토·다운로드·게시",
     ]);
+    expect(screen.getByText("콘텐츠 설정").closest("li")).toHaveAttribute("aria-current", "step");
     expect(screen.getByRole("button", { name: "1. 목적" })).toBeVisible();
     expect(screen.getByRole("button", { name: "2. 주제·자료" })).toBeVisible();
     expect(screen.getByRole("button", { name: "3. 채널·형식" })).toBeVisible();
@@ -366,6 +387,8 @@ describe("ContentProposalFlow", () => {
     await user.click(screen.getByRole("button", { name: "주제·자료 완료" }));
     await user.click(await screen.findByRole("button", { name: "Instagram" }));
     await user.click(screen.getByRole("button", { name: "AI 구성안 만들기" }));
+
+    expect(await screen.findByRole("heading", { name: "가장 좋은 방향을 선택하세요" })).toBeVisible();
 
     expect(create).toHaveBeenCalledTimes(1);
     expect(create).toHaveBeenCalledWith("brand-demo", {
@@ -418,8 +441,8 @@ describe("ContentProposalFlow", () => {
     });
 
     expect(await screen.findByText("복원된 브랜드 주제")).toBeVisible();
-    expect(screen.getByText("blog")).toBeVisible();
-    expect(screen.getByText("blog_export")).toBeVisible();
+    expect(screen.getAllByText("blog")[0]).toBeVisible();
+    expect(screen.getAllByText("blog_export")[0]).toBeVisible();
     expect(screen.getByText("여름 피부 3단계 관리")).toBeVisible();
   });
 
@@ -526,6 +549,13 @@ describe("ContentProposalFlow", () => {
     await act(async () => { await Promise.resolve(); });
 
     expect(getBatch).not.toHaveBeenCalledWith("brand-new", "batch-1", expect.any(AbortSignal));
+  });
+
+  it("does not show a proposal error when StrictMode aborts the first resume request", async () => {
+    renderFlow({ initialBatchId: "batch-1", strictMode: true, abortFirstBatchLoad: true });
+
+    expect(await screen.findByRole("heading", { name: "가장 좋은 방향을 선택하세요" })).toBeVisible();
+    expect(screen.queryByText("AI 구성안을 불러오지 못했습니다. 입력을 유지한 채 다시 시도해 주세요.")).not.toBeInTheDocument();
   });
 
   it("surfaces server revalidation when a frozen reference becomes unavailable", async () => {

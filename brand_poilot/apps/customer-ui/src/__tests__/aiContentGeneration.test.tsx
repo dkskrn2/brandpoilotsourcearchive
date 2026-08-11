@@ -51,7 +51,12 @@ describe("AiContentGenerationPage", () => {
     renderGeneration("generation-card-complete");
 
     expect(await screen.findByRole("heading", { name: "생성 결과 상세" })).toBeVisible();
+    expect(screen.getByRole("heading", { name: "생성 결과를 확인하세요" })).toBeVisible();
+    expect(screen.getByText("결과 확인").closest("li")).toHaveAttribute("aria-current", "step");
     expect(screen.getByText("형식: 카드뉴스 · 여름 추천 카드뉴스")).toBeVisible();
+    expect(screen.getByRole("region", { name: "생성 완료 요약" })).toHaveClass("is-success");
+    expect(screen.getByRole("complementary", { name: "결과 정보" })).toHaveTextContent("카드뉴스");
+    expect(screen.getByRole("complementary", { name: "결과 정보" })).toHaveTextContent("generation-card-complete");
     expect(screen.getByText("Instagram OAuth 게시 계정 미연결")).toBeVisible();
     expect(screen.getAllByRole("link", { name: "연결하기" })[0]).toHaveAttribute("href", expect.stringContaining("/auth/meta/start"));
 
@@ -107,7 +112,8 @@ describe("AiContentGenerationPage", () => {
       configuredGateway.retryOutput = vi.fn(configuredGateway.retryOutput.bind(configuredGateway));
     });
 
-    const outputRows = await screen.findAllByRole("listitem");
+    const outputRows = within(await screen.findByRole("list", { name: "생성 결과 목록" }))
+      .getAllByRole("listitem");
     const failedOutputRow = outputRows[1];
     expect(within(failedOutputRow).getByText("실패 사유: 이미지 생성 실패")).toBeVisible();
 
@@ -282,7 +288,8 @@ describe("AiContentGenerationPage", () => {
       });
     });
 
-    const rows = await screen.findAllByRole("listitem");
+    const rows = within(await screen.findByRole("list", { name: "생성 결과 목록" }))
+      .getAllByRole("listitem");
     const failedRow = rows[1];
     expect(screen.queryByRole("region", { name: "SNS에 바로 게시" })).not.toBeInTheDocument();
     await user.type(within(failedRow).getByLabelText("문제 해결형 다시 생성 사유"), "다시 생성");
@@ -312,6 +319,9 @@ describe("AiContentGenerationPage", () => {
   it("shows planning state", async () => {
     renderGeneration("generation-planning");
     expect(await screen.findByText("기획 중")).toBeVisible();
+    expect(screen.getByRole("heading", { name: "콘텐츠를 만들고 있습니다" })).toBeVisible();
+    expect(screen.getByText("콘텐츠 생성").closest("li")).toHaveAttribute("aria-current", "step");
+    expect(screen.getByRole("status")).toHaveTextContent("선택한 구성안으로 콘텐츠를 기획하고 있습니다.");
   });
 
   it("shows reel contracts with selected and all ZIP actions", async () => {
@@ -319,7 +329,8 @@ describe("AiContentGenerationPage", () => {
 
     expect(await screen.findByText("형식: 릴스 · 신제품 출시 마케팅 소재")).toBeVisible();
 
-    const outputRows = screen.getAllByRole("listitem");
+    const outputRows = within(screen.getByRole("list", { name: "생성 결과 목록" }))
+      .getAllByRole("listitem");
     expect(within(outputRows[0]).getByRole("button", { name: "혜택 강조형 결과 ZIP 다운로드" })).toBeEnabled();
 
     expect(screen.getByRole("button", { name: "선택 결과 ZIP" })).toBeEnabled();
@@ -489,7 +500,8 @@ describe("AiContentGenerationPage", () => {
     });
 
     await user.click(await screen.findByRole("tab", { name: "완성본" }));
-    const outputRows = screen.getAllByRole("listitem");
+    const outputRows = within(screen.getByRole("list", { name: "생성 결과 목록" }))
+      .getAllByRole("listitem");
     const failedOutputRow = outputRows[1];
     await user.type(within(failedOutputRow).getByLabelText("문제 해결형 다시 생성 사유"), "실패한 이미지만 다시 생성");
     await user.click(within(failedOutputRow).getByRole("button", { name: /결과 2 다시 생성/ }));
