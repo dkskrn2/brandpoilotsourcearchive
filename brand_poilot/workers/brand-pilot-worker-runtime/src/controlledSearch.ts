@@ -452,6 +452,26 @@ function normalizeUrl(value: string): string {
   return url.toString();
 }
 
+const TRACKING_QUERY_PARAMETERS = new Set([
+  "dclid",
+  "fbclid",
+  "gclid",
+  "mc_cid",
+  "mc_eid",
+  "msclkid",
+]);
+
+function observedSourceKey(value: string): string {
+  const url = new URL(normalizeUrl(value));
+  for (const key of [...url.searchParams.keys()]) {
+    const normalizedKey = key.toLowerCase();
+    if (normalizedKey.startsWith("utm_") || TRACKING_QUERY_PARAMETERS.has(normalizedKey)) {
+      url.searchParams.delete(key);
+    }
+  }
+  return url.toString();
+}
+
 function observedWebSearchUrls(event: Record<string, unknown>): string[] {
   const item = object(event.item);
   const values: string[] = [];
@@ -503,7 +523,7 @@ function auditEvents(
   for (const event of events) {
     if (auditEventSafety(event, search)) {
       webSearchSeen = true;
-      for (const url of observedWebSearchUrls(event)) observed.add(normalizeUrl(url));
+      for (const url of observedWebSearchUrls(event)) observed.add(observedSourceKey(url));
       for (const query of observedWebSearchQueries(event)) executedQueries.add(query);
     }
   }
@@ -591,7 +611,8 @@ function composeEvidence(
     if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new Error("controlled_search_result_invalid");
     const source = raw as Record<string, unknown>;
     const url = normalizeUrl(text(source.url, 2_000));
-    if ((observed.size > 0 && !observed.has(url)) || (observed.size === 0 && !queryOnlyAuditMatched)) {
+    if ((observed.size > 0 && !observed.has(observedSourceKey(url)))
+      || (observed.size === 0 && !queryOnlyAuditMatched)) {
       throw new Error("controlled_search_unobserved_source");
     }
     if (byUrl.has(url)) continue;

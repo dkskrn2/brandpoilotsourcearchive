@@ -411,6 +411,32 @@ describe("controlled proposal search", () => {
     expect(item.contentHash).toBe(expectedHash);
   });
 
+  it("accepts the same observed article after removing known tracking parameters", async () => {
+    const observedUrl = "https://www.theverge.com/streaming/977474/youtube-partner-program-new-requirements?utm_source=chatgpt.com";
+    const canonicalUrl = "https://www.theverge.com/streaming/977474/youtube-partner-program-new-requirements";
+    const runner = injectedRunner(`${webEvent(observedUrl)}\n${searchedResult(canonicalUrl)}`);
+
+    await expect(runControlledSearch({
+      purpose: "informational",
+      mode: "required",
+      publicResearchContext: publicContext("informational"),
+    }, { runChild: runner.run })).resolves.toMatchObject({
+      items: [{ url: canonicalUrl }],
+    });
+  });
+
+  it("does not ignore content-bearing query parameters when matching observed sources", async () => {
+    const observedUrl = "https://publisher.example/article?id=1";
+    const differentUrl = "https://publisher.example/article?id=2";
+    const runner = injectedRunner(`${webEvent(observedUrl)}\n${searchedResult(differentUrl)}`);
+
+    await expect(runControlledSearch({
+      purpose: "informational",
+      mode: "required",
+      publicResearchContext: publicContext("informational"),
+    }, { runChild: runner.run })).rejects.toThrow("controlled_search_unobserved_source");
+  });
+
   it.each([
     ["credentialed URL", `${JSON.stringify({ type: "item.completed", item: { type: "web_search", url: "https://user:password@source.example/a" } })}\n${searchedResult("https://user:password@source.example/a")}`, "controlled_search_source_url_invalid"],
     ["unobserved URL", `${webEvent()}\n${searchedResult("https://invented.example/a")}`, "controlled_search_unobserved_source"],
