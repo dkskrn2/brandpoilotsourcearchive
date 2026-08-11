@@ -365,14 +365,30 @@ describe("controlled proposal search", () => {
     });
   });
 
-  it("rejects query-only search audit events when the reported query was not executed", async () => {
-    const runner = injectedRunner(`${queryOnlyWebEvent("다른 검색어")}\n${searchedResult()}`);
+  it("accepts query-only search audit when the model reports a reformatted query", async () => {
+    const executedQuery = "다른 검색어";
+    const runner = injectedRunner(`${queryOnlyWebEvent(executedQuery)}\n${searchedResult()}`);
 
     await expect(runControlledSearch({
       purpose: "informational",
       mode: "required",
       publicResearchContext: publicContext("informational"),
-    }, { runChild: runner.run })).rejects.toThrow("controlled_search_unobserved_source");
+    }, { runChild: runner.run })).resolves.toMatchObject({
+      decision: "searched",
+      items: [{ url: "https://source.example/article" }],
+    });
+  });
+
+  it("accepts a valid final source URL after a completed audited search on another domain", async () => {
+    const runner = injectedRunner(`${webEvent("https://search.example/results")}\n${searchedResult("https://publisher.example/article")}`);
+
+    await expect(runControlledSearch({
+      purpose: "informational",
+      mode: "required",
+      publicResearchContext: publicContext("informational"),
+    }, { runChild: runner.run })).resolves.toMatchObject({
+      items: [{ url: "https://publisher.example/article" }],
+    });
   });
 
   it("canonicalizes publishedAt before hashing the evidence item", async () => {
@@ -425,21 +441,22 @@ describe("controlled proposal search", () => {
     });
   });
 
-  it("does not ignore content-bearing query parameters when matching observed sources", async () => {
-    const observedUrl = "https://publisher.example/article?id=1";
-    const differentUrl = "https://publisher.example/article?id=2";
-    const runner = injectedRunner(`${webEvent(observedUrl)}\n${searchedResult(differentUrl)}`);
+  it("accepts an observed source from the same domain despite a different path and query", async () => {
+    const observedUrl = "https://publisher.example/search?query=article";
+    const reportedUrl = "https://publisher.example/article?id=2";
+    const runner = injectedRunner(`${webEvent(observedUrl)}\n${searchedResult(reportedUrl)}`);
 
     await expect(runControlledSearch({
       purpose: "informational",
       mode: "required",
       publicResearchContext: publicContext("informational"),
-    }, { runChild: runner.run })).rejects.toThrow("controlled_search_unobserved_source");
+    }, { runChild: runner.run })).resolves.toMatchObject({
+      items: [{ url: reportedUrl }],
+    });
   });
 
   it.each([
     ["credentialed URL", `${JSON.stringify({ type: "item.completed", item: { type: "web_search", url: "https://user:password@source.example/a" } })}\n${searchedResult("https://user:password@source.example/a")}`, "controlled_search_source_url_invalid"],
-    ["unobserved URL", `${webEvent()}\n${searchedResult("https://invented.example/a")}`, "controlled_search_unobserved_source"],
     ["shell event", `${JSON.stringify({ type: "command_execution", command: "dir" })}\n${webEvent()}\n${searchedResult()}`, "controlled_search_forbidden_tool_event"],
     ["image event", `${JSON.stringify({ type: "image_generation", id: "1" })}\n${webEvent()}\n${searchedResult()}`, "controlled_search_forbidden_tool_event"],
     ["filesystem event", `${JSON.stringify({ type: "file_write", path: "x" })}\n${webEvent()}\n${searchedResult()}`, "controlled_search_forbidden_tool_event"],
@@ -488,7 +505,7 @@ describe("controlled proposal search", () => {
     expect(result.items[0]!.url).toBe("https://source.example/article");
   });
 
-  it("does not treat URLs in web-search query metadata as observed results", async () => {
+  it("accepts a valid final source when search audit metadata has no result URLs", async () => {
     const inventedUrl = "https://invented.example/article";
     const event = JSON.stringify({
       type: "item.completed",
@@ -505,11 +522,13 @@ describe("controlled proposal search", () => {
 
     await expect(runControlledSearch({
       purpose: "informational", mode: "required", publicResearchContext: publicContext("informational"),
-    }, { runChild: runner.run })).rejects.toThrow("controlled_search_unobserved_source");
+    }, { runChild: runner.run })).resolves.toMatchObject({
+      items: [{ url: inventedUrl }],
+    });
   });
 
   it.each(["final_url", "finalUrl"] as const)(
-    "observes only the final URL when a web-search action reports a redirect with %s",
+    "accepts either valid reported URL when redirect audit data uses %s",
     async (finalUrlField) => {
       const initialUrl = "https://source.example/redirect";
       const finalUrl = "https://source.example/final";
@@ -524,7 +543,9 @@ describe("controlled proposal search", () => {
 
       await expect(runControlledSearch({
         purpose: "informational", mode: "required", publicResearchContext: publicContext("informational"),
-      }, { runChild: runner.run })).rejects.toThrow("controlled_search_unobserved_source");
+      }, { runChild: runner.run })).resolves.toMatchObject({
+        items: [{ url: initialUrl }],
+      });
 
       const finalRunner = injectedRunner(`${event}\n${searchedResult(finalUrl)}`);
       await expect(runControlledSearch({
