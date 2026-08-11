@@ -26,9 +26,11 @@ describe("reel production runtime", () => {
       expect(Object.keys(schema.properties)).toEqual(["contractVersion", "content", "assets"]);
       expect(schema.properties.assets.items.additionalProperties).toBe(false);
       expect(Object.keys(schema.properties.assets.items.properties)).toEqual([
-        "index", "role", "copy", "visualDirection", "evidenceIds", "productImageAssetIds",
+        "index", "role", "coreMessage", "headline", "keyVisual", "supportingTexts", "footnote",
+        "visualDirection", "evidenceIds", "productImageAssetIds",
       ]);
       expect(args[args.indexOf("--output-schema") + 1]).toBe(schemaPath);
+      expect(schemaPath).toContain("reel-plan-draft-v2.schema.json");
       expect(args.join(" ")).not.toContain("reel-plan-v2.schema.json");
     } finally {
       await rm(outputDir, { recursive: true, force: true });

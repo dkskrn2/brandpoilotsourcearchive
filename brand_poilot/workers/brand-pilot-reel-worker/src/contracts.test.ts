@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { parseReelJob, parseReelPlanDraftForInput } from "./contracts.js";
+import {
+  parseReelJob,
+  parseReelPlanDraftForInput,
+  parseStructuredReelPlanDraftForInput,
+} from "./contracts.js";
 
 const uid = (value: number) => `00000000-0000-4000-8000-${String(value).padStart(12, "0")}`;
 
@@ -29,7 +33,80 @@ function draft() {
   };
 }
 
+function structuredDraft() {
+  return {
+    contractVersion: "reel-plan-draft.v2",
+    content: { caption: "핵심을 설명합니다.", hashtags: ["#가이드"], cta: "저장해 두세요." },
+    assets: [
+      {
+        index: 1,
+        role: "hook",
+        coreMessage: "온도 하나가 맛을 바꿉니다.",
+        headline: "차 맛은 온도에서 갈립니다",
+        keyVisual: { type: "number", texts: ["80°C"] },
+        supportingTexts: ["떫은맛은 줄이고 향은 살립니다"],
+        footnote: "차 종류에 따라 달라질 수 있습니다",
+        visualDirection: "헤드라인과 숫자를 세로 화면 중앙에 크게 배치",
+        evidenceIds: [uid(1)],
+        productImageAssetIds: [uid(2)],
+      },
+      {
+        index: 2,
+        role: "explanation",
+        coreMessage: "순서대로 따르면 됩니다.",
+        headline: "세 단계로 끝내세요",
+        keyVisual: { type: "steps", texts: ["데우기", "우리기", "마시기"] },
+        supportingTexts: [],
+        footnote: null,
+        visualDirection: "세 단계를 위에서 아래로 연결",
+        evidenceIds: [uid(1)],
+        productImageAssetIds: [],
+      },
+    ],
+  };
+}
+
 describe("reel worker contract", () => {
+  it("compiles structured scene copy to the existing reel-plan-draft.v1 API body", () => {
+    expect(parseStructuredReelPlanDraftForInput(structuredDraft(), input())).toEqual({
+      contractVersion: "reel-plan-draft.v1",
+      content: structuredDraft().content,
+      assets: [
+        {
+          index: 1,
+          role: "hook",
+          copy: "차 맛은 온도에서 갈립니다\n80°C\n떫은맛은 줄이고 향은 살립니다\n차 종류에 따라 달라질 수 있습니다",
+          visualDirection: "정보 위계(서버 고정): headline=1; keyVisual=number:1; supportingTexts=1; footnote=1\n헤드라인과 숫자를 세로 화면 중앙에 크게 배치",
+          evidenceIds: [uid(1)],
+          productImageAssetIds: [uid(2)],
+        },
+        {
+          index: 2,
+          role: "explanation",
+          copy: "세 단계로 끝내세요\n데우기\n우리기\n마시기",
+          visualDirection: "정보 위계(서버 고정): headline=1; keyVisual=steps:3; supportingTexts=0; footnote=0\n세 단계를 위에서 아래로 연결",
+          evidenceIds: [uid(1)],
+          productImageAssetIds: [],
+        },
+      ],
+    });
+  });
+
+  it("rejects filler fields and inconsistent key visual structure", () => {
+    expect(() => parseStructuredReelPlanDraftForInput({
+      ...structuredDraft(),
+      assets: [{ ...structuredDraft().assets[0], extraCopy: "채우기 문구" }, structuredDraft().assets[1]],
+    }, input())).toThrow("reel_structured_draft_invalid");
+    expect(() => parseStructuredReelPlanDraftForInput({
+      ...structuredDraft(),
+      assets: [{ ...structuredDraft().assets[0], keyVisual: { type: "none", texts: ["불필요"] } }, structuredDraft().assets[1]],
+    }, input())).toThrow("reel_structured_draft_invalid");
+    expect(() => parseStructuredReelPlanDraftForInput({
+      ...structuredDraft(),
+      assets: [{ ...structuredDraft().assets[0], supportingTexts: ["1", "2", "3"] }, structuredDraft().assets[1]],
+    }, input())).toThrow("reel_structured_draft_invalid");
+  });
+
   it("accepts only V3 reel generate jobs", () => {
     const job = {
       id: "job-1", generationId: "generation-1", outputId: "output-1",

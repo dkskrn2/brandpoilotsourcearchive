@@ -32,9 +32,35 @@ function job(): ReelJob {
 
 function reelDraft() {
   return {
-    contractVersion: "reel-plan-draft.v1",
+    contractVersion: "reel-plan-draft.v2",
     content: { caption: "Useful caption", hashtags: ["guide"], cta: "Save" },
-    assets: [{ index: 1, role: "scene", copy: "Explain the fixed evidence clearly.", visualDirection: "Vertical editorial scene.", evidenceIds: [uid(4)], productImageAssetIds: [] }],
+    assets: [{
+      index: 1,
+      role: "scene",
+      coreMessage: "Explain the fixed evidence clearly.",
+      headline: "Use the verified process",
+      keyVisual: { type: "none", texts: [] },
+      supportingTexts: ["Explain the fixed evidence clearly."],
+      footnote: null,
+      visualDirection: "Vertical editorial scene.",
+      evidenceIds: [uid(4)],
+      productImageAssetIds: [],
+    }],
+  };
+}
+
+function compiledDraft() {
+  return {
+    contractVersion: "reel-plan-draft.v1",
+    content: reelDraft().content,
+    assets: [{
+      index: 1,
+      role: "scene",
+      copy: "Use the verified process\nExplain the fixed evidence clearly.",
+      visualDirection: "정보 위계(서버 고정): headline=1; keyVisual=none:0; supportingTexts=1; footnote=0\nVertical editorial scene.",
+      evidenceIds: [uid(4)],
+      productImageAssetIds: [],
+    }],
   };
 }
 
@@ -66,9 +92,9 @@ describe("reel worker", () => {
     expect(client.complete).toHaveBeenCalledWith(item.id, {
       workerId: "worker",
       leaseToken: "lease",
-      skillVersion: expect.any(String),
+      skillVersion: "reel-plan-skill.v5",
       jobType: "generate",
-      planDraft: reelDraft(),
+      planDraft: compiledDraft(),
     });
     expect(client.fail).not.toHaveBeenCalled();
     expect(client.heartbeat).not.toHaveBeenCalled();
@@ -88,7 +114,7 @@ describe("reel worker", () => {
 
     expect(planner.run).toHaveBeenCalledTimes(2);
     expect(planner.run.mock.calls[1]?.[1]).toContain("reel_plan_draft_outline_mismatch");
-    expect(client.complete).toHaveBeenCalledWith(item.id, expect.objectContaining({ planDraft: reelDraft() }));
+    expect(client.complete).toHaveBeenCalledWith(item.id, expect.objectContaining({ planDraft: compiledDraft() }));
     expect(first.cleanup).toHaveBeenCalledOnce();
     expect(second.cleanup).toHaveBeenCalledOnce();
   });

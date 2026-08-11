@@ -11,7 +11,7 @@ import {
   type CodexAccountPool,
 } from "@brand-pilot/worker-runtime";
 import type { ReelPlanDraftV1 } from "@brand-pilot/content-contracts/planner-drafts";
-import { parseReelInput, parseReelPlanDraftForInput, type ReelClient, type ReelJob } from "./contracts.js";
+import { parseReelInput, parseStructuredReelPlanDraftForInput, type ReelClient, type ReelJob } from "./contracts.js";
 import { buildReelPlanPrompt, reelPlanSkillVersion } from "./promptBuilder.js";
 
 export interface ReelPlanner {
@@ -81,7 +81,7 @@ export async function runOnce(input: { workerId: string; client: ReelClient; pla
       const run = await input.planner.run(job, buildReelPlanPrompt(finalInput, repairError), lease.signal);
       runs.push(run);
       try {
-        planDraft = parseReelPlanDraftForInput(
+        planDraft = parseStructuredReelPlanDraftForInput(
           JSON.parse(await readFile(path.join(run.outputDir, "reel-plan.json"), "utf8")),
           finalInput,
         );

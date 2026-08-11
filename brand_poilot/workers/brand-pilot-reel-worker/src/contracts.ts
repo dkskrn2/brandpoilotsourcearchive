@@ -6,6 +6,10 @@ import {
   parseReelPlanDraftV1,
   type ReelPlanDraftV1,
 } from "@brand-pilot/content-contracts/planner-drafts";
+import {
+  compileStructuredReelPlanDraftV2,
+  parseStructuredReelPlanDraftV2,
+} from "./structuredSceneDraft.js";
 
 export interface ReelJob {
   id: string;
@@ -105,4 +109,17 @@ export function parseReelPlanDraftForInput(value: unknown, input: ContentGenerat
     );
   }
   return draft;
+}
+
+export function parseStructuredReelPlanDraftForInput(
+  value: unknown,
+  input: ContentGenerationInputV3,
+): ReelPlanDraftV1 {
+  try {
+    const draft = parseStructuredReelPlanDraftV2(value);
+    return parseReelPlanDraftForInput(compileStructuredReelPlanDraftV2(draft), input);
+  } catch (error) {
+    if (error instanceof Error && error.message !== "reel_plan_draft_v1_invalid") throw error;
+    throw new Error("reel_structured_draft_invalid");
+  }
 }

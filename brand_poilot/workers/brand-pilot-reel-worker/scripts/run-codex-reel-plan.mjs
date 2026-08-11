@@ -1,8 +1,7 @@
 import { spawn } from "node:child_process";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
-import { ReelPlanDraftV1Schema } from "@brand-pilot/content-contracts/planner-drafts";
 
 const childEnvironmentKeys = ["CODEX_HOME", "HOME", "LANG", "LC_ALL", "TMPDIR", "TMP", "TEMP", "SSL_CERT_FILE", "NODE_EXTRA_CA_CERTS", "PATHEXT"];
 
@@ -31,15 +30,15 @@ export function buildCodexArgs(outputDir) {
     "-c", "permissions.planner.network.enabled=false",
     "--disable", "shell_tool", "--disable", "image_generation", "--disable", "browser_use", "--disable", "multi_agent", "--disable", "plugins",
     "--ask-for-approval", "never", "exec", "--model", "gpt-5.6-terra", "--ignore-user-config", "--skip-git-repo-check", "--ignore-rules", "--ephemeral",
-    "--output-schema", path.join(path.resolve(outputDir), "reel-plan-draft-v1.schema.json"),
+    "--output-schema", path.join(path.resolve(outputDir), "reel-plan-draft-v2.schema.json"),
     "--output-last-message", path.join(outputDir, "reel-plan.json"), "-C", outputDir, "-",
   ];
 }
 
 export async function writeReelPlanDraftSchema(outputDir) {
-  const schemaPath = path.join(path.resolve(outputDir), "reel-plan-draft-v1.schema.json");
+  const schemaPath = path.join(path.resolve(outputDir), "reel-plan-draft-v2.schema.json");
   await mkdir(outputDir, { recursive: true });
-  await writeFile(schemaPath, `${JSON.stringify(ReelPlanDraftV1Schema, null, 2)}\n`, "utf8");
+  await copyFile(fileURLToPath(new URL("./reel-plan-draft-v2.schema.json", import.meta.url)), schemaPath);
   return schemaPath;
 }
 
