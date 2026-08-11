@@ -388,7 +388,10 @@ describe("ContentProposalFlow", () => {
     await user.click(await screen.findByRole("button", { name: "Instagram" }));
     await user.click(screen.getByRole("button", { name: "AI 구성안 만들기" }));
 
-    expect(await screen.findByRole("heading", { name: "가장 좋은 방향을 선택하세요" })).toBeVisible();
+    expect(await screen.findByRole("heading", { name: "어떤 방향으로 만들까요?" })).toBeVisible();
+    expect(screen.getByText("분석한 원문")).toBeVisible();
+    expect(document.querySelector(".source-strip")).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "입력 요약" })).not.toBeInTheDocument();
 
     expect(create).toHaveBeenCalledTimes(1);
     expect(create).toHaveBeenCalledWith("brand-demo", {
@@ -418,7 +421,7 @@ describe("ContentProposalFlow", () => {
 
     await user.click(screen.getByRole("button", { name: "구성안 선택: 여름 피부 3단계 관리" }));
 
-    expect(await screen.findByRole("heading", { name: "브랜드 스타일과 이미지 설정" })).toBeVisible();
+    expect(await screen.findByRole("heading", { name: "스타일과 참고 이미지를 확인하세요" })).toBeVisible();
     expect(getRules).toHaveBeenCalledTimes(1);
     expect(screen.getByRole("img", { name: "차분한 스타일" })).toBeVisible();
     expect(listReferences).not.toHaveBeenCalled();
@@ -441,9 +444,8 @@ describe("ContentProposalFlow", () => {
     });
 
     expect(await screen.findByText("복원된 브랜드 주제")).toBeVisible();
-    expect(screen.getAllByText("blog")[0]).toBeVisible();
-    expect(screen.getAllByText("blog_export")[0]).toBeVisible();
-    expect(screen.getByText("여름 피부 3단계 관리")).toBeVisible();
+    expect(screen.getAllByText("블로그")[0]).toBeVisible();
+    expect(screen.getAllByText("여름 피부 3단계 관리")[0]).toBeVisible();
   });
 
   it("validates a seed reference in the active brand result and selects it before proposal creation", async () => {
@@ -554,7 +556,7 @@ describe("ContentProposalFlow", () => {
   it("does not show a proposal error when StrictMode aborts the first resume request", async () => {
     renderFlow({ initialBatchId: "batch-1", strictMode: true, abortFirstBatchLoad: true });
 
-    expect(await screen.findByRole("heading", { name: "가장 좋은 방향을 선택하세요" })).toBeVisible();
+    expect(await screen.findByRole("heading", { name: "어떤 방향으로 만들까요?" })).toBeVisible();
     expect(screen.queryByText("AI 구성안을 불러오지 못했습니다. 입력을 유지한 채 다시 시도해 주세요.")).not.toBeInTheDocument();
   });
 
@@ -633,8 +635,8 @@ describe("ContentProposalFlow", () => {
     await user.click(await screen.findByRole("button", { name: "최종 콘텐츠 1개 생성" }));
 
     expect(await screen.findByRole("alert")).toHaveTextContent("오늘 AI 콘텐츠 생성 10회를 모두 사용했습니다");
-    expect(screen.getByText("여름 피부 3단계 관리")).toBeVisible();
-    expect(screen.getByRole("heading", { name: "브랜드 스타일과 이미지 설정" })).toBeVisible();
+    expect(screen.getAllByText("여름 피부 3단계 관리")[0]).toBeVisible();
+    expect(screen.getByRole("heading", { name: "스타일과 참고 이미지를 확인하세요" })).toBeVisible();
   });
 
   it("seals the selected proposal before loading approved style previews", async () => {
@@ -663,7 +665,7 @@ describe("ContentProposalFlow", () => {
     await user.click(first);
 
     expect(first).not.toBePressed();
-    expect(screen.queryByRole("heading", { name: "브랜드 스타일과 이미지 설정" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "스타일과 참고 이미지를 확인하세요" })).not.toBeInTheDocument();
 
     await act(async () => { resolveSelection({ id: "generation-sealed" }); });
     await waitFor(() => expect(first).toBePressed());
@@ -684,7 +686,7 @@ describe("ContentProposalFlow", () => {
 
     expect(await screen.findByRole("alert")).toHaveTextContent("구성안을 선택하지 못했습니다");
     expect(first).not.toBePressed();
-    expect(screen.queryByRole("heading", { name: "브랜드 스타일과 이미지 설정" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "스타일과 참고 이미지를 확인하세요" })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "구성안 선택: 흔한 실수 체크리스트" })).toBeEnabled();
   });
 
@@ -735,7 +737,7 @@ describe("ContentProposalFlow", () => {
 
     await user.click(await screen.findByRole("button", { name: "구성안 선택: 여름 피부 3단계 관리" }));
     await user.click(await screen.findByRole("radio", { name: /차분한 스타일/ }));
-    await user.type(screen.getByLabelText("모든 생성 이미지에 공통 적용할 프롬프트"), "밝고 정돈된 편집 디자인");
+    await user.type(screen.getByLabelText("이미지 추가 요청 (선택)"), "밝고 정돈된 편집 디자인");
     await user.click(screen.getByRole("button", { name: "최종 콘텐츠 1개 생성" }));
 
     await waitFor(() => expect(updateFinalizationDraft).toHaveBeenCalledWith(

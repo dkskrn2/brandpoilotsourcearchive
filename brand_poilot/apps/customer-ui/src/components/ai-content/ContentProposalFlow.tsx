@@ -39,6 +39,17 @@ const sections: Array<[ContentSetupSection, string, string, string]> = [
   ["delivery", "3. 채널·형식", "03", "게시 채널과 결과 형식을 선택합니다"],
 ];
 
+const formatDisplayLabel: Record<ContentOutputFormatV2, string> = {
+  card_news: "카드뉴스",
+  blog: "블로그",
+  reel: "릴스",
+};
+
+const familyDisplayLabel: Record<ContentFamily, string> = {
+  informational: "정보성",
+  marketing: "마케팅성",
+};
+
 type IdempotencyKeySlot = { fingerprint: string; key: string };
 
 function keyForRequest(slot: { current: IdempotencyKeySlot | null }, request: unknown) {
@@ -526,9 +537,10 @@ export function ContentProposalFlow({
     }
     : {
       step: "STEP 2 OF 4",
-      title: "가장 좋은 방향을 선택하세요",
-      description: "구성안의 핵심 메시지와 전체 흐름을 비교하고, 브랜드 스타일과 참고 이미지를 확인합니다.",
+      title: "어떤 방향으로 만들까요?",
+      description: "같은 주제를 서로 다른 관점으로 풀어낸 구성안입니다. 핵심 차이를 먼저 비교한 뒤 선택하세요.",
     };
+  const proposalSource = summary.find((item) => item.label === "원문·자료")?.value ?? "입력한 원문";
 
   return <div className="content ai-content-wizard content-proposal-flow ai-content-flow">
     <header className="wizard-header" data-guide="content-proposal-header">
@@ -537,7 +549,10 @@ export function ContentProposalFlow({
         <h1>{heading.title}</h1>
         <p className="wizard-header-description">{heading.description}</p>
       </div>
-      <PageGuideButton />
+      <div className="wizard-header-actions">
+        {displayPhase === "proposal_selection" ? <span className="proposal-count">AI 구성안 <strong>{proposals.length}</strong>개</span> : null}
+        <PageGuideButton />
+      </div>
     </header>
     <AiContentPhaseProgress current={displayPhase} />
     {machine.phase === "setup" ? <div className="content-setup-layout">
@@ -614,9 +629,11 @@ export function ContentProposalFlow({
       <aside className="content-input-summary"><span className="content-input-summary__eyebrow">현재 설정</span><h2>입력 요약</h2><dl>{summary.map((item) => <div key={item.label}><dt>{item.label}</dt><dd>{item.value}</dd></div>)}</dl>{loadingProposal ? <p>검증된 입력으로 구성안을 만들고 있습니다.</p> : null}</aside>
     </div> : null}
     {machine.phase === "proposal_selection" && proposals.length
-      ? <><aside className="content-input-summary proposal-input-summary" aria-label="복원된 입력 요약">
-          <span className="content-input-summary__eyebrow">선택 기준</span><h2>입력 요약</h2><dl>{summary.map((item) => <div key={item.label}><dt>{item.label}</dt><dd>{item.value}</dd></div>)}</dl>
-        </aside>
+      ? <><div className="source-strip" aria-label="분석한 원문">
+          <span className="source-icon" aria-hidden="true">↗</span>
+          <div><small>분석한 원문</small><strong>{proposalSource}</strong></div>
+          <span>{family ? familyDisplayLabel[family] : "콘텐츠"} · {formatDisplayLabel[format]}</span>
+        </div>
         <div data-guide="content-proposal-selection"><ContentProposalComparison
           proposals={proposals}
           selectedId={selectedProposal?.id ?? null}
@@ -634,6 +651,8 @@ export function ContentProposalFlow({
           loadError={styleLoadError}
           submitting={submitting}
           attachmentsReady={attachmentsReady && Boolean(selectedGenerationId)}
+          selectedProposalTitle={selectedProposal.proposal.title}
+          attachmentCount={attachments.length}
           attachmentUploader={<AiContentAttachmentUploader
             gateway={gateway}
             brandId={brandId}

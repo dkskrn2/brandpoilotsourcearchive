@@ -10,7 +10,6 @@ export function ContentProposalComparison({ proposals, selectedId, evidence = []
   onSelect(item: ContentProposalRecord | ContentProposalRecordV2): void;
 }) {
   return <section className="proposal-comparison" aria-label="AI 구성안 비교">
-    <header><p>AI 구성안 {proposals.length}개</p><h2>어떤 방향으로 만들까요?</h2></header>
     <div className="proposal-grid">{proposals.map((item, index) =>
       <ContentProposalCard
         key={item.id}

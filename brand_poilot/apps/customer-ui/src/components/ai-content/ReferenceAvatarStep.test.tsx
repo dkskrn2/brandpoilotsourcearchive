@@ -51,6 +51,8 @@ function Harness({
     submitting={false}
     attachmentsReady
     attachmentUploader={<div>첨부 이미지 영역</div>}
+    selectedProposalTitle="게시 전, 이 3가지만 확인"
+    attachmentCount={2}
     onAvatarStyleImageChange={setAvatarId}
     onUserImageInstructionChange={setInstruction}
     onRetry={onRetry}
@@ -59,11 +61,26 @@ function Harness({
 }
 
 describe("ReferenceAvatarStep", () => {
+  it("uses the approved visual-direction layout and sticky selection action", () => {
+    const { container } = render(<Harness />);
+
+    expect(container.querySelector(".style-panel")).toBeInTheDocument();
+    expect(container.querySelector(".style-layout")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "스타일과 참고 이미지를 확인하세요" })).toBeVisible();
+    expect(screen.getByText("VISUAL DIRECTION")).toBeVisible();
+    expect(screen.getByRole("heading", { name: "브랜드 스타일" })).toBeVisible();
+    expect(screen.getByRole("heading", { name: "아바타" })).toBeVisible();
+    expect(screen.getByRole("heading", { name: "첨부 이미지" })).toBeVisible();
+    expect(screen.getByLabelText("이미지 추가 요청 (선택)")).toBeVisible();
+    expect(container.querySelector(".selection-bar")).toHaveTextContent("게시 전, 이 3가지만 확인");
+    expect(screen.getByRole("button", { name: "최종 콘텐츠 1개 생성" })).toHaveTextContent("콘텐츠 생성 시작");
+  });
+
   it("previews only approved Brand Rules images and allows one optional avatar from that exact set", async () => {
     const user = userEvent.setup();
     render(<Harness />);
 
-    expect(screen.getByRole("heading", { name: "브랜드 스타일과 이미지 설정" })).toBeVisible();
+    expect(screen.getByRole("heading", { name: "스타일과 참고 이미지를 확인하세요" })).toBeVisible();
     expect(screen.getByRole("img", { name: "차분한 편집 스타일" })).toHaveAttribute("src", styles[0]!.previewUrl);
     expect(screen.getByRole("img", { name: "선명한 제품 스타일" })).toHaveAttribute("src", styles[1]!.previewUrl);
     expect(screen.getAllByText("자동 적용")).toHaveLength(styles.length);
@@ -71,8 +88,8 @@ describe("ReferenceAvatarStep", () => {
     await user.click(screen.getByRole("radio", { name: /선명한 제품 스타일/ }));
     expect(screen.getByRole("radio", { name: /차분한 편집 스타일/ })).not.toBeChecked();
     expect(screen.getByRole("radio", { name: /선명한 제품 스타일/ })).toBeChecked();
-    await user.click(screen.getByRole("radio", { name: "아바타 사용 안 함" }));
-    expect(screen.getByRole("radio", { name: "아바타 사용 안 함" })).toBeChecked();
+    await user.click(screen.getByRole("radio", { name: /아바타 사용 안 함/ }));
+    expect(screen.getByRole("radio", { name: /아바타 사용 안 함/ })).toBeChecked();
 
     expect(screen.queryByRole("tablist", { name: /레퍼런스/ })).not.toBeInTheDocument();
     expect(screen.queryByText(/아바타 라이브러리|이번 생성에만 사용할 아바타|아바타 업로드/)).not.toBeInTheDocument();
@@ -85,13 +102,13 @@ describe("ReferenceAvatarStep", () => {
     render(<Harness styleImages={[]} onGenerate={generate} />);
 
     expect(screen.getByText("등록된 브랜드 스타일 이미지 없이 생성합니다")).toBeVisible();
-    const prompt = screen.getByLabelText("모든 생성 이미지에 공통 적용할 프롬프트");
+    const prompt = screen.getByLabelText("이미지 추가 요청 (선택)");
     await user.type(prompt, "밝고 정돈된 편집 디자인");
     expect(prompt).toHaveValue("밝고 정돈된 편집 디자인");
     expect(screen.getByText("첨부 이미지 영역")).toBeVisible();
     await user.click(screen.getByRole("button", { name: "최종 콘텐츠 1개 생성" }));
     expect(generate).toHaveBeenCalledTimes(1);
-    expect(screen.queryByText(/생성 개수|output count|2개|3개/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/생성 개수|output count/i)).not.toBeInTheDocument();
   });
 
   it("explains deferred blog images and supports retry after a real style load error", async () => {

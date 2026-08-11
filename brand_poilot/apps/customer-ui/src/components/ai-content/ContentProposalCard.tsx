@@ -27,11 +27,16 @@ const strategyLabel: Record<string, string> = {
   cta: "행동 유도",
 };
 
-function TextList({ values }: { values: string[] }) {
-  return values.length
-    ? <ul>{values.map((value, index) => <li key={`${index}:${value}`}>{value}</li>)}</ul>
-    : <span>없음</span>;
-}
+const outputFormatLabel: Record<string, string> = {
+  card_news: "카드뉴스",
+  blog: "블로그",
+  reel: "릴스",
+};
+
+const channelLabel: Record<string, string> = {
+  instagram: "Instagram",
+  blog_export: "블로그",
+};
 
 export function ContentProposalCard({
   item,
@@ -69,80 +74,61 @@ export function ContentProposalCard({
     </article>;
   }
 
-  const usedEvidence = evidence.filter((source) => proposal.evidenceIds.includes(source.id));
-  const usedReferences = references.filter((reference) => proposal.referenceIds.includes(reference.id));
   const details = proposal.purposeDetails;
   const isBlog = proposal.outputFormat === "blog";
+  const typeLabel = details.kind === "informational"
+    ? informationalTypeLabel[proposal.informationalType!]
+    : "마케팅";
+  const providedValue = details.kind === "informational" ? details.value : details.appeal;
+  const previewCount = isBlog ? proposal.outline.length : proposal.assetCount ?? proposal.outline.length;
+  const remainingOutlineCount = Math.max(0, proposal.outline.length - 3);
 
-  return <article className={`content-proposal-card${selected ? " is-selected" : ""}`}>
-    <header>
-      <span>구성안 {position}</span>
+  return <article className={`content-proposal-card proposal-card${selected ? " is-selected" : ""}`}>
+    <header className="proposal-card__header">
+      <div>
+        <span className="card-index">구성안 {position}</span>
+        <span className={selected ? "selected-badge" : "quiet-badge"}>{selected ? "✓ 선택됨" : typeLabel}</span>
+      </div>
       <h3>{proposal.title}</h3>
+      <p>{proposal.oneLineIntent}</p>
     </header>
-    <p className="proposal-card-intent">{proposal.oneLineIntent}</p>
-    <p className="proposal-card-differentiator"><strong>이 안의 차별점</strong>{proposal.differentiator}</p>
-    <dl className="proposal-card-highlights" aria-label="핵심 비교 정보">
-      <div><dt>대상</dt><dd>{proposal.target}</dd></div>
-      <div><dt>핵심 메시지</dt><dd>{proposal.keyMessage}</dd></div>
-      <div><dt>시작 문구</dt><dd>{proposal.hook}</dd></div>
-    </dl>
-    <ol className="proposal-outline-preview" aria-label={isBlog ? "글 흐름 미리보기" : "장면 흐름 미리보기"}>
-      {proposal.outline.slice(0, 3).map((outline) => <li key={outline.index}>
-        <span>{String(outline.index).padStart(2, "0")}</span>
-        <strong>{outline.headline}</strong>
-      </li>)}
-    </ol>
-    <div className="proposal-card-summary" aria-label="구성안 요약">
-      <span>{proposal.outputFormat}</span>
-      <span>{proposal.channelTargets.join(", ")}</span>
+    <div className="proposal-meta" aria-label="구성안 형식 요약">
+      <span>{outputFormatLabel[proposal.outputFormat] ?? proposal.outputFormat}</span>
       <span>{isBlog ? "글 구성" : `${proposal.assetCount}장`}</span>
+      {proposal.channelTargets.map((target) => <span key={target}>{channelLabel[target] ?? target}</span>)}
     </div>
-    <details className="proposal-card-details">
-      <summary>구성안 상세 보기</summary>
-      <dl className="proposal-details">
-        <div><dt>기획 의도</dt><dd>{proposal.oneLineIntent}</dd></div>
-        <div><dt>상황</dt><dd>{proposal.customerContext}</dd></div>
-        <div><dt>선택 이유</dt><dd>{proposal.selectionReason}</dd></div>
-        <div><dt>출력 형식·채널</dt><dd>{proposal.outputFormat} · {proposal.channelTargets.join(", ")}</dd></div>
-        {details.kind === "informational" ? <>
-          <div><dt>정보 유형</dt><dd>{informationalTypeLabel[proposal.informationalType!]}</dd></div>
-          <div><dt>독자 질문</dt><dd>{details.question}</dd></div>
-          <div><dt>제공 가치</dt><dd>{details.value}</dd></div>
-          <div><dt>지금 다룰 이유</dt><dd>{details.whyNow}</dd></div>
-          <div><dt>핵심 학습 포인트</dt><dd><TextList values={details.learningPoints} /></dd></div>
-        </> : <>
-          <div><dt>캠페인 목적</dt><dd>{details.campaignObjective}</dd></div>
-          <div><dt>고객 상황·니즈</dt><dd>{details.situationAndNeed}</dd></div>
-          <div><dt>제품</dt><dd>{details.productId}</dd></div>
-          <div><dt>타깃 세그먼트</dt><dd>{details.targetSegment}</dd></div>
-          <div><dt>강점</dt><dd><TextList values={details.strengths} /></dd></div>
-          <div><dt>한계</dt><dd><TextList values={details.limitations} /></dd></div>
-          <div><dt>소구점</dt><dd>{details.appeal}</dd></div>
-          <div><dt>구매 장벽</dt><dd><TextList values={details.buyingBarriers} /></dd></div>
-          <div><dt>CTA</dt><dd>{details.cta}</dd></div>
-        </>}
-        <div><dt>검색 근거</dt><dd>{usedEvidence.length ? <ul>{usedEvidence.map((source) => <li key={source.id}>
-          <a href={source.url} target="_blank" rel="noreferrer">{source.title}</a>{source.publisher ? ` · ${source.publisher}` : ""}
-        </li>)}</ul> : "없음"}</dd></div>
-        <div><dt>사용 레퍼런스</dt><dd>{usedReferences.length ? <ul>{usedReferences.map((reference) => <li key={reference.id}>
-          <span>{reference.title}</span>{reference.preview.url ? <> · <a href={reference.preview.url} target="_blank" rel="noreferrer">{reference.title} 미리보기</a></> : null}
-        </li>)}</ul> : "없음"}</dd></div>
-        {isBlog
-          ? <div><dt>이미지</dt><dd>이미지는 최종 작성 중 필요할 때 결정</dd></div>
-          : <div><dt>제안 장수</dt><dd>{proposal.assetCount}장</dd></div>}
-      </dl>
-      <section>
-        <h4>{isBlog ? "글 개요" : "장면별 개요"}</h4>
-        <ol aria-label={isBlog ? "글 개요" : "장면별 개요"} className="proposal-outline">
-          {proposal.outline.map((outline) => <li key={outline.index}>
-            <strong>{outline.index}. {outline.role} · {outline.headline}</strong>
-            <span>{outline.purpose}</span>
-          </li>)}
-        </ol>
-      </section>
-    </details>
-    <button type="button" className="button primary" aria-pressed={selected} disabled={disabled} onClick={onSelect}>
-      구성안 선택: {proposal.title}
+    <section className="message-block">
+      <small>첫 화면 훅</small>
+      <strong>{proposal.hook}</strong>
+    </section>
+    <section className="key-message">
+      <small>핵심 메시지</small>
+      <p>{proposal.keyMessage}</p>
+    </section>
+    <dl className="compact-facts" aria-label="핵심 비교 정보">
+      <div><dt>대상</dt><dd>{proposal.target}</dd></div>
+      <div><dt>제공 가치</dt><dd>{providedValue}</dd></div>
+      <div><dt>차별점</dt><dd>{proposal.differentiator}</dd></div>
+    </dl>
+    <section className="outline-preview">
+      <div><h4>{isBlog ? "글 흐름" : "장면 흐름"}</h4><span>{previewCount}개 {isBlog ? "섹션" : "장면"}</span></div>
+      <ol aria-label={isBlog ? "글 흐름 미리보기" : "장면 흐름 미리보기"}>
+        {proposal.outline.slice(0, 3).map((outline) => <li key={outline.index}>
+          <b>{String(outline.index).padStart(2, "0")}</b>
+          <span><strong>{outline.headline}</strong><small>{outline.purpose}</small></span>
+        </li>)}
+      </ol>
+      {remainingOutlineCount ? <p>외 {remainingOutlineCount}개 {isBlog ? "섹션" : "장면"}</p> : null}
+    </section>
+    <button
+      type="button"
+      className="select-button"
+      aria-label={`구성안 선택: ${proposal.title}`}
+      aria-pressed={selected}
+      disabled={disabled}
+      onClick={onSelect}
+    >
+      <span>{selected ? "선택한 구성안" : "이 구성안 선택"}</span><span aria-hidden="true">{selected ? "✓" : "→"}</span>
     </button>
   </article>;
 }
