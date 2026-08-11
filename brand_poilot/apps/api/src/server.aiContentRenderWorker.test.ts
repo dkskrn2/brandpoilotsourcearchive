@@ -90,9 +90,9 @@ describe("AI content render worker routes", () => {
   it("forwards render failure and immutable blog supplemental research", async () => {
     const { app, repository } = setup();
     const headers = { authorization: "Bearer worker-token" };
-    const failure = await app.inject({ method: "POST", url: "/worker/ai-content-render-jobs/render-1/fail", headers, payload: { workerId: "worker-1", leaseToken: "lease-1", errorCode: "render_failed", errorMessage: "failed", retryable: true } });
+    const failure = await app.inject({ method: "POST", url: "/worker/ai-content-render-jobs/render-1/fail", headers, payload: { workerId: "worker-1", leaseToken: "lease-1", errorCode: "render_failed", errorMessage: "failed", diagnosticCode: "ai_content_asset_final_message_invalid", retryable: true } });
     expect(failure.statusCode).toBe(200);
-    expect(repository.failAiContentRenderJob).toHaveBeenCalledWith(expect.objectContaining({ retryable: true }));
+    expect(repository.failAiContentRenderJob).toHaveBeenCalledWith(expect.objectContaining({ diagnosticCode: "ai_content_asset_final_message_invalid", retryable: true }));
     const research = await app.inject({ method: "POST", url: "/worker/ai-content-jobs/job-1/research-complete", headers, payload: { workerId: "blog-worker", leaseToken: "lease-2", outputId: "output-1", evidence: { contractVersion: "research-evidence.v1", items: [] } } });
     expect(research.statusCode).toBe(200);
     expect(repository.saveAiContentOutputResearch).toHaveBeenCalledWith(expect.objectContaining({ jobId: "job-1", outputId: "output-1" }));

@@ -171,6 +171,14 @@ function retryableAiContentError(error: unknown, message: string): boolean {
   return /(?:too many requests|\b429\b|currently not available|service unavailable|\b503\b|fetch failed|ECONNRESET|ECONNREFUSED|ETIMEDOUT|EAI_AGAIN|socket hang up|\bnetwork\b|timeout|rate_limit|temporar|unavailable|render_failed|output_missing|api_failed:5)/i.test(details);
 }
 
+function safeAiContentDiagnosticCode(error: unknown): string | undefined {
+  if (!error || typeof error !== "object") return undefined;
+  const diagnostic = (error as Record<string, unknown>).diagnostic;
+  if (typeof diagnostic !== "string") return undefined;
+  const matches = diagnostic.match(/\b(?:ai_content|codex)_[a-z0-9_]{1,108}\b/g);
+  return matches?.at(-1);
+}
+
 async function runAiContentOnce(input: {
   workerId: string;
   client: AiContentRenderClient;
@@ -214,9 +222,11 @@ async function runAiContentOnce(input: {
     const stoppedExternally = error instanceof AiContentShutdownError
       || controller.signal.reason instanceof AiContentShutdownError;
     if (!stoppedExternally && !(error instanceof AiContentLeaseLostError) && !(controller.signal.reason instanceof AiContentLeaseLostError)) {
+      const diagnosticCode = safeAiContentDiagnosticCode(error);
       await input.client.fail(job, input.workerId, {
         errorCode: message.split(":", 1)[0]!.slice(0, 120),
         errorMessage: message.slice(0, 2_000),
+        ...(diagnosticCode === undefined ? {} : { diagnosticCode }),
         retryable: retryableAiContentError(error, message),
       }).catch(() => undefined);
     }

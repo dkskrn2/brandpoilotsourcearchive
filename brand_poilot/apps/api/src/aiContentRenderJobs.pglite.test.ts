@@ -113,6 +113,7 @@ describe("AiContentRenderJobsRepository with postgres semantics", () => {
       create table ai_content_generation_operations(id uuid primary key,generation_id uuid,status text);
       create table ai_content_usage_ledger(id uuid primary key default gen_random_uuid(),workspace_id uuid,brand_id uuid,generation_id uuid,output_id uuid,usage_type text,quantity integer,usage_date date,idempotency_key text,operation_id uuid,reservation_id uuid,reversal_of_ledger_id uuid,unique(brand_id,idempotency_key));
       create table ai_content_generation_render_jobs(id uuid primary key default gen_random_uuid(),generation_id uuid,output_id uuid,workspace_id uuid,brand_id uuid,job_kind text,asset_index integer,status text default 'queued',payload_json jsonb,result_json jsonb,attempt_count integer default 0,max_attempts integer default 3,available_at timestamptz default now(),worker_id text,lease_token uuid,lease_expires_at timestamptz,error_code text,error_message text,created_at timestamptz default now(),updated_at timestamptz default now(),completed_at timestamptz);
+      create table audit_events(id uuid primary key default gen_random_uuid(),workspace_id uuid,brand_id uuid,actor_user_id uuid,actor_type text not null,event_type text not null,entity_type text not null,entity_id uuid,before_json jsonb,after_json jsonb,metadata jsonb not null default '{}',created_at timestamptz default now(),actor_external_id text);
       create unique index render_asset_unique on ai_content_generation_render_jobs(output_id,asset_index) where job_kind='image_asset';
       create unique index render_finalize_unique on ai_content_generation_render_jobs(output_id) where job_kind='package_finalize';
       create function transition_ai_content_generation_operation(p_operation_id uuid,p_expected_status text,p_next_status text)
@@ -140,7 +141,7 @@ describe("AiContentRenderJobsRepository with postgres semantics", () => {
       await repository.completeAsset({ jobId: job!.id, workerId: "image-worker", leaseToken: job!.leaseToken, jobKind: "image_asset", asset: { index: job!.assetIndex!, url: blobAssetUrl(job!.assetIndex!), storagePath: `ai-content/${ids.brand}/${ids.generation}/${ids.output}/assets/${String(job!.assetIndex).padStart(2, "0")}.png`, mimeType: "image/png", width: 1080, height: 1080, checksum: String(index).repeat(64) } });
     }
     const failed = await repository.claim({ workerId: "image-worker", leaseSeconds: 180 });
-    await repository.fail({ jobId: failed!.id, workerId: "image-worker", leaseToken: failed!.leaseToken, errorCode: "render_failed", errorMessage: "failed", retryable: true });
+    await repository.fail({ jobId: failed!.id, workerId: "image-worker", leaseToken: failed!.leaseToken, errorCode: "render_failed", errorMessage: "failed", diagnosticCode: "ai_content_asset_final_message_invalid", retryable: true });
     await db.query("update ai_content_generation_render_jobs set available_at=now() where id=$1", [failed!.id]);
     const retry = await repository.claim({ workerId: "image-worker", leaseSeconds: 180 });
     expect(retry?.assetIndex).toBe(failed?.assetIndex);
@@ -148,6 +149,25 @@ describe("AiContentRenderJobsRepository with postgres semantics", () => {
     const states = await db.query<{ job_kind: string; asset_index: number | null; status: string; result_json: unknown }>("select job_kind,asset_index,status,result_json from ai_content_generation_render_jobs order by job_kind,asset_index");
     expect(states.rows.filter((row) => row.job_kind === "image_asset").every((row) => row.status === "succeeded" && row.result_json)).toBe(true);
     expect(states.rows.filter((row) => row.job_kind === "package_finalize")).toHaveLength(1);
+    const events = await db.query<{ event_type: string; entity_id: string; actor_external_id: string; metadata: Record<string, unknown> }>(
+      "select event_type,entity_id,actor_external_id,metadata from audit_events order by created_at",
+    );
+    expect(events.rows).toEqual([expect.objectContaining({
+      event_type: "ai_content_render_attempt_failed",
+      entity_id: failed!.id,
+      actor_external_id: "image-worker",
+      metadata: expect.objectContaining({
+        contractVersion: "ai-content-render-attempt-failed.v1",
+        generationId: ids.generation,
+        outputId: ids.output,
+        assetIndex: failed!.assetIndex,
+        attemptCount: 1,
+        errorCode: "render_failed",
+        diagnosticCode: "ai_content_asset_final_message_invalid",
+        requestedRetryable: true,
+        willRetry: true,
+      }),
+    })]);
   });
 
   it("queues one finalizer immediately for a blog plan without images", async () => {
@@ -303,6 +323,10 @@ describe("AiContentRenderJobsRepository with postgres semantics", () => {
     await expect(repository.fail({ ...failure, workerId: "other-worker" })).rejects.toThrow("ai_content_render_job_lease_invalid");
     await expect(repository.fail({ ...failure, leaseToken: "60000000-0000-4000-8000-000000000099" })).rejects.toThrow("ai_content_render_job_lease_invalid");
     await expect(repository.fail(failure)).resolves.toBeUndefined();
+    expect((await db.query<{ count: number }>(
+      "select count(*)::integer count from audit_events where entity_id=$1 and event_type='ai_content_render_attempt_failed'",
+      [job!.id],
+    )).rows[0]?.count).toBe(1);
   });
 
   it("closes a final lease-exhausted V3 render as failed and reverses its reservation", async () => {

@@ -4556,14 +4556,21 @@ export function createServer(
       if (!authenticateAiContentWorker(request.headers.authorization, reply)) return;
       const renderRepository = requireAiContentRenderWorkerRepository(repository);
       const body = request.body ?? {};
-      assertExactAiContentWorkerBody(body, ["workerId", "leaseToken", "errorCode", "errorMessage", "retryable"], "ai_content_render_failure_invalid");
+      assertExactAiContentWorkerBody(body, ["workerId", "leaseToken", "errorCode", "errorMessage", "diagnosticCode", "retryable"], "ai_content_render_failure_invalid");
       if (typeof body.retryable !== "boolean") throw new Error("ai_content_retryable_invalid");
+      const diagnosticCode = body.diagnosticCode === undefined
+        ? undefined
+        : requiredAiContentField(body.diagnosticCode, "ai_content_render_diagnostic_invalid", 120);
+      if (diagnosticCode !== undefined && !/^(?:ai_content|codex)_[a-z0-9_]{1,108}$/.test(diagnosticCode)) {
+        throw new Error("ai_content_render_diagnostic_invalid");
+      }
       await renderRepository.failAiContentRenderJob({
         jobId: request.params.jobId,
         workerId: requiredAiContentField(body.workerId, "ai_content_worker_id_required", 200),
         leaseToken: requiredAiContentField(body.leaseToken, "ai_content_lease_token_required", 200),
         errorCode: requiredAiContentField(body.errorCode, "ai_content_error_code_invalid", 120),
         errorMessage: requiredAiContentField(body.errorMessage, "ai_content_error_message_invalid", 2_000),
+        ...(diagnosticCode === undefined ? {} : { diagnosticCode }),
         retryable: body.retryable,
       });
       return { id: request.params.jobId, status: "accepted" };

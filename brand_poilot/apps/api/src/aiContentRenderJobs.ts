@@ -80,6 +80,7 @@ export interface RenderFailure {
   leaseToken: string;
   errorCode: string;
   errorMessage: string;
+  diagnosticCode?: string;
   retryable: boolean;
 }
 
@@ -494,6 +495,38 @@ async function failRenderOutputAndGeneration(
     [row.generation_id, generationStatus, errorCode, errorMessage],
   );
   await reverseGenerationReservationIfTerminalFailure(client, String(row.generation_id));
+}
+
+async function appendRenderFailureAudit(
+  client: Queryable,
+  row: Record<string, unknown>,
+  input: RenderFailure,
+  willRetry: boolean,
+): Promise<void> {
+  const metadata = {
+    contractVersion: "ai-content-render-attempt-failed.v1",
+    generationId: String(row.generation_id),
+    outputId: String(row.output_id),
+    jobKind: String(row.job_kind),
+    assetIndex: row.asset_index === null ? null : Number(row.asset_index),
+    attemptCount: Number(row.attempt_count),
+    maxAttempts: Number(row.max_attempts),
+    errorCode: input.errorCode,
+    errorMessage: input.errorMessage,
+    diagnosticCode: input.diagnosticCode ?? null,
+    requestedRetryable: input.retryable,
+    willRetry,
+  };
+  try {
+    await client.query(
+      `insert into audit_events(
+         workspace_id,brand_id,actor_type,actor_external_id,event_type,entity_type,entity_id,metadata
+       ) values($1,$2,'worker',$3,'ai_content_render_attempt_failed','ai_content_generation_render_job',$4,$5::jsonb)`,
+      [row.workspace_id, row.brand_id, input.workerId, input.jobId, JSON.stringify(metadata)],
+    );
+  } catch {
+    // Error history is observational. It must never roll back an already committed render transition.
+  }
 }
 
 function requireLease(row: Record<string, unknown>, input: { workerId: string; leaseToken: string }): void {
@@ -919,6 +952,9 @@ export function createAiContentRenderJobsRepository(
     async fail(input) {
       const client = await pool.connect();
       try {
+        if (input.diagnosticCode !== undefined && !/^(?:ai_content|codex)_[a-z0-9_]{1,108}$/.test(input.diagnosticCode)) {
+          throw new Error("ai_content_render_diagnostic_invalid");
+        }
         await client.query("BEGIN");
         const row = await lockTerminalRenderGraph(client, input.jobId);
         if (row.status === "failed" && row.error_code === input.errorCode) {
@@ -944,6 +980,7 @@ export function createAiContentRenderJobsRepository(
           await failRenderOutputAndGeneration(client, row, input.errorCode, input.errorMessage);
         }
         await client.query("COMMIT");
+        await appendRenderFailureAudit(client, row, input, retry);
       } catch (error) {
         await client.query("ROLLBACK");
         throw error;

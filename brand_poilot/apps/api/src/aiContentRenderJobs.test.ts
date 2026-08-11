@@ -374,4 +374,33 @@ describe("ai-content render job boundary helpers", () => {
 
     expect(locks).toEqual(["generation", "job", "output"]);
   });
+
+  it("does not roll back a render failure when the post-commit audit append fails", async () => {
+    let auditAttempted = false;
+    const scope = { output_id: "output", generation_id: "generation", workspace_id: "workspace", brand_id: "brand" };
+    const client = {
+      query: async (sql: string) => {
+        const normalized = sql.replace(/\s+/g, " ").trim().toLowerCase();
+        if (normalized === "begin" || normalized === "commit" || normalized === "rollback") return { rows: [] };
+        if (normalized.includes("select output_id,generation_id,workspace_id,brand_id") && normalized.includes("ai_content_generation_render_jobs")) return { rows: [scope] };
+        if (normalized.includes("from ai_content_generations") && normalized.endsWith("for update")) return { rows: [{ id: scope.generation_id }] };
+        if (normalized.includes("from ai_content_generation_render_jobs where id=$1 for update")) return { rows: [{ id: "job", ...scope, job_kind: "image_asset", asset_index: 1, status: "processing", worker_id: "image-worker", lease_token: "lease", lease_expires_at: new Date(Date.now() + 60_000), lease_expired: false, attempt_count: 1, max_attempts: 3 }] };
+        if (normalized.includes("from ai_content_generation_outputs") && normalized.endsWith("for update")) return { rows: [{ id: scope.output_id }] };
+        if (normalized.startsWith("update ai_content_generation_render_jobs set status=$2")) return { rows: [] };
+        if (normalized.startsWith("insert into audit_events")) {
+          auditAttempted = true;
+          throw new Error("audit unavailable");
+        }
+        throw new Error(`unexpected query: ${normalized}`);
+      },
+      release() {},
+    };
+    const repository = createAiContentRenderJobsRepository({ connect: async () => client } as never, async () => ({}) as never);
+
+    await expect(repository.fail({
+      jobId: "job", workerId: "image-worker", leaseToken: "lease",
+      errorCode: "render_failed", errorMessage: "failed", retryable: true,
+    })).resolves.toBeUndefined();
+    expect(auditAttempted).toBe(true);
+  });
 });

@@ -478,6 +478,32 @@ describe("V3 AI content render priority", () => {
     expect(client.claim).not.toHaveBeenCalled();
   });
 
+  it("reports only a safe diagnostic code from renderer stderr without changing retry classification", async () => {
+    const aiContentClient = v3Client();
+    const processError = new Error("ai_content_asset_render_failed:1");
+    Object.defineProperty(processError, "diagnostic", {
+      enumerable: false,
+      value: "request failed\nai_content_asset_final_message_invalid\nSECRET_TOKEN=do-not-store",
+    });
+
+    await expect(runOnce({
+      workerId: "worker",
+      aiContentClient,
+      aiContentRenderer: { renderAsset: vi.fn(async () => { throw processError; }) },
+      aiContentStorage: { uploadAsset: vi.fn() },
+      aiContentFinalizer: vi.fn(),
+      client: workerClient(), renderer: { renderJob: vi.fn() }, storage: { upload: vi.fn() },
+    })).resolves.toEqual({ status: "failed", jobId: v3id(1) });
+
+    expect(aiContentClient.fail).toHaveBeenCalledWith(expect.anything(), "worker", {
+      errorCode: "ai_content_asset_render_failed",
+      errorMessage: "ai_content_asset_render_failed:1",
+      diagnosticCode: "ai_content_asset_final_message_invalid",
+      retryable: true,
+    });
+    expect(JSON.stringify(aiContentClient.fail.mock.calls[0]?.[2])).not.toContain("SECRET_TOKEN");
+  });
+
   it("aborts the active child signal when a heartbeat loses the lease", async () => {
     const aiContentClient = v3Client();
     aiContentClient.heartbeat.mockResolvedValue(false);

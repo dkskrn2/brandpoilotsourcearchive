@@ -83,10 +83,10 @@ describe("AI content render API client", () => {
     await expect(client.heartbeat(lease, "worker", 180)).resolves.toBe(true);
     await expect(client.heartbeat(lease, "worker", 180)).resolves.toBe(false);
     await client.completeAsset(lease, "worker", { index: 1, url: "https://blob.example/1.png", storagePath: "path", mimeType: "image/png", width: 1080, height: 1350, checksum: "a".repeat(64) });
-    await client.fail(lease, "worker", { errorCode: "render_failed", errorMessage: "failed", retryable: true });
+    await client.fail(lease, "worker", { errorCode: "render_failed", errorMessage: "failed", diagnosticCode: "ai_content_asset_final_message_invalid", retryable: true });
 
     expect(JSON.parse(String(fetchImpl.mock.calls[2]![1]!.body))).toEqual(expect.objectContaining({ jobKind: "image_asset", workerId: "worker", leaseToken: "lease" }));
-    expect(JSON.parse(String(fetchImpl.mock.calls[3]![1]!.body))).toEqual({ workerId: "worker", leaseToken: "lease", errorCode: "render_failed", errorMessage: "failed", retryable: true });
+    expect(JSON.parse(String(fetchImpl.mock.calls[3]![1]!.body))).toEqual({ workerId: "worker", leaseToken: "lease", errorCode: "render_failed", errorMessage: "failed", diagnosticCode: "ai_content_asset_final_message_invalid", retryable: true });
   });
 
   it("preserves a stable API error code when a render completion is rejected", async () => {

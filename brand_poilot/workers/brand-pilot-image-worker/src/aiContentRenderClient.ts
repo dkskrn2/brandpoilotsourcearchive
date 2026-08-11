@@ -70,7 +70,7 @@ export interface AiContentRenderClient {
   heartbeat(job: AiContentRenderLease, workerId: string, leaseSeconds: number): Promise<boolean>;
   completeAsset(job: AiContentRenderLease, workerId: string, asset: AiContentRenderedAsset): Promise<void>;
   completePackage(job: AiContentRenderLease, workerId: string, input: { manifest: object; manifestUrl: string }): Promise<void>;
-  fail(job: AiContentRenderLease, workerId: string, input: { errorCode: string; errorMessage: string; retryable: boolean }): Promise<void>;
+  fail(job: AiContentRenderLease, workerId: string, input: { errorCode: string; errorMessage: string; diagnosticCode?: string; retryable: boolean }): Promise<void>;
 }
 
 function record(value: unknown, code = "ai_content_render_job_invalid"): Record<string, unknown> {
