@@ -6,6 +6,7 @@
   "exports": {
     ".": "./dist/index.js",
     "./planner-drafts": "./dist/plannerDrafts.js",
+    "./structured-scene-copy": "./dist/structuredSceneCopy.js",
     "./generated/*": "./generated/*"
   },
   "types": "./dist/index.d.ts",

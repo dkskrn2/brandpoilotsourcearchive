@@ -66,6 +66,8 @@ Each entry has exact keys `role`, `label`, `value`; `label` is `null` or a trimm
 - Create `packages/brand-pilot-content-contracts/src/structuredSceneCopy.ts` — TypeBox schema, parser, relation validation, deterministic flatten/compiler, and natural hierarchy builder.
 - Create `packages/brand-pilot-content-contracts/src/structuredSceneCopy.test.ts` — exact relation and deterministic compilation tests.
 - Modify `packages/brand-pilot-content-contracts/package.json` — export `./structured-scene-copy`.
+- Modify `packages/brand-pilot-content-contracts/src/index.ts` — register the persistent schema in the canonical schema registry.
+- Modify `packages/brand-pilot-content-contracts/src/catalog.ts` and focused catalog tests — register and verify the generated schema leaf.
 - Modify `packages/brand-pilot-content-contracts/src/generateArtifacts.ts` — generate the persistent semantic schema artifact.
 - Modify `packages/brand-pilot-content-contracts/src/generatedArtifacts.test.ts` — prove generated schema/catalog synchronization.
 - Regenerate `packages/brand-pilot-content-contracts/generated/structured-scene-copy-v1.schema.json` and the generated catalog.
@@ -105,6 +107,9 @@ Each entry has exact keys `role`, `label`, `value`; `label` is `null` or a trimm
 - Create: `packages/brand-pilot-content-contracts/src/structuredSceneCopy.ts`
 - Create: `packages/brand-pilot-content-contracts/src/structuredSceneCopy.test.ts`
 - Modify: `packages/brand-pilot-content-contracts/package.json`
+- Modify: `packages/brand-pilot-content-contracts/src/index.ts`
+- Modify: `packages/brand-pilot-content-contracts/src/catalog.ts`
+- Modify: `packages/brand-pilot-content-contracts/src/catalog.test.ts`
 - Modify: `packages/brand-pilot-content-contracts/src/generateArtifacts.ts`
 - Modify: `packages/brand-pilot-content-contracts/src/generatedArtifacts.test.ts`
 - Generate: `packages/brand-pilot-content-contracts/generated/structured-scene-copy-v1.schema.json`
