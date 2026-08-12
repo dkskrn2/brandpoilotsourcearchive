@@ -29,24 +29,20 @@ jobs:
     concurrency:
       group: brand-pilot-production-baseline-recovery
       cancel-in-progress: false
-    runs-on: ubuntu-24.04
+    runs-on: [self-hosted, Windows, X64, brand-pilot-recovery]
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           ref: ${{ inputs.expected_release_sha }}
           persist-credentials: false
 
-      - name: Validate pinned recovery inputs and credentials
+      - name: Validate pinned recovery inputs and local SSH identity
         shell: bash
         env:
           EXPECTED_RELEASE_SHA: ${{ inputs.expected_release_sha }}
           EXPECTED_API_DIGEST: ${{ inputs.expected_api_digest }}
           EXPECTED_RELEASE_ENV_SHA256: ${{ inputs.expected_release_env_sha256 }}
           EXPECTED_RELEASE_INTEGRITY_SHA256: ${{ inputs.expected_release_integrity_sha256 }}
-          DEPLOY_HOST: ${{ secrets.BRAND_PILOT_DEPLOY_HOST }}
-          DEPLOY_USER: ${{ secrets.BRAND_PILOT_DEPLOY_USER }}
-          DEPLOY_SSH_KEY: ${{ secrets.BRAND_PILOT_DEPLOY_SSH_KEY }}
-          DEPLOY_KNOWN_HOSTS: ${{ secrets.BRAND_PILOT_DEPLOY_KNOWN_HOSTS }}
         run: |
           set -Eeuo pipefail
           [[ "$EXPECTED_RELEASE_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "recovery_release_sha_invalid" >&2; exit 1; }
@@ -54,21 +50,8 @@ jobs:
           [[ "$EXPECTED_RELEASE_ENV_SHA256" =~ ^[0-9a-f]{64}$ ]] || { echo "recovery_release_env_sha256_invalid" >&2; exit 1; }
           [[ "$EXPECTED_RELEASE_INTEGRITY_SHA256" =~ ^[0-9a-f]{64}$ ]] || { echo "recovery_release_integrity_sha256_invalid" >&2; exit 1; }
           [[ "$(git rev-parse HEAD)" == "$EXPECTED_RELEASE_SHA" ]] || { echo "recovery_checkout_sha_mismatch" >&2; exit 1; }
-          for value in "$DEPLOY_HOST" "$DEPLOY_USER" "$DEPLOY_SSH_KEY" "$DEPLOY_KNOWN_HOSTS"; do
-            [[ -n "$value" ]] || { echo "recovery_credentials_missing" >&2; exit 1; }
-          done
-
-      - name: Configure pinned SSH host identity
-        shell: bash
-        env:
-          DEPLOY_SSH_KEY: ${{ secrets.BRAND_PILOT_DEPLOY_SSH_KEY }}
-          DEPLOY_KNOWN_HOSTS: ${{ secrets.BRAND_PILOT_DEPLOY_KNOWN_HOSTS }}
-        run: |
-          set -Eeuo pipefail
-          install -d -m 0700 "$HOME/.ssh"
-          printf '%s\n' "$DEPLOY_SSH_KEY" > "$HOME/.ssh/id_ed25519"
-          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
-          chmod 0600 "$HOME/.ssh/id_ed25519" "$HOME/.ssh/known_hosts"
+          [[ -f "$HOME/.ssh/brand-pilot-ubuntu" && ! -L "$HOME/.ssh/brand-pilot-ubuntu" ]] || { echo "recovery_ssh_key_missing" >&2; exit 1; }
+          [[ -f "$HOME/.ssh/known_hosts" && ! -L "$HOME/.ssh/known_hosts" ]] || { echo "recovery_known_hosts_missing" >&2; exit 1; }
 
       - name: Validate and stream the installed production release read-only
         shell: bash
@@ -77,11 +60,11 @@ jobs:
           EXPECTED_API_DIGEST: ${{ inputs.expected_api_digest }}
           EXPECTED_RELEASE_ENV_SHA256: ${{ inputs.expected_release_env_sha256 }}
           EXPECTED_RELEASE_INTEGRITY_SHA256: ${{ inputs.expected_release_integrity_sha256 }}
-          DEPLOY_HOST: ${{ secrets.BRAND_PILOT_DEPLOY_HOST }}
-          DEPLOY_USER: ${{ secrets.BRAND_PILOT_DEPLOY_USER }}
         run: |
           set -Eeuo pipefail
-          ssh -o BatchMode=yes -o StrictHostKeyChecking=yes "$DEPLOY_USER@$DEPLOY_HOST" \
+          ssh -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile="$HOME/.ssh/known_hosts" \
+            -i "$HOME/.ssh/brand-pilot-ubuntu" bpdeploy@brand-pilot-ubuntu \
             bash -s -- "$EXPECTED_RELEASE_SHA" "$EXPECTED_API_DIGEST" \
             "$EXPECTED_RELEASE_ENV_SHA256" "$EXPECTED_RELEASE_INTEGRITY_SHA256" <<'REMOTE' \
             > recovered-release.tar.gz
@@ -112,9 +95,10 @@ jobs:
           release_files+=(release-integrity.sha256)
           tar --numeric-owner -C "$release_dir" -czf - -- "${release_files[@]}"
           REMOTE
-          EXPECTED_RELEASE_SHA="$EXPECTED_RELEASE_SHA" python3 <<'PYTHON'
+          EXPECTED_RELEASE_SHA="$EXPECTED_RELEASE_SHA" python <<'PYTHON'
           import os
           import pathlib
+          import shutil
           import tarfile
 
           destination = pathlib.Path("recovered-release") / os.environ["EXPECTED_RELEASE_SHA"]
@@ -123,11 +107,33 @@ jobs:
               members = archive.getmembers()
               if not members:
                   raise SystemExit("recovery_archive_empty")
+              by_name = {}
               for member in members:
                   path = pathlib.PurePosixPath(member.name)
                   if path.is_absolute() or ".." in path.parts or not member.isfile():
                       raise SystemExit("recovery_archive_member_invalid")
-              archive.extractall(destination, members=members, filter="data")
+                  if member.name in by_name:
+                      raise SystemExit("recovery_archive_member_duplicate")
+                  by_name[member.name] = member
+                  target = destination.joinpath(*path.parts)
+                  target.parent.mkdir(parents=True, exist_ok=True)
+                  source = archive.extractfile(member)
+                  if source is None:
+                      raise SystemExit("recovery_archive_member_invalid")
+                  with source, target.open("xb") as output:
+                      shutil.copyfileobj(source, output)
+              integrity = destination / "release-integrity.sha256"
+              expected_names = {"release-integrity.sha256"}
+              for line in integrity.read_text(encoding="utf-8").splitlines():
+                  checksum, mode, relative = line.split("  ", 2)
+                  expected_names.add(relative)
+                  member = by_name.get(relative)
+                  if member is None or f"{member.mode & 0o777:03o}" != mode:
+                      raise SystemExit("recovery_archive_mode_invalid")
+              if set(by_name) != expected_names:
+                  raise SystemExit("recovery_archive_file_set_invalid")
+              if f"{by_name['release-integrity.sha256'].mode & 0o777:03o}" != "600":
+                  raise SystemExit("recovery_archive_mode_invalid")
           PYTHON
           [[ -z "$(find recovered-release -type l -print -quit)" ]] || { echo "recovery_symlink_forbidden" >&2; exit 1; }
 
@@ -151,7 +157,6 @@ jobs:
             [[ "$relative" != /* && "$relative" != *".."* && "$relative" != *\\* ]]
             path="$release_dir/$relative"
             [[ -f "$path" && ! -L "$path" ]]
-            [[ "$(stat -c '%a' -- "$path")" == "$mode" ]]
             [[ "$(sha256sum -- "$path" | awk '{print $1}')" == "$checksum" ]]
             case "$relative" in
               release.env|release.env.sha256|marketing-worker-retirement.json) ;;
@@ -187,18 +192,21 @@ jobs:
           )
           cp "$release_dir/release-integrity.sha256" recovery-artifact/
           bundle_sha256="$(sha256sum -- "recovery-artifact/release-bundle-$EXPECTED_RELEASE_SHA.tar.gz" | awk '{print $1}')"
-          jq -cnS \
-            --arg contractVersion "brand-pilot-baseline-recovery.v1" \
-            --arg sourceWorkflow ".github/workflows/recover-brand-pilot-production-baseline.yml" \
-            --arg releaseSha "$EXPECTED_RELEASE_SHA" \
-            --arg apiDigest "$EXPECTED_API_DIGEST" \
-            --arg releaseEnvSha256 "$EXPECTED_RELEASE_ENV_SHA256" \
-            --arg releaseIntegritySha256 "$EXPECTED_RELEASE_INTEGRITY_SHA256" \
-            --arg releaseBundleSha256 "$bundle_sha256" \
-            --arg workflowRunId "$GITHUB_RUN_ID" \
-            --arg workflowHeadSha "$GITHUB_SHA" \
-            '{contractVersion:$contractVersion,sourceWorkflow:$sourceWorkflow,workflowRunId:$workflowRunId,workflowHeadSha:$workflowHeadSha,releaseSha:$releaseSha,apiDigest:$apiDigest,releaseEnvSha256:$releaseEnvSha256,releaseIntegritySha256:$releaseIntegritySha256,releaseBundleSha256:$releaseBundleSha256}' \
+          BUNDLE_SHA256="$bundle_sha256" node --input-type=module <<'NODE' \
             > recovery-artifact/baseline-recovery-provenance.json
+          const provenance = {
+            apiDigest: process.env.EXPECTED_API_DIGEST,
+            contractVersion: "brand-pilot-baseline-recovery.v1",
+            releaseBundleSha256: process.env.BUNDLE_SHA256,
+            releaseEnvSha256: process.env.EXPECTED_RELEASE_ENV_SHA256,
+            releaseIntegritySha256: process.env.EXPECTED_RELEASE_INTEGRITY_SHA256,
+            releaseSha: process.env.EXPECTED_RELEASE_SHA,
+            sourceWorkflow: ".github/workflows/recover-brand-pilot-production-baseline.yml",
+            workflowHeadSha: process.env.GITHUB_SHA,
+            workflowRunId: process.env.GITHUB_RUN_ID,
+          };
+          process.stdout.write(`${JSON.stringify(provenance)}\n`);
+          NODE
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
