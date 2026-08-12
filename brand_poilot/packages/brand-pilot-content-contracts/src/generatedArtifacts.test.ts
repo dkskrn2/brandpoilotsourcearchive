@@ -26,7 +26,6 @@ const SCHEMA_FILENAMES = [
   "proposal-input-v2.schema.json",
   "reel-plan-v2.schema.json",
   "research-evidence-v1.schema.json",
-  "structured-scene-copy-v1.schema.json",
 ] as const;
 
 function objectKeysAreSorted(value: unknown): boolean {
@@ -58,17 +57,20 @@ function schemaProblems(value: unknown): { oneOf: boolean; uniqueItems: boolean;
 }
 
 describe("generated content contract artifacts", () => {
-  it("keeps private planner drafts outside canonical source hashing and artifacts", async () => {
+  it("keeps private transient contracts outside canonical source hashing and artifacts", async () => {
     const source = mkdtempSync(join(tmpdir(), "content-contract-private-source-"));
     const canonicalPath = join(source, "canonical.ts");
     const privateDraftPath = join(source, "plannerDrafts.ts");
+    const privateStructuredScenePath = join(source, "structuredSceneCopy.ts");
     writeFileSync(canonicalPath, "export const canonical = 'v1';\n", "utf8");
     writeFileSync(privateDraftPath, "export const privateDraft = 'v1';\n", "utf8");
+    writeFileSync(privateStructuredScenePath, "export const privateStructuredScene = 'v1';\n", "utf8");
 
     const originalHash = computeContractSourceHash(source);
     const originalArtifacts = await generateArtifactSet(source);
 
     writeFileSync(privateDraftPath, "export const privateDraft = 'v2';\n", "utf8");
+    writeFileSync(privateStructuredScenePath, "export const privateStructuredScene = 'v2';\n", "utf8");
     expect(computeContractSourceHash(source)).toBe(originalHash);
     expect(await generateArtifactSet(source)).toEqual(originalArtifacts);
 
@@ -113,7 +115,7 @@ describe("generated content contract artifacts", () => {
         if (statSync(absolute).isDirectory()) visit(absolute);
         else if (name.endsWith(".ts") && !name.endsWith(".test.ts")
           && name !== "generateArtifacts.ts" && name !== "checkGenerated.ts"
-          && name !== "plannerDrafts.ts") files.push(absolute);
+          && name !== "plannerDrafts.ts" && name !== "structuredSceneCopy.ts") files.push(absolute);
       }
     };
     visit(sourceDirectory);

@@ -5,7 +5,7 @@
     "card_news": "card_news",
     "reel": "reel"
   },
-  "contractSourceHash": "8932c7d94b89a764293c2a8913b7d30bde54319a3b6b3f7b3ff0128880628117",
+  "contractSourceHash": "02760a1e006eb5920980a4b9c5b268cf53b3595543c5f909f2d66be53393c660",
   "formats": [
     "card_news",
     "blog",
@@ -109,10 +109,6 @@
     "researchEvidenceV1": {
       "filename": "research-evidence-v1.schema.json",
       "sha256": "b797488d25354aebe601dcf9c775f9f67ab0ebd9bffa1c30896c0b2a306c2ff3"
-    },
-    "structuredSceneCopyV1": {
-      "filename": "structured-scene-copy-v1.schema.json",
-      "sha256": "a3ba477a3e43934ea68551f84baab8715f17f8ee925049e2e324214dac5a23e3"
     }
   },
   "services": {
