@@ -112,4 +112,63 @@ describe("Proposal V2 semantic result", () => {
       expect(() => parseContentProposalSetV2(candidate, compositionJob())).toThrow();
     }
   });
+
+  it.each(["card_news", "reel"] as const)(
+  "allows %s concepts to cite different representative frozen evidence and references", (outputFormat) => {
+    const job = compositionJob();
+    const result = structuredClone(proposalSet);
+    job.composedInput.outputSettings.outputFormat = outputFormat;
+    job.request.outputFormat = outputFormat;
+    const secondEvidenceId = "71000000-0000-4000-8000-000000000007";
+    const firstReferenceId = "72000000-0000-4000-8000-000000000007";
+    job.composedInput.researchEvidence.items.push({
+      ...structuredClone(job.composedInput.researchEvidence.items[0]!),
+      id: secondEvidenceId,
+      title: "두 번째 검증 자료",
+      url: "https://source.example/second",
+      contentHash: "b".repeat(64),
+    });
+    job.composedInput.references.push({
+      referenceItemId: firstReferenceId,
+      snapshotId: "73000000-0000-4000-8000-000000000007",
+      roles: ["content_reference"],
+      title: "참고 자료",
+      sourceUrl: "https://reference.example/article",
+      capturedAt: "2026-08-01T04:00:00.000Z",
+      contentHash: "c".repeat(64),
+      text: "선택 관점을 보조하는 동결 참고 자료",
+      image: null,
+    });
+    result.proposals[1].evidenceIds = [secondEvidenceId];
+    result.proposals[2].referenceIds = [firstReferenceId];
+    for (const proposal of result.proposals) proposal.outputFormat = outputFormat;
+
+    expect(parseContentProposalSetV2(result, job)).toEqual(result);
+  });
+
+  it.each(["blog"] as const)(
+    "keeps the existing identical representative evidence sets for %s proposals",
+    (outputFormat) => {
+      const job = compositionJob();
+      const result = structuredClone(proposalSet);
+      const secondEvidenceId = "71000000-0000-4000-8000-000000000007";
+      job.composedInput.outputSettings.outputFormat = outputFormat;
+      job.request.outputFormat = outputFormat;
+      job.composedInput.researchEvidence.items.push({
+        ...structuredClone(job.composedInput.researchEvidence.items[0]!),
+        id: secondEvidenceId,
+        title: "두 번째 검증 자료",
+        url: "https://source.example/second",
+        contentHash: "b".repeat(64),
+      });
+      for (const proposal of result.proposals) {
+        proposal.outputFormat = outputFormat;
+        if (outputFormat === "blog") proposal.assetCount = null;
+      }
+      result.proposals[1].evidenceIds = [secondEvidenceId];
+
+      expect(() => parseContentProposalSetV2(result, job))
+        .toThrow("content_proposal_result_not_distinct");
+    },
+  );
 });

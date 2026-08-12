@@ -10,7 +10,7 @@ import {
   startJobLeaseGuard,
   type CodexAccountPool,
 } from "@brand-pilot/worker-runtime";
-import { parseReelInput, parseStructuredReelPlanSubmissionForInput, type ReelClient, type ReelJob, type StructuredReelPlanSubmission } from "./contracts.js";
+import { parseReelInput, parseReelStoryboardSubmissionForInput, type ReelClient, type ReelJob, type ReelStoryboardSubmission } from "./contracts.js";
 import { buildReelPlanPrompt, reelPlanSkillVersion } from "./promptBuilder.js";
 
 export interface ReelPlanner {
@@ -75,12 +75,12 @@ export async function runOnce(input: { workerId: string; client: ReelClient; pla
   try {
     const finalInput = parseReelInput(job.payload.contentGenerationInput, job);
     let repairError: string | undefined;
-    let submission: StructuredReelPlanSubmission | undefined;
+    let submission: ReelStoryboardSubmission | undefined;
     for (let attempt = 0; attempt < 2; attempt += 1) {
       const run = await input.planner.run(job, buildReelPlanPrompt(finalInput, repairError), lease.signal);
       runs.push(run);
       try {
-        submission = parseStructuredReelPlanSubmissionForInput(
+        submission = parseReelStoryboardSubmissionForInput(
           JSON.parse(await readFile(path.join(run.outputDir, "reel-plan.json"), "utf8")),
           finalInput,
         );
@@ -97,7 +97,7 @@ export async function runOnce(input: { workerId: string; client: ReelClient; pla
       skillVersion: reelPlanSkillVersion,
       jobType: "generate",
       planDraft: submission.planDraft,
-      renderSemanticContract: submission.renderSemanticContract,
+      reelStoryboardContract: submission.reelStoryboardContract,
     };
     const completion = await replayContentWorkerCompletion({
       body: completionBody,

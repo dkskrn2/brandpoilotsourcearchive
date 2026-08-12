@@ -180,39 +180,110 @@ describe("AI content worker routes", () => {
     await app.close();
   });
 
-  it("forwards the exact structured-scene contract with a social planning completion", async () => {
+  it("forwards the exact Reel Storyboard contract with a Reel planning completion", async () => {
     const { app, repository } = setup();
     const planDraft = {
       contractVersion: "reel-plan-draft.v1",
       content: { caption: "Caption", hashtags: ["guide"], cta: "Save" },
       assets: [{ index: 1, role: "scene", copy: "결론", visualDirection: "세로 구성", evidenceIds: [], productImageAssetIds: [] }],
     };
-    const renderSemanticContract = {
-      contractVersion: "structured-scene-copy.v1",
-      outputFormat: "reel",
+    const storyboard = {
+      contractVersion: "reel-storyboard.v1",
+      content: planDraft.content,
+      storyNarrative: "결론을 먼저 제시한다.",
+      visualSystem: {
+        paletteDirection: "white red black", typographyDirection: "large vertical type",
+        graphicLanguage: "editorial", imageryDirection: "numbers first", invariants: ["same margins"],
+      },
       scenes: [{
-        index: 1, role: "scene", coreMessage: "핵심", headline: "결론",
+        index: 1, editorialRole: "hook", purpose: "결론을 먼저 제시한다.", coreMessage: "핵심", headline: "결론",
         keyVisual: { type: "none", entries: [] }, supportingTexts: [], footnote: null,
-        visualDirection: "세로 구성", evidenceIds: [], productImageAssetIds: [],
+        visualThesis: "결론이 가장 먼저 보인다.", layoutArchetype: "vertical_hook",
+        evidenceIds: [], productImageAssetIds: [],
       }],
+    };
+    const reelStoryboardContract = {
+      contractVersion: "reel-storyboard.v1", storyboardSha256: "a".repeat(64), storyboard,
     };
     const response = await app.inject({
       method: "POST", url: "/worker/ai-content-jobs/job-1/complete",
       headers: { authorization: "Bearer worker-token" },
       payload: {
-        workerId: "worker-1", leaseToken: "lease-1", skillVersion: "reel-plan-skill.v6",
-        jobType: "generate", planDraft, renderSemanticContract,
+        workerId: "worker-1", leaseToken: "lease-1", skillVersion: "reel-storyboard-skill.v1",
+        jobType: "generate", planDraft, reelStoryboardContract,
       },
     });
 
     expect(response.statusCode).toBe(200);
     expect(repository.completeAiContentJob).toHaveBeenCalledWith(expect.objectContaining({
-      planDraft, renderSemanticContract,
+      planDraft, reelStoryboardContract,
     }));
     await app.close();
   });
 
-  it("rejects a structured-scene contract on an unchanged blog completion", async () => {
+  it("forwards a card deck sidecar with its deterministically derived planning draft", async () => {
+    const { app, repository } = setup();
+    const planDraft = {
+      contractVersion: "card-news-plan-draft.v1",
+      content: { caption: "Caption", hashtags: ["guide"], cta: "Save" },
+      assets: [1, 2, 3].map((index) => ({
+        index, role: "scene", copy: `결론 ${index}`, visualDirection: `방향 ${index}`,
+        evidenceIds: [], productImageAssetIds: [],
+      })),
+    };
+    const deck = {
+      contractVersion: "card-deck-editorial-plan.v1",
+      content: planDraft.content,
+      deckNarrative: "발표에서 행동으로 이어진다.",
+      visualSystem: {
+        paletteDirection: "white red black", typographyDirection: "large type",
+        graphicLanguage: "editorial", imageryDirection: "numbers first", invariants: ["same margins"],
+      },
+      scenes: [1, 2, 3].map((index) => ({
+        index, editorialRole: "scene", purpose: `목적 ${index}`, coreMessage: `핵심 ${index}`,
+        headline: `결론 ${index}`, keyVisual: { type: "none", entries: [] }, supportingTexts: [], footnote: null,
+        visualThesis: `논지 ${index}`, layoutArchetype: "editorial_freeform", evidenceIds: [], productImageAssetIds: [],
+      })),
+    };
+    const cardDeckContract = { contractVersion: "card-deck-editorial-plan.v1", deckSha256: "a".repeat(64), plan: deck };
+    const response = await app.inject({
+      method: "POST", url: "/worker/ai-content-jobs/job-1/complete",
+      headers: { authorization: "Bearer worker-token" },
+      payload: {
+        workerId: "worker-1", leaseToken: "lease-1", skillVersion: "card-news-plan-skill.v6",
+        jobType: "generate", planDraft, cardDeckContract,
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(repository.completeAiContentJob).toHaveBeenCalledWith(expect.objectContaining({ planDraft, cardDeckContract }));
+    await app.close();
+  });
+
+  it("rejects a card draft without its deck and a deck on non-card ingress", async () => {
+    const { app, repository } = setup();
+    const common = { workerId: "worker-1", leaseToken: "lease-1", skillVersion: "skill", jobType: "generate" };
+    const missing = await app.inject({
+      method: "POST", url: "/worker/ai-content-jobs/job-1/complete",
+      headers: { authorization: "Bearer worker-token" },
+      payload: { ...common, planDraft: { contractVersion: "card-news-plan-draft.v1" } },
+    });
+    const extra = await app.inject({
+      method: "POST", url: "/worker/ai-content-jobs/job-1/complete",
+      headers: { authorization: "Bearer worker-token" },
+      payload: {
+        ...common, planDraft: { contractVersion: "blog-plan-draft.v1" },
+        cardDeckContract: { contractVersion: "card-deck-editorial-plan.v1", deckSha256: "a".repeat(64), plan: {} },
+      },
+    });
+
+    expect(missing.statusCode).toBe(400);
+    expect(extra.statusCode).toBe(400);
+    expect(repository.completeAiContentJob).not.toHaveBeenCalled();
+    await app.close();
+  });
+
+  it("rejects a Reel Storyboard contract on an unchanged blog completion", async () => {
     const { app, repository } = setup();
     const response = await app.inject({
       method: "POST", url: "/worker/ai-content-jobs/job-1/complete",
@@ -221,13 +292,8 @@ describe("AI content worker routes", () => {
         workerId: "worker-1", leaseToken: "lease-1", skillVersion: "blog-plan-draft.v1",
         jobType: "generate",
         planDraft: { contractVersion: "blog-plan-draft.v1", content: {}, imageDraft: null },
-        renderSemanticContract: {
-          contractVersion: "structured-scene-copy.v1", outputFormat: "reel",
-          scenes: [{
-            index: 1, role: "scene", coreMessage: "핵심", headline: "결론",
-            keyVisual: { type: "none", entries: [] }, supportingTexts: [], footnote: null,
-            visualDirection: "세로 구성", evidenceIds: [], productImageAssetIds: [],
-          }],
+        reelStoryboardContract: {
+          contractVersion: "reel-storyboard.v1", storyboardSha256: "a".repeat(64), storyboard: {},
         },
       },
     });

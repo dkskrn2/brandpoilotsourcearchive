@@ -423,10 +423,13 @@ export function parseContentProposalSetV2(
       fail("content_proposal_result_invalid");
     }
   }
+  const requiresSharedRepresentativeSources = settings.outputFormat === "blog";
   if (new Set(set.proposals.map((proposal) => proposal.conceptKey)).size !== 3
     || new Set(set.proposals.map(semanticFingerprint)).size !== 3
-    || new Set(set.proposals.map((proposal) => sortedSet(proposal.evidenceIds))).size !== 1
-    || new Set(set.proposals.map((proposal) => sortedSet(proposal.referenceIds))).size !== 1) {
+    || (requiresSharedRepresentativeSources
+      && new Set(set.proposals.map((proposal) => sortedSet(proposal.evidenceIds))).size !== 1)
+    || (requiresSharedRepresentativeSources
+      && new Set(set.proposals.map((proposal) => sortedSet(proposal.referenceIds))).size !== 1)) {
     fail("content_proposal_result_not_distinct");
   }
   for (let leftIndex = 0; leftIndex < set.proposals.length; leftIndex += 1) {

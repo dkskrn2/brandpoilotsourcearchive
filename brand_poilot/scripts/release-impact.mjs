@@ -17,6 +17,7 @@ const COMPONENTS = Object.freeze(["customerUi", ...SERVER_COMPONENTS]);
 
 export const AI_CONTENT_THREE_FORMAT_CUTOVER_PROFILE = "ai-content-three-format-cutover";
 export const STRUCTURED_SOCIAL_RENDER_SEMANTICS_PROFILE = "structured-social-render-semantics";
+export const CARD_DECK_EDITORIAL_PIPELINE_PROFILE = "card-deck-editorial-pipeline";
 const AI_CONTENT_CUTOVER_SERVER_COMPONENTS = Object.freeze([
   "api",
   "contentProposalWorker",
@@ -95,6 +96,7 @@ const STRUCTURED_SOCIAL_CARD_PATHS = new Set([
 const STRUCTURED_SOCIAL_REEL_PATHS = new Set([
   "workers/brand-pilot-reel-worker/Dockerfile",
   "workers/brand-pilot-reel-worker/scripts/reel-plan-draft-v2.schema.json",
+  "workers/brand-pilot-reel-worker/scripts/reel-storyboard-v1.schema.json",
   "workers/brand-pilot-reel-worker/scripts/run-codex-reel-plan.mjs",
   "workers/brand-pilot-reel-worker/src/contracts.test.ts",
   "workers/brand-pilot-reel-worker/src/contracts.ts",
@@ -114,8 +116,8 @@ const STRUCTURED_SOCIAL_IMAGE_PATHS = new Set([
   "workers/brand-pilot-image-worker/src/aiContentLockedSocialCopyPrompt.ts",
   "workers/brand-pilot-image-worker/src/aiContentManualAssetPromptV2.test.ts",
   "workers/brand-pilot-image-worker/src/aiContentManualAssetPromptV2Common.ts",
-  "workers/brand-pilot-image-worker/src/aiContentManualRenderContract.test.ts",
   "workers/brand-pilot-image-worker/src/aiContentManualRenderContract.ts",
+  "workers/brand-pilot-image-worker/src/aiContentManualRenderContract.test.ts",
   "workers/brand-pilot-image-worker/src/aiContentReelAssetPromptV2.ts",
   "workers/brand-pilot-image-worker/src/aiContentRenderClient.test.ts",
   "workers/brand-pilot-image-worker/src/aiContentRenderClient.ts",
@@ -135,6 +137,38 @@ const STRUCTURED_SOCIAL_DOC_PATHS = new Set([
   "docs/superpowers/plans/2026-08-11-structured-social-scene-copy.md",
   "docs/superpowers/plans/2026-08-12-structured-scene-render-semantics.md",
   "docs/superpowers/specs/2026-08-11-structured-social-scene-copy-design.md",
+]);
+
+const CARD_DECK_CONTRACT_PATHS = new Set([
+  "packages/brand-pilot-content-contracts/package.json",
+  "packages/brand-pilot-content-contracts/src/cardDeckEditorialPlan.test.ts",
+  "packages/brand-pilot-content-contracts/src/cardDeckEditorialPlan.ts",
+  "packages/brand-pilot-content-contracts/src/cardDeckEditorialPlanNode.ts",
+  "packages/brand-pilot-content-contracts/src/editorialVisualContext.ts",
+  "packages/brand-pilot-content-contracts/src/reelStoryboard.test.ts",
+  "packages/brand-pilot-content-contracts/src/reelStoryboard.ts",
+  "packages/brand-pilot-content-contracts/src/reelStoryboardNode.ts",
+  "packages/brand-pilot-content-contracts/src/generateArtifacts.ts",
+  "packages/brand-pilot-content-contracts/src/generatedArtifacts.test.ts",
+]);
+
+const CARD_DECK_DOC_PATHS = new Set([
+  "docs/superpowers/plans/2026-08-12-card-deck-editorial-pipeline.md",
+  "docs/superpowers/specs/2026-08-12-card-deck-editorial-pipeline-design.md",
+  "docs/superpowers/specs/2026-08-12-editorial-render-contracts-final.md",
+]);
+
+const CARD_DECK_TOOLING_PATHS = new Set([
+  "deploy/env/card-news-worker.env.example",
+  "scripts/canonical-format-schema-runtime.test.mjs",
+  "scripts/content-account-pool-deployment.test.mjs",
+  "scripts/incremental-cicd-contract.test.mjs",
+  "scripts/reel-worker-deployment-cutover.test.mjs",
+  "scripts/release-impact.mjs",
+  "scripts/release-impact.test.mjs",
+  "scripts/three-format-cutover-static-check.mjs",
+  "scripts/three-format-cutover-static-check.test.mjs",
+  ".github/workflows/publish-brand-pilot-server-images.yml",
 ]);
 
 const WORKER_PATHS = Object.freeze([
@@ -294,9 +328,43 @@ function classifyStructuredSocialRenderPath(path, components) {
   return { known: false };
 }
 
+function classifyCardDeckEditorialPipelinePath(path, components) {
+  if (CARD_DECK_DOC_PATHS.has(path)) return { known: true, documentation: true };
+  if (CARD_DECK_CONTRACT_PATHS.has(path)) {
+    for (const component of ["api", "contentProposalWorker", "cardNewsWorker", "imageWorker", "reelWorker"]) {
+      components[component] = true;
+    }
+    return { known: true };
+  }
+  if (path.startsWith("apps/api/")) {
+    components.api = true;
+    return { known: true };
+  }
+  if (path.startsWith("workers/brand-pilot-content-proposal-worker/")) {
+    components.contentProposalWorker = true;
+    return { known: true };
+  }
+  if (path.startsWith("workers/brand-pilot-card-news-worker/")) {
+    components.cardNewsWorker = true;
+    return { known: true };
+  }
+  if (path.startsWith("workers/brand-pilot-reel-worker/")) {
+    components.reelWorker = true;
+    return { known: true };
+  }
+  if (path.startsWith("workers/brand-pilot-image-worker/")) {
+    components.imageWorker = true;
+    return { known: true };
+  }
+  if (CARD_DECK_TOOLING_PATHS.has(path)) {
+    return { known: true, deployBundle: path === "scripts/release-impact.mjs" };
+  }
+  return { known: false };
+}
+
 export function classifyChangedPaths(values, options = {}) {
   const profile = options.profile ?? "default";
-  if (!["default", AI_CONTENT_THREE_FORMAT_CUTOVER_PROFILE, STRUCTURED_SOCIAL_RENDER_SEMANTICS_PROFILE].includes(profile)) {
+  if (!["default", AI_CONTENT_THREE_FORMAT_CUTOVER_PROFILE, STRUCTURED_SOCIAL_RENDER_SEMANTICS_PROFILE, CARD_DECK_EDITORIAL_PIPELINE_PROFILE].includes(profile)) {
     throw new Error("release_impact_profile_invalid");
   }
   const originalPaths = [...new Set(values.map((value) => String(value ?? "").trim()).filter(Boolean))];
@@ -313,13 +381,16 @@ export function classifyChangedPaths(values, options = {}) {
   let nonDocumentationChange = false;
 
   if (profile === AI_CONTENT_THREE_FORMAT_CUTOVER_PROFILE
-    || profile === STRUCTURED_SOCIAL_RENDER_SEMANTICS_PROFILE) {
+    || profile === STRUCTURED_SOCIAL_RENDER_SEMANTICS_PROFILE
+    || profile === CARD_DECK_EDITORIAL_PIPELINE_PROFILE) {
     for (let index = 0; index < paths.length; index += 1) {
       const path = paths[index];
       const originalPath = originalPaths[index] ?? path;
       const result = profile === AI_CONTENT_THREE_FORMAT_CUTOVER_PROFILE
         ? classifyAiContentCutoverPath(path, components)
-        : classifyStructuredSocialRenderPath(path, components);
+        : profile === STRUCTURED_SOCIAL_RENDER_SEMANTICS_PROFILE
+          ? classifyStructuredSocialRenderPath(path, components)
+          : classifyCardDeckEditorialPipelinePath(path, components);
       if (result.documentation) continue;
       nonDocumentationChange = true;
       if (result.migration) migrationChanged = true;

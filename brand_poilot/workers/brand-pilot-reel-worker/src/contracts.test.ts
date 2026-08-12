@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   parseReelJob,
   parseReelPlanDraftForInput,
-  parseStructuredReelPlanDraftForInput,
+  parseReelStoryboardSubmissionForInput,
 } from "./contracts.js";
 
 const uid = (value: number) => `00000000-0000-4000-8000-${String(value).padStart(12, "0")}`;
@@ -33,26 +33,37 @@ function draft() {
   };
 }
 
-function structuredDraft() {
+function storyboard() {
   return {
-    contractVersion: "reel-plan-draft.v2",
+    contractVersion: "reel-storyboard.v1",
     content: { caption: "핵심을 설명합니다.", hashtags: ["#가이드"], cta: "저장해 두세요." },
-    assets: [
+    storyNarrative: "온도의 차이를 설명한 뒤 실행 순서로 이어진다.",
+    visualSystem: {
+      paletteDirection: "따뜻한 차 색상",
+      typographyDirection: "세로 화면용 큰 제목과 숫자",
+      graphicLanguage: "절제된 편집형 인포그래픽",
+      imageryDirection: "차와 온도 수치 중심",
+      invariants: ["같은 색과 여백을 유지"],
+    },
+    scenes: [
       {
         index: 1,
-        role: "hook",
+        editorialRole: "hook",
+        purpose: "온도가 맛을 바꾼다는 사실을 알린다.",
         coreMessage: "온도 하나가 맛을 바꿉니다.",
         headline: "차 맛은 온도에서 갈립니다",
         keyVisual: { type: "number", entries: [{ role: "value", label: null, value: "80°C" }] },
         supportingTexts: ["떫은맛은 줄이고 향은 살립니다"],
         footnote: "차 종류에 따라 달라질 수 있습니다",
-        visualDirection: "헤드라인과 숫자를 세로 화면 중앙에 크게 배치",
+        visualThesis: "헤드라인과 숫자를 세로 화면 중앙에 크게 배치",
+        layoutArchetype: "vertical_hook",
         evidenceIds: [uid(1)],
         productImageAssetIds: [uid(2)],
       },
       {
         index: 2,
-        role: "explanation",
+        editorialRole: "explanation",
+        purpose: "실행 순서를 안내한다.",
         coreMessage: "순서대로 따르면 됩니다.",
         headline: "세 단계로 끝내세요",
         keyVisual: { type: "steps", entries: [
@@ -62,7 +73,8 @@ function structuredDraft() {
         ] },
         supportingTexts: [],
         footnote: null,
-        visualDirection: "세 단계를 위에서 아래로 연결",
+        visualThesis: "세 단계를 위에서 아래로 연결",
+        layoutArchetype: "sequence",
         evidenceIds: [uid(1)],
         productImageAssetIds: [],
       },
@@ -71,16 +83,16 @@ function structuredDraft() {
 }
 
 describe("reel worker contract", () => {
-  it("compiles structured scene copy to the existing reel-plan-draft.v1 API body", () => {
-    expect(parseStructuredReelPlanDraftForInput(structuredDraft(), input())).toEqual({
+  it("compiles the storyboard to the existing reel-plan-draft.v1 API body", () => {
+    expect(parseReelStoryboardSubmissionForInput(storyboard(), input()).planDraft).toEqual({
       contractVersion: "reel-plan-draft.v1",
-      content: structuredDraft().content,
+      content: storyboard().content,
       assets: [
         {
           index: 1,
           role: "hook",
           copy: "차 맛은 온도에서 갈립니다\n80°C\n떫은맛은 줄이고 향은 살립니다\n차 종류에 따라 달라질 수 있습니다",
-          visualDirection: "헤드라인과 숫자를 세로 화면 중앙에 크게 배치",
+          visualDirection: expect.stringContaining("헤드라인과 숫자를 세로 화면 중앙에 크게 배치"),
           evidenceIds: [uid(1)],
           productImageAssetIds: [uid(2)],
         },
@@ -88,7 +100,7 @@ describe("reel worker contract", () => {
           index: 2,
           role: "explanation",
           copy: "세 단계로 끝내세요\n데우기\n우리기\n마시기",
-          visualDirection: "세 단계를 위에서 아래로 연결",
+          visualDirection: expect.stringContaining("세 단계를 위에서 아래로 연결"),
           evidenceIds: [uid(1)],
           productImageAssetIds: [],
         },
@@ -97,17 +109,17 @@ describe("reel worker contract", () => {
   });
 
   it("rejects filler fields and inconsistent key visual structure", () => {
-    expect(() => parseStructuredReelPlanDraftForInput({
-      ...structuredDraft(),
-      assets: [{ ...structuredDraft().assets[0], extraCopy: "채우기 문구" }, structuredDraft().assets[1]],
+    expect(() => parseReelStoryboardSubmissionForInput({
+      ...storyboard(),
+      scenes: [{ ...storyboard().scenes[0], extraCopy: "채우기 문구" }, storyboard().scenes[1]],
     }, input())).toThrow("reel_structured_draft_invalid");
-    expect(() => parseStructuredReelPlanDraftForInput({
-      ...structuredDraft(),
-      assets: [{ ...structuredDraft().assets[0], keyVisual: { type: "none", entries: [{ role: "value", label: null, value: "불필요" }] } }, structuredDraft().assets[1]],
+    expect(() => parseReelStoryboardSubmissionForInput({
+      ...storyboard(),
+      scenes: [{ ...storyboard().scenes[0], keyVisual: { type: "none", entries: [{ role: "value", label: null, value: "불필요" }] } }, storyboard().scenes[1]],
     }, input())).toThrow("reel_structured_draft_invalid");
-    expect(() => parseStructuredReelPlanDraftForInput({
-      ...structuredDraft(),
-      assets: [{ ...structuredDraft().assets[0], supportingTexts: ["1", "2", "3"] }, structuredDraft().assets[1]],
+    expect(() => parseReelStoryboardSubmissionForInput({
+      ...storyboard(),
+      scenes: [{ ...storyboard().scenes[0], supportingTexts: ["1", "2", "3"] }, storyboard().scenes[1]],
     }, input())).toThrow("reel_structured_draft_invalid");
   });
 

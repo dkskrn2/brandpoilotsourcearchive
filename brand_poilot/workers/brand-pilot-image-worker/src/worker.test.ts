@@ -436,6 +436,7 @@ function v3AssetJob(): AiContentImageAssetJob {
 function v3Client(claimed: AiContentImageAssetJob | AiContentPackageFinalizeJob | null = v3AssetJob()) {
   return {
     claim: vi.fn(async () => claimed), heartbeat: vi.fn(async () => true), completeAsset: vi.fn(async () => undefined),
+    appendRenderDiagnostic: vi.fn(async () => undefined),
     completePackage: vi.fn(async () => undefined), fail: vi.fn(async () => undefined),
   };
 }
@@ -466,6 +467,44 @@ describe("V3 AI content render priority", () => {
     expect(aiContentStorage.uploadAsset).toHaveBeenCalledWith(expect.objectContaining({ path: expect.stringMatching(/\/assets\/02\.png$/), index: 2 }));
     expect(aiContentClient.completeAsset).toHaveBeenCalledWith(expect.objectContaining({ id: v3id(1) }), "worker", expect.objectContaining({ index: 2 }));
     expect(client.claim).not.toHaveBeenCalled();
+  });
+
+  it("keeps a completed editorial asset successful when private diagnostic append fails", async () => {
+    const job = v3AssetJob() as any;
+    job.payload.contractVersion = "ai-content-card-deck-render-job.v1";
+    const aiContentClient = v3Client(job);
+    aiContentClient.appendRenderDiagnostic.mockRejectedValueOnce(new Error("diagnostic unavailable"));
+    const renderDiagnostic = {
+      contractVersion: "ai-content-editorial-render-diagnostic.v1" as const,
+      sourceContractVersion: "card-deck-editorial-plan.v1" as const,
+      sourceSha256: "a".repeat(64),
+      sceneIndex: 2,
+      compiledPromptVersion: "image-card-deck.v1" as const,
+      compiledPromptSha256: "b".repeat(64),
+      actualToolArgumentsObservation: "not_emitted_by_runner" as const,
+      actualToolArgumentsSha256: null,
+    };
+    const rendered = {
+      index: 2, bytes: Buffer.from("asset-2"), mimeType: "image/png" as const,
+      width: 1080, height: 1080, checksum: "a".repeat(64), renderDiagnostic,
+    };
+    const uploaded = {
+      index: 2, url: "https://blob.example/02.png", storagePath: job.payload.storagePath,
+      mimeType: "image/png" as const, width: 1080, height: 1080, checksum: "a".repeat(64),
+    };
+
+    await expect(runOnce({
+      workerId: "worker",
+      aiContentClient,
+      aiContentRenderer: { renderAsset: vi.fn(async () => rendered) },
+      aiContentStorage: { uploadAsset: vi.fn(async () => uploaded) },
+      aiContentFinalizer: vi.fn(),
+      client: workerClient(), renderer: { renderJob: vi.fn() }, storage: { upload: vi.fn() },
+    })).resolves.toEqual({ status: "completed", jobId: job.id });
+
+    expect(aiContentClient.completeAsset).toHaveBeenCalledTimes(1);
+    expect(aiContentClient.appendRenderDiagnostic).toHaveBeenCalledWith(job, "worker", renderDiagnostic);
+    expect(aiContentClient.fail).not.toHaveBeenCalled();
   });
 
   it("isolates V3 failure from legacy job state", async () => {

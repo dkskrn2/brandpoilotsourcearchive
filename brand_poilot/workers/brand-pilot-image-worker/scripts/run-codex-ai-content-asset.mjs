@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { copyFile, mkdir, readFile, rm } from "node:fs/promises";
+import { copyFile, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { buildImageWorkerChildEnvironment, resolveGeneratedImagesDirectory } from "../dist/childEnvironment.mjs";
@@ -19,6 +19,7 @@ async function main() {
   const jobFile = argument("--job");
   const outputFile = path.resolve(argument("--output"));
   const workspaceDir = path.resolve(argument("--workspace"));
+  const diagnosticFile = path.resolve(argument("--diagnostic"));
   const job = parseAiContentAssetRunnerJob(JSON.parse(await readFile(jobFile, "utf8")));
   await Promise.all([
     readFile(path.join(workspaceDir, "AGENTS.md"), "utf8"),
@@ -78,6 +79,11 @@ async function main() {
     if (generated.length !== 1) throw new Error("codex_image_output_count_mismatch");
     await mkdir(path.dirname(outputFile), { recursive: true });
     await copyFile(generated[0], outputFile);
+    await writeFile(diagnosticFile, JSON.stringify({
+      contractVersion: "ai-content-editorial-tool-observation.v1",
+      observation: "not_emitted_by_runner",
+      actualToolArguments: null,
+    }), "utf8");
   } finally {
     if (ownedSessionId && /^[a-zA-Z0-9_-]+$/.test(ownedSessionId)) {
       await rm(path.join(imagegenOutputDir, ownedSessionId), { recursive: true, force: true });

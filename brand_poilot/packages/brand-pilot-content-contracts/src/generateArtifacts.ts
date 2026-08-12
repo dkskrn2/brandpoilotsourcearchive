@@ -59,7 +59,15 @@ function authoredSourceFiles(directory: string): string[] {
         // Planner drafts are private transient worker/API transport, never stored or bound canonical contracts.
         && entry !== "plannerDrafts.ts"
         // Structured scene copy is private render transport. It must not rotate the proposal catalog/hash.
-        && entry !== "structuredSceneCopy.ts") files.push(absolute);
+        && entry !== "structuredSceneCopy.ts"
+        // Card deck editorial plans are a private worker/API sidecar, not a stored proposal catalog contract.
+        && entry !== "cardDeckEditorialPlan.ts"
+        && entry !== "cardDeckEditorialPlanNode.ts"
+        // Reel storyboards are the equivalent private worker/API sidecar.
+        && entry !== "reelStoryboard.ts"
+        && entry !== "reelStoryboardNode.ts"
+        // Safe Card/Reel planning projection; private and not a stored canonical contract.
+        && entry !== "editorialVisualContext.ts") files.push(absolute);
     }
   };
   visit(directory);

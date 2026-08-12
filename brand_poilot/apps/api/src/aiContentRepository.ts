@@ -6,8 +6,8 @@ import { isDeepStrictEqual } from "node:util";
 import {
   type AiContentManifest,
   type CompleteAiContentJobInput,
-  parseRenderSemanticContractV1,
-  type RenderSemanticContractV1,
+  type CardDeckContractV1,
+  type ReelStoryboardContractV1,
   type ContentChannelV2,
   type ContentFinalizationDraftV2,
   type ContentGenerationStartV2,
@@ -41,7 +41,6 @@ import { assembleContentPlanResultV2, parseContentPlanResultV2, type ContentPlan
 import {
   createAiContentRenderJobsRepository,
   enqueueAiContentRenderJobs,
-  resolveManualRenderTransport,
 } from "./aiContentRenderJobs.js";
 import { assertAiContentWritable, withAiContentTransactionFence } from "./aiContentMaintenance.js";
 import {
@@ -56,7 +55,13 @@ import {
   type ContentStudioOutputFormat,
   type VerifiedGeneratedContentCatalog,
 } from "@brand-pilot/content-contracts";
-import { compileStructuredScene } from "@brand-pilot/content-contracts/structured-scene-copy";
+import {
+  compileCardDeckPlanDraftV1,
+  parseCardDeckEditorialPlanV1,
+} from "@brand-pilot/content-contracts/card-deck-editorial-plan";
+import { cardDeckEditorialPlanSha256 } from "@brand-pilot/content-contracts/card-deck-editorial-plan/node";
+import { compileReelStoryboardDraftV1, parseReelStoryboardV1 } from "@brand-pilot/content-contracts/reel-storyboard";
+import { reelStoryboardSha256 } from "@brand-pilot/content-contracts/reel-storyboard/node";
 import {
   assembleAiContentFixedInput,
   type AiContentFixedInputSource,
@@ -367,6 +372,7 @@ export interface AiContentRepository extends AiContentAttachmentLifecycleReposit
   completeAiContentRenderAsset(input: import("./aiContentRenderJobs.js").RenderAssetCompletion): Promise<void>;
   completeAiContentRenderPackage(input: import("./aiContentRenderJobs.js").RenderPackageCompletion): Promise<AiContentGenerationRecord>;
   failAiContentRenderJob(input: import("./aiContentRenderJobs.js").RenderFailure): Promise<void>;
+  appendAiContentEditorialRenderDiagnostic(input: import("./aiContentRenderJobs.js").EditorialRenderDiagnosticAppend): Promise<void>;
   saveAiContentOutputResearch(input: { jobId: string; outputId: string; workerId: string; leaseToken: string; evidence: Record<string, unknown> }): Promise<void>;
   retryAiContentOutput(input: AuthenticatedBrandScope & {
     outputId: string;
@@ -440,57 +446,80 @@ function canonicalJson(value: unknown): string {
   return JSON.stringify(normalize(value));
 }
 
-function validateRenderSemanticContract(
+function validateCardDeckContract(
   input: CompleteAiContentJobInput,
-  outputFormat: ContentOutputFormatV2,
-  plan: ContentPlanResultV2,
-  requiredForManualRender: boolean,
-): RenderSemanticContractV1 | null {
-  if (outputFormat === "blog") {
-    if (input.renderSemanticContract !== undefined) {
-      throw new Error("ai_content_render_semantic_contract_invalid");
-    }
+  finalInput: ReturnType<typeof parseCanonicalContentGenerationInputV3>,
+): CardDeckContractV1 | null {
+  if (finalInput.outputSettings.outputFormat !== "card_news") {
+    if (input.cardDeckContract !== undefined) throw new Error("ai_content_card_deck_contract_invalid");
     return null;
   }
-  if (!requiredForManualRender) return null;
-  if (input.renderSemanticContract === undefined) {
-    throw new Error("ai_content_render_semantic_contract_invalid");
+  if (!("planDraft" in input) || input.cardDeckContract === undefined
+    || input.reelStoryboardContract !== undefined) {
+    throw new Error("ai_content_card_deck_contract_invalid");
   }
-  const semantic = parseRenderSemanticContractV1(input.renderSemanticContract);
-  if (semantic.outputFormat !== outputFormat || !plan.imagePackage
-    || plan.imagePackage.outputFormat !== outputFormat
-    || semantic.scenes.length !== plan.imagePackage.assets.length) {
-    throw new Error("ai_content_render_semantic_contract_mismatch");
+  const deck = parseCardDeckEditorialPlanV1(input.cardDeckContract.plan);
+  if (input.cardDeckContract.contractVersion !== "card-deck-editorial-plan.v1"
+    || !/^[0-9a-f]{64}$/.test(input.cardDeckContract.deckSha256)
+    || cardDeckEditorialPlanSha256(deck) !== input.cardDeckContract.deckSha256) {
+    throw new Error("ai_content_card_deck_hash_mismatch");
   }
-  for (const [offset, scene] of semantic.scenes.entries()) {
-    const asset = plan.imagePackage.assets[offset];
-    if (!asset) throw new Error("ai_content_render_semantic_contract_mismatch");
-    const { attachmentIds: _attachmentIds, ...assetWithoutAttachments } = asset;
-    if (canonicalJson(compileStructuredScene(scene)) !== canonicalJson(assetWithoutAttachments)) {
-      throw new Error("ai_content_render_semantic_contract_mismatch");
-    }
+  const compiled = compileCardDeckPlanDraftV1(deck, finalInput.selectedProposal.outline);
+  if (canonicalJson(compiled) !== canonicalJson(input.planDraft)) {
+    throw new Error("ai_content_card_deck_compilation_mismatch");
   }
-  return semantic;
+  return { contractVersion: "card-deck-editorial-plan.v1", deckSha256: input.cardDeckContract.deckSha256, plan: deck };
 }
 
-function assertStoredRenderSemanticContract(
-  payload: unknown,
-  semantic: RenderSemanticContractV1 | null,
-): void {
+function validateReelStoryboardContract(
+  input: CompleteAiContentJobInput,
+  finalInput: ReturnType<typeof parseCanonicalContentGenerationInputV3>,
+): ReelStoryboardContractV1 | null {
+  if (finalInput.outputSettings.outputFormat !== "reel") {
+    if (input.reelStoryboardContract !== undefined) throw new Error("ai_content_reel_storyboard_contract_invalid");
+    return null;
+  }
+  if (!("planDraft" in input) || input.reelStoryboardContract === undefined
+    || input.cardDeckContract !== undefined) {
+    throw new Error("ai_content_reel_storyboard_contract_invalid");
+  }
+  const storyboard = parseReelStoryboardV1(input.reelStoryboardContract.storyboard);
+  if (input.reelStoryboardContract.contractVersion !== "reel-storyboard.v1"
+    || !/^[0-9a-f]{64}$/.test(input.reelStoryboardContract.storyboardSha256)
+    || reelStoryboardSha256(storyboard) !== input.reelStoryboardContract.storyboardSha256) {
+    throw new Error("ai_content_reel_storyboard_hash_mismatch");
+  }
+  const compiled = compileReelStoryboardDraftV1(storyboard, finalInput.selectedProposal.outline);
+  if (canonicalJson(compiled) !== canonicalJson(input.planDraft)) {
+    throw new Error("ai_content_reel_storyboard_compilation_mismatch");
+  }
+  return {
+    contractVersion: "reel-storyboard.v1",
+    storyboardSha256: input.reelStoryboardContract.storyboardSha256,
+    storyboard,
+  };
+}
+
+function assertStoredReelStoryboardContract(payload: unknown, storyboard: ReelStoryboardContractV1 | null): void {
   const stored = payload && typeof payload === "object" && !Array.isArray(payload)
-    ? (payload as Record<string, unknown>).renderSemanticContract
+    ? (payload as Record<string, unknown>).reelStoryboardContract
     : undefined;
-  if (semantic === null) {
+  if (storyboard === null) {
     if (stored !== undefined) throw new Error("ai_content_plan_completion_conflict");
     return;
   }
-  try {
-    if (canonicalJson(parseRenderSemanticContractV1(stored)) !== canonicalJson(semantic)) {
-      throw new Error("ai_content_plan_completion_conflict");
-    }
-  } catch {
-    throw new Error("ai_content_plan_completion_conflict");
+  if (canonicalJson(stored) !== canonicalJson(storyboard)) throw new Error("ai_content_plan_completion_conflict");
+}
+
+function assertStoredCardDeckContract(payload: unknown, deck: CardDeckContractV1 | null): void {
+  const stored = payload && typeof payload === "object" && !Array.isArray(payload)
+    ? (payload as Record<string, unknown>).cardDeckContract
+    : undefined;
+  if (deck === null) {
+    if (stored !== undefined) throw new Error("ai_content_plan_completion_conflict");
+    return;
   }
+  if (canonicalJson(stored) !== canonicalJson(deck)) throw new Error("ai_content_plan_completion_conflict");
 }
 
 const EXPECTED_PROPOSAL_CATALOG_SHA256 = "41ac04e76adf0fd9746ea7535b36f6c1ea314ec4890253a2cd56a9f215f7cdbe";
@@ -2334,6 +2363,7 @@ export function createAiContentRepository(pool: Pool, options: AiContentReposito
     completeAiContentRenderAsset: renderJobs.completeAsset,
     completeAiContentRenderPackage: renderJobs.completePackage,
     failAiContentRenderJob: renderJobs.fail,
+    appendAiContentEditorialRenderDiagnostic: renderJobs.appendEditorialDiagnostic,
     saveAiContentOutputResearch: renderJobs.saveOutputResearch,
     getAiContentBrandContext(input) {
       return loadAiContentBrandContext(pool, input, options.brandIntelligenceProvider);
@@ -3255,21 +3285,11 @@ export function createAiContentRepository(pool: Pool, options: AiContentReposito
           || finalInput.outputSettings.outputFormat !== job.output_format) {
           throw new Error("ai_content_generation_input_mismatch");
         }
+        const cardDeckContract = validateCardDeckContract(input, finalInput);
+        const reelStoryboardContract = validateReelStoryboardContract(input, finalInput);
         const plan = hasPlan
           ? parseContentPlanResultV2(input.plan, finalInput, snapshot.rows[0].evidence_json)
           : assembleContentPlanResultV2(input.planDraft, finalInput, snapshot.rows[0].evidence_json);
-        const imageAssetTransport = await resolveManualRenderTransport(client, {
-          generationId: String(job.generation_id),
-          workspaceId: String(job.workspace_id),
-          brandId: String(job.brand_id),
-          selectedProposalId: finalInput.selectedProposal.id,
-        });
-        const renderSemanticContract = validateRenderSemanticContract(
-          input,
-          finalInput.outputSettings.outputFormat,
-          plan,
-          imageAssetTransport === "manual-v2",
-        );
         if (job.status === "succeeded") {
           if (job.worker_id !== input.workerId || job.lease_token !== input.leaseToken) throw new Error("ai_content_job_lease_invalid");
           const stored = await client.query(
@@ -3279,7 +3299,8 @@ export function createAiContentRepository(pool: Pool, options: AiContentReposito
           if (!stored.rows[0]?.plan_json || canonicalJson(stored.rows[0].plan_json) !== canonicalJson(plan)) {
             throw new Error("ai_content_plan_completion_conflict");
           }
-          assertStoredRenderSemanticContract(job.payload_json, renderSemanticContract);
+          assertStoredCardDeckContract(job.payload_json, cardDeckContract);
+          assertStoredReelStoryboardContract(job.payload_json, reelStoryboardContract);
           const generation = await generationById(client, String(job.generation_id));
           await client.query("COMMIT");
           return generation;
@@ -3312,7 +3333,7 @@ export function createAiContentRepository(pool: Pool, options: AiContentReposito
         await enqueueAiContentRenderJobs(client, {
           workspaceId: String(job.workspace_id), brandId: String(job.brand_id),
           generationId: String(job.generation_id), outputId: String(job.output_id), plan, finalInput,
-          imageAssetTransport, renderSemanticContract,
+          cardDeckContract, reelStoryboardContract,
         });
         await client.query(
           "update ai_content_generations set status='generating',current_stage='generation',error_code=null,error_message=null,updated_at=now() where id=$1",
@@ -3321,14 +3342,17 @@ export function createAiContentRepository(pool: Pool, options: AiContentReposito
         await client.query(
           `update ai_content_generation_jobs
               set status = 'succeeded', skill_version = $2, completed_at = coalesce(completed_at, now()),
-                  payload_json = case when $3::jsonb is null then payload_json
-                    else jsonb_set(payload_json, '{renderSemanticContract}', $3::jsonb, true) end,
+                  payload_json = case
+                    when $3::jsonb is not null then jsonb_set(payload_json, '{cardDeckContract}', $3::jsonb, true)
+                    when $4::jsonb is not null then jsonb_set(payload_json, '{reelStoryboardContract}', $4::jsonb, true)
+                    else payload_json end,
                   lease_expires_at = null, error_code = null, error_message = null, updated_at = now()
             where id = $1`,
           [
             input.jobId,
             input.skillVersion,
-            renderSemanticContract === null ? null : JSON.stringify(renderSemanticContract),
+            cardDeckContract === null ? null : JSON.stringify(cardDeckContract),
+            reelStoryboardContract === null ? null : JSON.stringify(reelStoryboardContract),
           ],
         );
         const generation = await generationById(client, String(job.generation_id));

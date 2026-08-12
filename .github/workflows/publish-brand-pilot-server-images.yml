@@ -71,7 +71,7 @@ jobs:
           if [[ "$GITHUB_EVENT_NAME" == "pull_request" ]]; then
             git fetch --no-tags origin "$GITHUB_BASE_REF"
             base_sha="$(git merge-base "origin/$GITHUB_BASE_REF" "$GITHUB_SHA")"
-            scoped_impact_json="$(node scripts/release-impact.mjs --base "$base_sha" --head "$GITHUB_SHA" --profile structured-social-render-semantics)"
+            scoped_impact_json="$(node scripts/release-impact.mjs --base "$base_sha" --head "$GITHUB_SHA" --profile card-deck-editorial-pipeline)"
             if IMPACT_JSON="$scoped_impact_json" node --input-type=module -e '
               const impact = JSON.parse(process.env.IMPACT_JSON);
               process.exit(impact.verifiedScope && impact.productionDeployAllowed ? 0 : 1);
@@ -85,7 +85,7 @@ jobs:
             impact_json="$(node --input-type=module -e 'import { classifyChangedPaths } from "./scripts/release-impact.mjs"; console.log(JSON.stringify(classifyChangedPaths(["package-lock.json"])))')"
             bootstrap=true
           else
-            scoped_impact_json="$(node scripts/release-impact.mjs --base "$PRODUCTION_RELEASE_SHA" --head "$GITHUB_SHA" --profile structured-social-render-semantics)"
+            scoped_impact_json="$(node scripts/release-impact.mjs --base "$PRODUCTION_RELEASE_SHA" --head "$GITHUB_SHA" --profile card-deck-editorial-pipeline)"
             if IMPACT_JSON="$scoped_impact_json" node --input-type=module -e '
               const impact = JSON.parse(process.env.IMPACT_JSON);
               process.exit(impact.verifiedScope && impact.productionDeployAllowed ? 0 : 1);

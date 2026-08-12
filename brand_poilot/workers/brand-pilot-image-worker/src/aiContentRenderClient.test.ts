@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { createAiContentRenderClient } from "./aiContentRenderClient.js";
-import { cloneManualImageJobV2, cloneManualImageJobV3 } from "../test/fixtures/manualRender.js";
+import { cloneCardDeckImageJob, cloneManualBlogImageJobV2, cloneReelStoryboardImageJob } from "../test/fixtures/manualRender.js";
 
 const uid = (n: number) => `10000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 
@@ -10,7 +10,7 @@ function consistentlyMutatedFormatClaim(
   inputAspectRatio: "1:1" | "9:16" | "16:9" | null,
   packageAspectRatio: "1:1" | "9:16" | "16:9",
 ): any {
-  const job: any = cloneManualImageJobV2();
+  const job: any = cloneManualBlogImageJobV2();
   const imagePackage = job.payload.imagePackage;
   imagePackage.outputFormat = format;
   imagePackage.channelTargets = [channelTarget];
@@ -44,28 +44,13 @@ function consistentlyMutatedFormatClaim(
 
 describe("AI content render API client", () => {
   it("uses the Task 9 endpoints and unwraps an image job without confusing a 204", async () => {
-    const job = {
-      id: uid(1), generationId: uid(2), outputId: uid(3), workspaceId: uid(4), brandId: uid(5),
-      jobKind: "image_asset", assetIndex: 1, leaseToken: "lease", attemptCount: 1,
-      payload: {
-        contractVersion: "ai-content-render-job.v1", jobKind: "image_asset", generationId: uid(2), outputId: uid(3),
-        assetIndex: 1, assetKey: `${uid(2)}:1`, storagePath: `ai-content/${uid(5)}/${uid(2)}/${uid(3)}/assets/01.png`,
-        imagePackage: {
-          contractVersion: "image-generation-package.v1", generationId: uid(2), outputFormat: "card_news",
-          purpose: "informational", assetCount: 1, aspectRatio: "4:5", channelTargets: ["instagram"],
-          assets: [{ index: 1, role: "hook", copy: "copy", visualDirection: "visual", evidenceIds: [], productImageAssetIds: [], attachmentIds: [] }],
-          product: null, references: [], brandStyleImages: [], avatarStyleImageId: null, attachments: [],
-          userImageInstruction: null,
-          logoPolicy: { allowGeneratedLogo: false, allowReservedLogoArea: false, allowExternalReferenceLogo: false, allowExistingProductPackagingLogo: true },
-        },
-      },
-    };
+    const job = cloneCardDeckImageJob();
     const fetchImpl = vi.fn()
       .mockResolvedValueOnce(new Response(JSON.stringify({ job }), { status: 200, headers: { "content-type": "application/json" } }))
       .mockResolvedValueOnce(new Response(null, { status: 204 }));
     const client = createAiContentRenderClient({ apiUrl: "https://api.example/", token: "token", fetchImpl });
 
-    await expect(client.claim("worker", 180)).resolves.toMatchObject({ jobKind: "image_asset", assetIndex: 1 });
+    await expect(client.claim("worker", 180)).resolves.toMatchObject({ jobKind: "image_asset", assetIndex: 2 });
     await expect(client.claim("worker", 180)).resolves.toBeNull();
     expect(fetchImpl).toHaveBeenNthCalledWith(1, "https://api.example/worker/ai-content-render-jobs/claim", expect.objectContaining({
       method: "POST", body: JSON.stringify({ workerId: "worker", leaseSeconds: 180 }),
@@ -103,8 +88,33 @@ describe("AI content render API client", () => {
     )).rejects.toThrow("ai_content_render_api_failed:400:ai_content_render_asset_invalid");
   });
 
+  it("appends the private card Deck diagnostic with the original completed lease", async () => {
+    const fetchImpl = vi.fn(async () => new Response(JSON.stringify({ status: "ok" }), { status: 200 }));
+    const client = createAiContentRenderClient({ apiUrl: "https://api.example", token: "token", fetchImpl });
+    const diagnostic = {
+      contractVersion: "ai-content-editorial-render-diagnostic.v1" as const,
+      sourceContractVersion: "card-deck-editorial-plan.v1" as const,
+      sourceSha256: "a".repeat(64),
+      sceneIndex: 2,
+      compiledPromptVersion: "image-card-deck.v1" as const,
+      compiledPromptSha256: "b".repeat(64),
+      actualToolArgumentsObservation: "not_emitted_by_runner" as const,
+      actualToolArgumentsSha256: null,
+    };
+
+    await client.appendRenderDiagnostic?.({ id: uid(1), leaseToken: "lease" }, "worker", diagnostic);
+
+    expect(fetchImpl).toHaveBeenCalledWith(
+      `https://api.example/worker/ai-content-render-jobs/${uid(1)}/diagnostic`,
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({ workerId: "worker", leaseToken: "lease", diagnostic }),
+      }),
+    );
+  });
+
   it("strictly parses the hydrated manual v2 claim while preserving its canonical snapshots", async () => {
-    const job = cloneManualImageJobV2();
+    const job = cloneManualBlogImageJobV2();
     const fetchImpl = vi.fn(async () => new Response(JSON.stringify({ job }), { status: 200 }));
     const client = createAiContentRenderClient({ apiUrl: "https://api.example", token: "token", fetchImpl });
 
@@ -116,39 +126,61 @@ describe("AI content render API client", () => {
         contractVersion: "ai-content-render-job.v2",
         rendererPromptVersion: "image-final-pixels.v2",
         contentGenerationInput: { generationId: job.generationId },
-        contentPlan: { contractVersion: "card-news-plan.v2" },
+        contentPlan: { contractVersion: "blog-plan.v2" },
       },
     });
   });
 
-  it("strictly parses the hydrated manual v3 claim and current structured scene", async () => {
-    const job = cloneManualImageJobV3();
+  it("strictly parses the Reel Storyboard claim and authoritative current scene", async () => {
+    const job = cloneReelStoryboardImageJob();
     const fetchImpl = vi.fn(async () => new Response(JSON.stringify({ job }), { status: 200 }));
     const client = createAiContentRenderClient({ apiUrl: "https://api.example", token: "token", fetchImpl });
 
     await expect(client.claim("worker", 180)).resolves.toMatchObject({
       payload: {
-        contractVersion: "ai-content-render-job.v3",
-        rendererPromptVersion: "image-final-pixels.v3",
-        renderSemanticBinding: { contractVersion: "structured-scene-copy.v1", sceneIndex: 2 },
-        renderSemanticScene: {
-          contractVersion: "structured-scene-copy.v1",
-          scene: { index: 2, role: "detail", headline: "두 번째 장면" },
+        contractVersion: "ai-content-reel-storyboard-render-job.v1",
+        rendererPromptVersion: "image-reel-storyboard.v1",
+        reelStoryboardBinding: { contractVersion: "reel-storyboard.v1", sceneIndex: 2 },
+        reelStoryboardCurrentScene: {
+          contractVersion: "reel-storyboard-current-scene.v1",
+          scene: { index: 2, headline: "차 맛은 온도에서 갈립니다" },
+        },
+      },
+    });
+  });
+
+  it("strictly parses the Card Deck claim and authoritative current scene", async () => {
+    const job = cloneCardDeckImageJob();
+    const fetchImpl = vi.fn(async () => new Response(JSON.stringify({ job }), { status: 200 }));
+    const client = createAiContentRenderClient({ apiUrl: "https://api.example", token: "token", fetchImpl });
+
+    await expect(client.claim("worker", 180)).resolves.toMatchObject({
+      payload: {
+        contractVersion: "ai-content-card-deck-render-job.v1",
+        rendererPromptVersion: "image-card-deck.v1",
+        cardDeckBinding: { contractVersion: "card-deck-editorial-plan.v1", sceneIndex: 2 },
+        cardDeckCurrentScene: {
+          contractVersion: "card-deck-current-scene.v1",
+          sceneIndex: 2,
+          compatibilityRole: "detail",
+          scene: { index: 2, headline: "차 맛은 온도에서 갈립니다" },
         },
       },
     });
   });
 
   it.each([
-    ["unknown payload key", (job: ReturnType<typeof cloneManualImageJobV2>) => Object.assign(job.payload, { unexpected: true })],
-    ["generation binding", (job: ReturnType<typeof cloneManualImageJobV2>) => { job.payload.contentGenerationInput.generationId = uid(99); }],
-    ["workspace identity", (job: ReturnType<typeof cloneManualImageJobV2>) => { job.workspaceId = "workspace"; }],
-    ["output binding", (job: ReturnType<typeof cloneManualImageJobV2>) => { job.payload.outputId = uid(99); }],
-    ["storage brand binding", (job: ReturnType<typeof cloneManualImageJobV2>) => { job.payload.storagePath = job.payload.storagePath.replace(job.brandId, uid(99)); }],
-    ["plan/package binding", (job: ReturnType<typeof cloneManualImageJobV2>) => { job.payload.contentPlan.imagePackage.assets[1]!.role = "wrong"; }],
-    ["outline role binding", (job: ReturnType<typeof cloneManualImageJobV2>) => { job.payload.contentGenerationInput.selectedProposal.outline[1]!.role = "wrong"; }],
+    ["unknown payload key", (job: ReturnType<typeof cloneManualBlogImageJobV2>) => Object.assign(job.payload, { unexpected: true })],
+    ["generation binding", (job: ReturnType<typeof cloneManualBlogImageJobV2>) => { job.payload.contentGenerationInput.generationId = uid(99); }],
+    ["workspace identity", (job: ReturnType<typeof cloneManualBlogImageJobV2>) => { job.workspaceId = "workspace"; }],
+    ["output binding", (job: ReturnType<typeof cloneManualBlogImageJobV2>) => { job.payload.outputId = uid(99); }],
+    ["storage brand binding", (job: ReturnType<typeof cloneManualBlogImageJobV2>) => { job.payload.storagePath = job.payload.storagePath.replace(job.brandId, uid(99)); }],
+    ["plan/package binding", (job: ReturnType<typeof cloneManualBlogImageJobV2>) => {
+      job.payload.contentPlan.imagePackage = structuredClone(job.payload.contentPlan.imagePackage);
+      job.payload.contentPlan.imagePackage!.assets[1]!.role = "wrong";
+    }],
   ])("rejects a v2 claim with a mismatched %s", async (_label, mutate) => {
-    const job = cloneManualImageJobV2();
+    const job = cloneManualBlogImageJobV2();
     mutate(job);
     const fetchImpl = vi.fn(async () => new Response(JSON.stringify({ job }), { status: 200 }));
     const client = createAiContentRenderClient({ apiUrl: "https://api.example", token: "token", fetchImpl });
@@ -157,7 +189,6 @@ describe("AI content render API client", () => {
   });
 
   it.each([
-    ["reel", () => consistentlyMutatedFormatClaim("reel", "instagram", "9:16", "9:16"), "reel-plan.v2"],
     ["blog with an independent image aspect", () => consistentlyMutatedFormatClaim("blog", "blog_export", null, "16:9"), "blog-plan.v2"],
   ])("accepts fixed %s semantics", async (_label, buildJob, contractVersion) => {
     const job = buildJob();
@@ -170,10 +201,8 @@ describe("AI content render API client", () => {
   });
 
   it.each([
-    ["card-news channel", () => consistentlyMutatedFormatClaim("card_news", "blog_export", "1:1", "1:1")],
-    ["card-news aspect", () => consistentlyMutatedFormatClaim("card_news", "instagram", "16:9", "16:9")],
-    ["reel channel", () => consistentlyMutatedFormatClaim("reel", "blog_export", "9:16", "9:16")],
-    ["reel aspect", () => consistentlyMutatedFormatClaim("reel", "instagram", "1:1", "1:1")],
+    ["removed card-news v2 path", () => consistentlyMutatedFormatClaim("card_news", "instagram", "1:1", "1:1")],
+    ["removed Reel v2 path", () => consistentlyMutatedFormatClaim("reel", "instagram", "9:16", "9:16")],
     ["blog channel", () => consistentlyMutatedFormatClaim("blog", "instagram", null, "1:1")],
     ["blog input aspect", () => consistentlyMutatedFormatClaim("blog", "blog_export", "1:1", "1:1")],
   ])("rejects a consistently rebound %s claim that violates fixed format semantics", async (_label, buildJob) => {

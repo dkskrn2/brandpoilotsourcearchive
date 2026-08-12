@@ -2,9 +2,13 @@ import { parseContentOrchestrationV1 } from "./contentOrchestration.js";
 import type { ApprovedBrandRulesSnapshotV1 } from "@brand-pilot/content-contracts";
 import type { ContentPlanDraftV1 } from "@brand-pilot/content-contracts/planner-drafts";
 import {
-  parseStructuredSceneCopyV1,
-  type StructuredSceneCopyV1,
-} from "@brand-pilot/content-contracts/structured-scene-copy";
+  parseCardDeckEditorialPlanV1,
+  type CardDeckEditorialPlanV1,
+} from "@brand-pilot/content-contracts/card-deck-editorial-plan";
+import {
+  parseReelStoryboardV1,
+  type ReelStoryboardV1,
+} from "@brand-pilot/content-contracts/reel-storyboard";
 
 export type AiContentType = "card_news" | "blog" | "marketing";
 export type ContentFamily = "informational" | "marketing";
@@ -516,10 +520,16 @@ interface CompleteAiContentJobBase {
   skillVersion: string;
 }
 
-export interface RenderSemanticContractV1 {
-  contractVersion: "structured-scene-copy.v1";
-  outputFormat: "card_news" | "reel";
-  scenes: StructuredSceneCopyV1[];
+export interface CardDeckContractV1 {
+  contractVersion: "card-deck-editorial-plan.v1";
+  deckSha256: string;
+  plan: CardDeckEditorialPlanV1;
+}
+
+export interface ReelStoryboardContractV1 {
+  contractVersion: "reel-storyboard.v1";
+  storyboardSha256: string;
+  storyboard: ReelStoryboardV1;
 }
 
 export interface CompleteAiContentAnalysisJobInput extends CompleteAiContentJobBase {
@@ -536,13 +546,15 @@ export interface CompleteAiContentGenerationJobInput extends CompleteAiContentJo
 export interface CompleteAiContentCanonicalPlanningJobInput extends CompleteAiContentJobBase {
   jobType: "generate";
   plan: import("./aiContentPlanContracts.js").ContentPlanResultV2;
-  renderSemanticContract?: RenderSemanticContractV1;
+  cardDeckContract?: CardDeckContractV1;
+  reelStoryboardContract?: ReelStoryboardContractV1;
 }
 
 export interface CompleteAiContentDraftPlanningJobInput extends CompleteAiContentJobBase {
   jobType: "generate";
   planDraft: ContentPlanDraftV1;
-  renderSemanticContract?: RenderSemanticContractV1;
+  cardDeckContract?: CardDeckContractV1;
+  reelStoryboardContract?: ReelStoryboardContractV1;
 }
 
 export type CompleteAiContentPlanningJobInput =
@@ -576,23 +588,41 @@ function requiredString(value: unknown, code: string, maxLength = 500): string {
   return normalized;
 }
 
-export function parseRenderSemanticContractV1(value: unknown): RenderSemanticContractV1 {
-  const source = inputObject(value, "ai_content_render_semantic_contract_invalid");
-  const keys = ["contractVersion", "outputFormat", "scenes"];
+export function parseCardDeckContractV1(value: unknown): CardDeckContractV1 {
+  const source = inputObject(value, "ai_content_card_deck_contract_invalid");
+  const keys = ["contractVersion", "deckSha256", "plan"];
   if (Object.keys(source).length !== keys.length || keys.some((key) => !(key in source))
-    || source.contractVersion !== "structured-scene-copy.v1"
-    || !["card_news", "reel"].includes(String(source.outputFormat))
-    || !Array.isArray(source.scenes) || source.scenes.length < 1 || source.scenes.length > 5) {
-    fail("ai_content_render_semantic_contract_invalid");
+    || source.contractVersion !== "card-deck-editorial-plan.v1"
+    || typeof source.deckSha256 !== "string" || !/^[0-9a-f]{64}$/.test(source.deckSha256)) {
+    fail("ai_content_card_deck_contract_invalid");
   }
   try {
     return {
-      contractVersion: "structured-scene-copy.v1",
-      outputFormat: source.outputFormat as "card_news" | "reel",
-      scenes: source.scenes.map(parseStructuredSceneCopyV1),
+      contractVersion: "card-deck-editorial-plan.v1",
+      deckSha256: source.deckSha256,
+      plan: parseCardDeckEditorialPlanV1(source.plan),
     };
   } catch {
-    return fail("ai_content_render_semantic_contract_invalid");
+    return fail("ai_content_card_deck_contract_invalid");
+  }
+}
+
+export function parseReelStoryboardContractV1(value: unknown): ReelStoryboardContractV1 {
+  const source = inputObject(value, "ai_content_reel_storyboard_contract_invalid");
+  const keys = ["contractVersion", "storyboardSha256", "storyboard"];
+  if (Object.keys(source).length !== keys.length || keys.some((key) => !(key in source))
+    || source.contractVersion !== "reel-storyboard.v1"
+    || typeof source.storyboardSha256 !== "string" || !/^[0-9a-f]{64}$/.test(source.storyboardSha256)) {
+    fail("ai_content_reel_storyboard_contract_invalid");
+  }
+  try {
+    return {
+      contractVersion: "reel-storyboard.v1",
+      storyboardSha256: source.storyboardSha256,
+      storyboard: parseReelStoryboardV1(source.storyboard),
+    };
+  } catch {
+    return fail("ai_content_reel_storyboard_contract_invalid");
   }
 }
 

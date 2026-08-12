@@ -90,7 +90,8 @@ test("manual generation deployment exposes reel worker and no legacy marketing w
   const dockerfile = read("workers/brand-pilot-reel-worker/Dockerfile");
   assert.match(dockerfile, /npm run build --workspace @brand-pilot\/worker-runtime[\s\\]*&& npm run build --workspace @brand-pilot\/reel-worker/);
   assert.match(dockerfile, /codex-resources\/bwrap \/usr\/local\/bin\/bwrap/);
-  assert.match(dockerfile, /generated\/reel-plan-v2\.schema\.json/);
+  assert.match(dockerfile, /reel-storyboard-v1\.schema\.json/);
+  assert.doesNotMatch(dockerfile, /generated\/reel-plan-v2\.schema\.json/);
   assert.match(dockerfile, /workers\/brand-pilot-reel-worker\/dist\/index\.js/);
 });
 

@@ -1126,6 +1126,7 @@ export interface ApiRepository
   completeAiContentRenderAsset?(input: import("./aiContentRenderJobs.js").RenderAssetCompletion): Promise<void>;
   completeAiContentRenderPackage?(input: import("./aiContentRenderJobs.js").RenderPackageCompletion): Promise<AiContentGenerationRecord>;
   failAiContentRenderJob?(input: import("./aiContentRenderJobs.js").RenderFailure): Promise<void>;
+  appendAiContentEditorialRenderDiagnostic?(input: import("./aiContentRenderJobs.js").EditorialRenderDiagnosticAppend): Promise<void>;
   saveAiContentOutputResearch?(input: { jobId: string; outputId: string; workerId: string; leaseToken: string; evidence: Record<string, unknown> }): Promise<void>;
   retryAiContentOutput(input: BrandScope & { actorUserId: string; outputId: string; contractVersion: "content-generation-retry.v1"; idempotencyKey: string; reason: string; usageDate: string; dailyGenerationLimit: number }): Promise<AiContentGenerationRecord>;
   getAiContentProposalBatch?(input: BrandScope & { batchId: string }): Promise<AiContentProposalBatchRecord | null>;

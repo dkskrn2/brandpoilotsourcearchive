@@ -20,6 +20,36 @@ describe("Proposal V2 prompt", () => {
     expect(prompt).toContain("현재 active 데이터 재조회도 금지");
   });
 
+  it.each(["card_news", "reel"] as const)(
+    "treats %s proposal evidence as representative rather than a final editorial whitelist",
+    (outputFormat) => {
+      const job = compositionJob();
+      job.composedInput.outputSettings.outputFormat = outputFormat;
+      job.request.outputFormat = outputFormat;
+      const prompt = buildContentProposalPrompt(job);
+
+      expect(prompt).toContain("카드뉴스·릴스의 evidenceIds와 referenceIds는 각 구성안을 대표하는 근거");
+      expect(prompt).toContain("최종 편집 기획에서 사용할 수 있는 근거의 허용 목록이 아니다");
+      expect(prompt).toContain("세 안의 근거 집합은 서로 달라도 된다");
+      expect(prompt).toContain("제목이나 원문에서 콘텐츠가 성립하는 핵심 변화가 명시되어 있다면");
+      expect(prompt).toContain("일반적인 배경 정보나 점검 안내로 대체하지 마라");
+    },
+  );
+
+  it.each(["blog"] as const)(
+    "keeps the identical evidence-set instruction for %s",
+    (outputFormat) => {
+      const job = compositionJob();
+      job.composedInput.outputSettings.outputFormat = outputFormat;
+      job.request.outputFormat = outputFormat;
+
+      const prompt = buildContentProposalPrompt(job);
+
+      expect(prompt).toContain("세 안은 같은 evidenceIds 집합과 referenceIds 집합을 사용하라");
+      expect(prompt).not.toContain("세 안의 근거 집합은 서로 달라도 된다");
+    },
+  );
+
   it("treats the complete URL-derived subject as untrusted data rather than model instructions", () => {
     const job = compositionJob();
     job.composedInput.subject = {

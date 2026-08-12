@@ -9,10 +9,22 @@ import type {
   ContentStudioOutputFormat,
   ImageGenerationPackageV1,
 } from "@brand-pilot/content-contracts";
+import {
+  compileCardDeckSceneV1,
+  parseCardDeckEditorialPlanV1,
+} from "@brand-pilot/content-contracts/card-deck-editorial-plan";
+import { cardDeckEditorialPlanSha256 } from "@brand-pilot/content-contracts/card-deck-editorial-plan/node";
+import {
+  compileReelStoryboardSceneV1,
+  parseReelStoryboardV1,
+} from "@brand-pilot/content-contracts/reel-storyboard";
+import { reelStoryboardSha256 } from "@brand-pilot/content-contracts/reel-storyboard/node";
 import type { AiContentGenerationRecord } from "./aiContentRepository.js";
 import {
-  parseRenderSemanticContractV1,
-  type RenderSemanticContractV1,
+  parseCardDeckContractV1,
+  parseReelStoryboardContractV1,
+  type CardDeckContractV1,
+  type ReelStoryboardContractV1,
 } from "./aiContentContracts.js";
 import {
   BLOG_PASSIVE_HTML_FORBIDDEN_ATTRIBUTES,
@@ -46,11 +58,6 @@ function canonicalJson(value: unknown): string {
   return JSON.stringify(normalize(value));
 }
 
-function semanticSha256(value: RenderSemanticContractV1): string {
-  return createHash("sha256").update(canonicalJson(value)).digest("hex");
-}
-
-export type AiContentImageAssetTransport = "v1" | "manual-v2";
 
 export interface AiContentRenderedAsset {
   index: number;
@@ -109,12 +116,29 @@ export interface RenderFailure {
   retryable: boolean;
 }
 
+export interface EditorialRenderDiagnosticAppend {
+  jobId: string;
+  workerId: string;
+  leaseToken: string;
+  diagnostic: {
+    contractVersion: "ai-content-editorial-render-diagnostic.v1";
+    sourceContractVersion: "card-deck-editorial-plan.v1" | "reel-storyboard.v1";
+    sourceSha256: string;
+    sceneIndex: number;
+    compiledPromptVersion: "image-card-deck.v1" | "image-reel-storyboard.v1";
+    compiledPromptSha256: string;
+    actualToolArgumentsObservation: "observed" | "not_emitted_by_runner";
+    actualToolArgumentsSha256: string | null;
+  };
+}
+
 export interface AiContentRenderJobsRepository {
   claim(input: { workerId: string; leaseSeconds: number }): Promise<AiContentRenderJob | null>;
   heartbeat(input: RenderLeaseInput): Promise<boolean>;
   completeAsset(input: RenderAssetCompletion): Promise<void>;
   completePackage(input: RenderPackageCompletion): Promise<AiContentGenerationRecord>;
   fail(input: RenderFailure): Promise<void>;
+  appendEditorialDiagnostic(input: EditorialRenderDiagnosticAppend): Promise<void>;
   saveOutputResearch(input: {
     jobId: string;
     outputId: string;
@@ -224,33 +248,6 @@ export function parseRenderAssetResult(
   }
 }
 
-export async function resolveManualRenderTransport(client: Queryable, input: {
-  generationId: string;
-  workspaceId: string;
-  brandId: string;
-  selectedProposalId: string;
-}): Promise<AiContentImageAssetTransport> {
-  const lineage = await client.query(
-    `select binding.selected_proposal_id,batch.origin
-       from ai_content_generation_prompt_bindings binding
-       join ai_content_proposals proposal
-         on proposal.id=binding.selected_proposal_id
-        and proposal.workspace_id=binding.workspace_id and proposal.brand_id=binding.brand_id
-       join ai_content_proposal_batches batch
-         on batch.id=proposal.batch_id
-        and batch.workspace_id=proposal.workspace_id and batch.brand_id=proposal.brand_id
-      where binding.generation_id=$1 and binding.workspace_id=$2 and binding.brand_id=$3
-        and binding.selected_proposal_id=$4`,
-    [input.generationId, input.workspaceId, input.brandId, input.selectedProposalId],
-  );
-  if (
-    lineage.rows.length !== 1
-    || String(lineage.rows[0]?.selected_proposal_id) !== input.selectedProposalId
-    || lineage.rows[0]?.origin !== "manual"
-  ) return "v1";
-  return "manual-v2";
-}
-
 export async function enqueueAiContentRenderJobs(client: Queryable, input: {
   workspaceId: string;
   brandId: string;
@@ -258,37 +255,69 @@ export async function enqueueAiContentRenderJobs(client: Queryable, input: {
   outputId: string;
   plan: ContentPlanResultV2;
   finalInput: ContentGenerationInputV3;
-  imageAssetTransport?: AiContentImageAssetTransport;
-  renderSemanticContract?: RenderSemanticContractV1 | null;
+  cardDeckContract?: CardDeckContractV1 | null;
+  reelStoryboardContract?: ReelStoryboardContractV1 | null;
 }): Promise<void> {
   const imagePackage = input.plan.imagePackage;
   if (imagePackage) {
-    const structuredSocial = input.imageAssetTransport === "manual-v2"
-      && (imagePackage.outputFormat === "card_news" || imagePackage.outputFormat === "reel");
-    const semantic = structuredSocial ? input.renderSemanticContract : null;
-    if (structuredSocial && (!semantic || semantic.outputFormat !== imagePackage.outputFormat
-      || semantic.scenes.length !== imagePackage.assets.length)) {
-      throw new Error("ai_content_render_semantic_contract_mismatch");
+    const cardDeck = imagePackage.outputFormat === "card_news" && input.cardDeckContract
+      ? parseCardDeckContractV1(input.cardDeckContract)
+      : null;
+    if (input.cardDeckContract && imagePackage.outputFormat !== "card_news") {
+      throw new Error("ai_content_card_deck_contract_invalid");
     }
-    if (semantic) {
-      for (const [offset, rawScene] of semantic.scenes.entries()) {
-        const scene = parseStructuredSceneCopyV1(rawScene);
+    const reelStoryboard = imagePackage.outputFormat === "reel" && input.reelStoryboardContract
+      ? parseReelStoryboardContractV1(input.reelStoryboardContract)
+      : null;
+    if (input.reelStoryboardContract && imagePackage.outputFormat !== "reel") {
+      throw new Error("ai_content_reel_storyboard_contract_invalid");
+    }
+    if (imagePackage.outputFormat === "card_news" && !cardDeck) {
+      throw new Error("ai_content_card_deck_contract_invalid");
+    }
+    if (cardDeck) {
+      if (cardDeckEditorialPlanSha256(cardDeck.plan) !== cardDeck.deckSha256
+        || cardDeck.plan.scenes.length !== imagePackage.assets.length
+        || input.finalInput.selectedProposal.outline.length !== cardDeck.plan.scenes.length) {
+        throw new Error("ai_content_card_deck_compilation_mismatch");
+      }
+      for (const [offset, scene] of cardDeck.plan.scenes.entries()) {
         const asset = imagePackage.assets[offset];
-        if (!asset) throw new Error("ai_content_render_semantic_contract_mismatch");
+        const outline = input.finalInput.selectedProposal.outline[offset];
+        if (!asset || !outline) throw new Error("ai_content_card_deck_compilation_mismatch");
+        const compiled = compileCardDeckSceneV1(cardDeck.plan, scene, outline.role);
         const { attachmentIds: _attachmentIds, ...assetWithoutAttachments } = asset;
-        if (canonicalJson(compileStructuredScene(scene)) !== canonicalJson(assetWithoutAttachments)) {
-          throw new Error("ai_content_render_semantic_contract_mismatch");
+        if (canonicalJson(compileStructuredScene(compiled)) !== canonicalJson(assetWithoutAttachments)) {
+          throw new Error("ai_content_card_deck_compilation_mismatch");
         }
       }
     }
-    const semanticHash = semantic ? semanticSha256(semantic) : null;
+    if (imagePackage.outputFormat === "reel" && !reelStoryboard) {
+      throw new Error("ai_content_reel_storyboard_contract_invalid");
+    }
+    if (reelStoryboard) {
+      if (reelStoryboardSha256(reelStoryboard.storyboard) !== reelStoryboard.storyboardSha256
+        || reelStoryboard.storyboard.scenes.length !== imagePackage.assets.length) {
+        throw new Error("ai_content_reel_storyboard_compilation_mismatch");
+      }
+      for (const [offset, scene] of reelStoryboard.storyboard.scenes.entries()) {
+        const asset = imagePackage.assets[offset];
+        const outline = input.finalInput.selectedProposal.outline[offset];
+        if (!asset || !outline) throw new Error("ai_content_reel_storyboard_compilation_mismatch");
+        const compiled = compileReelStoryboardSceneV1(reelStoryboard.storyboard, scene, outline.role);
+        const { attachmentIds: _attachmentIds, ...assetWithoutAttachments } = asset;
+        if (canonicalJson(compileStructuredScene(compiled)) !== canonicalJson(assetWithoutAttachments)) {
+          throw new Error("ai_content_reel_storyboard_compilation_mismatch");
+        }
+      }
+    }
     for (const asset of imagePackage.assets) {
       const payload = {
-        contractVersion: semantic
-          ? "ai-content-render-job.v3"
-          : input.imageAssetTransport === "manual-v2"
-            ? "ai-content-render-job.v2"
-          : "ai-content-render-job.v1",
+        contractVersion: cardDeck
+          ? "ai-content-card-deck-render-job.v1"
+          : reelStoryboard
+          ? "ai-content-reel-storyboard-render-job.v1"
+          : "ai-content-render-job.v2",
         jobKind: "image_asset",
         generationId: input.generationId,
         outputId: input.outputId,
@@ -296,18 +325,25 @@ export async function enqueueAiContentRenderJobs(client: Queryable, input: {
         assetIndex: asset.index,
         assetKey: `${input.generationId}:${asset.index}`,
         storagePath: expectedAiContentAssetStoragePath({ ...input, assetIndex: asset.index }),
-        ...(semantic
+        ...(cardDeck
           ? {
-              rendererPromptVersion: "image-final-pixels.v3",
-              renderSemanticBinding: {
-                contractVersion: "structured-scene-copy.v1",
-                semanticSha256: semanticHash,
+              rendererPromptVersion: "image-card-deck.v1",
+              cardDeckBinding: {
+                contractVersion: "card-deck-editorial-plan.v1",
+                deckSha256: cardDeck.deckSha256,
                 sceneIndex: asset.index,
               },
             }
-          : input.imageAssetTransport === "manual-v2"
-            ? { rendererPromptVersion: "image-final-pixels.v2" }
-          : {}),
+          : reelStoryboard
+          ? {
+              rendererPromptVersion: "image-reel-storyboard.v1",
+              reelStoryboardBinding: {
+                contractVersion: "reel-storyboard.v1",
+                storyboardSha256: reelStoryboard.storyboardSha256,
+                sceneIndex: asset.index,
+              },
+            }
+          : { rendererPromptVersion: "image-final-pixels.v2" }),
       };
       await client.query(
         `insert into ai_content_generation_render_jobs
@@ -428,22 +464,22 @@ async function manualImageAssetPayloadV2(
   };
 }
 
-async function manualImageAssetPayloadV3(
+async function reelStoryboardImageAssetPayloadV1(
   client: Queryable,
   row: Record<string, unknown>,
 ): Promise<Record<string, unknown>> {
   const storedPayload = record(row.payload_json);
   requireExactObjectKeys(storedPayload, [
     "contractVersion", "jobKind", "generationId", "outputId", "imagePackage",
-    "assetIndex", "assetKey", "storagePath", "rendererPromptVersion", "renderSemanticBinding",
+    "assetIndex", "assetKey", "storagePath", "rendererPromptVersion", "reelStoryboardBinding",
   ]);
-  const binding = record(storedPayload.renderSemanticBinding);
-  requireExactObjectKeys(binding, ["contractVersion", "semanticSha256", "sceneIndex"]);
+  const binding = record(storedPayload.reelStoryboardBinding);
+  requireExactObjectKeys(binding, ["contractVersion", "storyboardSha256", "sceneIndex"]);
   const assetIndex = Number(row.asset_index);
   if (
     row.job_kind !== "image_asset"
     || !Number.isSafeInteger(assetIndex)
-    || storedPayload.contractVersion !== "ai-content-render-job.v3"
+    || storedPayload.contractVersion !== "ai-content-reel-storyboard-render-job.v1"
     || storedPayload.jobKind !== "image_asset"
     || storedPayload.generationId !== String(row.generation_id)
     || storedPayload.outputId !== String(row.output_id)
@@ -453,11 +489,11 @@ async function manualImageAssetPayloadV3(
       brandId: String(row.brand_id), generationId: String(row.generation_id),
       outputId: String(row.output_id), assetIndex,
     })
-    || storedPayload.rendererPromptVersion !== "image-final-pixels.v3"
-    || binding.contractVersion !== "structured-scene-copy.v1"
+    || storedPayload.rendererPromptVersion !== "image-reel-storyboard.v1"
+    || binding.contractVersion !== "reel-storyboard.v1"
     || binding.sceneIndex !== assetIndex
-    || typeof binding.semanticSha256 !== "string"
-    || !/^[0-9a-f]{64}$/.test(binding.semanticSha256)
+    || typeof binding.storyboardSha256 !== "string"
+    || !/^[0-9a-f]{64}$/.test(binding.storyboardSha256)
   ) throw new Error("ai_content_render_snapshot_mismatch");
 
   const state = await client.query(
@@ -510,16 +546,20 @@ async function manualImageAssetPayloadV3(
     throw new Error("ai_content_render_snapshot_mismatch");
   }
   const generationPayload = record(state.rows[0].generation_job_payload);
-  const semantic = parseRenderSemanticContractV1(generationPayload.renderSemanticContract);
-  if (semantic.outputFormat !== contentPlan.imagePackage.outputFormat
-    || semanticSha256(semantic) !== binding.semanticSha256) {
+  const storyboardContract = parseReelStoryboardContractV1(generationPayload.reelStoryboardContract);
+  const storyboard = parseReelStoryboardV1(storyboardContract.storyboard);
+  if (contentPlan.imagePackage.outputFormat !== "reel"
+    || reelStoryboardSha256(storyboard) !== storyboardContract.storyboardSha256
+    || storyboardContract.storyboardSha256 !== binding.storyboardSha256) {
     throw new Error("ai_content_render_snapshot_mismatch");
   }
-  const scene = semantic.scenes.find((candidate) => candidate.index === assetIndex);
+  const scene = storyboard.scenes.find((candidate) => candidate.index === assetIndex);
+  const outline = contentGenerationInput.selectedProposal.outline.find((candidate) => candidate.index === assetIndex);
   const asset = contentPlan.imagePackage.assets.find((candidate) => candidate.index === assetIndex);
-  if (!scene || !asset) throw new Error("ai_content_render_snapshot_mismatch");
+  if (!scene || !outline || !asset) throw new Error("ai_content_render_snapshot_mismatch");
+  const compiledScene = compileReelStoryboardSceneV1(storyboard, scene, outline.role);
   const { attachmentIds: _attachmentIds, ...assetWithoutAttachments } = asset;
-  if (canonicalJson(compileStructuredScene(scene)) !== canonicalJson(assetWithoutAttachments)) {
+  if (canonicalJson(compileStructuredScene(compiledScene)) !== canonicalJson(assetWithoutAttachments)) {
     throw new Error("ai_content_render_snapshot_mismatch");
   }
 
@@ -527,7 +567,127 @@ async function manualImageAssetPayloadV3(
     ...storedPayload,
     contentGenerationInput,
     contentPlan,
-    renderSemanticScene: { contractVersion: "structured-scene-copy.v1", scene },
+    reelStoryboardContract: storyboardContract,
+    reelStoryboardCurrentScene: {
+      contractVersion: "reel-storyboard-current-scene.v1",
+      storyboardSha256: storyboardContract.storyboardSha256,
+      sceneIndex: assetIndex,
+      compatibilityRole: outline.role,
+      scene,
+    },
+  };
+}
+
+async function cardDeckImageAssetPayloadV1(
+  client: Queryable,
+  row: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  const storedPayload = record(row.payload_json);
+  requireExactObjectKeys(storedPayload, [
+    "contractVersion", "jobKind", "generationId", "outputId", "imagePackage",
+    "assetIndex", "assetKey", "storagePath", "rendererPromptVersion", "cardDeckBinding",
+  ]);
+  const binding = record(storedPayload.cardDeckBinding);
+  requireExactObjectKeys(binding, ["contractVersion", "deckSha256", "sceneIndex"]);
+  const assetIndex = Number(row.asset_index);
+  if (
+    row.job_kind !== "image_asset"
+    || !Number.isSafeInteger(assetIndex)
+    || storedPayload.contractVersion !== "ai-content-card-deck-render-job.v1"
+    || storedPayload.jobKind !== "image_asset"
+    || storedPayload.generationId !== String(row.generation_id)
+    || storedPayload.outputId !== String(row.output_id)
+    || storedPayload.assetIndex !== assetIndex
+    || storedPayload.assetKey !== `${String(row.generation_id)}:${assetIndex}`
+    || storedPayload.storagePath !== expectedAiContentAssetStoragePath({
+      brandId: String(row.brand_id), generationId: String(row.generation_id),
+      outputId: String(row.output_id), assetIndex,
+    })
+    || storedPayload.rendererPromptVersion !== "image-card-deck.v1"
+    || binding.contractVersion !== "card-deck-editorial-plan.v1"
+    || binding.sceneIndex !== assetIndex
+    || typeof binding.deckSha256 !== "string"
+    || !/^[0-9a-f]{64}$/.test(binding.deckSha256)
+  ) throw new Error("ai_content_render_snapshot_mismatch");
+
+  const state = await client.query(
+    `select output.plan_json,input.input_json,research.evidence_json,
+            binding.selected_proposal_id,batch.origin,
+            generation_job.payload_json as generation_job_payload
+       from ai_content_generation_outputs output
+       join ai_content_generations generation
+         on generation.id=output.generation_id
+        and generation.workspace_id=output.workspace_id and generation.brand_id=output.brand_id
+       join ai_content_generation_input_snapshots input
+         on input.generation_id=output.generation_id
+        and input.workspace_id=output.workspace_id and input.brand_id=output.brand_id
+       join ai_content_generation_prompt_bindings binding
+         on binding.generation_id=output.generation_id
+        and binding.workspace_id=output.workspace_id and binding.brand_id=output.brand_id
+       join ai_content_proposals proposal
+         on proposal.id=binding.selected_proposal_id
+        and proposal.workspace_id=binding.workspace_id and proposal.brand_id=binding.brand_id
+       join ai_content_proposal_batches batch
+         on batch.id=proposal.batch_id
+        and batch.workspace_id=proposal.workspace_id and batch.brand_id=proposal.brand_id
+       join ai_content_generation_jobs generation_job
+         on generation_job.generation_id=output.generation_id and generation_job.output_id=output.id
+        and generation_job.workspace_id=output.workspace_id and generation_job.brand_id=output.brand_id
+        and generation_job.job_type='generate' and generation_job.status='succeeded'
+       left join ai_content_output_research_snapshots research
+         on research.output_id=output.id and research.generation_id=output.generation_id
+        and research.workspace_id=output.workspace_id and research.brand_id=output.brand_id
+      where output.id=$1 and output.generation_id=$2
+        and output.workspace_id=$3 and output.brand_id=$4
+      for share of generation,output`,
+    [row.output_id, row.generation_id, row.workspace_id, row.brand_id],
+  );
+  if (state.rows.length !== 1 || !["manual", "scheduled_crawl"].includes(String(state.rows[0]?.origin))) {
+    throw new Error("ai_content_render_lineage_mismatch");
+  }
+  const contentGenerationInput = parseContentGenerationInputV3(state.rows[0].input_json);
+  if (contentGenerationInput.generationId !== String(row.generation_id)
+    || contentGenerationInput.selectedProposal.id !== String(state.rows[0].selected_proposal_id)) {
+    throw new Error("ai_content_render_lineage_mismatch");
+  }
+  const contentPlan = parseContentPlanResultV2(
+    state.rows[0].plan_json,
+    contentGenerationInput,
+    state.rows[0].evidence_json,
+  );
+  if (contentPlan.contractVersion !== "card-news-plan.v2" || contentPlan.imagePackage === null
+    || !isDeepStrictEqual(contentPlan.imagePackage, storedPayload.imagePackage)) {
+    throw new Error("ai_content_render_snapshot_mismatch");
+  }
+  const generationPayload = record(state.rows[0].generation_job_payload);
+  const cardDeckContract = parseCardDeckContractV1(generationPayload.cardDeckContract);
+  const deck = parseCardDeckEditorialPlanV1(cardDeckContract.plan);
+  if (cardDeckEditorialPlanSha256(deck) !== cardDeckContract.deckSha256
+    || cardDeckContract.deckSha256 !== binding.deckSha256) {
+    throw new Error("ai_content_render_snapshot_mismatch");
+  }
+  const scene = deck.scenes.find((candidate) => candidate.index === assetIndex);
+  const outline = contentGenerationInput.selectedProposal.outline.find((candidate) => candidate.index === assetIndex);
+  const asset = contentPlan.imagePackage.assets.find((candidate) => candidate.index === assetIndex);
+  if (!scene || !outline || !asset) throw new Error("ai_content_render_snapshot_mismatch");
+  const compiledScene = compileCardDeckSceneV1(deck, scene, outline.role);
+  const { attachmentIds: _attachmentIds, ...assetWithoutAttachments } = asset;
+  if (canonicalJson(compileStructuredScene(compiledScene)) !== canonicalJson(assetWithoutAttachments)) {
+    throw new Error("ai_content_render_snapshot_mismatch");
+  }
+
+  return {
+    ...storedPayload,
+    contentGenerationInput,
+    contentPlan,
+    cardDeckContract,
+    cardDeckCurrentScene: {
+      contractVersion: "card-deck-current-scene.v1",
+      deckSha256: cardDeckContract.deckSha256,
+      sceneIndex: assetIndex,
+      compatibilityRole: outline.role,
+      scene,
+    },
   };
 }
 
@@ -909,8 +1069,10 @@ export function createAiContentRenderJobsRepository(
         const storedPayload = record(row.payload_json);
         const payload = row.job_kind === "package_finalize"
           ? await finalizerPayload(client, row)
-          : storedPayload.contractVersion === "ai-content-render-job.v3"
-            ? await manualImageAssetPayloadV3(client, row)
+          : storedPayload.contractVersion === "ai-content-card-deck-render-job.v1"
+            ? await cardDeckImageAssetPayloadV1(client, row)
+            : storedPayload.contractVersion === "ai-content-reel-storyboard-render-job.v1"
+            ? await reelStoryboardImageAssetPayloadV1(client, row)
             : storedPayload.contractVersion === "ai-content-render-job.v2"
               ? await manualImageAssetPayloadV2(client, row)
               : storedPayload;
@@ -1104,6 +1266,54 @@ export function createAiContentRenderJobsRepository(
         const generation = await loadGeneration(client, String(row.generation_id));
         await client.query("COMMIT");
         return generation;
+      } catch (error) {
+        await client.query("ROLLBACK");
+        throw error;
+      } finally { client.release(); }
+    },
+
+    async appendEditorialDiagnostic(input) {
+      const client = await pool.connect();
+      try {
+        await client.query("BEGIN");
+        const row = await lockedRenderJob(client, input.jobId);
+        if (row.status !== "succeeded"
+          || row.job_kind !== "image_asset"
+          || row.worker_id !== input.workerId
+          || String(row.lease_token) !== input.leaseToken) {
+          throw new Error("ai_content_render_job_lease_invalid");
+        }
+        const storedPayload = record(row.payload_json);
+        const binding = storedPayload.contractVersion === "ai-content-card-deck-render-job.v1"
+          ? record(storedPayload.cardDeckBinding) : record(storedPayload.reelStoryboardBinding);
+        const diagnostic = input.diagnostic;
+        const isCard = storedPayload.contractVersion === "ai-content-card-deck-render-job.v1";
+        const isReel = storedPayload.contractVersion === "ai-content-reel-storyboard-render-job.v1";
+        if ((!isCard && !isReel)
+          || diagnostic.contractVersion !== "ai-content-editorial-render-diagnostic.v1"
+          || diagnostic.sourceContractVersion !== (isCard ? "card-deck-editorial-plan.v1" : "reel-storyboard.v1")
+          || diagnostic.compiledPromptVersion !== (isCard ? "image-card-deck.v1" : "image-reel-storyboard.v1")
+          || diagnostic.sourceSha256 !== (isCard ? binding.deckSha256 : binding.storyboardSha256)
+          || diagnostic.sceneIndex !== Number(row.asset_index)
+          || !/^[0-9a-f]{64}$/.test(diagnostic.compiledPromptSha256)
+          || !["observed", "not_emitted_by_runner"].includes(diagnostic.actualToolArgumentsObservation)
+          || (diagnostic.actualToolArgumentsObservation === "observed") !== (diagnostic.actualToolArgumentsSha256 !== null)
+          || (diagnostic.actualToolArgumentsSha256 !== null && !/^[0-9a-f]{64}$/.test(diagnostic.actualToolArgumentsSha256))) {
+          throw new Error("ai_content_editorial_render_diagnostic_invalid");
+        }
+        await client.query(
+          `insert into audit_events(
+             workspace_id,brand_id,actor_type,actor_external_id,event_type,entity_type,entity_id,metadata
+           ) select $1,$2,'worker',$3,'ai_content_editorial_render_diagnostic','ai_content_generation_render_job',$4,$5::jsonb
+             where not exists (
+               select 1 from audit_events
+                where workspace_id=$1 and brand_id=$2 and actor_type='worker' and actor_external_id=$3
+                  and event_type='ai_content_editorial_render_diagnostic'
+                  and entity_type='ai_content_generation_render_job' and entity_id=$4 and metadata=$5::jsonb
+             )`,
+          [row.workspace_id, row.brand_id, input.workerId, input.jobId, JSON.stringify(diagnostic)],
+        );
+        await client.query("COMMIT");
       } catch (error) {
         await client.query("ROLLBACK");
         throw error;

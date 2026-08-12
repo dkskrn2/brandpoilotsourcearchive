@@ -31,7 +31,7 @@ COPY --from=build --chown=node:node /app/workers/brand-pilot-worker-runtime/dist
 COPY --from=build --chown=node:node /app/workers/brand-pilot-reel-worker/package.json ./workers/brand-pilot-reel-worker/package.json
 COPY --from=build --chown=node:node /app/workers/brand-pilot-reel-worker/dist ./workers/brand-pilot-reel-worker/dist
 COPY --from=build --chown=node:node /app/workers/brand-pilot-reel-worker/scripts/run-codex-reel-plan.mjs ./workers/brand-pilot-reel-worker/scripts/run-codex-reel-plan.mjs
-COPY --from=build --chown=node:node /app/workers/brand-pilot-reel-worker/scripts/reel-plan-draft-v2.schema.json ./workers/brand-pilot-reel-worker/scripts/reel-plan-draft-v2.schema.json
+COPY --from=build --chown=node:node /app/workers/brand-pilot-reel-worker/scripts/reel-storyboard-v1.schema.json ./workers/brand-pilot-reel-worker/scripts/reel-storyboard-v1.schema.json
 
 WORKDIR /app/workers/brand-pilot-reel-worker
 USER node

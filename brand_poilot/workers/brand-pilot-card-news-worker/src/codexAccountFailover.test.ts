@@ -27,7 +27,7 @@ async function fixture() {
     'if (!process.env.CODEX_HOME?.endsWith("secondary")) { console.error("You have hit your usage limit"); process.exit(1); }',
     'const output = value("--output");',
     'await mkdir(output, { recursive: true });',
-    'await writeFile(new URL("card-news-plan.json", `file://${output.replaceAll("\\\\", "/")}/`), JSON.stringify({ ok: true }));',
+    'await writeFile(new URL("card-deck-editorial-plan.json", `file://${output.replaceAll("\\\\", "/")}/`), JSON.stringify({ ok: true }));',
   ].join("\n"));
   const skillFile = path.join(root, "SKILL.md");
   await writeFile(skillFile, "test skill");

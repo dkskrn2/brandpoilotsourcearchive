@@ -1,10 +1,16 @@
-import { parseImageGenerationPackageV1, type ImageGenerationPackageV1 } from "@brand-pilot/content-contracts";
 import {
   parseAiContentManualImageAssetPayloadV2,
-  parseAiContentManualImageAssetPayloadV3,
   type AiContentManualImageAssetPayloadV2,
-  type AiContentManualImageAssetPayloadV3,
 } from "./aiContentManualRenderContract.js";
+import {
+  parseAiContentCardDeckImageAssetPayloadV1,
+  type AiContentCardDeckImageAssetPayloadV1,
+} from "./aiContentCardDeckRenderContract.js";
+import type { AiContentEditorialRenderDiagnostic } from "./aiContentAssetRenderer.js";
+import {
+  parseAiContentReelStoryboardImageAssetPayloadV1,
+  type AiContentReelStoryboardImageAssetPayloadV1,
+} from "./aiContentReelStoryboardRenderContract.js";
 
 export interface AiContentRenderedAsset {
   index: number;
@@ -26,34 +32,25 @@ interface AiContentRenderJobBase {
   attemptCount: number;
 }
 
-export interface AiContentImageAssetJobV1 extends AiContentRenderJobBase {
-  jobKind: "image_asset";
-  assetIndex: number;
-  payload: {
-    contractVersion: "ai-content-render-job.v1";
-    jobKind: "image_asset";
-    generationId: string;
-    outputId: string;
-    imagePackage: ImageGenerationPackageV1;
-    assetIndex: number;
-    assetKey: string;
-    storagePath: string;
-  };
-}
-
 export interface AiContentImageAssetJobV2 extends AiContentRenderJobBase {
   jobKind: "image_asset";
   assetIndex: number;
   payload: AiContentManualImageAssetPayloadV2;
 }
 
-export interface AiContentImageAssetJobV3 extends AiContentRenderJobBase {
+export interface AiContentCardDeckImageAssetJob extends AiContentRenderJobBase {
   jobKind: "image_asset";
   assetIndex: number;
-  payload: AiContentManualImageAssetPayloadV3;
+  payload: AiContentCardDeckImageAssetPayloadV1;
 }
 
-export type AiContentImageAssetJob = AiContentImageAssetJobV1 | AiContentImageAssetJobV2 | AiContentImageAssetJobV3;
+export interface AiContentReelStoryboardImageAssetJob extends AiContentRenderJobBase {
+  jobKind: "image_asset";
+  assetIndex: number;
+  payload: AiContentReelStoryboardImageAssetPayloadV1;
+}
+
+export type AiContentImageAssetJob = AiContentImageAssetJobV2 | AiContentCardDeckImageAssetJob | AiContentReelStoryboardImageAssetJob;
 
 export interface AiContentPackageFinalizeJob extends AiContentRenderJobBase {
   jobKind: "package_finalize";
@@ -77,6 +74,7 @@ export interface AiContentRenderClient {
   claim(workerId: string, leaseSeconds: number): Promise<AiContentRenderJob | null>;
   heartbeat(job: AiContentRenderLease, workerId: string, leaseSeconds: number): Promise<boolean>;
   completeAsset(job: AiContentRenderLease, workerId: string, asset: AiContentRenderedAsset): Promise<void>;
+  appendRenderDiagnostic?(job: AiContentRenderLease, workerId: string, diagnostic: AiContentEditorialRenderDiagnostic): Promise<void>;
   completePackage(job: AiContentRenderLease, workerId: string, input: { manifest: object; manifestUrl: string }): Promise<void>;
   fail(job: AiContentRenderLease, workerId: string, input: { errorCode: string; errorMessage: string; diagnosticCode?: string; retryable: boolean }): Promise<void>;
 }
@@ -123,12 +121,20 @@ function parseJob(value: unknown): AiContentRenderJob {
   if (!Number.isSafeInteger(common.attemptCount) || common.attemptCount < 1) throw new Error("ai_content_render_job_invalid");
   if (source.jobKind === "image_asset") {
     const rawPayload = record(source.payload);
-    if (rawPayload.contractVersion === "ai-content-render-job.v3") {
+    if (rawPayload.contractVersion === "ai-content-card-deck-render-job.v1") {
       const assetIndex = Number(source.assetIndex);
       if (!Number.isSafeInteger(assetIndex) || assetIndex < 1 || source.assetIndex !== assetIndex) {
         throw new Error("ai_content_render_job_invalid");
       }
-      const payload = parseAiContentManualImageAssetPayloadV3(rawPayload, { ...common, id: common.id, assetIndex });
+      const payload = parseAiContentCardDeckImageAssetPayloadV1(rawPayload, { ...common, id: common.id, assetIndex });
+      return { ...common, jobKind: "image_asset", assetIndex, payload };
+    }
+    if (rawPayload.contractVersion === "ai-content-reel-storyboard-render-job.v1") {
+      const assetIndex = Number(source.assetIndex);
+      if (!Number.isSafeInteger(assetIndex) || assetIndex < 1 || source.assetIndex !== assetIndex) {
+        throw new Error("ai_content_render_job_invalid");
+      }
+      const payload = parseAiContentReelStoryboardImageAssetPayloadV1(rawPayload, { ...common, id: common.id, assetIndex });
       return { ...common, jobKind: "image_asset", assetIndex, payload };
     }
     if (rawPayload.contractVersion === "ai-content-render-job.v2") {
@@ -139,19 +145,7 @@ function parseJob(value: unknown): AiContentRenderJob {
       const payload = parseAiContentManualImageAssetPayloadV2(rawPayload, { ...common, id: common.id, assetIndex });
       return { ...common, jobKind: "image_asset", assetIndex, payload };
     }
-    const payload = exact(source.payload, ["contractVersion", "jobKind", "generationId", "outputId", "imagePackage", "assetIndex", "assetKey", "storagePath"]);
-    const assetIndex = Number(source.assetIndex);
-    const imagePackage = parseImageGenerationPackageV1(payload.imagePackage);
-    const expectedPath = `ai-content/${common.brandId}/${common.generationId}/${common.outputId}/assets/${String(assetIndex).padStart(2, "0")}.png`;
-    if (
-      payload.contractVersion !== "ai-content-render-job.v1" || payload.jobKind !== "image_asset"
-      || !Number.isSafeInteger(assetIndex) || assetIndex < 1 || assetIndex > imagePackage.assetCount
-      || Number(payload.assetIndex) !== assetIndex || source.assetIndex !== assetIndex
-      || payload.generationId !== common.generationId || payload.outputId !== common.outputId
-      || imagePackage.generationId !== common.generationId
-      || payload.assetKey !== `${common.generationId}:${assetIndex}` || payload.storagePath !== expectedPath
-    ) throw new Error("ai_content_render_job_invalid");
-    return { ...common, jobKind: "image_asset", assetIndex, payload: { contractVersion: "ai-content-render-job.v1", jobKind: "image_asset", generationId: common.generationId, outputId: common.outputId, imagePackage, assetIndex, assetKey: String(payload.assetKey), storagePath: String(payload.storagePath) } };
+    throw new Error("ai_content_render_job_invalid");
   }
   if (source.jobKind === "package_finalize" && source.assetIndex === null) {
     const payload = exact(source.payload, ["contractVersion", "jobKind", "generationId", "outputId", "plan", "finalInput", "supplementalResearch", "assets"]);
@@ -198,6 +192,11 @@ export function createAiContentRenderClient({ apiUrl, token, fetchImpl = fetch }
     },
     async completeAsset(job, workerId, asset) {
       await request(`/worker/ai-content-render-jobs/${encodeURIComponent(job.id)}/complete`, { workerId, leaseToken: job.leaseToken, jobKind: "image_asset", asset });
+    },
+    async appendRenderDiagnostic(job, workerId, diagnostic) {
+      await request(`/worker/ai-content-render-jobs/${encodeURIComponent(job.id)}/diagnostic`, {
+        workerId, leaseToken: job.leaseToken, diagnostic,
+      });
     },
     async completePackage(job, workerId, input) {
       await request(`/worker/ai-content-render-jobs/${encodeURIComponent(job.id)}/complete`, { workerId, leaseToken: job.leaseToken, jobKind: "package_finalize", manifest: input.manifest, manifestUrl: input.manifestUrl });

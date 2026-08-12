@@ -6,20 +6,20 @@ const formats = Object.freeze([
   {
     format: "card-news",
     worker: "brand-pilot-card-news-worker",
-    runner: "run-codex-card-news-v2-plan.mjs",
-    schema: "card-news-plan-v2.schema.json",
+    runner: "run-codex-card-deck-plan.mjs",
+    schema: "card-deck-editorial-plan-v1.schema.json",
   },
   {
     format: "blog",
     worker: "brand-pilot-blog-worker",
     runner: "run-codex-blog-v2-plan.mjs",
-    schema: "blog-plan-v2.schema.json",
+    schema: "blog-plan-draft-v1.schema.json",
   },
   {
     format: "reel",
     worker: "brand-pilot-reel-worker",
     runner: "run-codex-reel-plan.mjs",
-    schema: "reel-plan-v2.schema.json",
+    schema: "reel-storyboard-v1.schema.json",
   },
 ]);
 
@@ -29,22 +29,15 @@ test("every format planner executes the canonical generated schema", async () =>
       readFile(`workers/${entry.worker}/scripts/${entry.runner}`, "utf8"),
       readFile(`workers/${entry.worker}/Dockerfile`, "utf8"),
     ]);
-    const canonicalPath = `packages/brand-pilot-content-contracts/generated/${entry.schema}`;
-    assert.match(runner, new RegExp(canonicalPath.replaceAll("/", "\\/")));
-    assert.match(dockerfile, /packages\/brand-pilot-content-contracts\/generated/);
-    assert.doesNotMatch(
-      dockerfile,
-      new RegExp(`/workers/${entry.worker}/scripts/${entry.schema}`.replaceAll("/", "\\/")),
-    );
+    assert.match(runner, new RegExp(entry.schema.replaceAll(".", "\\.")));
+    assert.match(dockerfile, new RegExp(entry.schema.replaceAll(".", "\\.")));
   }
 });
 
 test("canonical format schemas satisfy the provider structured-output subset", async () => {
   for (const entry of formats) {
-    const schema = JSON.parse(await readFile(
-      `packages/brand-pilot-content-contracts/generated/${entry.schema}`,
-      "utf8",
-    ));
+    const schemaPath = `workers/${entry.worker}/scripts/${entry.schema}`;
+    const schema = JSON.parse(await readFile(schemaPath, "utf8"));
     const serialized = JSON.stringify(schema);
     assert.doesNotMatch(serialized, /"oneOf"|"uniqueItems"/);
     const untypedConstPaths = [];

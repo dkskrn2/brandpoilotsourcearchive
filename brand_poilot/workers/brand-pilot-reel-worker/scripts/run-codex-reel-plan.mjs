@@ -30,15 +30,15 @@ export function buildCodexArgs(outputDir) {
     "-c", "permissions.planner.network.enabled=false",
     "--disable", "shell_tool", "--disable", "image_generation", "--disable", "browser_use", "--disable", "multi_agent", "--disable", "plugins",
     "--ask-for-approval", "never", "exec", "--model", "gpt-5.6-terra", "--ignore-user-config", "--skip-git-repo-check", "--ignore-rules", "--ephemeral",
-    "--output-schema", path.join(path.resolve(outputDir), "reel-plan-draft-v2.schema.json"),
+    "--output-schema", path.join(path.resolve(outputDir), "reel-storyboard-v1.schema.json"),
     "--output-last-message", path.join(outputDir, "reel-plan.json"), "-C", outputDir, "-",
   ];
 }
 
-export async function writeReelPlanDraftSchema(outputDir) {
-  const schemaPath = path.join(path.resolve(outputDir), "reel-plan-draft-v2.schema.json");
+export async function writeReelStoryboardSchema(outputDir) {
+  const schemaPath = path.join(path.resolve(outputDir), "reel-storyboard-v1.schema.json");
   await mkdir(outputDir, { recursive: true });
-  await copyFile(fileURLToPath(new URL("./reel-plan-draft-v2.schema.json", import.meta.url)), schemaPath);
+  await copyFile(fileURLToPath(new URL("./reel-storyboard-v1.schema.json", import.meta.url)), schemaPath);
   return schemaPath;
 }
 
@@ -46,7 +46,7 @@ export async function main() {
   const jobFile = argument("--job");
   const outputDir = argument("--output");
   await mkdir(outputDir, { recursive: true });
-  await writeReelPlanDraftSchema(outputDir);
+  await writeReelStoryboardSchema(outputDir);
   const payload = JSON.parse(await readFile(jobFile, "utf8"));
   const child = spawn(process.env.CODEX_COMMAND ?? "codex", buildCodexArgs(outputDir), {
     cwd: outputDir, env: childEnv(), stdio: ["pipe", "inherit", "inherit"], shell: false,

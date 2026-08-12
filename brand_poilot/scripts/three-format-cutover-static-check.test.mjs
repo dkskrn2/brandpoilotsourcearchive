@@ -62,7 +62,7 @@ const baseline = Object.freeze({
   "workers/brand-pilot-reel-worker/src/client.ts": `request("/worker/ai-content-jobs/reel/claim", { workerId });`,
   "workers/brand-pilot-reel-worker/src/index.ts": `const workerId = process.env.REEL_WORKER_ID ?? "reel-worker";`,
   "workers/brand-pilot-reel-worker/src/worker.ts": `export const workerFailure = "reel_worker_failed";`,
-  "workers/brand-pilot-card-news-worker/scripts/run-codex-card-news-v2-plan.mjs": `
+  "workers/brand-pilot-card-news-worker/scripts/run-codex-card-deck-plan.mjs": `
     const args = ["--model", "gpt-5.6-terra", "exec"];
   `,
   "workers/brand-pilot-blog-worker/scripts/run-codex-blog-v2-plan.mjs": `
@@ -90,11 +90,11 @@ const baseline = Object.freeze({
   `,
   "deploy/env/card-news-worker.env.example": `
     CARD_NEWS_CODEX_PLAN_TIMEOUT_MS=300000
-    CARD_NEWS_CODEX_PLAN_COMMAND=node scripts/run-codex-card-news-v2-plan.mjs --job "{{jobFile}}" --output "{{outputDir}}"
+    CARD_NEWS_CODEX_PLAN_COMMAND=node scripts/run-codex-card-deck-plan.mjs --job "{{jobFile}}" --output "{{outputDir}}"
   `,
   "workers/brand-pilot-card-news-worker/.env.example": `
     CARD_NEWS_CODEX_PLAN_TIMEOUT_MS=300000
-    CARD_NEWS_CODEX_PLAN_COMMAND=node scripts/run-codex-card-news-v2-plan.mjs --job "{{jobFile}}" --output "{{outputDir}}"
+    CARD_NEWS_CODEX_PLAN_COMMAND=node scripts/run-codex-card-deck-plan.mjs --job "{{jobFile}}" --output "{{outputDir}}"
   `,
   "deploy/env/blog-worker.env.example": `
     BLOG_CODEX_PLAN_TIMEOUT_MS=300000
@@ -106,6 +106,8 @@ const baseline = Object.freeze({
   `,
   "workers/brand-pilot-image-worker/src/aiContentFinalizer.ts": `const plans = ["card-news-plan.v2", "blog-plan.v2", "reel-plan.v2"]; const manifest = "ai-content.v3";`,
   "workers/brand-pilot-image-worker/src/aiContentRenderClient.ts": `import { parseImageGenerationPackageV1 } from "@brand-pilot/content-contracts";`,
+  "workers/brand-pilot-image-worker/src/aiContentCardDeckRenderContract.ts": `import { parseContentGenerationInputV3 } from "@brand-pilot/content-contracts";`,
+  "workers/brand-pilot-image-worker/src/aiContentReelStoryboardRenderContract.ts": `import { parseContentGenerationInputV3 } from "@brand-pilot/content-contracts";`,
   "apps/api/src/automatedCardNews.ts": `const intentionallyDeferred = "marketing-plan.v2 ai-content.v2 marketing-worker content_type";`,
   "apps/customer-ui/src/features/ai-content/aiContentApiGateway.ts": `
     import { parseAiContentManifestV3, parseContentStudioOutputFormat, parseContentPurpose } from "@brand-pilot/content-contracts";

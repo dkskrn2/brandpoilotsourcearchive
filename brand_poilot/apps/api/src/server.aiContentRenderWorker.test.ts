@@ -7,6 +7,7 @@ function setup() {
     claimAiContentRenderJob: vi.fn(async () => ({ id: "render-1", jobKind: "image_asset", leaseToken: "lease-1" })),
     heartbeatAiContentRenderJob: vi.fn(async () => true),
     completeAiContentRenderAsset: vi.fn(async () => undefined),
+    appendAiContentEditorialRenderDiagnostic: vi.fn(async () => undefined),
     completeAiContentRenderPackage: vi.fn(async () => ({ id: "generation-1", status: "completed" })),
     failAiContentRenderJob: vi.fn(async () => undefined),
     saveAiContentOutputResearch: vi.fn(async () => undefined),
@@ -48,6 +49,7 @@ describe("AI content render worker routes", () => {
       { url: "/worker/ai-content-render-jobs/claim", payload: { workerId: "worker-1", leaseSeconds: 180 } },
       { url: "/worker/ai-content-render-jobs/render-1/heartbeat", payload: { workerId: "worker-1", leaseToken: "lease-1", leaseSeconds: 180 } },
       { url: "/worker/ai-content-render-jobs/render-1/complete", payload: { workerId: "worker-1", leaseToken: "lease-1", jobKind: "image_asset", asset: {} } },
+      { url: "/worker/ai-content-render-jobs/render-1/diagnostic", payload: { workerId: "worker-1", leaseToken: "lease-1", diagnostic: {} } },
       { url: "/worker/ai-content-render-jobs/render-1/fail", payload: { workerId: "worker-1", leaseToken: "lease-1", errorCode: "failed", errorMessage: "failed", retryable: false } },
       { url: "/worker/ai-content-jobs/job-1/research-complete", payload: { workerId: "worker-1", leaseToken: "lease-1", outputId: "output-1", evidence: {} } },
     ];
@@ -84,6 +86,32 @@ describe("AI content render worker routes", () => {
     const finalizer = await app.inject({ method: "POST", url: "/worker/ai-content-render-jobs/render-2/complete", headers, payload: { ...identity, jobKind: "package_finalize", manifest: { version: "ai-content.v2" }, manifestUrl: "https://blob.example/manifest.json" } });
     expect(finalizer.statusCode).toBe(200);
     expect(repository.completeAiContentRenderPackage).toHaveBeenCalledWith(expect.objectContaining({ jobId: "render-2", jobKind: "package_finalize" }));
+    await app.close();
+  });
+
+  it("appends an exact private editorial diagnostic after asset completion", async () => {
+    const { app, repository } = setup();
+    const headers = { authorization: "Bearer worker-token" };
+    const diagnostic = {
+      contractVersion: "ai-content-editorial-render-diagnostic.v1",
+      sourceContractVersion: "card-deck-editorial-plan.v1", sourceSha256: "a".repeat(64), sceneIndex: 1,
+      compiledPromptVersion: "image-card-deck.v1", compiledPromptSha256: "b".repeat(64),
+      actualToolArgumentsObservation: "not_emitted_by_runner", actualToolArgumentsSha256: null,
+    };
+    const response = await app.inject({
+      method: "POST", url: "/worker/ai-content-render-jobs/render-1/diagnostic", headers,
+      payload: { workerId: "worker-1", leaseToken: "lease-1", diagnostic },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(repository.appendAiContentEditorialRenderDiagnostic).toHaveBeenCalledWith({
+      jobId: "render-1", workerId: "worker-1", leaseToken: "lease-1", diagnostic,
+    });
+    const extra = await app.inject({
+      method: "POST", url: "/worker/ai-content-render-jobs/render-1/diagnostic", headers,
+      payload: { workerId: "worker-1", leaseToken: "lease-1", diagnostic, extra: true },
+    });
+    expect(extra.statusCode).toBe(400);
     await app.close();
   });
 

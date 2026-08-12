@@ -5,6 +5,11 @@
   "type": "module",
   "exports": {
     ".": "./dist/index.js",
+    "./card-deck-editorial-plan": "./dist/cardDeckEditorialPlan.js",
+    "./card-deck-editorial-plan/node": "./dist/cardDeckEditorialPlanNode.js",
+    "./reel-storyboard": "./dist/reelStoryboard.js",
+    "./reel-storyboard/node": "./dist/reelStoryboardNode.js",
+    "./editorial-visual-context": "./dist/editorialVisualContext.js",
     "./planner-drafts": "./dist/plannerDrafts.js",
     "./structured-scene-copy": "./dist/structuredSceneCopy.js",
     "./generated/*": "./generated/*"

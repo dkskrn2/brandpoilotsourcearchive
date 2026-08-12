@@ -202,8 +202,9 @@ async function runAiContentOnce(input: {
     if (controller.signal.aborted) throw controller.signal.reason;
     if (job.jobKind === "image_asset") {
       const rendered = await input.renderer.renderAsset(job, controller.signal);
+      const { renderDiagnostic, ...renderedAsset } = rendered;
       if (controller.signal.aborted) throw controller.signal.reason;
-      const uploaded = await input.storage.uploadAsset({ ...rendered, path: job.payload.storagePath });
+      const uploaded = await input.storage.uploadAsset({ ...renderedAsset, path: job.payload.storagePath });
       if (
         uploaded.index !== job.assetIndex || uploaded.storagePath !== job.payload.storagePath
         || uploaded.mimeType !== "image/png" || uploaded.width !== rendered.width || uploaded.height !== rendered.height
@@ -211,6 +212,9 @@ async function runAiContentOnce(input: {
       ) throw new Error("ai_content_asset_upload_invalid");
       if (controller.signal.aborted) throw controller.signal.reason;
       await input.client.completeAsset(job, input.workerId, uploaded);
+      if (renderDiagnostic && input.client.appendRenderDiagnostic) {
+        await input.client.appendRenderDiagnostic(job, input.workerId, renderDiagnostic).catch(() => undefined);
+      }
     } else {
       const completed = await input.finalizer(job, controller.signal);
       if (controller.signal.aborted) throw controller.signal.reason;

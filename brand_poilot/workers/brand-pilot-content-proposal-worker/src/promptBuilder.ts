@@ -11,6 +11,14 @@ function safeJson(value: unknown): string {
 
 function buildV2Prompt(job: ContentProposalCompositionJob): string {
   const snapshot = job.composedInput;
+  const sourceSelectionRule = snapshot.outputSettings.outputFormat !== "blog"
+    ? [
+        "카드뉴스·릴스의 evidenceIds와 referenceIds는 각 구성안을 대표하는 근거이며 최종 편집 기획에서 사용할 수 있는 근거의 허용 목록이 아니다.",
+        "세 안의 근거 집합은 서로 달라도 된다. 단, 각 ID는 제공된 동결 researchEvidence와 references 안에 실제로 존재해야 한다.",
+        "정보성·뉴스성 카드뉴스·릴스에서는 새로움, 수치 변화, 전후 차이, 적용 대상, 시점, 행동 영향을 우선 검토하되 선택한 관점에 맞는 사실만 사용하라.",
+        "제목이나 원문에서 콘텐츠가 성립하는 핵심 변화가 명시되어 있다면 이를 일반적인 배경 정보나 점검 안내로 대체하지 마라.",
+      ]
+    : ["세 안은 같은 evidenceIds 집합과 referenceIds 집합을 사용하라."];
   const formatRule = snapshot.outputSettings.outputFormat === "blog"
     ? "블로그는 assetCount는 null로 두고, outline은 글의 구조와 이미지 필요성 판단 기준을 제시하라."
     : "시각 형식의 assetCount는 고정 계산 규칙 없이 LLM이 내용에 맞춰 1~5에서 직접 고른다. outline 길이와 index를 정확히 맞춰라. 각 장은 내용이 빈약하지 않게 압축하되 과밀하게 채워 가독성을 해치지 마라.";
@@ -35,7 +43,8 @@ function buildV2Prompt(job: ContentProposalCompositionJob): string {
     "differentiationAxes는 target, situation, question, appeal, narrative, informational_type 중 1개 이상으로만 구성하고 그 외 값은 사용하지 마라.",
     "A/B/C 같은 고정 라벨이나 고정 3축 템플릿은 쓰지 마라. 각 안에 화면 표시용 differentiator와 differentiationAxes를 작성하라.",
     "contentInstruction이 null이 아니면 세 안 모두에 공통 적용하라.",
-    "세 안은 input과 같은 outputFormat, 단일 channelTargets, evidenceIds 집합, referenceIds 집합을 사용하라.",
+    "세 안은 input과 같은 outputFormat과 단일 channelTargets를 사용하라.",
+    ...sourceSelectionRule,
     "각 안은 conceptKey, title, informationalType, oneLineIntent, differentiator, differentiationAxes, target, customerContext, keyMessage, hook, selectionReason, evidenceIds, referenceIds, outputFormat, channelTargets, assetCount, outline, purposeDetails를 정확히 포함하라.",
     "outline 항목은 index, role, headline, purpose를 포함하고 index는 1부터 연속이어야 한다.",
     formatRule,

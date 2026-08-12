@@ -73,7 +73,7 @@ test("affected images default legacy paths to primary and deny the whole pool", 
 
   for (const file of [
     "workers/brand-pilot-content-proposal-worker/src/codexModel.ts",
-    "workers/brand-pilot-card-news-worker/scripts/run-codex-card-news-v2-plan.mjs",
+    "workers/brand-pilot-card-news-worker/scripts/run-codex-card-deck-plan.mjs",
     "workers/brand-pilot-blog-worker/scripts/run-codex-blog-v2-plan.mjs",
     "workers/brand-pilot-blog-worker/src/research.ts",
     "workers/brand-pilot-reel-worker/scripts/run-codex-reel-plan.mjs",

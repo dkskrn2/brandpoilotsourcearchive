@@ -16,7 +16,7 @@ async function main() {
   const client = createClient(required("BRAND_PILOT_API_URL"), required("WORKER_API_TOKEN"));
   const accountPool = await createCodexAccountPoolFromEnv(process.env);
   const planner = createCommandRunner(
-    process.env.CARD_NEWS_CODEX_PLAN_COMMAND ?? "node scripts/run-codex-card-news-v2-plan.mjs --job \"{{jobFile}}\" --output \"{{outputDir}}\"",
+    process.env.CARD_NEWS_CODEX_PLAN_COMMAND ?? "node scripts/run-codex-card-deck-plan.mjs --job \"{{jobFile}}\" --output \"{{outputDir}}\"",
     Math.max(1_000, Number(process.env.CARD_NEWS_CODEX_PLAN_TIMEOUT_MS ?? 300_000)),
     { accountPool },
   );

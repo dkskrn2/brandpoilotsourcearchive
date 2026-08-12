@@ -9,7 +9,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createCodexAccountPool, type CodexAccountPool } from "@brand-pilot/worker-runtime";
 import { createAiContentAssetRenderer, dimensionsForAspectRatio, runAiContentAssetChildProcess } from "./aiContentAssetRenderer.js";
 import type { AiContentImageAssetJob } from "./aiContentRenderClient.js";
-import { cloneManualImageJobV2, cloneManualImageJobV3 } from "../test/fixtures/manualRender.js";
+import { cloneCardDeckImageJob, cloneManualBlogImageJobV2, cloneManualImageJobV2, cloneReelStoryboardImageJob } from "../test/fixtures/manualRender.js";
 
 const uid = (n: number) => `30000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 const sha = (c: string) => c.repeat(64);
@@ -166,15 +166,14 @@ describe("V3 single asset renderer", () => {
   });
 
   it("stages the full immutable v2 context and every frozen attachment as read-only optional references", async () => {
-    const input: any = cloneManualImageJobV2();
+    const input: any = cloneManualBlogImageJobV2();
     expect(input.payload.imagePackage.assets[1].attachmentIds).toEqual([]);
     const { bytesByPath, readOwned } = await bindManualOwnedBytes(input);
     const rendered = await sharp({ create: { width: 8, height: 12, channels: 4, background: "white" } }).png().toBuffer();
     const runChild = vi.fn(async ({ workspaceDir, outputFile, prompt }: { workspaceDir: string; outputFile: string; prompt: string }) => {
       const inputDir = path.join(workspaceDir, "inputs");
       expect(prompt).toContain("ai-content-asset-render.v2");
-      expect(prompt).toMatch(/완성된.*카드뉴스|카드뉴스.*완성/s);
-      expect(prompt).toMatch(/배경.*이미지만.*만들지 마세요/s);
+      expect(prompt).toMatch(/블로그/);
       expect(prompt).toContain("inputs/content-generation-input.json");
       expect(prompt).toContain("inputs/attachments/attachment-03.webp");
       expect(JSON.parse(await readFile(path.join(inputDir, "content-generation-input.json"), "utf8"))).toEqual(input.payload.contentGenerationInput);
@@ -190,10 +189,10 @@ describe("V3 single asset renderer", () => {
           copy: "두 번째 장면",
           visualDirection: "두 번째 장면 비주얼",
         },
-        blogInsertionContext: null,
+        blogInsertionContext: expect.objectContaining({ placeholder: "asset://02" }),
       });
-      await expect(readFile(path.join(inputDir, "blog-insertion-context.json"), "utf8"))
-        .rejects.toMatchObject({ code: "ENOENT" });
+      expect(JSON.parse(await readFile(path.join(inputDir, "blog-insertion-context.json"), "utf8")))
+        .toMatchObject({ placeholder: "asset://02" });
       await expect(readFile(path.join(inputDir, "structured-scene-copy.json"), "utf8"))
         .rejects.toMatchObject({ code: "ENOENT" });
       const index = JSON.parse(await readFile(path.join(inputDir, "attachments", "index.json"), "utf8"));
@@ -239,21 +238,82 @@ describe("V3 single asset renderer", () => {
     expect(runChild).toHaveBeenCalledTimes(1);
   });
 
-  it("stages only the hydrated v3 scene as read-only structured semantics", async () => {
-    const input: any = cloneManualImageJobV3();
+  it("stages the authoritative Reel Storyboard and deterministic compiled prompt", async () => {
+    const input: any = cloneReelStoryboardImageJob();
     const { readOwned } = await bindManualOwnedBytes(input);
-    const rendered = await sharp({ create: { width: 8, height: 8, channels: 4, background: "white" } }).png().toBuffer();
+    const rendered = await sharp({ create: { width: 90, height: 160, channels: 4, background: "white" } }).png().toBuffer();
+    let observedPrompt = "";
     const runChild = vi.fn(async ({ workspaceDir, outputFile }: { workspaceDir: string; outputFile: string }) => {
-      const semanticPath = path.join(workspaceDir, "inputs", "structured-scene-copy.json");
-      expect(JSON.parse(await readFile(semanticPath, "utf8"))).toEqual(input.payload.renderSemanticScene);
-      expect((await (await import("node:fs/promises")).stat(semanticPath)).mode & 0o222).toBe(0);
+      const inputDir = path.join(workspaceDir, "inputs");
+      const storyboardPath = path.join(inputDir, "reel-storyboard.json");
+      const scenePath = path.join(inputDir, "reel-storyboard-current-scene.json");
+      expect(JSON.parse(await readFile(storyboardPath, "utf8"))).toEqual(input.payload.reelStoryboardContract);
+      expect(JSON.parse(await readFile(scenePath, "utf8"))).toEqual(input.payload.reelStoryboardCurrentScene);
+      observedPrompt = await readFile(path.join(inputDir, "compiled-render-prompt.txt"), "utf8");
+      expect(observedPrompt).toContain("[GLOBAL VISUAL SYSTEM]");
+      expect((await (await import("node:fs/promises")).stat(storyboardPath)).mode & 0o222).toBe(0);
+      expect((await (await import("node:fs/promises")).stat(scenePath)).mode & 0o222).toBe(0);
       await mkdir(path.dirname(outputFile), { recursive: true });
       await writeFile(outputFile, rendered);
     });
     const renderer = createAiContentAssetRenderer({ workerRoot: path.resolve("."), readOwned, runChild });
 
-    await expect(renderer.renderAsset(input as AiContentImageAssetJob, new AbortController().signal))
-      .resolves.toMatchObject({ index: 2 });
+    const result = await renderer.renderAsset(input as AiContentImageAssetJob, new AbortController().signal);
+    expect(result).toMatchObject({
+        index: 2,
+        renderDiagnostic: {
+          contractVersion: "ai-content-editorial-render-diagnostic.v1",
+          sourceContractVersion: "reel-storyboard.v1",
+          sourceSha256: input.payload.reelStoryboardBinding.storyboardSha256,
+          sceneIndex: 2,
+          compiledPromptVersion: "image-reel-storyboard.v1",
+          compiledPromptSha256: createHash("sha256").update(observedPrompt).digest("hex"),
+          actualToolArgumentsObservation: "not_emitted_by_runner",
+          actualToolArgumentsSha256: null,
+        },
+      });
+    expect(runChild).toHaveBeenCalledTimes(1);
+  });
+
+  it("stages the authoritative card Deck and passes the exact compiled prompt to the child", async () => {
+    const input: any = cloneCardDeckImageJob();
+    const { readOwned } = await bindManualOwnedBytes(input);
+    const rendered = await sharp({ create: { width: 8, height: 8, channels: 4, background: "white" } }).png().toBuffer();
+    let observedPrompt = "";
+    const runChild = vi.fn(async ({ workspaceDir, outputFile, prompt }: { workspaceDir: string; outputFile: string; prompt: string }) => {
+      observedPrompt = prompt;
+      const inputDir = path.join(workspaceDir, "inputs");
+      expect(JSON.parse(await readFile(path.join(inputDir, "card-deck-editorial-plan.json"), "utf8")))
+        .toEqual(input.payload.cardDeckContract);
+      expect(JSON.parse(await readFile(path.join(inputDir, "card-deck-current-scene.json"), "utf8")))
+        .toEqual(input.payload.cardDeckCurrentScene);
+      expect(await readFile(path.join(inputDir, "compiled-render-prompt.txt"), "utf8")).toBe(prompt);
+      expect(prompt).toContain("[GLOBAL VISUAL SYSTEM]");
+      expect(prompt).toContain("[KEY VISUAL RELATION]");
+      for (const relative of [
+        "card-deck-editorial-plan.json", "card-deck-current-scene.json", "compiled-render-prompt.txt",
+      ]) {
+        expect((await (await import("node:fs/promises")).stat(path.join(inputDir, relative))).mode & 0o222).toBe(0);
+      }
+      await mkdir(path.dirname(outputFile), { recursive: true });
+      await writeFile(outputFile, rendered);
+    });
+    const renderer = createAiContentAssetRenderer({ workerRoot: path.resolve("."), readOwned, runChild });
+
+    const result = await renderer.renderAsset(input as AiContentImageAssetJob, new AbortController().signal);
+    expect(result).toMatchObject({
+        index: 2,
+        renderDiagnostic: {
+          contractVersion: "ai-content-editorial-render-diagnostic.v1",
+          sourceContractVersion: "card-deck-editorial-plan.v1",
+          sourceSha256: input.payload.cardDeckBinding.deckSha256,
+          sceneIndex: 2,
+          compiledPromptVersion: "image-card-deck.v1",
+          compiledPromptSha256: createHash("sha256").update(observedPrompt).digest("hex"),
+          actualToolArgumentsObservation: "not_emitted_by_runner",
+          actualToolArgumentsSha256: null,
+        },
+      });
     expect(runChild).toHaveBeenCalledTimes(1);
   });
 

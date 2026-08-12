@@ -9,11 +9,6 @@ import {
   type ContentPlanResultV2,
   type ImageGenerationPackageV1,
 } from "@brand-pilot/content-contracts";
-import {
-  compileStructuredScene,
-  parseStructuredSceneCopyV1,
-  type StructuredSceneCopyV1,
-} from "@brand-pilot/content-contracts/structured-scene-copy";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
@@ -31,32 +26,7 @@ export interface AiContentManualImageAssetPayloadV2 {
   contentPlan: ContentPlanResultV2;
 }
 
-export interface AiContentManualImageAssetPayloadV3 {
-  contractVersion: "ai-content-render-job.v3";
-  jobKind: "image_asset";
-  generationId: string;
-  outputId: string;
-  imagePackage: ImageGenerationPackageV1;
-  assetIndex: number;
-  assetKey: string;
-  storagePath: string;
-  rendererPromptVersion: "image-final-pixels.v3";
-  contentGenerationInput: ContentGenerationInputV3;
-  contentPlan: ContentPlanResultV2;
-  renderSemanticBinding: {
-    contractVersion: "structured-scene-copy.v1";
-    semanticSha256: string;
-    sceneIndex: number;
-  };
-  renderSemanticScene: {
-    contractVersion: "structured-scene-copy.v1";
-    scene: StructuredSceneCopyV1;
-  };
-}
-
-export type AiContentManualImageAssetPayload =
-  | AiContentManualImageAssetPayloadV2
-  | AiContentManualImageAssetPayloadV3;
+export type AiContentManualImageAssetPayload = AiContentManualImageAssetPayloadV2;
 
 export interface AiContentManualImageAssetIdentity {
   id: string;
@@ -93,25 +63,7 @@ export interface AiContentManualRenderContractV2 {
   blogInsertionContext: BlogInsertionContextV2 | null;
 }
 
-export interface AiContentManualRenderContractV3 {
-  contractVersion: "ai-content-manual-render.v3";
-  rendererPromptVersion: "image-final-pixels.v3";
-  generationId: string;
-  outputId: string;
-  workspaceId: string;
-  brandId: string;
-  assetIndex: number;
-  assetKey: string;
-  storagePath: string;
-  outputFormat: "card_news" | "reel";
-  purpose: ImageGenerationPackageV1["purpose"];
-  aspectRatio: "1:1" | "9:16";
-  currentAsset: { index: number; role: string; copy: string; visualDirection: string };
-  blogInsertionContext: null;
-  renderSemanticScene: AiContentManualImageAssetPayloadV3["renderSemanticScene"];
-}
-
-export type AiContentManualRenderContract = AiContentManualRenderContractV2 | AiContentManualRenderContractV3;
+export type AiContentManualRenderContract = AiContentManualRenderContractV2;
 
 function invalid(): never {
   throw new Error("ai_content_render_job_invalid");
@@ -153,7 +105,8 @@ function assertCanonicalBindings(
   } else if (!sameStringArray(input.outputSettings.channelTargets, ["blog_export"])
     || input.outputSettings.aspectRatio !== null
     || !sameStringArray(imagePackage.channelTargets, ["blog_export"])) invalid();
-  const expectedPlanVersion = format === "card_news" ? "card-news-plan.v2" : format === "blog" ? "blog-plan.v2" : "reel-plan.v2";
+  if (format !== "blog") invalid();
+  const expectedPlanVersion = "blog-plan.v2";
   if (
     input.generationId !== identity.generationId
     || plan.contractVersion !== expectedPlanVersion
@@ -175,7 +128,6 @@ function assertCanonicalBindings(
     || imagePackage.userImageInstruction !== input.userImageInstruction
     || imagePackage.assetCount !== imagePackage.assets.length
   ) invalid();
-  if (format === "reel" && (!("outputFormat" in plan) || plan.outputFormat !== "reel")) invalid();
   if (input.outputSettings.purpose === "marketing" && (input.product === null
     || input.selectedProposal.purposeDetails.kind !== "marketing"
     || input.selectedProposal.purposeDetails.productId !== input.product.id)) invalid();
@@ -250,63 +202,6 @@ export function parseAiContentManualImageAssetPayloadV2(
   }
 }
 
-export function parseAiContentManualImageAssetPayloadV3(
-  value: unknown,
-  identity: AiContentManualImageAssetIdentity,
-): AiContentManualImageAssetPayloadV3 {
-  try {
-    if (![identity.id, identity.generationId, identity.outputId, identity.workspaceId, identity.brandId].every((id) => UUID.test(id))) invalid();
-    const source = exactRecord(value, [
-      "contractVersion", "jobKind", "generationId", "outputId", "imagePackage", "assetIndex", "assetKey",
-      "storagePath", "rendererPromptVersion", "contentGenerationInput", "contentPlan",
-      "renderSemanticBinding", "renderSemanticScene",
-    ]);
-    const imagePackage = parseImageGenerationPackageV1(source.imagePackage);
-    const contentGenerationInput = parseContentGenerationInputV3(source.contentGenerationInput);
-    const contentPlan = parseContentPlanResultV2(source.contentPlan);
-    const binding = exactRecord(source.renderSemanticBinding, ["contractVersion", "semanticSha256", "sceneIndex"]);
-    const semanticSource = exactRecord(source.renderSemanticScene, ["contractVersion", "scene"]);
-    const scene = parseStructuredSceneCopyV1(semanticSource.scene);
-    const expectedPath = `ai-content/${identity.brandId}/${identity.generationId}/${identity.outputId}/assets/${String(identity.assetIndex).padStart(2, "0")}.png`;
-    if (
-      source.contractVersion !== "ai-content-render-job.v3"
-      || source.jobKind !== "image_asset"
-      || source.rendererPromptVersion !== "image-final-pixels.v3"
-      || source.generationId !== identity.generationId
-      || source.outputId !== identity.outputId
-      || source.assetIndex !== identity.assetIndex
-      || source.assetKey !== `${identity.generationId}:${identity.assetIndex}`
-      || source.storagePath !== expectedPath
-      || binding.contractVersion !== "structured-scene-copy.v1"
-      || typeof binding.semanticSha256 !== "string"
-      || !/^[0-9a-f]{64}$/.test(binding.semanticSha256)
-      || binding.sceneIndex !== identity.assetIndex
-      || semanticSource.contractVersion !== "structured-scene-copy.v1"
-      || scene.index !== identity.assetIndex
-      || (imagePackage.outputFormat !== "card_news" && imagePackage.outputFormat !== "reel")
-    ) invalid();
-    assertCanonicalBindings(identity, contentGenerationInput, contentPlan, imagePackage);
-    const currentAsset = imagePackage.assets[identity.assetIndex - 1];
-    if (!currentAsset) invalid();
-    const { attachmentIds: _attachmentIds, ...assetWithoutAttachments } = currentAsset;
-    if (!isDeepStrictEqual(compileStructuredScene(scene), assetWithoutAttachments)) invalid();
-    return {
-      contractVersion: "ai-content-render-job.v3", jobKind: "image_asset",
-      generationId: identity.generationId, outputId: identity.outputId, imagePackage,
-      assetIndex: identity.assetIndex, assetKey: String(source.assetKey), storagePath: String(source.storagePath),
-      rendererPromptVersion: "image-final-pixels.v3", contentGenerationInput, contentPlan,
-      renderSemanticBinding: {
-        contractVersion: "structured-scene-copy.v1",
-        semanticSha256: String(binding.semanticSha256),
-        sceneIndex: identity.assetIndex,
-      },
-      renderSemanticScene: { contractVersion: "structured-scene-copy.v1", scene },
-    };
-  } catch {
-    throw new Error("ai_content_render_job_invalid");
-  }
-}
-
 function normalizedText(value: string): string {
   return value.replace(/\s+/g, " ").trim();
 }
@@ -366,28 +261,6 @@ export function buildAiContentManualRenderContract(input: {
   payload: AiContentManualImageAssetPayload;
 }): AiContentManualRenderContract {
   const currentAsset = input.payload.imagePackage.assets[input.identity.assetIndex - 1]!;
-  if (input.payload.contractVersion === "ai-content-render-job.v3") {
-    return {
-      contractVersion: "ai-content-manual-render.v3",
-      rendererPromptVersion: input.payload.rendererPromptVersion,
-      generationId: input.identity.generationId,
-      outputId: input.identity.outputId,
-      workspaceId: input.identity.workspaceId,
-      brandId: input.identity.brandId,
-      assetIndex: input.identity.assetIndex,
-      assetKey: input.payload.assetKey,
-      storagePath: input.payload.storagePath,
-      outputFormat: input.payload.imagePackage.outputFormat as "card_news" | "reel",
-      purpose: input.payload.imagePackage.purpose,
-      aspectRatio: input.payload.imagePackage.aspectRatio as "1:1" | "9:16",
-      currentAsset: {
-        index: currentAsset.index, role: currentAsset.role,
-        copy: currentAsset.copy, visualDirection: currentAsset.visualDirection,
-      },
-      blogInsertionContext: null,
-      renderSemanticScene: input.payload.renderSemanticScene,
-    };
-  }
   return {
     contractVersion: "ai-content-manual-render.v2",
     rendererPromptVersion: input.payload.rendererPromptVersion,

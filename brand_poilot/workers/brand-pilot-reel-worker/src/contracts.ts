@@ -2,15 +2,16 @@ import {
   parseContentGenerationInputV3,
   type ContentGenerationInputV3,
 } from "@brand-pilot/content-contracts";
-import { STRUCTURED_SCENE_COPY_VERSION, type StructuredSceneCopyV1 } from "@brand-pilot/content-contracts/structured-scene-copy";
+import {
+  compileReelStoryboardDraftV1,
+  parseReelStoryboardV1,
+  type ReelStoryboardV1,
+} from "@brand-pilot/content-contracts/reel-storyboard";
+import { reelStoryboardSha256 } from "@brand-pilot/content-contracts/reel-storyboard/node";
 import {
   parseReelPlanDraftV1,
   type ReelPlanDraftV1,
 } from "@brand-pilot/content-contracts/planner-drafts";
-import {
-  compileStructuredReelPlanDraftV2,
-  parseStructuredReelPlanDraftV2,
-} from "./structuredSceneDraft.js";
 
 export interface ReelJob {
   id: string;
@@ -112,38 +113,43 @@ export function parseReelPlanDraftForInput(value: unknown, input: ContentGenerat
   return draft;
 }
 
-export function parseStructuredReelPlanDraftForInput(
-  value: unknown,
-  input: ContentGenerationInputV3,
-): ReelPlanDraftV1 {
-  return parseStructuredReelPlanSubmissionForInput(value, input).planDraft;
-}
-
-export type StructuredReelPlanSubmission = {
+export type ReelStoryboardSubmission = {
   planDraft: ReelPlanDraftV1;
-  renderSemanticContract: {
-    contractVersion: typeof STRUCTURED_SCENE_COPY_VERSION;
-    outputFormat: "reel";
-    scenes: StructuredSceneCopyV1[];
+  reelStoryboardContract: {
+    contractVersion: "reel-storyboard.v1";
+    storyboardSha256: string;
+    storyboard: ReelStoryboardV1;
   };
 };
 
-export function parseStructuredReelPlanSubmissionForInput(
+export function parseReelStoryboardSubmissionForInput(
   value: unknown,
   input: ContentGenerationInputV3,
-): StructuredReelPlanSubmission {
+): ReelStoryboardSubmission {
   try {
-    const draft = parseStructuredReelPlanDraftV2(value);
+    const storyboard = parseReelStoryboardV1(value);
+    const planDraft = parseReelPlanDraftForInput(
+      compileReelStoryboardDraftV1(storyboard, input.selectedProposal.outline),
+      input,
+    );
     return {
-      planDraft: parseReelPlanDraftForInput(compileStructuredReelPlanDraftV2(draft), input),
-      renderSemanticContract: {
-        contractVersion: STRUCTURED_SCENE_COPY_VERSION,
-        outputFormat: "reel",
-        scenes: draft.assets,
+      planDraft,
+      reelStoryboardContract: {
+        contractVersion: "reel-storyboard.v1",
+        storyboardSha256: reelStoryboardSha256(storyboard),
+        storyboard,
       },
     };
   } catch (error) {
-    if (error instanceof Error && error.message !== "reel_plan_draft_v1_invalid") throw error;
+    if (error instanceof Error && [
+      "reel_plan_draft_content_invalid",
+      "reel_plan_draft_hashtag_duplicate",
+      "reel_plan_draft_outline_mismatch",
+      "reel_plan_draft_evidence_id_duplicate",
+      "reel_plan_draft_evidence_id_unknown",
+      "reel_plan_draft_product_image_id_duplicate",
+      "reel_plan_draft_product_image_id_unknown",
+    ].includes(error.message)) throw error;
     throw new Error("reel_structured_draft_invalid");
   }
 }

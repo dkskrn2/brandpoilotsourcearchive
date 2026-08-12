@@ -1,4 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
+import { compileCardDeckPlanDraftV1 } from "@brand-pilot/content-contracts/card-deck-editorial-plan";
+import { cardDeckEditorialPlanSha256 } from "@brand-pilot/content-contracts/card-deck-editorial-plan/node";
+import { compileReelStoryboardDraftV1 } from "@brand-pilot/content-contracts/reel-storyboard";
+import { reelStoryboardSha256 } from "@brand-pilot/content-contracts/reel-storyboard/node";
 import {
   createAiContentRenderJobsRepository,
   enqueueAiContentRenderJobs,
@@ -6,66 +10,112 @@ import {
   expectedAiContentAssetStoragePath,
   parseRenderManifestUrl,
   parseRenderAssetResult,
-  resolveManualRenderTransport,
 } from "./aiContentRenderJobs.js";
 
 describe("ai-content render job boundary helpers", () => {
-  it.each([
-    ["manual", "manual-v2"],
-    ["scheduled_crawl", "v1"],
-  ] as const)("selects %s proposal lineage without consulting generation draft metadata", async (origin, expected) => {
-    const query = vi.fn(async (sql: string, params: unknown[]) => {
-      expect(sql).toContain("from ai_content_generation_prompt_bindings binding");
-      expect(sql).toContain("join ai_content_proposals proposal");
-      expect(sql).toContain("join ai_content_proposal_batches batch");
-      expect(sql).not.toContain("draft_json");
-      expect(params).toEqual(["generation", "workspace", "brand", "proposal"]);
-      return { rows: [{ selected_proposal_id: "proposal", origin }], rowCount: 1 };
-    });
-
-    await expect(resolveManualRenderTransport({ query } as never, {
-      generationId: "generation",
-      workspaceId: "workspace",
-      brandId: "brand",
-      selectedProposalId: "proposal",
-    })).resolves.toBe(expected);
-  });
-
-  it("falls back to v1 when manual proposal lineage cannot be proven", async () => {
-    const query = vi.fn(async () => ({ rows: [], rowCount: 0 }));
-
-    await expect(resolveManualRenderTransport({ query } as never, {
-      generationId: "generation",
-      workspaceId: "workspace",
-      brandId: "brand",
-      selectedProposalId: "proposal",
-    })).resolves.toBe("v1");
-  });
-
-  it("proves manual lineage with a SELECT-only query", async () => {
-    const query = vi.fn(async (sql: string) => {
-      if (/\bfor\s+(?:share|update)\b/i.test(sql)) {
-        throw Object.assign(new Error("permission denied for table ai_content_generation_prompt_bindings"), {
-          code: "42501",
-        });
-      }
-      return { rows: [{ selected_proposal_id: "proposal", origin: "manual" }], rowCount: 1 };
-    });
-
-    await expect(resolveManualRenderTransport({ query } as never, {
-      generationId: "generation",
-      workspaceId: "workspace",
-      brandId: "brand",
-      selectedProposalId: "proposal",
-    })).resolves.toBe("manual-v2");
-  });
-
-  it("stores only a version hash and scene index for a structured manual social render", async () => {
+  it("stores the named Card Deck binding without a legacy transport selector", async () => {
     const writes: unknown[][] = [];
     const query = vi.fn(async (_sql: string, params: unknown[]) => {
       writes.push(params);
       return { rows: [], rowCount: 1 };
     });
+    const outline = [1, 2, 3].map((index) => ({ index, role: index === 1 ? "hook" : "detail" }));
+    const deck = {
+      contractVersion: "card-deck-editorial-plan.v1" as const,
+      content: { caption: "Caption", hashtags: ["#deck"], cta: "Save" },
+      deckNarrative: "A connected three-card deck.",
+      visualSystem: {
+        paletteDirection: "Red, white, and black.",
+        typographyDirection: "Bold Korean editorial hierarchy.",
+        graphicLanguage: "Consistent flat editorial symbols.",
+        imageryDirection: "Use subject-led editorial imagery.",
+        invariants: ["Keep one visual system across every card."],
+      },
+      scenes: [1, 2, 3].map((index) => ({
+        index,
+        editorialRole: index === 1 ? "hook" : "detail",
+        purpose: `Purpose ${index}`,
+        coreMessage: `Core ${index}`,
+        headline: `Headline ${index}`,
+        keyVisual: { type: "number" as const, entries: [{ role: "value" as const, label: null, value: `${index}x` }] },
+        supportingTexts: [`Support ${index}`],
+        footnote: null,
+        visualThesis: `Make ${index}x dominant.`,
+        layoutArchetype: "stat_focus" as const,
+        evidenceIds: [],
+        productImageAssetIds: [],
+      })),
+    };
+    const draft = compileCardDeckPlanDraftV1(deck, outline);
+    const imagePackage = {
+      contractVersion: "image-generation-package.v1" as const,
+      generationId: "generation", outputFormat: "card_news" as const, purpose: "informational" as const,
+      assetCount: 3, aspectRatio: "1:1" as const, channelTargets: ["instagram"] as ["instagram"],
+      assets: draft.assets.map((asset) => ({ ...asset, attachmentIds: [] as string[] })),
+      product: null, references: [], brandStyleImages: [], avatarStyleImageId: null,
+      attachments: [], userImageInstruction: null,
+      logoPolicy: {
+        allowGeneratedLogo: false as const, allowReservedLogoArea: false as const,
+        allowExternalReferenceLogo: false as const, allowExistingProductPackagingLogo: true as const,
+      },
+    };
+    const cardDeckContract = {
+      contractVersion: "card-deck-editorial-plan.v1" as const,
+      deckSha256: cardDeckEditorialPlanSha256(deck),
+      plan: deck,
+    };
+
+    await enqueueAiContentRenderJobs({ query } as never, {
+      workspaceId: "workspace", brandId: "brand", generationId: "generation", outputId: "output",
+      plan: { contractVersion: "card-news-plan.v2", content: deck.content, imagePackage },
+      finalInput: { selectedProposal: { outline } } as never,
+      cardDeckContract,
+    });
+
+    expect(writes).toHaveLength(3);
+    for (const [offset, write] of writes.entries()) {
+      expect(JSON.parse(String(write[5]))).toEqual({
+        contractVersion: "ai-content-card-deck-render-job.v1",
+        jobKind: "image_asset",
+        generationId: "generation",
+        outputId: "output",
+        imagePackage,
+        assetIndex: offset + 1,
+        assetKey: `generation:${offset + 1}`,
+        storagePath: `ai-content/brand/generation/output/assets/0${offset + 1}.png`,
+        rendererPromptVersion: "image-card-deck.v1",
+        cardDeckBinding: {
+          contractVersion: "card-deck-editorial-plan.v1",
+          deckSha256: cardDeckContract.deckSha256,
+          sceneIndex: offset + 1,
+        },
+      });
+    }
+  });
+
+  it("stores only a version hash and scene index for a Reel Storyboard render", async () => {
+    const writes: unknown[][] = [];
+    const query = vi.fn(async (_sql: string, params: unknown[]) => {
+      writes.push(params);
+      return { rows: [], rowCount: 1 };
+    });
+    const outline = [{ index: 1, role: "scene" }];
+    const storyboard = {
+      contractVersion: "reel-storyboard.v1" as const,
+      content: { caption: "Caption", hashtags: [] as string[], cta: "Save" },
+      storyNarrative: "Core evidence first.",
+      visualSystem: {
+        paletteDirection: "High contrast", typographyDirection: "Large vertical type",
+        graphicLanguage: "Editorial", imageryDirection: "Evidence first", invariants: ["Same margins"],
+      },
+      scenes: [{
+        index: 1, editorialRole: "hook", purpose: "Lead with the conclusion", coreMessage: "Core",
+        headline: "Copy", keyVisual: { type: "none" as const, entries: [] }, supportingTexts: [], footnote: null,
+        visualThesis: "Make the conclusion dominant", layoutArchetype: "vertical_hook" as const,
+        evidenceIds: [], productImageAssetIds: [],
+      }],
+    };
+    const draft = compileReelStoryboardDraftV1(storyboard, outline);
     const imagePackage = {
       contractVersion: "image-generation-package.v1" as const,
       generationId: "generation",
@@ -74,10 +124,7 @@ describe("ai-content render job boundary helpers", () => {
       assetCount: 1,
       aspectRatio: "9:16" as const,
       channelTargets: ["instagram"] as ["instagram"],
-      assets: [{
-        index: 1, role: "scene", copy: "Copy", visualDirection: "Visual",
-        evidenceIds: [], productImageAssetIds: [], attachmentIds: [],
-      }],
+      assets: draft.assets.map((asset) => ({ ...asset, attachmentIds: [] as string[] })),
       product: null, references: [], brandStyleImages: [], avatarStyleImageId: null,
       attachments: [], userImageInstruction: null,
       logoPolicy: {
@@ -92,24 +139,19 @@ describe("ai-content render job boundary helpers", () => {
       workspaceId: "workspace", brandId: "brand", generationId: "generation", outputId: "output",
       plan: {
         contractVersion: "reel-plan.v2", outputFormat: "reel",
-        content: { caption: "Caption", hashtags: [], cta: "Save" }, imagePackage,
+        content: storyboard.content, imagePackage,
       },
-      finalInput: { contractVersion: "content-generation-input.v3" } as never,
-      imageAssetTransport: "manual-v2",
-      renderSemanticContract: {
-        contractVersion: "structured-scene-copy.v1",
-        outputFormat: "reel",
-        scenes: [{
-          index: 1, role: "scene", coreMessage: "Core", headline: "Copy",
-          keyVisual: { type: "none", entries: [] }, supportingTexts: [], footnote: null,
-          visualDirection: "Visual", evidenceIds: [], productImageAssetIds: [],
-        }],
+      finalInput: { selectedProposal: { outline } } as never,
+      reelStoryboardContract: {
+        contractVersion: "reel-storyboard.v1",
+        storyboardSha256: reelStoryboardSha256(storyboard),
+        storyboard,
       },
     });
 
     const payload = JSON.parse(String(writes[0]?.[5]));
     expect(payload).toEqual({
-      contractVersion: "ai-content-render-job.v3",
+      contractVersion: "ai-content-reel-storyboard-render-job.v1",
       jobKind: "image_asset",
       generationId: "generation",
       outputId: "output",
@@ -117,16 +159,16 @@ describe("ai-content render job boundary helpers", () => {
       assetIndex: 1,
       assetKey: "generation:1",
       storagePath: "ai-content/brand/generation/output/assets/01.png",
-      rendererPromptVersion: "image-final-pixels.v3",
-      renderSemanticBinding: {
-        contractVersion: "structured-scene-copy.v1",
-        semanticSha256: expect.stringMatching(/^[0-9a-f]{64}$/),
+      rendererPromptVersion: "image-reel-storyboard.v1",
+      reelStoryboardBinding: {
+        contractVersion: "reel-storyboard.v1",
+        storyboardSha256: expect.stringMatching(/^[0-9a-f]{64}$/),
         sceneIndex: 1,
       },
     });
     expect(payload).not.toHaveProperty("contentGenerationInput");
     expect(payload).not.toHaveProperty("contentPlan");
-    expect(payload).not.toHaveProperty("renderSemanticContract");
+    expect(payload).not.toHaveProperty("reelStoryboardContract");
   });
 
   it("keeps a manual blog image on the existing v2 render contract", async () => {
@@ -158,7 +200,6 @@ describe("ai-content render job boundary helpers", () => {
         content: { title: "Title", htmlTemplate: "<article><h1>Title</h1></article>", metaTitle: "Title", metaDescription: "Description", usedEvidenceIds: [] },
       },
       finalInput: { contractVersion: "content-generation-input.v3" } as never,
-      imageAssetTransport: "manual-v2",
     });
 
     expect(JSON.parse(String(writes[0]?.[5]))).toMatchObject({

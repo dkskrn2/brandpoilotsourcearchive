@@ -78,18 +78,18 @@ describe("production image worker runtime", () => {
     expect(runnerSource).toMatch(/selectedAssetCount:\s*1/);
     expect(runnerSource).toContain("image_generation");
     expect(runnerSource).toContain("permissions.worker.network.enabled=false");
+    expect(runnerSource).toContain("ai-content-editorial-tool-observation.v1");
     expect(runnerSource).not.toMatch(/fixture|OPENAI_API_KEY|external image api/i);
     expect(runnerSource).toContain("rm(path.join(imagegenOutputDir, ownedSessionId)");
     expect(skillSource).toContain("작업 하나당 정확히 PNG 한 장");
     expect(skillSource).toContain("gpt-image-2");
     expect(skillSource).toContain("1:1");
-    expect(skillSource).toContain("4:5");
-    expect(skillSource).toContain("16:9");
     expect(skillSource).toContain("9:16");
     expect(skillSource).toContain("콜라주");
     expect(skillSource).toContain("ai-content-render-job.v2");
-    expect(skillSource).toContain("ai-content-render-job.v3");
-    expect(skillSource).toContain("inputs/structured-scene-copy.json");
+    expect(skillSource).toContain("ai-content-card-deck-render-job.v1");
+    expect(skillSource).toContain("ai-content-reel-storyboard-render-job.v1");
+    expect(skillSource).toContain("inputs/reel-storyboard.json");
     expect(skillSource).toMatch(/최종 픽셀/);
     expect(skillSource).toMatch(/배경.*이미지만.*만들지/);
     expect(skillSource).toMatch(/서버.*텍스트.*합성.*없/);
@@ -132,7 +132,7 @@ describe("production image worker runtime", () => {
     expect(dockerfile).toContain('CMD ["node", "workers/brand-pilot-image-worker/dist/index.js", "watch"]');
   });
 
-  it("retains the legacy CTA bans while documenting the V3 one-asset contract", async () => {
+  it("retains CTA bans while documenting the named one-asset contracts", async () => {
     const skill = await readFile(path.join(workerRoot, ".codex", "skills", "image-render", "SKILL.md"), "utf8");
     for (const forbidden of ["문의하기", "상담 신청", "지금 확인", "더 알아보기"]) {
       expect(skill).toContain(forbidden);

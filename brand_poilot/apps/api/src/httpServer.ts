@@ -41,7 +41,8 @@ import {
   parseCancelUploadSessionInput,
   parseConfirmAttachmentInput,
   parseContentGenerationRetryV1,
-  parseRenderSemanticContractV1,
+  parseReelStoryboardContractV1,
+  parseCardDeckContractV1,
   parseV3AttachmentUploadTokenInput,
   type AiContentType,
   type CompleteAiContentJobInput,
@@ -4480,13 +4481,15 @@ export function createServer(
       };
       const hasPlan = Object.prototype.hasOwnProperty.call(body, "plan");
       const hasPlanDraft = Object.prototype.hasOwnProperty.call(body, "planDraft");
-      const hasRenderSemanticContract = Object.prototype.hasOwnProperty.call(body, "renderSemanticContract");
+      const hasReelStoryboardContract = Object.prototype.hasOwnProperty.call(body, "reelStoryboardContract");
+      const hasCardDeckContract = Object.prototype.hasOwnProperty.call(body, "cardDeckContract");
       if (hasPlan === hasPlanDraft) throw new Error("ai_content_plan_completion_invalid");
       assertExactAiContentWorkerBody(
         body,
         [
           "workerId", "leaseToken", "skillVersion", "jobType", hasPlan ? "plan" : "planDraft",
-          ...(hasRenderSemanticContract ? ["renderSemanticContract"] : []),
+          ...(hasReelStoryboardContract ? ["reelStoryboardContract"] : []),
+          ...(hasCardDeckContract ? ["cardDeckContract"] : []),
         ],
         "ai_content_plan_completion_invalid",
       );
@@ -4494,22 +4497,33 @@ export function createServer(
       if (body.jobType !== "generate" || !isObject(submittedPlan)) {
         throw new Error("ai_content_plan_completion_invalid");
       }
-      if (hasRenderSemanticContract
+      if (hasReelStoryboardContract
         && String(submittedPlan.contractVersion).startsWith("blog-plan")) {
         throw new Error("ai_content_plan_completion_invalid");
       }
+      const submittedVersion = String(submittedPlan.contractVersion);
+      if ((submittedVersion === "card-news-plan-draft.v1") !== hasCardDeckContract
+        || (hasCardDeckContract && (hasPlan || hasReelStoryboardContract))
+        || ((submittedVersion === "reel-plan-draft.v1") !== hasReelStoryboardContract)
+        || (hasReelStoryboardContract && hasPlan)) {
+        throw new Error("ai_content_plan_completion_invalid");
+      }
+      const cardDeckContract = hasCardDeckContract
+        ? parseCardDeckContractV1(body.cardDeckContract)
+        : undefined;
+      const reelStoryboardContract = hasReelStoryboardContract
+        ? parseReelStoryboardContractV1(body.reelStoryboardContract)
+        : undefined;
       const completion: CompleteAiContentJobInput = hasPlan
         ? {
             ...common, jobType: "generate", plan: submittedPlan as never,
-            ...(hasRenderSemanticContract
-              ? { renderSemanticContract: parseRenderSemanticContractV1(body.renderSemanticContract) }
-              : {}),
+            ...(reelStoryboardContract ? { reelStoryboardContract } : {}),
+            ...(cardDeckContract ? { cardDeckContract } : {}),
           }
         : {
             ...common, jobType: "generate", planDraft: submittedPlan as never,
-            ...(hasRenderSemanticContract
-              ? { renderSemanticContract: parseRenderSemanticContractV1(body.renderSemanticContract) }
-              : {}),
+            ...(reelStoryboardContract ? { reelStoryboardContract } : {}),
+            ...(cardDeckContract ? { cardDeckContract } : {}),
           };
       return repository.completeAiContentJob(completion);
     },
@@ -4570,6 +4584,30 @@ export function createServer(
         });
       }
       throw new Error("ai_content_render_job_kind_invalid");
+    },
+  );
+
+  app.post<{ Params: { jobId: string }; Body: Record<string, unknown> }>(
+    "/worker/ai-content-render-jobs/:jobId/diagnostic",
+    async (request, reply) => {
+      if (!authenticateAiContentWorker(request.headers.authorization, reply)) return;
+      const appendDiagnostic = repository.appendAiContentEditorialRenderDiagnostic;
+      if (typeof appendDiagnostic !== "function") throw new Error("ai_content_render_repository_not_configured");
+      const body = request.body ?? {};
+      assertExactAiContentWorkerBody(body, ["workerId", "leaseToken", "diagnostic"], "ai_content_editorial_render_diagnostic_invalid");
+      if (!isObject(body.diagnostic)) throw new Error("ai_content_editorial_render_diagnostic_invalid");
+      const diagnostic = body.diagnostic as Record<string, unknown>;
+      assertExactAiContentWorkerBody(diagnostic, [
+        "contractVersion", "sourceContractVersion", "sourceSha256", "sceneIndex", "compiledPromptVersion", "compiledPromptSha256",
+        "actualToolArgumentsObservation", "actualToolArgumentsSha256",
+      ], "ai_content_editorial_render_diagnostic_invalid");
+      await appendDiagnostic({
+        jobId: request.params.jobId,
+        workerId: requiredAiContentField(body.workerId, "ai_content_worker_id_required", 200),
+        leaseToken: requiredAiContentField(body.leaseToken, "ai_content_lease_token_required", 200),
+        diagnostic: diagnostic as never,
+      });
+      return { id: request.params.jobId, status: "recorded" };
     },
   );
 

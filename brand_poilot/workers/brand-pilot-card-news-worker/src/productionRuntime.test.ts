@@ -12,18 +12,18 @@ describe("card-news V3 production runtime", () => {
       read("../package.json"), read("../Dockerfile"), read("../.agents/skills/card-news-creator/SKILL.md"),
     ]);
     expect(JSON.parse(packageJson).dependencies).toHaveProperty("@brand-pilot/content-contracts", "0.1.0");
-    expect(dockerfile).toContain("run-codex-card-news-v2-plan.mjs");
+    expect(dockerfile).toContain("run-codex-card-deck-plan.mjs");
     expect(dockerfile).not.toContain("run-codex-card-news.mjs");
     expect(dockerfile).not.toContain("run-codex-card-news-plan.mjs");
-    expect(dockerfile).toContain("card-news-plan-draft-v2.schema.json");
+    expect(dockerfile).toContain("card-deck-editorial-plan-v1.schema.json");
     expect(dockerfile).not.toContain("card-news-plan-draft-v1.schema.json");
-    expect(skill).toContain("card-news-plan-draft.v2");
+    expect(skill).toContain("card-deck-editorial-plan.v1");
     expect(skill).not.toContain("ImageGenerationPackageV1");
     expect(skill).not.toContain("content-generation-input.v2");
   });
 
   it("uses the pinned network-disabled Terra planner", async () => {
-    const runner = await import(new URL("../scripts/run-codex-card-news-v2-plan.mjs", import.meta.url).href) as {
+    const runner = await import(new URL("../scripts/run-codex-card-deck-plan.mjs", import.meta.url).href) as {
       buildCodexArgs(outputDir: string): string[];
       buildCodexPrompt(prompt: string): string;
     };
@@ -31,20 +31,22 @@ describe("card-news V3 production runtime", () => {
     expect(args.slice(0, 3)).toEqual(["--model", "gpt-5.6-terra", "--strict-config"]);
     expect(args.join(" ")).toContain("permissions.planner.network.enabled=false");
     const schemaPath = args[args.indexOf("--output-schema") + 1];
-    expect(schemaPath).toMatch(/card-news-plan-draft-v2\.schema\.json$/);
+    expect(schemaPath).toMatch(/card-deck-editorial-plan-v1\.schema\.json$/);
     const schema = await readFile(schemaPath!, "utf8");
     const parsedSchema = JSON.parse(schema) as {
       properties: { contractVersion: Record<string, unknown> };
     };
     expect(parsedSchema.properties.contractVersion).toEqual({
       type: "string",
-      const: "card-news-plan-draft.v2",
+      const: "card-deck-editorial-plan.v1",
     });
     expect(parsedSchema).toMatchObject({
       properties: {
-        contractVersion: { const: "card-news-plan-draft.v2" },
+        contractVersion: { const: "card-deck-editorial-plan.v1" },
       },
     });
+    expect(schema).toContain('"deckNarrative"');
+    expect(schema).toContain('"visualSystem"');
     expect(schema).toContain('"coreMessage"');
     expect(schema).toContain('"keyVisual"');
     expect(schema).not.toContain('"uniqueItems"');

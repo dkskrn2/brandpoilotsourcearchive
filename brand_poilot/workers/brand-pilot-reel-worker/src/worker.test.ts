@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ContentWorkerApiError } from "@brand-pilot/worker-runtime";
-import type { ReelClient, ReelJob } from "./contracts.js";
+import { parseReelStoryboardSubmissionForInput, type ReelClient, type ReelJob } from "./contracts.js";
 import { runOnce } from "./worker.js";
 
 const uid = (value: number) => `00000000-0000-4000-8000-${String(value).padStart(12, "0")}`;
@@ -32,17 +32,27 @@ function job(): ReelJob {
 
 function reelDraft() {
   return {
-    contractVersion: "reel-plan-draft.v2",
+    contractVersion: "reel-storyboard.v1",
     content: { caption: "Useful caption", hashtags: ["guide"], cta: "Save" },
-    assets: [{
+    storyNarrative: "검증된 근거를 한 장면에 명확히 전달한다.",
+    visualSystem: {
+      paletteDirection: "high contrast",
+      typographyDirection: "large vertical type",
+      graphicLanguage: "editorial infographic",
+      imageryDirection: "evidence-led imagery",
+      invariants: ["consistent spacing"],
+    },
+    scenes: [{
       index: 1,
-      role: "scene",
+      editorialRole: "scene",
+      purpose: "검증된 근거를 설명한다.",
       coreMessage: "Explain the fixed evidence clearly.",
       headline: "Use the verified process",
       keyVisual: { type: "none", entries: [] },
       supportingTexts: ["Explain the fixed evidence clearly."],
       footnote: null,
-      visualDirection: "Vertical editorial scene.",
+      visualThesis: "Vertical editorial scene.",
+      layoutArchetype: "editorial_freeform",
       evidenceIds: [uid(4)],
       productImageAssetIds: [],
     }],
@@ -50,18 +60,7 @@ function reelDraft() {
 }
 
 function compiledDraft() {
-  return {
-    contractVersion: "reel-plan-draft.v1",
-    content: reelDraft().content,
-    assets: [{
-      index: 1,
-      role: "scene",
-      copy: "Use the verified process\nExplain the fixed evidence clearly.",
-      visualDirection: "Vertical editorial scene.",
-      evidenceIds: [uid(4)],
-      productImageAssetIds: [],
-    }],
-  };
+  return parseReelStoryboardSubmissionForInput(reelDraft(), reelInput() as never);
 }
 
 const temporary: string[] = [];
@@ -92,14 +91,10 @@ describe("reel worker", () => {
     expect(client.complete).toHaveBeenCalledWith(item.id, {
       workerId: "worker",
       leaseToken: "lease",
-      skillVersion: "reel-plan-skill.v6",
+      skillVersion: "reel-storyboard-skill.v1",
       jobType: "generate",
-      planDraft: compiledDraft(),
-      renderSemanticContract: {
-        contractVersion: "structured-scene-copy.v1",
-        outputFormat: "reel",
-        scenes: reelDraft().assets,
-      },
+      planDraft: compiledDraft().planDraft,
+      reelStoryboardContract: compiledDraft().reelStoryboardContract,
     });
     expect(client.fail).not.toHaveBeenCalled();
     expect(client.heartbeat).not.toHaveBeenCalled();
@@ -110,7 +105,7 @@ describe("reel worker", () => {
     const item = job();
     const client = { claim: vi.fn(async () => item), heartbeat: vi.fn(), complete: vi.fn(), fail: vi.fn() } as unknown as ReelClient;
     const invalid = reelDraft();
-    invalid.assets[0]!.role = "wrong-role";
+    (invalid.scenes[0] as Record<string, unknown>).unknown = true;
     const first = await output(invalid);
     const second = await output(reelDraft());
     const planner = { run: vi.fn().mockResolvedValueOnce(first).mockResolvedValueOnce(second) };
@@ -118,8 +113,8 @@ describe("reel worker", () => {
     await runOnce({ workerId: "worker", client, planner });
 
     expect(planner.run).toHaveBeenCalledTimes(2);
-    expect(planner.run.mock.calls[1]?.[1]).toContain("reel_plan_draft_outline_mismatch");
-    expect(client.complete).toHaveBeenCalledWith(item.id, expect.objectContaining({ planDraft: compiledDraft() }));
+    expect(planner.run.mock.calls[1]?.[1]).toContain("reel_structured_draft_invalid");
+    expect(client.complete).toHaveBeenCalledWith(item.id, expect.objectContaining({ planDraft: compiledDraft().planDraft }));
     expect(first.cleanup).toHaveBeenCalledOnce();
     expect(second.cleanup).toHaveBeenCalledOnce();
   });
@@ -128,14 +123,14 @@ describe("reel worker", () => {
     const item = job();
     const client = { claim: vi.fn(async () => item), heartbeat: vi.fn(), complete: vi.fn(), fail: vi.fn() } as unknown as ReelClient;
     const invalid = reelDraft();
-    invalid.assets[0]!.role = "wrong-role";
+    (invalid.scenes[0] as Record<string, unknown>).unknown = true;
     const planner = { run: vi.fn().mockResolvedValueOnce(await output(invalid)).mockResolvedValueOnce(await output(invalid)) };
 
     const result = await runOnce({ workerId: "worker", client, planner });
 
     expect(result).toEqual({ status: "failed", jobId: item.id });
     expect(client.complete).not.toHaveBeenCalled();
-    expect(client.fail).toHaveBeenCalledWith(item.id, expect.objectContaining({ errorCode: "reel_plan_draft_outline_mismatch", retryable: false }));
+    expect(client.fail).toHaveBeenCalledWith(item.id, expect.objectContaining({ errorCode: "reel_structured_draft_invalid", retryable: false }));
   });
 
   it("does not call the planner again when API completion fails", async () => {

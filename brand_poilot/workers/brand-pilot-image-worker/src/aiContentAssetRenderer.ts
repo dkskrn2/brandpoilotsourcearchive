@@ -16,6 +16,8 @@ import { buildAiContentAssetPrompt, type StagedAiContentAssetInputs } from "./ai
 import { buildAiContentManualAssetPromptV2 } from "./aiContentManualAssetPromptV2.js";
 import type { AiContentImageAssetJob } from "./aiContentRenderClient.js";
 import { buildAiContentManualRenderContract } from "./aiContentManualRenderContract.js";
+import { compileAiContentCardDeckRenderPrompt } from "./aiContentCardDeckPromptCompiler.js";
+import { compileAiContentReelStoryboardRenderPrompt } from "./aiContentReelStoryboardPromptCompiler.js";
 import { AI_CONTENT_OWNED_IMAGE_MAX_BYTES, type AiContentOwnedBlobReadConstraints } from "./storage.js";
 
 export interface LocallyRenderedAiContentAsset {
@@ -25,6 +27,18 @@ export interface LocallyRenderedAiContentAsset {
   width: number;
   height: number;
   checksum: string;
+  renderDiagnostic?: AiContentEditorialRenderDiagnostic;
+}
+
+export interface AiContentEditorialRenderDiagnostic {
+  contractVersion: "ai-content-editorial-render-diagnostic.v1";
+  sourceContractVersion: "card-deck-editorial-plan.v1" | "reel-storyboard.v1";
+  sourceSha256: string;
+  sceneIndex: number;
+  compiledPromptVersion: "image-card-deck.v1" | "image-reel-storyboard.v1";
+  compiledPromptSha256: string;
+  actualToolArgumentsObservation: "observed" | "not_emitted_by_runner";
+  actualToolArgumentsSha256: string | null;
 }
 
 export interface AiContentAssetRenderer {
@@ -36,7 +50,7 @@ export type AiContentAssetChildRunner = (input: {
   outputFile: string;
   prompt: string;
   signal: AbortSignal;
-}) => Promise<void>;
+}) => Promise<{ observation: "observed" | "not_emitted_by_runner"; actualToolArgumentsSha256: string | null } | void>;
 
 export function dimensionsForAspectRatio(ratio: ContentAspectRatio): { width: number; height: number } {
   switch (ratio) {
@@ -63,6 +77,11 @@ async function makeReadOnly(filePath: string): Promise<void> {
 
 async function writeReadOnlyJson(filePath: string, value: unknown): Promise<void> {
   await writeFile(filePath, `${JSON.stringify(value, null, 2)}\n`, { encoding: "utf8", mode: 0o444 });
+  await makeReadOnly(filePath);
+}
+
+async function writeReadOnlyText(filePath: string, value: string): Promise<void> {
+  await writeFile(filePath, value, { encoding: "utf8", mode: 0o444 });
   await makeReadOnly(filePath);
 }
 
@@ -237,9 +256,10 @@ async function defaultChildRunner(input: {
   signal: AbortSignal;
   resultContractVersion: "ai-content-asset-render.v1" | "ai-content-asset-render.v2";
   assetIndex: number;
-}): Promise<void> {
+}): Promise<{ observation: "observed" | "not_emitted_by_runner"; actualToolArgumentsSha256: string | null }> {
   if (input.signal.aborted) throw input.signal.reason instanceof Error ? input.signal.reason : new Error("ai_content_asset_render_aborted");
   const jobFile = path.join(input.workspaceDir, "asset-job.json");
+  const diagnosticFile = path.join(input.workspaceDir, "tool-observation.json");
   if (input.resultContractVersion === "ai-content-asset-render.v1") {
     await writeFile(jobFile, JSON.stringify({ prompt: input.prompt, selectedAssetCount: 1 }), { encoding: "utf8", mode: 0o444 });
   } else {
@@ -255,6 +275,7 @@ async function defaultChildRunner(input: {
     args: [
       path.join(input.workerRoot, "scripts", "run-codex-ai-content-asset.mjs"),
       "--job", jobFile, "--output", input.outputFile, "--workspace", input.workspaceDir,
+      "--diagnostic", diagnosticFile,
     ],
     cwd: input.workspaceDir,
     env: buildImageWorkerChildEnvironment(process.env),
@@ -262,6 +283,18 @@ async function defaultChildRunner(input: {
     signal: input.signal,
     timeoutMs: input.timeoutMs,
   });
+  const source = JSON.parse(await readFile(diagnosticFile, "utf8")) as Record<string, unknown>;
+  if (source.contractVersion !== "ai-content-editorial-tool-observation.v1"
+    || !["observed", "not_emitted_by_runner"].includes(String(source.observation))) {
+    throw new Error("ai_content_card_deck_tool_observation_invalid");
+  }
+  const actualToolArgumentsSha256 = source.actualToolArguments === null
+    ? null
+    : sha256(Buffer.from(JSON.stringify(source.actualToolArguments)));
+  return {
+    observation: source.observation as "observed" | "not_emitted_by_runner",
+    actualToolArgumentsSha256,
+  };
 }
 
 async function normalizedPng(bytes: Buffer, dimensions: { width: number; height: number }): Promise<Buffer> {
@@ -328,7 +361,6 @@ export function createAiContentAssetRenderer({
       const asset = imagePackage.assets[job.assetIndex - 1];
       if (!asset || asset.index !== job.assetIndex) throw new Error("ai_content_asset_index_invalid");
       const manualRenderContract = job.payload.contractVersion === "ai-content-render-job.v2"
-        || job.payload.contractVersion === "ai-content-render-job.v3"
         ? buildAiContentManualRenderContract({
           identity: {
             id: job.id, generationId: job.generationId, outputId: job.outputId,
@@ -337,8 +369,10 @@ export function createAiContentAssetRenderer({
           payload: job.payload,
         })
         : null;
+      const cardDeck = job.payload.contractVersion === "ai-content-card-deck-render-job.v1";
+      const reelStoryboard = job.payload.contractVersion === "ai-content-reel-storyboard-render-job.v1";
       if (job.payload.contractVersion === "ai-content-render-job.v2"
-        || job.payload.contractVersion === "ai-content-render-job.v3") {
+        || cardDeck || reelStoryboard) {
         for (const attachment of imagePackage.attachments) {
           if (attachment.sizeBytes > AI_CONTENT_OWNED_IMAGE_MAX_BYTES) {
             throw new Error("ai_content_owned_blob_size_limit_exceeded");
@@ -360,19 +394,33 @@ export function createAiContentAssetRenderer({
         ]);
         await Promise.all([makeReadOnly(agentFile), makeReadOnly(skillFile)]);
 
-        if (manualRenderContract !== null
-          && (job.payload.contractVersion === "ai-content-render-job.v2"
-            || job.payload.contractVersion === "ai-content-render-job.v3")) {
+        if (manualRenderContract !== null || cardDeck || reelStoryboard) {
           const attachmentDir = path.join(inputDir, "attachments");
           await mkdir(attachmentDir, { recursive: true });
+          if (job.payload.contractVersion !== "ai-content-render-job.v2"
+            && job.payload.contractVersion !== "ai-content-card-deck-render-job.v1"
+            && job.payload.contractVersion !== "ai-content-reel-storyboard-render-job.v1") {
+            throw new Error("ai_content_render_job_invalid");
+          }
           await Promise.all([
             writeReadOnlyJson(path.join(inputDir, "content-generation-input.json"), job.payload.contentGenerationInput),
             writeReadOnlyJson(path.join(inputDir, "content-plan.json"), job.payload.contentPlan),
-            writeReadOnlyJson(path.join(inputDir, "render-contract.json"), manualRenderContract),
-            ...(job.payload.contractVersion === "ai-content-render-job.v3"
-              ? [writeReadOnlyJson(path.join(inputDir, "structured-scene-copy.json"), job.payload.renderSemanticScene)]
+            ...(manualRenderContract === null
+              ? []
+              : [writeReadOnlyJson(path.join(inputDir, "render-contract.json"), manualRenderContract)]),
+            ...(job.payload.contractVersion === "ai-content-card-deck-render-job.v1"
+              ? [
+                  writeReadOnlyJson(path.join(inputDir, "card-deck-editorial-plan.json"), job.payload.cardDeckContract),
+                  writeReadOnlyJson(path.join(inputDir, "card-deck-current-scene.json"), job.payload.cardDeckCurrentScene),
+                ]
               : []),
-            ...(manualRenderContract.blogInsertionContext === null
+            ...(job.payload.contractVersion === "ai-content-reel-storyboard-render-job.v1"
+              ? [
+                  writeReadOnlyJson(path.join(inputDir, "reel-storyboard.json"), job.payload.reelStoryboardContract),
+                  writeReadOnlyJson(path.join(inputDir, "reel-storyboard-current-scene.json"), job.payload.reelStoryboardCurrentScene),
+                ]
+              : []),
+            ...(manualRenderContract === null || manualRenderContract.blogInsertionContext === null
               ? []
               : [writeReadOnlyJson(path.join(inputDir, "blog-insertion-context.json"), manualRenderContract.blogInsertionContext)]),
           ]);
@@ -422,7 +470,8 @@ export function createAiContentAssetRenderer({
           });
         }
         const manualHydrated = job.payload.contractVersion === "ai-content-render-job.v2"
-          || job.payload.contractVersion === "ai-content-render-job.v3";
+          || job.payload.contractVersion === "ai-content-card-deck-render-job.v1"
+          || job.payload.contractVersion === "ai-content-reel-storyboard-render-job.v1";
         const selectedAttachmentIds = new Set(asset.attachmentIds);
         const attachmentsToStage = manualHydrated
           ? imagePackage.attachments
@@ -465,23 +514,31 @@ export function createAiContentAssetRenderer({
           });
         }
 
-        const prompt = manualRenderContract === null
-          ? buildAiContentAssetPrompt({ imagePackage, assetIndex: job.assetIndex, staged })
-          : buildAiContentManualAssetPromptV2({ renderContract: manualRenderContract, staged });
+        const prompt = job.payload.contractVersion === "ai-content-card-deck-render-job.v1"
+          ? compileAiContentCardDeckRenderPrompt(job.payload, staged)
+          : job.payload.contractVersion === "ai-content-reel-storyboard-render-job.v1"
+            ? compileAiContentReelStoryboardRenderPrompt(job.payload, staged)
+          : manualRenderContract === null
+            ? buildAiContentAssetPrompt({ imagePackage, assetIndex: job.assetIndex, staged })
+            : buildAiContentManualAssetPromptV2({ renderContract: manualRenderContract, staged });
+        if (job.payload.contractVersion === "ai-content-card-deck-render-job.v1"
+          || job.payload.contractVersion === "ai-content-reel-storyboard-render-job.v1") {
+          await writeReadOnlyText(path.join(inputDir, "compiled-render-prompt.txt"), prompt);
+        }
         const childRunner = runChild ?? (accountPool
           ? ((input) => defaultChildRunner({
             ...input,
             accountPool,
             workerRoot,
             timeoutMs,
-            resultContractVersion: manualRenderContract === null
+            resultContractVersion: manualRenderContract === null && !cardDeck && !reelStoryboard
               ? "ai-content-asset-render.v1"
               : "ai-content-asset-render.v2",
             assetIndex: job.assetIndex,
           }))
           : undefined);
         if (!childRunner) throw new Error("codex_account_pool_required");
-        await childRunner({ workspaceDir, outputFile, prompt, signal });
+        const toolObservation = await childRunner({ workspaceDir, outputFile, prompt, signal });
         const outputBytes = await readFile(outputFile);
         const rendered = imagePackage.outputFormat === "blog"
           ? await preservedPng(outputBytes)
@@ -493,7 +550,26 @@ export function createAiContentAssetRenderer({
             const dimensions = dimensionsForAspectRatio(imagePackage.aspectRatio);
             return { bytes: await normalizedPng(outputBytes, dimensions), ...dimensions };
           })();
-        return { index: job.assetIndex, mimeType: "image/png", ...rendered, checksum: sha256(rendered.bytes) };
+        return {
+          index: job.assetIndex, mimeType: "image/png", ...rendered, checksum: sha256(rendered.bytes),
+          ...(job.payload.contractVersion === "ai-content-card-deck-render-job.v1"
+            || job.payload.contractVersion === "ai-content-reel-storyboard-render-job.v1"
+            ? {
+                renderDiagnostic: {
+                  contractVersion: "ai-content-editorial-render-diagnostic.v1" as const,
+                  sourceContractVersion: job.payload.contractVersion === "ai-content-card-deck-render-job.v1"
+                    ? "card-deck-editorial-plan.v1" as const : "reel-storyboard.v1" as const,
+                  sourceSha256: job.payload.contractVersion === "ai-content-card-deck-render-job.v1"
+                    ? job.payload.cardDeckBinding.deckSha256 : job.payload.reelStoryboardBinding.storyboardSha256,
+                  sceneIndex: job.assetIndex,
+                  compiledPromptVersion: job.payload.rendererPromptVersion,
+                  compiledPromptSha256: sha256(Buffer.from(prompt)),
+                  actualToolArgumentsObservation: toolObservation?.observation ?? "not_emitted_by_runner",
+                  actualToolArgumentsSha256: toolObservation?.actualToolArgumentsSha256 ?? null,
+                },
+              }
+            : {}),
+        };
       } finally {
         await rm(workDir, { recursive: true, force: true });
       }

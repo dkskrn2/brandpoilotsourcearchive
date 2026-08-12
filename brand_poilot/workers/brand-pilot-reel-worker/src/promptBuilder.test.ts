@@ -80,7 +80,11 @@ function promptInput(purpose: "informational" | "marketing") {
         text: "Useful editorial reference text.",
         image: { storageUrl: "https://storage.example/reference.png", storagePath: "secret/reference.png", mimeType: "image/png", checksum: "secret-reference-checksum" },
       }],
-      brandStyleImages: [{ storagePath: "secret/style.png", checksum: "secret-style-checksum" }],
+      brandStyleImages: [{
+        referenceItemId: "secret-style-reference", description: "private style", tags: ["editorial"],
+        storageUrl: "https://storage.example/style.png", storagePath: "secret/style.png",
+        mimeType: "image/png", checksum: "secret-style-checksum",
+      }],
       avatarStyleImageId: "secret-avatar-style",
       attachments: [{ id: "secret-attachment-id", storagePath: "secret/attachment.png", checksum: "secret-attachment-checksum" }],
     },
@@ -118,7 +122,7 @@ describe("reel purpose prompt", () => {
     const prompt = buildReelPlanPrompt(promptInput(purpose));
 
     expect(prompt).toContain(purpose === "informational" ? "정보성 릴스" : "마케팅성 릴스");
-    expect(prompt).toContain("reel-plan-draft.v2");
+    expect(prompt).toContain("reel-storyboard.v1");
     expect(prompt).toContain("Practical source title");
     expect(prompt).toContain("Evidence-backed claim for the scene.");
     expect(prompt).toContain("Selected reel concept");
@@ -137,23 +141,33 @@ describe("reel purpose prompt", () => {
 
     for (const forbidden of [
       '"generationId"', '"outputSettings"', '"versionId"', '"contentHash"', '"capturedAt"',
-      '"storageUrl"', '"storagePath"', '"checksum"', '"mimeType"', '"brandStyleImages"',
-      '"avatarStyleImageId"', '"attachments"', '"userImageInstruction"', '"logoPolicy"',
-      "secret-generation-id", "secret-product-id", "secret-product-version", "secret-reference-id",
-      "secret-reference-snapshot", "secret-avatar-style", "secret-attachment-id", "secret query",
+      '"storageUrl"', '"storagePath"', '"checksum"', '"mimeType"', '"logoPolicy"',
+      "secret-generation-id", "secret-product-id", "secret-product-version",
+      "secret-reference-snapshot", "secret query",
     ]) expect(prompt, forbidden).not.toContain(forbidden);
+    expect(prompt).toContain('"explicitUserDirection": "secret user image instruction"');
+    expect(prompt).toContain('"avatarStyleImageId": "secret-avatar-style"');
+    expect(prompt).toContain('"id": "secret-attachment-id"');
+    expect(prompt).toContain('"referenceItemId": "secret-style-reference"');
     expect(prompt).not.toContain("reel-plan.v2");
     expect(prompt).not.toContain("image-generation-package.v1");
     expect(prompt).not.toContain("attachmentIds");
   });
 
-  it("asks only for creative draft fields while locking outline identity", () => {
+  it("asks for one storyboard while treating the proposal outline as editorial reference", () => {
     const prompt = buildReelPlanPrompt(promptInput("informational"));
 
-    expect(prompt).toContain('"contractVersion": "reel-plan-draft.v2"');
+    expect(prompt).toContain('"contractVersion": "reel-storyboard.v1"');
     expect(prompt).toContain('"index": 1');
-    expect(prompt).toContain('"role": "선택 구성안 outline의 동일 순번 role"');
-    expect(prompt).toContain("contractVersion, content, assets");
+    expect(prompt).toContain('"editorialRole"');
+    expect(prompt).toContain('"storyNarrative"');
+    expect(prompt).toContain('"visualSystem"');
+    expect(prompt).toContain('"visualThesis"');
+    expect(prompt).toContain('"layoutArchetype"');
+    expect(prompt).toContain("outline의 headline, role, order, evidenceIds는 편집 참고값");
+    expect(prompt).toContain("동결된 전체 factualSources를 다시 검토");
+    expect(prompt).toContain("대표 근거일 뿐");
+    expect(prompt).not.toContain("index와 role은 선택 proposal outline의 같은 순번 값과 정확히 같아야");
     expect(prompt).toContain("coreMessage");
     expect(prompt).toContain("headline");
     expect(prompt).toContain("keyVisual");
@@ -166,7 +180,7 @@ describe("reel purpose prompt", () => {
     expect(prompt).toContain("headline은 coreMessage의 축약본");
     expect(prompt).toContain("supportingTexts를 모두 삭제해도 장면의 의미가 완전하다면");
     expect(prompt).toContain("모든 장면의 headline만 순서대로 읽어도");
-    expect(prompt).toContain("선택된 구성안의 서사 구조를 유지");
+    expect(prompt).toContain("선택된 구성안의 콘셉트와 목적을 유지");
     expect(prompt).toContain("before, after");
     expect(prompt).not.toContain("장면을 채우기 위한 문장");
     expect(prompt).toContain("attachment 선택");

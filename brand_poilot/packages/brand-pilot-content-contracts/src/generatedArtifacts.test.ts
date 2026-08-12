@@ -62,15 +62,30 @@ describe("generated content contract artifacts", () => {
     const canonicalPath = join(source, "canonical.ts");
     const privateDraftPath = join(source, "plannerDrafts.ts");
     const privateStructuredScenePath = join(source, "structuredSceneCopy.ts");
+    const privateCardDeckPath = join(source, "cardDeckEditorialPlan.ts");
+    const privateCardDeckNodePath = join(source, "cardDeckEditorialPlanNode.ts");
+    const privateReelStoryboardPath = join(source, "reelStoryboard.ts");
+    const privateReelStoryboardNodePath = join(source, "reelStoryboardNode.ts");
+    const privateEditorialVisualContextPath = join(source, "editorialVisualContext.ts");
     writeFileSync(canonicalPath, "export const canonical = 'v1';\n", "utf8");
     writeFileSync(privateDraftPath, "export const privateDraft = 'v1';\n", "utf8");
     writeFileSync(privateStructuredScenePath, "export const privateStructuredScene = 'v1';\n", "utf8");
+    writeFileSync(privateCardDeckPath, "export const privateCardDeck = 'v1';\n", "utf8");
+    writeFileSync(privateCardDeckNodePath, "export const privateCardDeckNode = 'v1';\n", "utf8");
+    writeFileSync(privateReelStoryboardPath, "export const privateReelStoryboard = 'v1';\n", "utf8");
+    writeFileSync(privateReelStoryboardNodePath, "export const privateReelStoryboardNode = 'v1';\n", "utf8");
+    writeFileSync(privateEditorialVisualContextPath, "export const privateEditorialVisualContext = 'v1';\n", "utf8");
 
     const originalHash = computeContractSourceHash(source);
     const originalArtifacts = await generateArtifactSet(source);
 
     writeFileSync(privateDraftPath, "export const privateDraft = 'v2';\n", "utf8");
     writeFileSync(privateStructuredScenePath, "export const privateStructuredScene = 'v2';\n", "utf8");
+    writeFileSync(privateCardDeckPath, "export const privateCardDeck = 'v2';\n", "utf8");
+    writeFileSync(privateCardDeckNodePath, "export const privateCardDeckNode = 'v2';\n", "utf8");
+    writeFileSync(privateReelStoryboardPath, "export const privateReelStoryboard = 'v2';\n", "utf8");
+    writeFileSync(privateReelStoryboardNodePath, "export const privateReelStoryboardNode = 'v2';\n", "utf8");
+    writeFileSync(privateEditorialVisualContextPath, "export const privateEditorialVisualContext = 'v2';\n", "utf8");
     expect(computeContractSourceHash(source)).toBe(originalHash);
     expect(await generateArtifactSet(source)).toEqual(originalArtifacts);
 
@@ -115,7 +130,10 @@ describe("generated content contract artifacts", () => {
         if (statSync(absolute).isDirectory()) visit(absolute);
         else if (name.endsWith(".ts") && !name.endsWith(".test.ts")
           && name !== "generateArtifacts.ts" && name !== "checkGenerated.ts"
-          && name !== "plannerDrafts.ts" && name !== "structuredSceneCopy.ts") files.push(absolute);
+          && name !== "plannerDrafts.ts" && name !== "structuredSceneCopy.ts"
+          && name !== "cardDeckEditorialPlan.ts" && name !== "cardDeckEditorialPlanNode.ts"
+          && name !== "reelStoryboard.ts" && name !== "reelStoryboardNode.ts"
+          && name !== "editorialVisualContext.ts") files.push(absolute);
       }
     };
     visit(sourceDirectory);
