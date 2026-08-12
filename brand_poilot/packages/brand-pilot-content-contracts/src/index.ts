@@ -7,7 +7,6 @@ export * from "./plans.js";
 export * from "./manifest.js";
 export * from "./binding.js";
 export * from "./validators.js";
-export * from "./structuredSceneCopy.js";
 
 import { ContentOrchestrationV2Schema } from "./orchestration.js";
 import {
@@ -28,7 +27,6 @@ import {
 } from "./plans.js";
 import { AiContentManifestV3Schema } from "./manifest.js";
 import { ContentPromptBindingSchema } from "./binding.js";
-import { StructuredSceneCopyV1Schema } from "./structuredSceneCopy.js";
 
 export const ALL_CONTENT_SCHEMAS = {
   contentOrchestrationV2: ContentOrchestrationV2Schema,
@@ -46,5 +44,4 @@ export const ALL_CONTENT_SCHEMAS = {
   },
   aiContentV3: AiContentManifestV3Schema,
   contentPromptBindingV1: ContentPromptBindingSchema,
-  structuredSceneCopyV1: StructuredSceneCopyV1Schema,
 } as const;

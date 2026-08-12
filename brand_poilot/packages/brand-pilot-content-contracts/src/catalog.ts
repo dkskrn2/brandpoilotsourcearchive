@@ -155,7 +155,6 @@ export const GeneratedContentCatalogSchema = Type.Object({
     }, { additionalProperties: false }),
     aiContentV3: ArtifactSchema("ai-content-v3.schema.json"),
     contentPromptBindingV1: ArtifactSchema("content-prompt-binding-v1.schema.json"),
-    structuredSceneCopyV1: ArtifactSchema("structured-scene-copy-v1.schema.json"),
   }, { additionalProperties: false }),
   proposalContracts: Type.Object({
     requestVersion: Type.Literal(CONTENT_PROPOSAL_CONTRACT_VERSIONS.request),
@@ -209,7 +208,6 @@ const EXPECTED_GENERATED_SCHEMA_FILENAMES = [
   "reel-plan-v2.schema.json",
   "ai-content-v3.schema.json",
   "content-prompt-binding-v1.schema.json",
-  "structured-scene-copy-v1.schema.json",
 ] as const;
 
 export function compareUnicodeCodePoints(left: string, right: string): number {
@@ -286,7 +284,6 @@ export async function parseGeneratedContentCatalog(
     catalog.schemas.plans.reel,
     catalog.schemas.aiContentV3,
     catalog.schemas.contentPromptBindingV1,
-    catalog.schemas.structuredSceneCopyV1,
   ];
   const actualFilenames = schemaLeaves.map(({ filename }) => filename).sort(compareUnicodeCodePoints);
   const expectedFilenames = [...EXPECTED_GENERATED_SCHEMA_FILENAMES].sort(compareUnicodeCodePoints);
