@@ -6,6 +6,8 @@ import { isDeepStrictEqual } from "node:util";
 import {
   type AiContentManifest,
   type CompleteAiContentJobInput,
+  parseRenderSemanticContractV1,
+  type RenderSemanticContractV1,
   type ContentChannelV2,
   type ContentFinalizationDraftV2,
   type ContentGenerationStartV2,
@@ -35,7 +37,7 @@ import {
   parseProposalInputSnapshotV2,
 } from "./aiContentGenerationInputV3.js";
 import type { AiContentSnapshotRepository } from "./aiContentSnapshotRepository.js";
-import { assembleContentPlanResultV2, parseContentPlanResultV2 } from "./aiContentPlanContracts.js";
+import { assembleContentPlanResultV2, parseContentPlanResultV2, type ContentPlanResultV2 } from "./aiContentPlanContracts.js";
 import {
   createAiContentRenderJobsRepository,
   enqueueAiContentRenderJobs,
@@ -54,6 +56,7 @@ import {
   type ContentStudioOutputFormat,
   type VerifiedGeneratedContentCatalog,
 } from "@brand-pilot/content-contracts";
+import { compileStructuredScene } from "@brand-pilot/content-contracts/structured-scene-copy";
 import {
   assembleAiContentFixedInput,
   type AiContentFixedInputSource,
@@ -437,7 +440,60 @@ function canonicalJson(value: unknown): string {
   return JSON.stringify(normalize(value));
 }
 
-const EXPECTED_PROPOSAL_CATALOG_SHA256 = "41ac04e76adf0fd9746ea7535b36f6c1ea314ec4890253a2cd56a9f215f7cdbe";
+function validateRenderSemanticContract(
+  input: CompleteAiContentJobInput,
+  outputFormat: ContentOutputFormatV2,
+  plan: ContentPlanResultV2,
+  requiredForManualRender: boolean,
+): RenderSemanticContractV1 | null {
+  if (outputFormat === "blog") {
+    if (input.renderSemanticContract !== undefined) {
+      throw new Error("ai_content_render_semantic_contract_invalid");
+    }
+    return null;
+  }
+  if (!requiredForManualRender) return null;
+  if (input.renderSemanticContract === undefined) {
+    throw new Error("ai_content_render_semantic_contract_invalid");
+  }
+  const semantic = parseRenderSemanticContractV1(input.renderSemanticContract);
+  if (semantic.outputFormat !== outputFormat || !plan.imagePackage
+    || plan.imagePackage.outputFormat !== outputFormat
+    || semantic.scenes.length !== plan.imagePackage.assets.length) {
+    throw new Error("ai_content_render_semantic_contract_mismatch");
+  }
+  for (const [offset, scene] of semantic.scenes.entries()) {
+    const asset = plan.imagePackage.assets[offset];
+    if (!asset) throw new Error("ai_content_render_semantic_contract_mismatch");
+    const { attachmentIds: _attachmentIds, ...assetWithoutAttachments } = asset;
+    if (canonicalJson(compileStructuredScene(scene)) !== canonicalJson(assetWithoutAttachments)) {
+      throw new Error("ai_content_render_semantic_contract_mismatch");
+    }
+  }
+  return semantic;
+}
+
+function assertStoredRenderSemanticContract(
+  payload: unknown,
+  semantic: RenderSemanticContractV1 | null,
+): void {
+  const stored = payload && typeof payload === "object" && !Array.isArray(payload)
+    ? (payload as Record<string, unknown>).renderSemanticContract
+    : undefined;
+  if (semantic === null) {
+    if (stored !== undefined) throw new Error("ai_content_plan_completion_conflict");
+    return;
+  }
+  try {
+    if (canonicalJson(parseRenderSemanticContractV1(stored)) !== canonicalJson(semantic)) {
+      throw new Error("ai_content_plan_completion_conflict");
+    }
+  } catch {
+    throw new Error("ai_content_plan_completion_conflict");
+  }
+}
+
+const EXPECTED_PROPOSAL_CATALOG_SHA256 = "bcb2badcc413ff85bac13364048a4fdb12d45a73592f42d662603b932500b248";
 const PROPOSAL_MODEL_ID = "gpt-5.6-terra";
 
 function loadProposalCatalog(): VerifiedGeneratedContentCatalog {
@@ -449,7 +505,7 @@ function loadProposalCatalog(): VerifiedGeneratedContentCatalog {
   }
   const catalog = JSON.parse(bytes.toString("utf8")) as VerifiedGeneratedContentCatalog;
   if (
-    catalog.contractSourceHash !== "02760a1e006eb5920980a4b9c5b268cf53b3595543c5f909f2d66be53393c660"
+    catalog.contractSourceHash !== "8932c7d94b89a764293c2a8913b7d30bde54319a3b6b3f7b3ff0128880628117"
     || catalog.proposalContracts.requestVersion !== "content-proposal-request.v2"
     || catalog.proposalContracts.baseInputVersion !== "proposal-base-input.v2"
     || catalog.proposalContracts.outputVersion !== "content-proposal.v2"
@@ -3202,6 +3258,18 @@ export function createAiContentRepository(pool: Pool, options: AiContentReposito
         const plan = hasPlan
           ? parseContentPlanResultV2(input.plan, finalInput, snapshot.rows[0].evidence_json)
           : assembleContentPlanResultV2(input.planDraft, finalInput, snapshot.rows[0].evidence_json);
+        const imageAssetTransport = await resolveManualRenderTransport(client, {
+          generationId: String(job.generation_id),
+          workspaceId: String(job.workspace_id),
+          brandId: String(job.brand_id),
+          selectedProposalId: finalInput.selectedProposal.id,
+        });
+        const renderSemanticContract = validateRenderSemanticContract(
+          input,
+          finalInput.outputSettings.outputFormat,
+          plan,
+          imageAssetTransport === "manual-v2",
+        );
         if (job.status === "succeeded") {
           if (job.worker_id !== input.workerId || job.lease_token !== input.leaseToken) throw new Error("ai_content_job_lease_invalid");
           const stored = await client.query(
@@ -3211,6 +3279,7 @@ export function createAiContentRepository(pool: Pool, options: AiContentReposito
           if (!stored.rows[0]?.plan_json || canonicalJson(stored.rows[0].plan_json) !== canonicalJson(plan)) {
             throw new Error("ai_content_plan_completion_conflict");
           }
+          assertStoredRenderSemanticContract(job.payload_json, renderSemanticContract);
           const generation = await generationById(client, String(job.generation_id));
           await client.query("COMMIT");
           return generation;
@@ -3240,12 +3309,6 @@ export function createAiContentRepository(pool: Pool, options: AiContentReposito
             where id=$1`,
           [job.output_id, JSON.stringify(plan)],
         );
-        const imageAssetTransport = await resolveManualRenderTransport(client, {
-          generationId: String(job.generation_id),
-          workspaceId: String(job.workspace_id),
-          brandId: String(job.brand_id),
-          selectedProposalId: finalInput.selectedProposal.id,
-        });
         await enqueueAiContentRenderJobs(client, {
           workspaceId: String(job.workspace_id), brandId: String(job.brand_id),
           generationId: String(job.generation_id), outputId: String(job.output_id), plan, finalInput,
@@ -3258,9 +3321,15 @@ export function createAiContentRepository(pool: Pool, options: AiContentReposito
         await client.query(
           `update ai_content_generation_jobs
               set status = 'succeeded', skill_version = $2, completed_at = coalesce(completed_at, now()),
+                  payload_json = case when $3::jsonb is null then payload_json
+                    else jsonb_set(payload_json, '{renderSemanticContract}', $3::jsonb, true) end,
                   lease_expires_at = null, error_code = null, error_message = null, updated_at = now()
             where id = $1`,
-          [input.jobId, input.skillVersion],
+          [
+            input.jobId,
+            input.skillVersion,
+            renderSemanticContract === null ? null : JSON.stringify(renderSemanticContract),
+          ],
         );
         const generation = await generationById(client, String(job.generation_id));
         await client.query("COMMIT");

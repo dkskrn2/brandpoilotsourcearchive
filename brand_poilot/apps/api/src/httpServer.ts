@@ -41,6 +41,7 @@ import {
   parseCancelUploadSessionInput,
   parseConfirmAttachmentInput,
   parseContentGenerationRetryV1,
+  parseRenderSemanticContractV1,
   parseV3AttachmentUploadTokenInput,
   type AiContentType,
   type CompleteAiContentJobInput,
@@ -4475,19 +4476,37 @@ export function createServer(
       };
       const hasPlan = Object.prototype.hasOwnProperty.call(body, "plan");
       const hasPlanDraft = Object.prototype.hasOwnProperty.call(body, "planDraft");
+      const hasRenderSemanticContract = Object.prototype.hasOwnProperty.call(body, "renderSemanticContract");
       if (hasPlan === hasPlanDraft) throw new Error("ai_content_plan_completion_invalid");
       assertExactAiContentWorkerBody(
         body,
-        ["workerId", "leaseToken", "skillVersion", "jobType", hasPlan ? "plan" : "planDraft"],
+        [
+          "workerId", "leaseToken", "skillVersion", "jobType", hasPlan ? "plan" : "planDraft",
+          ...(hasRenderSemanticContract ? ["renderSemanticContract"] : []),
+        ],
         "ai_content_plan_completion_invalid",
       );
       const submittedPlan = hasPlan ? body.plan : body.planDraft;
       if (body.jobType !== "generate" || !isObject(submittedPlan)) {
         throw new Error("ai_content_plan_completion_invalid");
       }
+      if (hasRenderSemanticContract
+        && String(submittedPlan.contractVersion).startsWith("blog-plan")) {
+        throw new Error("ai_content_plan_completion_invalid");
+      }
       const completion: CompleteAiContentJobInput = hasPlan
-        ? { ...common, jobType: "generate", plan: submittedPlan as never }
-        : { ...common, jobType: "generate", planDraft: submittedPlan as never };
+        ? {
+            ...common, jobType: "generate", plan: submittedPlan as never,
+            ...(hasRenderSemanticContract
+              ? { renderSemanticContract: parseRenderSemanticContractV1(body.renderSemanticContract) }
+              : {}),
+          }
+        : {
+            ...common, jobType: "generate", planDraft: submittedPlan as never,
+            ...(hasRenderSemanticContract
+              ? { renderSemanticContract: parseRenderSemanticContractV1(body.renderSemanticContract) }
+              : {}),
+          };
       return repository.completeAiContentJob(completion);
     },
   );
