@@ -3312,7 +3312,7 @@ export function createAiContentRepository(pool: Pool, options: AiContentReposito
         await enqueueAiContentRenderJobs(client, {
           workspaceId: String(job.workspace_id), brandId: String(job.brand_id),
           generationId: String(job.generation_id), outputId: String(job.output_id), plan, finalInput,
-          imageAssetTransport,
+          imageAssetTransport, renderSemanticContract,
         });
         await client.query(
           "update ai_content_generations set status='generating',current_stage='generation',error_code=null,error_message=null,updated_at=now() where id=$1",

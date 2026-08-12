@@ -283,7 +283,7 @@ describe("V3 generation runtime contract", () => {
   });
 
   it.each([
-    ["manual", "ai-content-render-job.v2", "image-final-pixels.v2"],
+    ["manual", "ai-content-render-job.v3", "image-final-pixels.v3"],
     ["scheduled_crawl", "ai-content-render-job.v1", undefined],
   ] as const)("selects the private render transport from %s proposal lineage at planning completion", async (
     origin,

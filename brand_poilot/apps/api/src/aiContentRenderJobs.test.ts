@@ -60,7 +60,7 @@ describe("ai-content render job boundary helpers", () => {
     })).resolves.toBe("manual-v2");
   });
 
-  it("stores only a private v2 marker at enqueue time for proven manual image assets", async () => {
+  it("stores only a version hash and scene index for a structured manual social render", async () => {
     const writes: unknown[][] = [];
     const query = vi.fn(async (_sql: string, params: unknown[]) => {
       writes.push(params);
@@ -96,11 +96,20 @@ describe("ai-content render job boundary helpers", () => {
       },
       finalInput: { contractVersion: "content-generation-input.v3" } as never,
       imageAssetTransport: "manual-v2",
+      renderSemanticContract: {
+        contractVersion: "structured-scene-copy.v1",
+        outputFormat: "reel",
+        scenes: [{
+          index: 1, role: "scene", coreMessage: "Core", headline: "Copy",
+          keyVisual: { type: "none", entries: [] }, supportingTexts: [], footnote: null,
+          visualDirection: "Visual", evidenceIds: [], productImageAssetIds: [],
+        }],
+      },
     });
 
     const payload = JSON.parse(String(writes[0]?.[5]));
     expect(payload).toEqual({
-      contractVersion: "ai-content-render-job.v2",
+      contractVersion: "ai-content-render-job.v3",
       jobKind: "image_asset",
       generationId: "generation",
       outputId: "output",
@@ -108,10 +117,55 @@ describe("ai-content render job boundary helpers", () => {
       assetIndex: 1,
       assetKey: "generation:1",
       storagePath: "ai-content/brand/generation/output/assets/01.png",
-      rendererPromptVersion: "image-final-pixels.v2",
+      rendererPromptVersion: "image-final-pixels.v3",
+      renderSemanticBinding: {
+        contractVersion: "structured-scene-copy.v1",
+        semanticSha256: expect.stringMatching(/^[0-9a-f]{64}$/),
+        sceneIndex: 1,
+      },
     });
     expect(payload).not.toHaveProperty("contentGenerationInput");
     expect(payload).not.toHaveProperty("contentPlan");
+    expect(payload).not.toHaveProperty("renderSemanticContract");
+  });
+
+  it("keeps a manual blog image on the existing v2 render contract", async () => {
+    const writes: unknown[][] = [];
+    const query = vi.fn(async (_sql: string, params: unknown[]) => {
+      writes.push(params);
+      return { rows: [], rowCount: 1 };
+    });
+    const imagePackage = {
+      contractVersion: "image-generation-package.v1" as const,
+      generationId: "generation", outputFormat: "blog" as const, purpose: "informational" as const,
+      assetCount: 1, aspectRatio: "16:9" as const, channelTargets: ["blog_export"] as ["blog_export"],
+      assets: [{
+        index: 1, role: "inline", copy: "Copy", visualDirection: "Visual",
+        evidenceIds: [], productImageAssetIds: [], attachmentIds: [],
+      }],
+      product: null, references: [], brandStyleImages: [], avatarStyleImageId: null,
+      attachments: [], userImageInstruction: null,
+      logoPolicy: {
+        allowGeneratedLogo: false as const, allowReservedLogoArea: false as const,
+        allowExternalReferenceLogo: false as const, allowExistingProductPackagingLogo: true as const,
+      },
+    };
+
+    await enqueueAiContentRenderJobs({ query } as never, {
+      workspaceId: "workspace", brandId: "brand", generationId: "generation", outputId: "output",
+      plan: {
+        contractVersion: "blog-plan.v2", imagePackage,
+        content: { title: "Title", htmlTemplate: "<article><h1>Title</h1></article>", metaTitle: "Title", metaDescription: "Description", usedEvidenceIds: [] },
+      },
+      finalInput: { contractVersion: "content-generation-input.v3" } as never,
+      imageAssetTransport: "manual-v2",
+    });
+
+    expect(JSON.parse(String(writes[0]?.[5]))).toMatchObject({
+      contractVersion: "ai-content-render-job.v2",
+      rendererPromptVersion: "image-final-pixels.v2",
+    });
+    expect(JSON.parse(String(writes[0]?.[5]))).not.toHaveProperty("renderSemanticBinding");
   });
 
   it("derives one deterministic path and exact dimensions from the frozen identity", () => {
