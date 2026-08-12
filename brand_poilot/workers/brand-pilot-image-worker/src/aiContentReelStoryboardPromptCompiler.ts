@@ -80,6 +80,8 @@ export function compileAiContentReelStoryboardRenderPrompt(
       "GLOBAL VISUAL SYSTEM and VISUAL THESIS define art direction; do not reduce them to a generic clean infographic.",
       "The current asset copy is a validation projection; the Storyboard scene is the sole semantic source.",
       "Do not display coreMessageNonDisplay as additional copy.",
+      "Do not render page or scene numbering such as 1/6, 01, Page 1, progress dots, or corner number badges. Factual quantities, years, measurements, and numbered content steps remain allowed.",
+      "Do not inspect with OCR, retry, or fail the job based on whether such numbering appears; this is a generation instruction only.",
       "Do not create a collage, multiple scenes, alternatives, logos, watermarks, or unsupported facts.",
       "Use only staged local reference files. Do not use network, web search, shell, or external APIs.",
       "Use Codex built-in image_generation with gpt-image-2 and return only the required completion JSON.",

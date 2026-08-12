@@ -178,6 +178,7 @@ export function buildReelPlanPrompt(input: ContentGenerationInputV3, repairError
     "제품 이미지는 productFacts.availableImages가 현재 장면에 직접 필요할 때만 해당 assetId를 productImageAssetIds에 중복 없이 넣으세요.",
     "visualSystem은 명시적 사용자 지시, 필수 시각 참고, 브랜드 스타일, 콘텐츠 소재의 시각 단서, 모델 판단 순으로 충돌을 해결하세요.",
     "visualSystem.invariants에는 장면 간 색, 타이포 계층, 여백, 아이콘·그래픽 재질 중 실제로 고정할 규칙을 명시하세요.",
+    "페이지 번호, 장면 번호, 현재/전체 장수, 진행률 배지 또는 페이지 인디케이터를 기획하거나 출력하지 마세요. 콘텐츠 자체의 수치, 연도, 측정값과 단계 번호는 이 제한에 포함되지 않습니다.",
     "visualThesis는 핵심 시각 관계를 설명하고 layoutArchetype은 이를 표현하는 수단으로 선택하세요. 레이아웃만 다양하게 만들고 약한 정보를 시각화하지 마세요.",
     "영상 조립과 이미지 생성은 후속 단계의 책임입니다. 파일, 웹, shell, image_generation 도구를 호출하지 마세요.",
     ...purposeRules,
