@@ -118,7 +118,7 @@ describe("reel purpose prompt", () => {
     const prompt = buildReelPlanPrompt(promptInput(purpose));
 
     expect(prompt).toContain(purpose === "informational" ? "정보성 릴스" : "마케팅성 릴스");
-    expect(prompt).toContain("reel-plan-draft.v1");
+    expect(prompt).toContain("reel-plan-draft.v2");
     expect(prompt).toContain("Practical source title");
     expect(prompt).toContain("Evidence-backed claim for the scene.");
     expect(prompt).toContain("Selected reel concept");
@@ -150,11 +150,25 @@ describe("reel purpose prompt", () => {
   it("asks only for creative draft fields while locking outline identity", () => {
     const prompt = buildReelPlanPrompt(promptInput("informational"));
 
-    expect(prompt).toContain('"contractVersion": "reel-plan-draft.v1"');
+    expect(prompt).toContain('"contractVersion": "reel-plan-draft.v2"');
     expect(prompt).toContain('"index": 1');
     expect(prompt).toContain('"role": "선택 구성안 outline의 동일 순번 role"');
     expect(prompt).toContain("contractVersion, content, assets");
-    expect(prompt).toContain("index, role, copy, visualDirection, evidenceIds, productImageAssetIds");
+    expect(prompt).toContain("coreMessage");
+    expect(prompt).toContain("headline");
+    expect(prompt).toContain("keyVisual");
+    expect(prompt).toContain('"entries": []');
+    expect(prompt).not.toContain('"texts": []');
+    expect(prompt).toContain("supportingTexts");
+    expect(prompt).toContain("footnote");
+    expect(prompt).toContain("한 장면에는 하나의 핵심 메시지만");
+    expect(prompt).toContain("정보량을 문장 수로 판단하지 마세요");
+    expect(prompt).toContain("headline은 coreMessage의 축약본");
+    expect(prompt).toContain("supportingTexts를 모두 삭제해도 장면의 의미가 완전하다면");
+    expect(prompt).toContain("모든 장면의 headline만 순서대로 읽어도");
+    expect(prompt).toContain("선택된 구성안의 서사 구조를 유지");
+    expect(prompt).toContain("before, after");
+    expect(prompt).not.toContain("장면을 채우기 위한 문장");
     expect(prompt).toContain("attachment 선택");
   });
 

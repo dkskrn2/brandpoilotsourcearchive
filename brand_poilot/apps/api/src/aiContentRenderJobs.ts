@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import type { Pool, PoolClient } from "pg";
 import { load } from "cheerio";
@@ -11,6 +11,10 @@ import type {
 } from "@brand-pilot/content-contracts";
 import type { AiContentGenerationRecord } from "./aiContentRepository.js";
 import {
+  parseRenderSemanticContractV1,
+  type RenderSemanticContractV1,
+} from "./aiContentContracts.js";
+import {
   BLOG_PASSIVE_HTML_FORBIDDEN_ATTRIBUTES,
   BLOG_PASSIVE_HTML_FORBIDDEN_TAGS,
   parseContentPlanResultV2,
@@ -22,8 +26,29 @@ import {
   completeGenerationOperationIfTerminal,
   reverseGenerationReservationIfTerminalFailure,
 } from "./aiContentGenerationOperations.js";
+import {
+  compileStructuredScene,
+  parseStructuredSceneCopyV1,
+} from "@brand-pilot/content-contracts/structured-scene-copy";
 
 type Queryable = Pick<PoolClient, "query">;
+
+function canonicalJson(value: unknown): string {
+  const normalize = (entry: unknown): unknown => {
+    if (Array.isArray(entry)) return entry.map(normalize);
+    if (entry && typeof entry === "object") {
+      return Object.fromEntries(Object.entries(entry as Record<string, unknown>)
+        .sort(([left], [right]) => left.localeCompare(right))
+        .map(([key, nested]) => [key, normalize(nested)]));
+    }
+    return entry;
+  };
+  return JSON.stringify(normalize(value));
+}
+
+function semanticSha256(value: RenderSemanticContractV1): string {
+  return createHash("sha256").update(canonicalJson(value)).digest("hex");
+}
 
 export type AiContentImageAssetTransport = "v1" | "manual-v2";
 
@@ -234,13 +259,35 @@ export async function enqueueAiContentRenderJobs(client: Queryable, input: {
   plan: ContentPlanResultV2;
   finalInput: ContentGenerationInputV3;
   imageAssetTransport?: AiContentImageAssetTransport;
+  renderSemanticContract?: RenderSemanticContractV1 | null;
 }): Promise<void> {
   const imagePackage = input.plan.imagePackage;
   if (imagePackage) {
+    const structuredSocial = input.imageAssetTransport === "manual-v2"
+      && (imagePackage.outputFormat === "card_news" || imagePackage.outputFormat === "reel");
+    const semantic = structuredSocial ? input.renderSemanticContract : null;
+    if (structuredSocial && (!semantic || semantic.outputFormat !== imagePackage.outputFormat
+      || semantic.scenes.length !== imagePackage.assets.length)) {
+      throw new Error("ai_content_render_semantic_contract_mismatch");
+    }
+    if (semantic) {
+      for (const [offset, rawScene] of semantic.scenes.entries()) {
+        const scene = parseStructuredSceneCopyV1(rawScene);
+        const asset = imagePackage.assets[offset];
+        if (!asset) throw new Error("ai_content_render_semantic_contract_mismatch");
+        const { attachmentIds: _attachmentIds, ...assetWithoutAttachments } = asset;
+        if (canonicalJson(compileStructuredScene(scene)) !== canonicalJson(assetWithoutAttachments)) {
+          throw new Error("ai_content_render_semantic_contract_mismatch");
+        }
+      }
+    }
+    const semanticHash = semantic ? semanticSha256(semantic) : null;
     for (const asset of imagePackage.assets) {
       const payload = {
-        contractVersion: input.imageAssetTransport === "manual-v2"
-          ? "ai-content-render-job.v2"
+        contractVersion: semantic
+          ? "ai-content-render-job.v3"
+          : input.imageAssetTransport === "manual-v2"
+            ? "ai-content-render-job.v2"
           : "ai-content-render-job.v1",
         jobKind: "image_asset",
         generationId: input.generationId,
@@ -249,8 +296,17 @@ export async function enqueueAiContentRenderJobs(client: Queryable, input: {
         assetIndex: asset.index,
         assetKey: `${input.generationId}:${asset.index}`,
         storagePath: expectedAiContentAssetStoragePath({ ...input, assetIndex: asset.index }),
-        ...(input.imageAssetTransport === "manual-v2"
-          ? { rendererPromptVersion: "image-final-pixels.v2" }
+        ...(semantic
+          ? {
+              rendererPromptVersion: "image-final-pixels.v3",
+              renderSemanticBinding: {
+                contractVersion: "structured-scene-copy.v1",
+                semanticSha256: semanticHash,
+                sceneIndex: asset.index,
+              },
+            }
+          : input.imageAssetTransport === "manual-v2"
+            ? { rendererPromptVersion: "image-final-pixels.v2" }
           : {}),
       };
       await client.query(
@@ -369,6 +425,109 @@ async function manualImageAssetPayloadV2(
     ...storedPayload,
     contentGenerationInput,
     contentPlan,
+  };
+}
+
+async function manualImageAssetPayloadV3(
+  client: Queryable,
+  row: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  const storedPayload = record(row.payload_json);
+  requireExactObjectKeys(storedPayload, [
+    "contractVersion", "jobKind", "generationId", "outputId", "imagePackage",
+    "assetIndex", "assetKey", "storagePath", "rendererPromptVersion", "renderSemanticBinding",
+  ]);
+  const binding = record(storedPayload.renderSemanticBinding);
+  requireExactObjectKeys(binding, ["contractVersion", "semanticSha256", "sceneIndex"]);
+  const assetIndex = Number(row.asset_index);
+  if (
+    row.job_kind !== "image_asset"
+    || !Number.isSafeInteger(assetIndex)
+    || storedPayload.contractVersion !== "ai-content-render-job.v3"
+    || storedPayload.jobKind !== "image_asset"
+    || storedPayload.generationId !== String(row.generation_id)
+    || storedPayload.outputId !== String(row.output_id)
+    || storedPayload.assetIndex !== assetIndex
+    || storedPayload.assetKey !== `${String(row.generation_id)}:${assetIndex}`
+    || storedPayload.storagePath !== expectedAiContentAssetStoragePath({
+      brandId: String(row.brand_id), generationId: String(row.generation_id),
+      outputId: String(row.output_id), assetIndex,
+    })
+    || storedPayload.rendererPromptVersion !== "image-final-pixels.v3"
+    || binding.contractVersion !== "structured-scene-copy.v1"
+    || binding.sceneIndex !== assetIndex
+    || typeof binding.semanticSha256 !== "string"
+    || !/^[0-9a-f]{64}$/.test(binding.semanticSha256)
+  ) throw new Error("ai_content_render_snapshot_mismatch");
+
+  const state = await client.query(
+    `select output.plan_json,input.input_json,research.evidence_json,
+            binding.selected_proposal_id,batch.origin,
+            generation_job.payload_json as generation_job_payload
+       from ai_content_generation_outputs output
+       join ai_content_generations generation
+         on generation.id=output.generation_id
+        and generation.workspace_id=output.workspace_id and generation.brand_id=output.brand_id
+       join ai_content_generation_input_snapshots input
+         on input.generation_id=output.generation_id
+        and input.workspace_id=output.workspace_id and input.brand_id=output.brand_id
+       join ai_content_generation_prompt_bindings binding
+         on binding.generation_id=output.generation_id
+        and binding.workspace_id=output.workspace_id and binding.brand_id=output.brand_id
+       join ai_content_proposals proposal
+         on proposal.id=binding.selected_proposal_id
+        and proposal.workspace_id=binding.workspace_id and proposal.brand_id=binding.brand_id
+       join ai_content_proposal_batches batch
+         on batch.id=proposal.batch_id
+        and batch.workspace_id=proposal.workspace_id and batch.brand_id=proposal.brand_id
+       join ai_content_generation_jobs generation_job
+         on generation_job.generation_id=output.generation_id and generation_job.output_id=output.id
+        and generation_job.workspace_id=output.workspace_id and generation_job.brand_id=output.brand_id
+        and generation_job.job_type='generate' and generation_job.status='succeeded'
+       left join ai_content_output_research_snapshots research
+         on research.output_id=output.id and research.generation_id=output.generation_id
+        and research.workspace_id=output.workspace_id and research.brand_id=output.brand_id
+      where output.id=$1 and output.generation_id=$2
+        and output.workspace_id=$3 and output.brand_id=$4
+      for share of generation,output`,
+    [row.output_id, row.generation_id, row.workspace_id, row.brand_id],
+  );
+  if (state.rows.length !== 1 || state.rows[0]?.origin !== "manual") {
+    throw new Error("ai_content_render_lineage_mismatch");
+  }
+  const contentGenerationInput = parseContentGenerationInputV3(state.rows[0].input_json);
+  if (contentGenerationInput.generationId !== String(row.generation_id)
+    || contentGenerationInput.selectedProposal.id !== String(state.rows[0].selected_proposal_id)) {
+    throw new Error("ai_content_render_lineage_mismatch");
+  }
+  const contentPlan = parseContentPlanResultV2(
+    state.rows[0].plan_json,
+    contentGenerationInput,
+    state.rows[0].evidence_json,
+  );
+  if (contentPlan.imagePackage === null
+    || !isDeepStrictEqual(contentPlan.imagePackage, storedPayload.imagePackage)) {
+    throw new Error("ai_content_render_snapshot_mismatch");
+  }
+  const generationPayload = record(state.rows[0].generation_job_payload);
+  const semantic = parseRenderSemanticContractV1(generationPayload.renderSemanticContract);
+  if (semantic.outputFormat !== contentPlan.imagePackage.outputFormat
+    || semanticSha256(semantic) !== binding.semanticSha256) {
+    throw new Error("ai_content_render_snapshot_mismatch");
+  }
+  const scene = semantic.scenes.find((candidate) => candidate.index === assetIndex);
+  const asset = contentPlan.imagePackage.assets.find((candidate) => candidate.index === assetIndex);
+  if (!scene || !asset) throw new Error("ai_content_render_snapshot_mismatch");
+  const { attachmentIds: _attachmentIds, ...assetWithoutAttachments } = asset;
+  if (canonicalJson(compileStructuredScene(scene)) !== canonicalJson(assetWithoutAttachments)) {
+    throw new Error("ai_content_render_snapshot_mismatch");
+  }
+
+  return {
+    ...storedPayload,
+    contentGenerationInput,
+    contentPlan,
+    renderSemanticScene: { contractVersion: "structured-scene-copy.v1", scene },
   };
 }
 
@@ -750,9 +909,11 @@ export function createAiContentRenderJobsRepository(
         const storedPayload = record(row.payload_json);
         const payload = row.job_kind === "package_finalize"
           ? await finalizerPayload(client, row)
-          : storedPayload.contractVersion === "ai-content-render-job.v2"
-            ? await manualImageAssetPayloadV2(client, row)
-            : storedPayload;
+          : storedPayload.contractVersion === "ai-content-render-job.v3"
+            ? await manualImageAssetPayloadV3(client, row)
+            : storedPayload.contractVersion === "ai-content-render-job.v2"
+              ? await manualImageAssetPayloadV2(client, row)
+              : storedPayload;
         await client.query("COMMIT");
         return renderJob(row, payload);
       } catch (error) {

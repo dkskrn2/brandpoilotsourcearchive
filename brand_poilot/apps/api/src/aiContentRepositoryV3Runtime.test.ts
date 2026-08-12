@@ -76,13 +76,31 @@ const planDraft = {
   content: plan.content,
   assets: plan.imagePackage.assets.map(({ attachmentIds: _attachmentIds, ...asset }) => asset),
 };
+const renderSemanticContract = {
+  contractVersion: "structured-scene-copy.v1" as const,
+  outputFormat: "reel" as const,
+  scenes: [{
+    index: 1,
+    role: "scene",
+    coreMessage: "Explain the verified process clearly.",
+    headline: "Explain clearly.",
+    keyVisual: { type: "none" as const, entries: [] },
+    supportingTexts: [],
+    footnote: null,
+    visualDirection: "Vertical editorial scene.",
+    evidenceIds: [uid(4)],
+    productImageAssetIds: [],
+  }],
+};
 
 function runtimeHarness(
-  initialStatus: "queued" | "processing",
+  initialStatus: "queued" | "processing" | "succeeded",
   lineageOrigin: "manual" | "scheduled_crawl" | null = null,
+  stored: { plan?: ReelPlanV2; renderSemanticContract?: typeof renderSemanticContract } = {},
+  fault: { renderInsert?: boolean } = {},
 ) {
   const statements: Array<{ sql: string; params: unknown[] }> = [];
-  let generationStatus = initialStatus === "queued" ? "queued" : "planning";
+  let generationStatus = initialStatus === "queued" ? "queued" : initialStatus === "succeeded" ? "generating" : "planning";
   let operationStatus = "started";
   let jobStatus = initialStatus;
   const baseJob = {
@@ -90,10 +108,11 @@ function runtimeHarness(
     job_type: "generate", output_format: "reel", status: jobStatus, payload_json: {
       generationId: uid(1), outputId: uid(7), contentGenerationInput: finalInput,
       planningMode: "selected_proposal", operationId: uid(10),
+      ...(stored.renderSemanticContract ? { renderSemanticContract: stored.renderSemanticContract } : {}),
     },
-    attempt_count: 1, max_attempts: 3, worker_id: initialStatus === "processing" ? "worker-1" : null,
-    lease_token: initialStatus === "processing" ? "lease-1" : null,
-    lease_expires_at: initialStatus === "processing" ? "2099-01-01T00:00:00.000Z" : null,
+    attempt_count: 1, max_attempts: 3, worker_id: initialStatus === "queued" ? null : "worker-1",
+    lease_token: initialStatus === "queued" ? null : "lease-1",
+    lease_expires_at: initialStatus === "queued" ? null : "2099-01-01T00:00:00.000Z",
     available_at: "2026-08-06T00:00:00.000Z", available: true, lease_expired: false,
   };
   const generationRow = () => ({
@@ -108,6 +127,9 @@ function runtimeHarness(
     query: vi.fn(async (sql: string, params: unknown[] = []) => {
       statements.push({ sql, params });
       if (["BEGIN", "COMMIT", "ROLLBACK"].includes(sql)) return { rows: [], rowCount: 0 };
+      if (fault.renderInsert && sql.includes("insert into ai_content_generation_render_jobs")) {
+        throw new Error("render_insert_fault");
+      }
       if (sql === "select assert_ai_content_writable()") return { rows: [{}], rowCount: 1 };
       if (sql.includes("from ai_content_generation_jobs") && (
         sql.includes("attempt_count >= max_attempts")
@@ -144,7 +166,7 @@ function runtimeHarness(
           : { rows: [{ selected_proposal_id: uid(5), origin: lineageOrigin }], rowCount: 1 };
       }
       if (sql.includes("select plan_json from ai_content_generation_outputs")) {
-        return { rows: [{ plan_json: null }], rowCount: 1 };
+        return { rows: [{ plan_json: stored.plan ?? null }], rowCount: 1 };
       }
       if (sql.includes("count(*)::integer as total")) {
         return { rows: [{ total: 1, completed: 0, failed: 1 }], rowCount: 1 };
@@ -214,19 +236,70 @@ describe("V3 generation runtime contract", () => {
   });
 
   it("accepts only the V3 plan completion and queues render work without finalizing the output", async () => {
-    const run = runtimeHarness("processing");
+    const run = runtimeHarness("processing", "manual");
     await run.repository.completeAiContentJob({
       jobId: uid(6), workerId: "worker-1", leaseToken: "lease-1", skillVersion: "reel.v3",
-      jobType: "generate", plan,
-    });
+      jobType: "generate", plan, renderSemanticContract,
+    } as never);
     const sql = run.statements.map(({ sql }) => sql).join("\n");
     expect(sql).toMatch(/set plan_json=coalesce[\s\S]*insert into ai_content_generation_render_jobs[\s\S]*status = 'succeeded'/i);
     expect(sql).not.toMatch(/artifact_manifest_json\s*=|insert into ai_content_usage_ledger/i);
     expect(run.statements.at(-1)?.sql).toBe("COMMIT");
   });
 
+  it("rejects a social completion without structured semantics before any write", async () => {
+    const run = runtimeHarness("processing", "manual");
+    await expect(run.repository.completeAiContentJob({
+      jobId: uid(6), workerId: "worker-1", leaseToken: "lease-1", skillVersion: "reel.v3",
+      jobType: "generate", plan,
+    })).rejects.toThrow("ai_content_render_semantic_contract_invalid");
+    const sql = run.statements.map(({ sql }) => sql).join("\n");
+    expect(sql).not.toMatch(/set plan_json=coalesce|insert into ai_content_generation_render_jobs/i);
+    expect(run.statements.at(-1)?.sql).toBe("ROLLBACK");
+  });
+
+  it("rejects changed structured meaning even when the submitted legacy plan remains valid", async () => {
+    const run = runtimeHarness("processing", "manual");
+    await expect(run.repository.completeAiContentJob({
+      jobId: uid(6), workerId: "worker-1", leaseToken: "lease-1", skillVersion: "reel.v3",
+      jobType: "generate", plan,
+      renderSemanticContract: {
+        ...renderSemanticContract,
+        scenes: [{ ...renderSemanticContract.scenes[0]!, headline: "Different conclusion" }],
+      },
+    } as never)).rejects.toThrow("ai_content_render_semantic_contract_mismatch");
+    expect(run.statements.map(({ sql }) => sql).join("\n"))
+      .not.toMatch(/set plan_json=coalesce|insert into ai_content_generation_render_jobs/i);
+  });
+
+  it("persists the semantic envelope in the same successful completion transaction", async () => {
+    const run = runtimeHarness("processing", "manual");
+    await run.repository.completeAiContentJob({
+      jobId: uid(6), workerId: "worker-1", leaseToken: "lease-1", skillVersion: "reel.v3",
+      jobType: "generate", plan, renderSemanticContract,
+    } as never);
+    const jobWrite = run.statements.find(({ sql }) => (
+      sql.includes("update ai_content_generation_jobs") && sql.includes("status = 'succeeded'")
+    ));
+    expect(jobWrite?.sql).toContain("renderSemanticContract");
+    expect(JSON.parse(String(jobWrite?.params[2]))).toEqual(renderSemanticContract);
+    expect(run.statements.at(-1)?.sql).toBe("COMMIT");
+  });
+
+  it("rolls back the plan and semantic write when render enqueue faults", async () => {
+    const run = runtimeHarness("processing", "manual", {}, { renderInsert: true });
+    await expect(run.repository.completeAiContentJob({
+      jobId: uid(6), workerId: "worker-1", leaseToken: "lease-1", skillVersion: "reel.v3",
+      jobType: "generate", plan, renderSemanticContract,
+    } as never)).rejects.toThrow("render_insert_fault");
+    const sql = run.statements.map(({ sql }) => sql).join("\n");
+    expect(sql).toMatch(/set plan_json=coalesce[\s\S]*insert into ai_content_generation_render_jobs/i);
+    expect(sql).not.toMatch(/status = 'succeeded'/i);
+    expect(run.statements.at(-1)?.sql).toBe("ROLLBACK");
+  });
+
   it.each([
-    ["manual", "ai-content-render-job.v2", "image-final-pixels.v2"],
+    ["manual", "ai-content-render-job.v3", "image-final-pixels.v3"],
     ["scheduled_crawl", "ai-content-render-job.v1", undefined],
   ] as const)("selects the private render transport from %s proposal lineage at planning completion", async (
     origin,
@@ -238,7 +311,8 @@ describe("V3 generation runtime contract", () => {
     await run.repository.completeAiContentJob({
       jobId: uid(6), workerId: "worker-1", leaseToken: "lease-1", skillVersion: "reel-draft.v1",
       jobType: "generate", planDraft,
-    });
+      ...(origin === "manual" ? { renderSemanticContract } : {}),
+    } as never);
 
     const lineageQuery = run.statements.find(({ sql }) => (
       sql.includes("from ai_content_generation_prompt_bindings binding")
@@ -254,16 +328,16 @@ describe("V3 generation runtime contract", () => {
   });
 
   it("assembles a draft into the same canonical plan and render payload as legacy completion", async () => {
-    const legacy = runtimeHarness("processing");
+    const legacy = runtimeHarness("processing", "manual");
     await legacy.repository.completeAiContentJob({
       jobId: uid(6), workerId: "worker-1", leaseToken: "lease-1", skillVersion: "reel.v3",
-      jobType: "generate", plan,
-    });
-    const draft = runtimeHarness("processing");
+      jobType: "generate", plan, renderSemanticContract,
+    } as never);
+    const draft = runtimeHarness("processing", "manual");
     await draft.repository.completeAiContentJob({
       jobId: uid(6), workerId: "worker-1", leaseToken: "lease-1", skillVersion: "reel-draft.v1",
-      jobType: "generate", planDraft,
-    });
+      jobType: "generate", planDraft, renderSemanticContract,
+    } as never);
 
     const storedPlan = (statements: Array<{ sql: string; params: unknown[] }>) => {
       const write = statements.find(({ sql }) => sql.includes("set plan_json=coalesce"));
@@ -280,7 +354,7 @@ describe("V3 generation runtime contract", () => {
   });
 
   it("rolls back an invalid draft before writing a plan, transition, or render job", async () => {
-    const run = runtimeHarness("processing");
+    const run = runtimeHarness("processing", "manual");
     await expect(run.repository.completeAiContentJob({
       jobId: uid(6), workerId: "worker-1", leaseToken: "lease-1", skillVersion: "reel-draft.v1",
       jobType: "generate",
@@ -288,10 +362,32 @@ describe("V3 generation runtime contract", () => {
         ...planDraft,
         assets: [{ ...planDraft.assets[0]!, evidenceIds: [uid(99)] }],
       },
-    })).rejects.toThrow("ai_content_plan_invalid");
+      renderSemanticContract,
+    } as never)).rejects.toThrow("ai_content_plan_invalid");
     const sql = run.statements.map(({ sql }) => sql).join("\n");
     expect(sql).not.toMatch(/set plan_json=coalesce|insert into ai_content_generation_render_jobs|set status='generating'/i);
     expect(run.statements.at(-1)?.sql).toBe("ROLLBACK");
+  });
+
+  it("replays an identical succeeded semantic completion and conflicts on changed structured meaning", async () => {
+    const identical = runtimeHarness("succeeded", "manual", { plan, renderSemanticContract });
+    await expect(identical.repository.completeAiContentJob({
+      jobId: uid(6), workerId: "worker-1", leaseToken: "lease-1", skillVersion: "reel.v3",
+      jobType: "generate", plan, renderSemanticContract,
+    } as never)).resolves.toMatchObject({ id: uid(1) });
+    expect(identical.statements.map(({ sql }) => sql).join("\n"))
+      .not.toMatch(/set plan_json=coalesce|insert into ai_content_generation_render_jobs/i);
+
+    const changed = runtimeHarness("succeeded", "manual", { plan, renderSemanticContract });
+    await expect(changed.repository.completeAiContentJob({
+      jobId: uid(6), workerId: "worker-1", leaseToken: "lease-1", skillVersion: "reel.v3",
+      jobType: "generate", plan,
+      renderSemanticContract: {
+        ...renderSemanticContract,
+        scenes: [{ ...renderSemanticContract.scenes[0]!, coreMessage: "Different structured meaning." }],
+      },
+    } as never)).rejects.toThrow("ai_content_plan_completion_conflict");
+    expect(changed.statements.at(-1)?.sql).toBe("ROLLBACK");
   });
 
   it("returns the reserved quota exactly once after a permanent planner failure", async () => {

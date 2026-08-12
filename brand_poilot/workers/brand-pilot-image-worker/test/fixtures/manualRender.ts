@@ -85,3 +85,39 @@ export function manualImageJobV2() {
 export function cloneManualImageJobV2(): ReturnType<typeof manualImageJobV2> {
   return structuredClone(manualImageJobV2());
 }
+
+export function manualImageJobV3() {
+  const job = cloneManualImageJobV2();
+  return {
+    ...job,
+    payload: {
+      ...job.payload,
+      contractVersion: "ai-content-render-job.v3" as const,
+      rendererPromptVersion: "image-final-pixels.v3" as const,
+      renderSemanticBinding: {
+        contractVersion: "structured-scene-copy.v1" as const,
+        semanticSha256: sha("f"),
+        sceneIndex: 2,
+      },
+      renderSemanticScene: {
+        contractVersion: "structured-scene-copy.v1" as const,
+        scene: {
+          index: 2,
+          role: "detail",
+          coreMessage: "제품을 설명하되 화면에 직접 표시하지 않는 핵심 의미입니다.",
+          headline: "두 번째 장면",
+          keyVisual: { type: "none" as const, entries: [] },
+          supportingTexts: [],
+          footnote: null,
+          visualDirection: "두 번째 장면 비주얼",
+          evidenceIds: [],
+          productImageAssetIds: [uid(10)],
+        },
+      },
+    },
+  };
+}
+
+export function cloneManualImageJobV3(): ReturnType<typeof manualImageJobV3> {
+  return structuredClone(manualImageJobV3());
+}

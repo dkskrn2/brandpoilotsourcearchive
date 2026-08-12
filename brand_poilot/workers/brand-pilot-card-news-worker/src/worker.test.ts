@@ -42,12 +42,28 @@ function v3Input(purpose: "informational" | "marketing") {
 
 function v3Draft(input: ReturnType<typeof v3Input>) {
   return {
-    contractVersion: "card-news-plan-draft.v1",
+    contractVersion: "card-news-plan-draft.v2",
     content: { caption: "Tea guide", hashtags: ["tea"], cta: "Save this" },
     assets: [
-      { index: 1, role: "hook", copy: "Start with a clear reason and useful context.", visualDirection: "Readable opening card.", evidenceIds: [], productImageAssetIds: [] },
-      { index: 2, role: "guide", copy: "Use the fixed facts to explain a practical next step.", visualDirection: "Mobile-friendly two-step guide.", evidenceIds: input.product ? [] : [uid(7)], productImageAssetIds: input.product ? [uid(4)] : [] },
+      { index: 1, role: "hook", coreMessage: "Open with one useful reason.", headline: "Start with a clear reason and useful context.", keyVisual: { type: "none", entries: [] }, supportingTexts: [], footnote: null, visualDirection: "Readable opening card.", evidenceIds: [], productImageAssetIds: [] },
+      { index: 2, role: "guide", coreMessage: "Give one practical next step.", headline: "Use the fixed facts to explain a practical next step.", keyVisual: { type: "none", entries: [] }, supportingTexts: [], footnote: null, visualDirection: "Mobile-friendly two-step guide.", evidenceIds: input.product ? [] : [uid(7)], productImageAssetIds: input.product ? [uid(4)] : [] },
     ],
+  };
+}
+
+function compiledV1(input: ReturnType<typeof v3Input>) {
+  const source = v3Draft(input);
+  return {
+    contractVersion: "card-news-plan-draft.v1",
+    content: source.content,
+    assets: source.assets.map((asset) => ({
+      index: asset.index,
+      role: asset.role,
+      copy: asset.headline,
+      visualDirection: asset.visualDirection,
+      evidenceIds: asset.evidenceIds,
+      productImageAssetIds: asset.productImageAssetIds,
+    })),
   };
 }
 
@@ -83,15 +99,20 @@ describe("card-news worker", () => {
     const item = v3Job(purpose);
     const api = client(item);
     const dir = await mkdtemp(path.join(os.tmpdir(), "card-v3-plan-"));
-    const expectedDraft = v3Draft(v3Input(purpose));
-    await writeFile(path.join(dir, "card-news-plan.json"), JSON.stringify(expectedDraft));
+    const structuredDraft = v3Draft(v3Input(purpose));
+    await writeFile(path.join(dir, "card-news-plan.json"), JSON.stringify(structuredDraft));
     const planner = { run: vi.fn(async () => ({ outputDir: dir, cleanup: vi.fn() })) };
     await runOnce({ workerId: "worker-1", client: api, planner });
 
     expect(planner.run).toHaveBeenCalledOnce();
     expect(api.complete).toHaveBeenCalledWith(item.id, {
       workerId: "worker-1", leaseToken: "lease-v3", jobType: "generate",
-      skillVersion: expect.any(String), planDraft: expectedDraft,
+      skillVersion: "card-news-plan-skill.v5", planDraft: compiledV1(v3Input(purpose)),
+      renderSemanticContract: {
+        contractVersion: "structured-scene-copy.v1",
+        outputFormat: "card_news",
+        scenes: structuredDraft.assets,
+      },
     });
   });
 
@@ -101,12 +122,12 @@ describe("card-news worker", () => {
     ["role", "asset_role_mismatch", (plan: ReturnType<typeof v3Draft>) => { plan.assets[0]!.role = "guide"; }],
     ["unknown evidence", "evidence_id_unknown", (plan: ReturnType<typeof v3Draft>) => { plan.assets[0]!.evidenceIds = [uid(99)]; }],
     ["duplicate evidence", "evidence_id_duplicate", (plan: ReturnType<typeof v3Draft>) => { plan.assets[1]!.evidenceIds = [uid(7), uid(7)]; }],
-    ["malformed evidence", "card_news_plan_draft_invalid", (plan: ReturnType<typeof v3Draft>) => { plan.assets[0]!.evidenceIds = ["not-a-uuid"]; }],
+    ["malformed evidence", "card_news_structured_draft_invalid", (plan: ReturnType<typeof v3Draft>) => { plan.assets[0]!.evidenceIds = ["not-a-uuid"]; }],
     ["unknown product image", "product_image_id_unknown", (plan: ReturnType<typeof v3Draft>) => { plan.assets[0]!.productImageAssetIds = [uid(99)]; }],
     ["duplicate hashtag", "hashtag_duplicate", (plan: ReturnType<typeof v3Draft>) => { plan.content.hashtags = ["tea", "tea"]; }],
     ["blank caption", "content_invalid", (plan: ReturnType<typeof v3Draft>) => { plan.content.caption = "   "; }],
-    ["immutable generation field", "card_news_plan_draft_invalid", (plan: ReturnType<typeof v3Draft>) => { Object.assign(plan, { generationId: uid(10) }); }],
-    ["attachment selection", "card_news_plan_draft_invalid", (plan: ReturnType<typeof v3Draft>) => { Object.assign(plan.assets[0]!, { attachmentIds: [uid(8)] }); }],
+    ["immutable generation field", "card_news_structured_draft_invalid", (plan: ReturnType<typeof v3Draft>) => { Object.assign(plan, { generationId: uid(10) }); }],
+    ["attachment selection", "card_news_structured_draft_invalid", (plan: ReturnType<typeof v3Draft>) => { Object.assign(plan.assets[0]!, { attachmentIds: [uid(8)] }); }],
   ])("repairs one invalid v3 %s plan with the validator error", async (_name, expectedError, mutate) => {
     const item = v3Job("informational");
     const api = client(item);
@@ -124,7 +145,7 @@ describe("card-news worker", () => {
 
     expect(planner.run).toHaveBeenCalledTimes(2);
     expect(planner.run.mock.calls[1]![1]).toContain(`card_news_plan_invalid:${expectedError}`);
-    expect(api.complete).toHaveBeenCalledWith(item.id, expect.objectContaining({ planDraft: valid }));
+    expect(api.complete).toHaveBeenCalledWith(item.id, expect.objectContaining({ planDraft: compiledV1(v3Input("informational")) }));
   });
 
   it("fails after one v3 repair and never queues image work locally", async () => {

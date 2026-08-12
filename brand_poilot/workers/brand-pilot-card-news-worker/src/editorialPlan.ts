@@ -1,10 +1,15 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import type { ContentGenerationInputV3 } from "@brand-pilot/content-contracts";
+import { STRUCTURED_SCENE_COPY_VERSION, type StructuredSceneCopyV1 } from "@brand-pilot/content-contracts/structured-scene-copy";
 import {
   parseCardNewsPlanDraftV1 as parseContractDraft,
   type CardNewsPlanDraftV1,
 } from "@brand-pilot/content-contracts/planner-drafts";
+import {
+  compileStructuredCardNewsPlanDraftV2,
+  parseStructuredCardNewsPlanDraftV2,
+} from "./structuredSceneDraft.js";
 
 function planMismatch(detail: string): never {
   throw new Error(`card_news_plan_invalid:${detail}`);
@@ -64,7 +69,43 @@ export function parseCardNewsPlanDraftV1(
   return draft;
 }
 
-export async function loadCardNewsPlanDraftV1(outputDir: string, input: ContentGenerationInputV3) {
+export function parseStructuredCardNewsPlanDraftForInput(
+  value: unknown,
+  input: ContentGenerationInputV3,
+): CardNewsPlanDraftV1 {
+  return parseStructuredCardNewsPlanSubmissionForInput(value, input).planDraft;
+}
+
+export type StructuredCardNewsPlanSubmission = {
+  planDraft: CardNewsPlanDraftV1;
+  renderSemanticContract: {
+    contractVersion: typeof STRUCTURED_SCENE_COPY_VERSION;
+    outputFormat: "card_news";
+    scenes: StructuredSceneCopyV1[];
+  };
+};
+
+export function parseStructuredCardNewsPlanSubmissionForInput(
+  value: unknown,
+  input: ContentGenerationInputV3,
+): StructuredCardNewsPlanSubmission {
+  try {
+    const draft = parseStructuredCardNewsPlanDraftV2(value);
+    return {
+      planDraft: parseCardNewsPlanDraftV1(compileStructuredCardNewsPlanDraftV2(draft), input),
+      renderSemanticContract: {
+        contractVersion: STRUCTURED_SCENE_COPY_VERSION,
+        outputFormat: "card_news",
+        scenes: draft.assets,
+      },
+    };
+  } catch (error) {
+    if (error instanceof Error && error.message.startsWith("card_news_plan_invalid:")) throw error;
+    planMismatch("card_news_plan_draft_invalid");
+  }
+}
+
+export async function loadStructuredCardNewsPlanDraft(outputDir: string, input: ContentGenerationInputV3) {
   const value = JSON.parse(await readFile(path.join(outputDir, "card-news-plan.json"), "utf8"));
-  return parseCardNewsPlanDraftV1(value, input);
+  return parseStructuredCardNewsPlanSubmissionForInput(value, input);
 }

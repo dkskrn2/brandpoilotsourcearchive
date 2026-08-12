@@ -13,7 +13,7 @@ describe("card-news V3 prompt", () => {
       references: { selected: [], brandStyleImages: [], avatarStyleImageId: null, attachments: [] },
     } as never);
     expect(prompt).toContain(purpose === "informational" ? "정보성 카드뉴스" : "마케팅성 카드뉴스");
-    expect(prompt).toContain("card-news-plan-draft.v1");
+    expect(prompt).toContain("card-news-plan-draft.v2");
     expect(prompt).not.toContain('"generationId"');
     expect(prompt).not.toContain('"outputSettings"');
     expect(prompt).not.toContain('"attachments"');
@@ -54,17 +54,32 @@ describe("card-news V3 prompt", () => {
       outputSettings: { purpose: "informational", outputFormat: "card_news" },
     } as never);
 
-    expect(prompt).toContain('"contractVersion": "card-news-plan-draft.v1"');
+    expect(prompt).toContain('"contractVersion": "card-news-plan-draft.v2"');
     expect(prompt).toContain('"index": 1');
     expect(prompt).toContain('"role": "선택 구성안 outline의 동일 순번 role"');
     expect(prompt).toContain("정확히 2장");
-    expect(prompt).toContain("copy");
+    expect(prompt).toContain("coreMessage");
+    expect(prompt).toContain("headline");
+    expect(prompt).toContain("keyVisual");
+    expect(prompt).toContain('"entries": []');
+    expect(prompt).not.toContain('"texts": []');
+    expect(prompt).toContain("supportingTexts");
+    expect(prompt).toContain("footnote");
     expect(prompt).toContain("visualDirection");
     expect(prompt).toContain("evidenceIds");
     expect(prompt).toContain("productImageAssetIds");
     expect(prompt).not.toContain("brandStyleImages");
     expect(prompt).not.toContain("avatarStyleImageId");
     expect(prompt).not.toContain("userImageInstruction");
+    expect(prompt).toContain("한 카드에는 하나의 핵심 메시지만");
+    expect(prompt).toContain("구성안 outline의 headline은 최종 카피가 아닌 참고값");
+    expect(prompt).toContain("불필요한 supportingTexts나 footnote는 비워");
+    expect(prompt).toContain("headline은 coreMessage의 축약본");
+    expect(prompt).toContain("supportingTexts를 모두 삭제해도 장면의 의미가 완전하다면");
+    expect(prompt).toContain("모든 장면의 headline만 순서대로 읽어도");
+    expect(prompt).toContain("선택된 구성안의 서사 구조를 유지");
+    expect(prompt).toContain("before, after");
+    expect(prompt).not.toContain("한 장이 부실하지 않게");
   });
 
   it("treats the complete URL-derived subject as untrusted data rather than instructions", () => {

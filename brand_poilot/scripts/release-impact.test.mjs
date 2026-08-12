@@ -5,7 +5,11 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test from "node:test";
 
-import { SERVER_COMPONENTS, classifyChangedPaths } from "./release-impact.mjs";
+import {
+  SERVER_COMPONENTS,
+  STRUCTURED_SOCIAL_RENDER_SEMANTICS_PROFILE,
+  classifyChangedPaths,
+} from "./release-impact.mjs";
 
 const enabled = (impact) => Object.entries(impact.components)
   .filter(([, value]) => value)
@@ -224,6 +228,51 @@ test("three-format cutover maps every production cutover artifact without wideni
   assert.equal(impact.deployBundleChanged, true);
   assert.equal(impact.verifiedScope, true);
   assert.deepEqual(impact.unknownPaths, []);
+});
+
+test("structured social render profile selects only its four coordinated consumers", () => {
+  const impact = classifyChangedPaths([
+    "brand_poilot/packages/brand-pilot-content-contracts/src/structuredSceneCopy.ts",
+    "brand_poilot/packages/brand-pilot-content-contracts/generated/structured-scene-copy-v1.schema.json",
+    "brand_poilot/apps/api/src/aiContentRenderJobs.ts",
+    "brand_poilot/workers/brand-pilot-card-news-worker/src/structuredSceneDraft.ts",
+    "brand_poilot/workers/brand-pilot-card-news-worker/.agents/skills/card-news-creator/SKILL.md",
+    "brand_poilot/workers/brand-pilot-card-news-worker/Dockerfile",
+    "brand_poilot/workers/brand-pilot-card-news-worker/scripts/card-news-plan-draft-v1.schema.json",
+    "brand_poilot/workers/brand-pilot-card-news-worker/scripts/run-codex-card-news-v2-plan.mjs",
+    "brand_poilot/workers/brand-pilot-card-news-worker/src/productionRuntime.test.ts",
+    "brand_poilot/workers/brand-pilot-reel-worker/src/structuredSceneDraft.ts",
+    "brand_poilot/workers/brand-pilot-reel-worker/Dockerfile",
+    "brand_poilot/workers/brand-pilot-reel-worker/scripts/run-codex-reel-plan.mjs",
+    "brand_poilot/workers/brand-pilot-reel-worker/src/productionRuntime.test.ts",
+    "brand_poilot/workers/brand-pilot-image-worker/src/aiContentManualRenderContract.ts",
+    "brand_poilot/docs/superpowers/plans/2026-08-11-structured-social-scene-copy.md",
+    "brand_poilot/docs/superpowers/specs/2026-08-11-structured-social-scene-copy-design.md",
+    "brand_poilot/scripts/release-impact.mjs",
+    "brand_poilot/scripts/release-impact.test.mjs",
+    ".github/workflows/publish-brand-pilot-server-images.yml",
+    "brand_poilot/scripts/incremental-cicd-contract.test.mjs",
+  ], { profile: STRUCTURED_SOCIAL_RENDER_SEMANTICS_PROFILE });
+
+  assert.deepEqual(enabled(impact), ["api", "cardNewsWorker", "imageWorker", "reelWorker"]);
+  assert.equal(impact.buildAllServer, false);
+  assert.equal(impact.migrationChanged, false);
+  assert.equal(impact.productionDeployAllowed, true);
+  assert.equal(impact.verifiedScope, true);
+  assert.deepEqual(impact.unknownPaths, []);
+});
+
+test("structured social render profile rejects any extra path without widening deployment", () => {
+  const impact = classifyChangedPaths([
+    "brand_poilot/apps/api/src/aiContentRenderJobs.ts",
+    "brand_poilot/workers/brand-pilot-blog-worker/src/worker.ts",
+  ], { profile: STRUCTURED_SOCIAL_RENDER_SEMANTICS_PROFILE });
+
+  assert.deepEqual(enabled(impact), ["api"]);
+  assert.equal(impact.buildAllServer, false);
+  assert.equal(impact.productionDeployAllowed, false);
+  assert.equal(impact.verifiedScope, false);
+  assert.deepEqual(impact.unknownPaths, ["brand_poilot/workers/brand-pilot-blog-worker/src/worker.ts"]);
 });
 
 test("CLI includes deleted marketing paths and maps retirement only to reel and deploy", () => {

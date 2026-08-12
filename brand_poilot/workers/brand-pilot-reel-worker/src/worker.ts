@@ -10,8 +10,7 @@ import {
   startJobLeaseGuard,
   type CodexAccountPool,
 } from "@brand-pilot/worker-runtime";
-import type { ReelPlanDraftV1 } from "@brand-pilot/content-contracts/planner-drafts";
-import { parseReelInput, parseReelPlanDraftForInput, type ReelClient, type ReelJob } from "./contracts.js";
+import { parseReelInput, parseStructuredReelPlanSubmissionForInput, type ReelClient, type ReelJob, type StructuredReelPlanSubmission } from "./contracts.js";
 import { buildReelPlanPrompt, reelPlanSkillVersion } from "./promptBuilder.js";
 
 export interface ReelPlanner {
@@ -76,12 +75,12 @@ export async function runOnce(input: { workerId: string; client: ReelClient; pla
   try {
     const finalInput = parseReelInput(job.payload.contentGenerationInput, job);
     let repairError: string | undefined;
-    let planDraft: ReelPlanDraftV1 | undefined;
+    let submission: StructuredReelPlanSubmission | undefined;
     for (let attempt = 0; attempt < 2; attempt += 1) {
       const run = await input.planner.run(job, buildReelPlanPrompt(finalInput, repairError), lease.signal);
       runs.push(run);
       try {
-        planDraft = parseReelPlanDraftForInput(
+        submission = parseStructuredReelPlanSubmissionForInput(
           JSON.parse(await readFile(path.join(run.outputDir, "reel-plan.json"), "utf8")),
           finalInput,
         );
@@ -91,13 +90,14 @@ export async function runOnce(input: { workerId: string; client: ReelClient; pla
         repairError = error instanceof Error ? error.message : String(error);
       }
     }
-    if (!planDraft) throw new Error("reel_plan_draft_invalid");
+    if (!submission) throw new Error("reel_plan_draft_invalid");
     const completionBody = {
       workerId: input.workerId,
       leaseToken: job.leaseToken,
       skillVersion: reelPlanSkillVersion,
       jobType: "generate",
-      planDraft,
+      planDraft: submission.planDraft,
+      renderSemanticContract: submission.renderSemanticContract,
     };
     const completion = await replayContentWorkerCompletion({
       body: completionBody,

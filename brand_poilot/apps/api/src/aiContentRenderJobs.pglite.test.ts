@@ -185,7 +185,7 @@ describe("AiContentRenderJobsRepository with postgres semantics", () => {
     }]);
   });
 
-  async function enqueueManualV2() {
+  async function enqueueManualV3() {
     const baseInput = finalInput();
     const input = {
       ...baseInput,
@@ -200,20 +200,33 @@ describe("AiContentRenderJobsRepository with postgres semantics", () => {
       content: { caption: "Tea", hashtags: [] as string[], cta: "Read" },
       imagePackage: imagePackage(1),
     };
+    const renderSemanticContract = {
+      contractVersion: "structured-scene-copy.v1" as const,
+      outputFormat: "card_news" as const,
+      scenes: [{
+        index: 1, role: "cover", coreMessage: "Core 1", headline: "Copy 1",
+        keyVisual: { type: "none" as const, entries: [] }, supportingTexts: [], footnote: null,
+        visualDirection: "Visual 1", evidenceIds: [], productImageAssetIds: [],
+      }],
+    };
     await db.query("insert into ai_content_proposal_batches(id,workspace_id,brand_id,origin) values($1,$2,$3,'manual')", [ids.batch, ids.workspace, ids.brand]);
     await db.query("insert into ai_content_proposals(id,batch_id,workspace_id,brand_id) values($1,$2,$3,$4)", [ids.proposal, ids.batch, ids.workspace, ids.brand]);
     await db.query("insert into ai_content_generation_prompt_bindings(generation_id,workspace_id,brand_id,selected_proposal_id) values($1,$2,$3,$4)", [ids.generation, ids.workspace, ids.brand, ids.proposal]);
     await db.query("insert into ai_content_generation_input_snapshots(generation_id,workspace_id,brand_id,input_json) values($1,$2,$3,$4::jsonb)", [ids.generation, ids.workspace, ids.brand, JSON.stringify(input)]);
     await db.query("update ai_content_generation_outputs set plan_json=$2::jsonb where id=$1", [ids.output, JSON.stringify(plan)]);
+    await db.query(
+      "insert into ai_content_generation_jobs(id,generation_id,output_id,workspace_id,brand_id,job_type,output_format,status,payload_json) values(gen_random_uuid(),$1,$2,$3,$4,'generate','card_news','succeeded',$5::jsonb)",
+      [ids.generation, ids.output, ids.workspace, ids.brand, JSON.stringify({ renderSemanticContract })],
+    );
     await enqueueAiContentRenderJobs(db as never, {
       workspaceId: ids.workspace, brandId: ids.brand, generationId: ids.generation, outputId: ids.output,
-      plan, finalInput: input, imageAssetTransport: "manual-v2",
+      plan, finalInput: input, imageAssetTransport: "manual-v2", renderSemanticContract,
     });
-    return { input, plan };
+    return { input, plan, renderSemanticContract };
   }
 
-  it("hydrates a proven manual v2 image claim from immutable input and canonical plan without rewriting the row", async () => {
-    const { input, plan } = await enqueueManualV2();
+  it("hydrates a proven manual v3 image claim with only the current structured scene", async () => {
+    const { input, plan, renderSemanticContract } = await enqueueManualV3();
     const before = await db.query<{ payload_json: Record<string, unknown> }>("select payload_json from ai_content_generation_render_jobs");
     expect(before.rows[0]?.payload_json).not.toHaveProperty("contentGenerationInput");
     expect(before.rows[0]?.payload_json).not.toHaveProperty("contentPlan");
@@ -221,7 +234,7 @@ describe("AiContentRenderJobsRepository with postgres semantics", () => {
     const job = await repository.claim({ workerId: "manual-image-worker", leaseSeconds: 180 });
 
     expect(job?.payload).toEqual({
-      contractVersion: "ai-content-render-job.v2",
+      contractVersion: "ai-content-render-job.v3",
       jobKind: "image_asset",
       generationId: ids.generation,
       outputId: ids.output,
@@ -231,17 +244,26 @@ describe("AiContentRenderJobsRepository with postgres semantics", () => {
       imagePackage: plan.imagePackage,
       contentGenerationInput: input,
       contentPlan: plan,
-      rendererPromptVersion: "image-final-pixels.v2",
+      rendererPromptVersion: "image-final-pixels.v3",
+      renderSemanticBinding: expect.objectContaining({
+        contractVersion: "structured-scene-copy.v1", sceneIndex: 1,
+        semanticSha256: expect.stringMatching(/^[0-9a-f]{64}$/),
+      }),
+      renderSemanticScene: {
+        contractVersion: "structured-scene-copy.v1",
+        scene: renderSemanticContract.scenes[0],
+      },
     });
     const after = await db.query<{ payload_json: Record<string, unknown> }>("select payload_json from ai_content_generation_render_jobs");
     expect(after.rows[0]?.payload_json).toEqual(before.rows[0]?.payload_json);
   });
 
-  it("hydrates a manual v2 image claim when proposal lineage tables are SELECT-only", async () => {
-    await enqueueManualV2();
+  it("hydrates a manual v3 image claim when proposal lineage tables are SELECT-only", async () => {
+    await enqueueManualV3();
     await db.exec(`
       create role content_application;
       grant select,update on ai_content_generations,ai_content_generation_outputs,ai_content_generation_render_jobs to content_application;
+      grant select on ai_content_generation_jobs to content_application;
       grant select on ai_content_generation_input_snapshots,ai_content_generation_prompt_bindings,
         ai_content_proposals,ai_content_proposal_batches,ai_content_output_research_snapshots to content_application;
       set role content_application;
@@ -250,12 +272,31 @@ describe("AiContentRenderJobsRepository with postgres semantics", () => {
     const job = await repository.claim({ workerId: "manual-image-worker", leaseSeconds: 180 });
 
     expect(job?.payload).toMatchObject({
-      contractVersion: "ai-content-render-job.v2",
+      contractVersion: "ai-content-render-job.v3",
       generationId: ids.generation,
       outputId: ids.output,
       contentGenerationInput: { contractVersion: "content-generation-input.v3" },
       contentPlan: { contractVersion: "card-news-plan.v2" },
     });
+  });
+
+  it("rehydrates identical current-scene semantics on a retry without rewriting the stored job", async () => {
+    await enqueueManualV3();
+    const before = await db.query<{ payload_json: Record<string, unknown> }>(
+      "select payload_json from ai_content_generation_render_jobs",
+    );
+    const first = await repository.claim({ workerId: "manual-image-worker", leaseSeconds: 180 });
+    await repository.fail({
+      jobId: first!.id, workerId: "manual-image-worker", leaseToken: first!.leaseToken,
+      errorCode: "render_transient", errorMessage: "retry", retryable: true,
+    });
+    await db.query("update ai_content_generation_render_jobs set available_at=now() where id=$1", [first!.id]);
+    const second = await repository.claim({ workerId: "manual-image-worker", leaseSeconds: 180 });
+
+    expect(second?.payload.renderSemanticScene).toEqual(first?.payload.renderSemanticScene);
+    expect((await db.query<{ payload_json: Record<string, unknown> }>(
+      "select payload_json from ai_content_generation_render_jobs",
+    )).rows[0]?.payload_json).toEqual(before.rows[0]?.payload_json);
   });
 
   it.each([
@@ -277,11 +318,17 @@ describe("AiContentRenderJobsRepository with postgres semantics", () => {
     ["queued package", async () => {
       await db.query("update ai_content_generation_render_jobs set payload_json=jsonb_set(payload_json,'{imagePackage,assets,0,copy}','\"tampered\"'::jsonb)");
     }],
+    ["semantic hash binding", async () => {
+      await db.query("update ai_content_generation_render_jobs set payload_json=jsonb_set(payload_json,'{renderSemanticBinding,semanticSha256}',to_jsonb(repeat('f',64)))");
+    }],
+    ["authoritative semantic envelope", async () => {
+      await db.query("update ai_content_generation_jobs set payload_json=jsonb_set(payload_json,'{renderSemanticContract,scenes,0,coreMessage}','\"tampered\"'::jsonb)");
+    }],
     ["manual lineage", async () => {
       await db.query("update ai_content_proposal_batches set origin='scheduled_crawl'");
     }],
-  ])("rolls back a v2 claim when %s no longer matches", async (_label, mutate) => {
-    await enqueueManualV2();
+  ])("rolls back a v3 claim when %s no longer matches", async (_label, mutate) => {
+    await enqueueManualV3();
     await mutate();
 
     await expect(repository.claim({ workerId: "manual-image-worker", leaseSeconds: 180 }))

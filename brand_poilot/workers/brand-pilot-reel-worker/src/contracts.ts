@@ -2,10 +2,15 @@ import {
   parseContentGenerationInputV3,
   type ContentGenerationInputV3,
 } from "@brand-pilot/content-contracts";
+import { STRUCTURED_SCENE_COPY_VERSION, type StructuredSceneCopyV1 } from "@brand-pilot/content-contracts/structured-scene-copy";
 import {
   parseReelPlanDraftV1,
   type ReelPlanDraftV1,
 } from "@brand-pilot/content-contracts/planner-drafts";
+import {
+  compileStructuredReelPlanDraftV2,
+  parseStructuredReelPlanDraftV2,
+} from "./structuredSceneDraft.js";
 
 export interface ReelJob {
   id: string;
@@ -105,4 +110,40 @@ export function parseReelPlanDraftForInput(value: unknown, input: ContentGenerat
     );
   }
   return draft;
+}
+
+export function parseStructuredReelPlanDraftForInput(
+  value: unknown,
+  input: ContentGenerationInputV3,
+): ReelPlanDraftV1 {
+  return parseStructuredReelPlanSubmissionForInput(value, input).planDraft;
+}
+
+export type StructuredReelPlanSubmission = {
+  planDraft: ReelPlanDraftV1;
+  renderSemanticContract: {
+    contractVersion: typeof STRUCTURED_SCENE_COPY_VERSION;
+    outputFormat: "reel";
+    scenes: StructuredSceneCopyV1[];
+  };
+};
+
+export function parseStructuredReelPlanSubmissionForInput(
+  value: unknown,
+  input: ContentGenerationInputV3,
+): StructuredReelPlanSubmission {
+  try {
+    const draft = parseStructuredReelPlanDraftV2(value);
+    return {
+      planDraft: parseReelPlanDraftForInput(compileStructuredReelPlanDraftV2(draft), input),
+      renderSemanticContract: {
+        contractVersion: STRUCTURED_SCENE_COPY_VERSION,
+        outputFormat: "reel",
+        scenes: draft.assets,
+      },
+    };
+  } catch (error) {
+    if (error instanceof Error && error.message !== "reel_plan_draft_v1_invalid") throw error;
+    throw new Error("reel_structured_draft_invalid");
+  }
 }

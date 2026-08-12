@@ -14,7 +14,7 @@ export function buildCodexPrompt(prompt) {
 export function buildCodexArgs(outputDir) {
   const schemaFile = path.resolve(
     import.meta.dirname,
-    "card-news-plan-draft-v1.schema.json",
+    "card-news-plan-draft-v2.schema.json",
   );
   const outputFile = path.join(outputDir, "card-news-plan.json");
   return [

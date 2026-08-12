@@ -33,7 +33,7 @@ COPY --from=build --chown=node:node /app/workers/brand-pilot-card-news-worker/pa
 COPY --from=build --chown=node:node /app/workers/brand-pilot-card-news-worker/dist ./workers/brand-pilot-card-news-worker/dist
 COPY --from=build --chown=node:node /app/workers/brand-pilot-card-news-worker/scripts/codex-runtime.mjs ./workers/brand-pilot-card-news-worker/scripts/codex-runtime.mjs
 COPY --from=build --chown=node:node /app/workers/brand-pilot-card-news-worker/scripts/run-codex-card-news-v2-plan.mjs ./workers/brand-pilot-card-news-worker/scripts/run-codex-card-news-v2-plan.mjs
-COPY --from=build --chown=node:node /app/workers/brand-pilot-card-news-worker/scripts/card-news-plan-draft-v1.schema.json ./workers/brand-pilot-card-news-worker/scripts/card-news-plan-draft-v1.schema.json
+COPY --from=build --chown=node:node /app/workers/brand-pilot-card-news-worker/scripts/card-news-plan-draft-v2.schema.json ./workers/brand-pilot-card-news-worker/scripts/card-news-plan-draft-v2.schema.json
 COPY --from=build --chown=node:node /app/workers/brand-pilot-card-news-worker/.agents/skills/card-news-creator/SKILL.md ./workers/brand-pilot-card-news-worker/.agents/skills/card-news-creator/SKILL.md
 
 WORKDIR /app/workers/brand-pilot-card-news-worker

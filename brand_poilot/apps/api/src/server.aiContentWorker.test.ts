@@ -180,6 +180,64 @@ describe("AI content worker routes", () => {
     await app.close();
   });
 
+  it("forwards the exact structured-scene contract with a social planning completion", async () => {
+    const { app, repository } = setup();
+    const planDraft = {
+      contractVersion: "reel-plan-draft.v1",
+      content: { caption: "Caption", hashtags: ["guide"], cta: "Save" },
+      assets: [{ index: 1, role: "scene", copy: "결론", visualDirection: "세로 구성", evidenceIds: [], productImageAssetIds: [] }],
+    };
+    const renderSemanticContract = {
+      contractVersion: "structured-scene-copy.v1",
+      outputFormat: "reel",
+      scenes: [{
+        index: 1, role: "scene", coreMessage: "핵심", headline: "결론",
+        keyVisual: { type: "none", entries: [] }, supportingTexts: [], footnote: null,
+        visualDirection: "세로 구성", evidenceIds: [], productImageAssetIds: [],
+      }],
+    };
+    const response = await app.inject({
+      method: "POST", url: "/worker/ai-content-jobs/job-1/complete",
+      headers: { authorization: "Bearer worker-token" },
+      payload: {
+        workerId: "worker-1", leaseToken: "lease-1", skillVersion: "reel-plan-skill.v6",
+        jobType: "generate", planDraft, renderSemanticContract,
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(repository.completeAiContentJob).toHaveBeenCalledWith(expect.objectContaining({
+      planDraft, renderSemanticContract,
+    }));
+    await app.close();
+  });
+
+  it("rejects a structured-scene contract on an unchanged blog completion", async () => {
+    const { app, repository } = setup();
+    const response = await app.inject({
+      method: "POST", url: "/worker/ai-content-jobs/job-1/complete",
+      headers: { authorization: "Bearer worker-token" },
+      payload: {
+        workerId: "worker-1", leaseToken: "lease-1", skillVersion: "blog-plan-draft.v1",
+        jobType: "generate",
+        planDraft: { contractVersion: "blog-plan-draft.v1", content: {}, imageDraft: null },
+        renderSemanticContract: {
+          contractVersion: "structured-scene-copy.v1", outputFormat: "reel",
+          scenes: [{
+            index: 1, role: "scene", coreMessage: "핵심", headline: "결론",
+            keyVisual: { type: "none", entries: [] }, supportingTexts: [], footnote: null,
+            visualDirection: "세로 구성", evidenceIds: [], productImageAssetIds: [],
+          }],
+        },
+      },
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toEqual({ error: "ai_content_plan_completion_invalid" });
+    expect(repository.completeAiContentJob).not.toHaveBeenCalled();
+    await app.close();
+  });
+
   it("maps a completion lease loss to the same 409 contract as heartbeat", async () => {
     const { app, repository } = setup();
     vi.mocked(repository.completeAiContentJob).mockRejectedValueOnce(
