@@ -26,7 +26,6 @@ const SCHEMA_FILENAMES = [
   "proposal-input-v2.schema.json",
   "reel-plan-v2.schema.json",
   "research-evidence-v1.schema.json",
-  "structured-scene-copy-v1.schema.json",
 ] as const;
 
 function objectKeysAreSorted(value: unknown): boolean {

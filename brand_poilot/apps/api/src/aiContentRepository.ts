@@ -505,7 +505,7 @@ function loadProposalCatalog(): VerifiedGeneratedContentCatalog {
   }
   const catalog = JSON.parse(bytes.toString("utf8")) as VerifiedGeneratedContentCatalog;
   if (
-    catalog.contractSourceHash !== "8932c7d94b89a764293c2a8913b7d30bde54319a3b6b3f7b3ff0128880628117"
+    catalog.contractSourceHash !== "02760a1e006eb5920980a4b9c5b268cf53b3595543c5f909f2d66be53393c660"
     || catalog.proposalContracts.requestVersion !== "content-proposal-request.v2"
     || catalog.proposalContracts.baseInputVersion !== "proposal-base-input.v2"
     || catalog.proposalContracts.outputVersion !== "content-proposal.v2"
