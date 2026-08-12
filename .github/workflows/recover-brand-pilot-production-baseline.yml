@@ -37,7 +37,7 @@ jobs:
           persist-credentials: false
 
       - name: Validate pinned recovery inputs and local SSH identity
-        shell: '"C:\Program Files\Git\bin\bash.exe" --noprofile --norc -e -o pipefail {0}'
+        shell: 'C:\Progra~1\Git\bin\bash.exe --noprofile --norc -e -o pipefail {0}'
         env:
           EXPECTED_RELEASE_SHA: ${{ inputs.expected_release_sha }}
           EXPECTED_API_DIGEST: ${{ inputs.expected_api_digest }}
@@ -54,7 +54,7 @@ jobs:
           [[ -f "$HOME/.ssh/known_hosts" && ! -L "$HOME/.ssh/known_hosts" ]] || { echo "recovery_known_hosts_missing" >&2; exit 1; }
 
       - name: Validate and stream the installed production release read-only
-        shell: '"C:\Program Files\Git\bin\bash.exe" --noprofile --norc -e -o pipefail {0}'
+        shell: 'C:\Progra~1\Git\bin\bash.exe --noprofile --norc -e -o pipefail {0}'
         env:
           EXPECTED_RELEASE_SHA: ${{ inputs.expected_release_sha }}
           EXPECTED_API_DIGEST: ${{ inputs.expected_api_digest }}
@@ -138,7 +138,7 @@ jobs:
           [[ -z "$(find recovered-release -type l -print -quit)" ]] || { echo "recovery_symlink_forbidden" >&2; exit 1; }
 
       - name: Verify recovered files against integrity metadata and source commit
-        shell: '"C:\Program Files\Git\bin\bash.exe" --noprofile --norc -e -o pipefail {0}'
+        shell: 'C:\Progra~1\Git\bin\bash.exe --noprofile --norc -e -o pipefail {0}'
         env:
           EXPECTED_RELEASE_SHA: ${{ inputs.expected_release_sha }}
           EXPECTED_RELEASE_ENV_SHA256: ${{ inputs.expected_release_env_sha256 }}
@@ -168,7 +168,7 @@ jobs:
           done < "$release_dir/release-integrity.sha256"
 
       - name: Reconstruct immutable release artifact with recovery provenance
-        shell: '"C:\Program Files\Git\bin\bash.exe" --noprofile --norc -e -o pipefail {0}'
+        shell: 'C:\Progra~1\Git\bin\bash.exe --noprofile --norc -e -o pipefail {0}'
         env:
           EXPECTED_RELEASE_SHA: ${{ inputs.expected_release_sha }}
           EXPECTED_API_DIGEST: ${{ inputs.expected_api_digest }}
