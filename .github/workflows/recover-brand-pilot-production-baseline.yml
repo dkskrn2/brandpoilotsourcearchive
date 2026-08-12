@@ -50,8 +50,10 @@ jobs:
           [[ "$EXPECTED_RELEASE_ENV_SHA256" =~ ^[0-9a-f]{64}$ ]] || { echo "recovery_release_env_sha256_invalid" >&2; exit 1; }
           [[ "$EXPECTED_RELEASE_INTEGRITY_SHA256" =~ ^[0-9a-f]{64}$ ]] || { echo "recovery_release_integrity_sha256_invalid" >&2; exit 1; }
           [[ "$(git rev-parse HEAD)" == "$EXPECTED_RELEASE_SHA" ]] || { echo "recovery_checkout_sha_mismatch" >&2; exit 1; }
-          [[ -f "$HOME/.ssh/brand-pilot-ubuntu" && ! -L "$HOME/.ssh/brand-pilot-ubuntu" ]] || { echo "recovery_ssh_key_missing" >&2; exit 1; }
-          [[ -f "$HOME/.ssh/known_hosts" && ! -L "$HOME/.ssh/known_hosts" ]] || { echo "recovery_known_hosts_missing" >&2; exit 1; }
+          ssh_home="$(cygpath -u "$USERPROFILE")/.ssh"
+          [[ -f "$ssh_home/brand-pilot-ubuntu" && ! -L "$ssh_home/brand-pilot-ubuntu" ]] || { echo "recovery_ssh_key_missing" >&2; exit 1; }
+          [[ -f "$ssh_home/known_hosts" && ! -L "$ssh_home/known_hosts" ]] || { echo "recovery_known_hosts_missing" >&2; exit 1; }
+          [[ -x /c/Windows/System32/OpenSSH/ssh.exe ]] || { echo "recovery_windows_openssh_missing" >&2; exit 1; }
 
       - name: Validate and stream the installed production release read-only
         shell: 'C:\Progra~1\Git\bin\bash.exe --noprofile --norc -e -o pipefail {0}'
@@ -62,9 +64,11 @@ jobs:
           EXPECTED_RELEASE_INTEGRITY_SHA256: ${{ inputs.expected_release_integrity_sha256 }}
         run: |
           set -Eeuo pipefail
-          ssh -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
-            -o UserKnownHostsFile="$HOME/.ssh/known_hosts" \
-            -i "$HOME/.ssh/brand-pilot-ubuntu" bpdeploy@brand-pilot-ubuntu \
+          ssh_home="$(cygpath -w "$USERPROFILE")\\.ssh"
+          /c/Windows/System32/OpenSSH/ssh.exe \
+            -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
+            -o "UserKnownHostsFile=$ssh_home\\known_hosts" \
+            -i "$ssh_home\\brand-pilot-ubuntu" bpdeploy@brand-pilot-ubuntu \
             bash -s -- "$EXPECTED_RELEASE_SHA" "$EXPECTED_API_DIGEST" \
             "$EXPECTED_RELEASE_ENV_SHA256" "$EXPECTED_RELEASE_INTEGRITY_SHA256" <<'REMOTE' \
             > recovered-release.tar.gz
