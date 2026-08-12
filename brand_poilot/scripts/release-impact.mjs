@@ -16,6 +16,7 @@ export const SERVER_COMPONENTS = Object.freeze([
 const COMPONENTS = Object.freeze(["customerUi", ...SERVER_COMPONENTS]);
 
 export const AI_CONTENT_THREE_FORMAT_CUTOVER_PROFILE = "ai-content-three-format-cutover";
+export const STRUCTURED_SOCIAL_RENDER_SEMANTICS_PROFILE = "structured-social-render-semantics";
 const AI_CONTENT_CUTOVER_SERVER_COMPONENTS = Object.freeze([
   "api",
   "contentProposalWorker",
@@ -48,6 +49,80 @@ const AI_CONTENT_PLANNER_DRAFT_CONTRACT_PATHS = new Set([
 const AI_CONTENT_SCOPED_TOOLING_PATHS = new Set([
   "scripts/check-local-env.mjs",
   "scripts/three-format-cutover-static-check.mjs",
+]);
+
+const STRUCTURED_SOCIAL_CONTRACT_PATHS = new Set([
+  "packages/brand-pilot-content-contracts/package.json",
+  "packages/brand-pilot-content-contracts/generated/content-catalog.json",
+  "packages/brand-pilot-content-contracts/generated/structured-scene-copy-v1.schema.json",
+  "packages/brand-pilot-content-contracts/src/catalog.test.ts",
+  "packages/brand-pilot-content-contracts/src/catalog.ts",
+  "packages/brand-pilot-content-contracts/src/generateArtifacts.ts",
+  "packages/brand-pilot-content-contracts/src/generatedArtifacts.test.ts",
+  "packages/brand-pilot-content-contracts/src/index.ts",
+  "packages/brand-pilot-content-contracts/src/structuredSceneCopy.test.ts",
+  "packages/brand-pilot-content-contracts/src/structuredSceneCopy.ts",
+]);
+
+const STRUCTURED_SOCIAL_API_PATHS = new Set([
+  "apps/api/src/aiContentContracts.ts",
+  "apps/api/src/aiContentRenderJobs.pglite.test.ts",
+  "apps/api/src/aiContentRenderJobs.test.ts",
+  "apps/api/src/aiContentRenderJobs.ts",
+  "apps/api/src/aiContentRepository.ts",
+  "apps/api/src/aiContentRepositoryV3.postgres.integration.test.ts",
+  "apps/api/src/aiContentRepositoryV3Runtime.test.ts",
+  "apps/api/src/httpServer.ts",
+  "apps/api/src/server.aiContentWorker.test.ts",
+]);
+
+const STRUCTURED_SOCIAL_CARD_PATHS = new Set([
+  "workers/brand-pilot-card-news-worker/scripts/card-news-plan-draft-v2.schema.json",
+  "workers/brand-pilot-card-news-worker/src/editorialPlan.ts",
+  "workers/brand-pilot-card-news-worker/src/promptBuilder.test.ts",
+  "workers/brand-pilot-card-news-worker/src/promptBuilder.ts",
+  "workers/brand-pilot-card-news-worker/src/structuredSceneDraft.test.ts",
+  "workers/brand-pilot-card-news-worker/src/structuredSceneDraft.ts",
+  "workers/brand-pilot-card-news-worker/src/worker.test.ts",
+  "workers/brand-pilot-card-news-worker/src/worker.ts",
+]);
+
+const STRUCTURED_SOCIAL_REEL_PATHS = new Set([
+  "workers/brand-pilot-reel-worker/scripts/reel-plan-draft-v2.schema.json",
+  "workers/brand-pilot-reel-worker/src/contracts.test.ts",
+  "workers/brand-pilot-reel-worker/src/contracts.ts",
+  "workers/brand-pilot-reel-worker/src/promptBuilder.test.ts",
+  "workers/brand-pilot-reel-worker/src/promptBuilder.ts",
+  "workers/brand-pilot-reel-worker/src/structuredSceneDraft.ts",
+  "workers/brand-pilot-reel-worker/src/worker.test.ts",
+  "workers/brand-pilot-reel-worker/src/worker.ts",
+]);
+
+const STRUCTURED_SOCIAL_IMAGE_PATHS = new Set([
+  "workers/brand-pilot-image-worker/.codex/skills/image-render/SKILL.md",
+  "workers/brand-pilot-image-worker/src/aiContentAssetRenderer.test.ts",
+  "workers/brand-pilot-image-worker/src/aiContentAssetRenderer.ts",
+  "workers/brand-pilot-image-worker/src/aiContentCardNewsAssetPromptV2.ts",
+  "workers/brand-pilot-image-worker/src/aiContentLockedSocialCopyPrompt.ts",
+  "workers/brand-pilot-image-worker/src/aiContentManualAssetPromptV2.test.ts",
+  "workers/brand-pilot-image-worker/src/aiContentManualAssetPromptV2Common.ts",
+  "workers/brand-pilot-image-worker/src/aiContentManualRenderContract.test.ts",
+  "workers/brand-pilot-image-worker/src/aiContentManualRenderContract.ts",
+  "workers/brand-pilot-image-worker/src/aiContentReelAssetPromptV2.ts",
+  "workers/brand-pilot-image-worker/src/aiContentRenderClient.test.ts",
+  "workers/brand-pilot-image-worker/src/aiContentRenderClient.ts",
+  "workers/brand-pilot-image-worker/src/productionRuntime.test.ts",
+  "workers/brand-pilot-image-worker/src/skillContract.test.ts",
+  "workers/brand-pilot-image-worker/test/fixtures/manualRender.ts",
+]);
+
+const STRUCTURED_SOCIAL_TOOLING_PATHS = new Set([
+  "scripts/release-impact.mjs",
+  "scripts/release-impact.test.mjs",
+]);
+
+const STRUCTURED_SOCIAL_DOC_PATHS = new Set([
+  "docs/superpowers/plans/2026-08-12-structured-scene-render-semantics.md",
 ]);
 
 const WORKER_PATHS = Object.freeze([
@@ -177,9 +252,39 @@ function classifyAiContentCutoverPath(path, components) {
   return { known: false };
 }
 
+function classifyStructuredSocialRenderPath(path, components) {
+  if (STRUCTURED_SOCIAL_DOC_PATHS.has(path)) return { known: true, documentation: true };
+  if (STRUCTURED_SOCIAL_CONTRACT_PATHS.has(path)) {
+    for (const component of ["api", "cardNewsWorker", "imageWorker", "reelWorker"]) {
+      components[component] = true;
+    }
+    return { known: true };
+  }
+  if (STRUCTURED_SOCIAL_API_PATHS.has(path)) {
+    components.api = true;
+    return { known: true };
+  }
+  if (STRUCTURED_SOCIAL_CARD_PATHS.has(path)) {
+    components.cardNewsWorker = true;
+    return { known: true };
+  }
+  if (STRUCTURED_SOCIAL_REEL_PATHS.has(path)) {
+    components.reelWorker = true;
+    return { known: true };
+  }
+  if (STRUCTURED_SOCIAL_IMAGE_PATHS.has(path)) {
+    components.imageWorker = true;
+    return { known: true };
+  }
+  if (STRUCTURED_SOCIAL_TOOLING_PATHS.has(path)) {
+    return { known: true, deployBundle: path === "scripts/release-impact.mjs" };
+  }
+  return { known: false };
+}
+
 export function classifyChangedPaths(values, options = {}) {
   const profile = options.profile ?? "default";
-  if (!["default", AI_CONTENT_THREE_FORMAT_CUTOVER_PROFILE].includes(profile)) {
+  if (!["default", AI_CONTENT_THREE_FORMAT_CUTOVER_PROFILE, STRUCTURED_SOCIAL_RENDER_SEMANTICS_PROFILE].includes(profile)) {
     throw new Error("release_impact_profile_invalid");
   }
   const originalPaths = [...new Set(values.map((value) => String(value ?? "").trim()).filter(Boolean))];
@@ -195,11 +300,14 @@ export function classifyChangedPaths(values, options = {}) {
   let deployBundleChanged = false;
   let nonDocumentationChange = false;
 
-  if (profile === AI_CONTENT_THREE_FORMAT_CUTOVER_PROFILE) {
+  if (profile === AI_CONTENT_THREE_FORMAT_CUTOVER_PROFILE
+    || profile === STRUCTURED_SOCIAL_RENDER_SEMANTICS_PROFILE) {
     for (let index = 0; index < paths.length; index += 1) {
       const path = paths[index];
       const originalPath = originalPaths[index] ?? path;
-      const result = classifyAiContentCutoverPath(path, components);
+      const result = profile === AI_CONTENT_THREE_FORMAT_CUTOVER_PROFILE
+        ? classifyAiContentCutoverPath(path, components)
+        : classifyStructuredSocialRenderPath(path, components);
       if (result.documentation) continue;
       nonDocumentationChange = true;
       if (result.migration) migrationChanged = true;
