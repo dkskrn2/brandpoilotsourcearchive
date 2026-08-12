@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { createAiContentRenderClient } from "./aiContentRenderClient.js";
-import { cloneManualImageJobV2 } from "../test/fixtures/manualRender.js";
+import { cloneManualImageJobV2, cloneManualImageJobV3 } from "../test/fixtures/manualRender.js";
 
 const uid = (n: number) => `10000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 
@@ -117,6 +117,24 @@ describe("AI content render API client", () => {
         rendererPromptVersion: "image-final-pixels.v2",
         contentGenerationInput: { generationId: job.generationId },
         contentPlan: { contractVersion: "card-news-plan.v2" },
+      },
+    });
+  });
+
+  it("strictly parses the hydrated manual v3 claim and current structured scene", async () => {
+    const job = cloneManualImageJobV3();
+    const fetchImpl = vi.fn(async () => new Response(JSON.stringify({ job }), { status: 200 }));
+    const client = createAiContentRenderClient({ apiUrl: "https://api.example", token: "token", fetchImpl });
+
+    await expect(client.claim("worker", 180)).resolves.toMatchObject({
+      payload: {
+        contractVersion: "ai-content-render-job.v3",
+        rendererPromptVersion: "image-final-pixels.v3",
+        renderSemanticBinding: { contractVersion: "structured-scene-copy.v1", sceneIndex: 2 },
+        renderSemanticScene: {
+          contractVersion: "structured-scene-copy.v1",
+          scene: { index: 2, role: "detail", headline: "두 번째 장면" },
+        },
       },
     });
   });

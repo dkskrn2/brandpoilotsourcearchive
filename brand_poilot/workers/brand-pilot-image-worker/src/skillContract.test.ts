@@ -26,5 +26,9 @@ describe("Threads Codex skill safety contract", () => {
     expect(skill).toContain("image_asset` 작업 하나당 정확히 PNG 한 장");
     expect(skill).toContain("레거시 릴스는 계약된 장면 수만큼 각각 별도 PNG");
     expect(skill).toContain("장수, 순서, 사실, 수량, 카피와 제품 정보는 다시 기획하거나 바꾸지 마세요");
+    expect(skill).toContain("ai-content-render-job.v3");
+    expect(skill).toContain("inputs/structured-scene-copy.json");
+    expect(skill).toMatch(/coreMessage.*화면.*표시.*금지/s);
+    expect(skill).toMatch(/visualDirection.*보조/s);
   });
 });

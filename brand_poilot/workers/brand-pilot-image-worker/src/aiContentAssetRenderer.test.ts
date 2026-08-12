@@ -9,7 +9,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createCodexAccountPool, type CodexAccountPool } from "@brand-pilot/worker-runtime";
 import { createAiContentAssetRenderer, dimensionsForAspectRatio, runAiContentAssetChildProcess } from "./aiContentAssetRenderer.js";
 import type { AiContentImageAssetJob } from "./aiContentRenderClient.js";
-import { cloneManualImageJobV2 } from "../test/fixtures/manualRender.js";
+import { cloneManualImageJobV2, cloneManualImageJobV3 } from "../test/fixtures/manualRender.js";
 
 const uid = (n: number) => `30000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 const sha = (c: string) => c.repeat(64);
@@ -194,6 +194,8 @@ describe("V3 single asset renderer", () => {
       });
       await expect(readFile(path.join(inputDir, "blog-insertion-context.json"), "utf8"))
         .rejects.toMatchObject({ code: "ENOENT" });
+      await expect(readFile(path.join(inputDir, "structured-scene-copy.json"), "utf8"))
+        .rejects.toMatchObject({ code: "ENOENT" });
       const index = JSON.parse(await readFile(path.join(inputDir, "attachments", "index.json"), "utf8"));
       expect(index).toEqual({
         contractVersion: "ai-content-attachment-index.v1",
@@ -234,6 +236,24 @@ describe("V3 single asset renderer", () => {
       expectedSizeBytes: bytesByPath.get("owned/attachment-two")!.byteLength,
       expectedContentType: "image/jpeg",
     });
+    expect(runChild).toHaveBeenCalledTimes(1);
+  });
+
+  it("stages only the hydrated v3 scene as read-only structured semantics", async () => {
+    const input: any = cloneManualImageJobV3();
+    const { readOwned } = await bindManualOwnedBytes(input);
+    const rendered = await sharp({ create: { width: 8, height: 8, channels: 4, background: "white" } }).png().toBuffer();
+    const runChild = vi.fn(async ({ workspaceDir, outputFile }: { workspaceDir: string; outputFile: string }) => {
+      const semanticPath = path.join(workspaceDir, "inputs", "structured-scene-copy.json");
+      expect(JSON.parse(await readFile(semanticPath, "utf8"))).toEqual(input.payload.renderSemanticScene);
+      expect((await (await import("node:fs/promises")).stat(semanticPath)).mode & 0o222).toBe(0);
+      await mkdir(path.dirname(outputFile), { recursive: true });
+      await writeFile(outputFile, rendered);
+    });
+    const renderer = createAiContentAssetRenderer({ workerRoot: path.resolve("."), readOwned, runChild });
+
+    await expect(renderer.renderAsset(input as AiContentImageAssetJob, new AbortController().signal))
+      .resolves.toMatchObject({ index: 2 });
     expect(runChild).toHaveBeenCalledTimes(1);
   });
 

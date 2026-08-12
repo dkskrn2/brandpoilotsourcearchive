@@ -328,6 +328,7 @@ export function createAiContentAssetRenderer({
       const asset = imagePackage.assets[job.assetIndex - 1];
       if (!asset || asset.index !== job.assetIndex) throw new Error("ai_content_asset_index_invalid");
       const manualRenderContract = job.payload.contractVersion === "ai-content-render-job.v2"
+        || job.payload.contractVersion === "ai-content-render-job.v3"
         ? buildAiContentManualRenderContract({
           identity: {
             id: job.id, generationId: job.generationId, outputId: job.outputId,
@@ -336,7 +337,8 @@ export function createAiContentAssetRenderer({
           payload: job.payload,
         })
         : null;
-      if (job.payload.contractVersion === "ai-content-render-job.v2") {
+      if (job.payload.contractVersion === "ai-content-render-job.v2"
+        || job.payload.contractVersion === "ai-content-render-job.v3") {
         for (const attachment of imagePackage.attachments) {
           if (attachment.sizeBytes > AI_CONTENT_OWNED_IMAGE_MAX_BYTES) {
             throw new Error("ai_content_owned_blob_size_limit_exceeded");
@@ -358,13 +360,18 @@ export function createAiContentAssetRenderer({
         ]);
         await Promise.all([makeReadOnly(agentFile), makeReadOnly(skillFile)]);
 
-        if (manualRenderContract !== null && job.payload.contractVersion === "ai-content-render-job.v2") {
+        if (manualRenderContract !== null
+          && (job.payload.contractVersion === "ai-content-render-job.v2"
+            || job.payload.contractVersion === "ai-content-render-job.v3")) {
           const attachmentDir = path.join(inputDir, "attachments");
           await mkdir(attachmentDir, { recursive: true });
           await Promise.all([
             writeReadOnlyJson(path.join(inputDir, "content-generation-input.json"), job.payload.contentGenerationInput),
             writeReadOnlyJson(path.join(inputDir, "content-plan.json"), job.payload.contentPlan),
             writeReadOnlyJson(path.join(inputDir, "render-contract.json"), manualRenderContract),
+            ...(job.payload.contractVersion === "ai-content-render-job.v3"
+              ? [writeReadOnlyJson(path.join(inputDir, "structured-scene-copy.json"), job.payload.renderSemanticScene)]
+              : []),
             ...(manualRenderContract.blogInsertionContext === null
               ? []
               : [writeReadOnlyJson(path.join(inputDir, "blog-insertion-context.json"), manualRenderContract.blogInsertionContext)]),
@@ -414,18 +421,19 @@ export function createAiContentAssetRenderer({
             roles: reference.roles, title: reference.title, text: reference.text,
           });
         }
-        const manualV2 = job.payload.contractVersion === "ai-content-render-job.v2";
+        const manualHydrated = job.payload.contractVersion === "ai-content-render-job.v2"
+          || job.payload.contractVersion === "ai-content-render-job.v3";
         const selectedAttachmentIds = new Set(asset.attachmentIds);
-        const attachmentsToStage = manualV2
+        const attachmentsToStage = manualHydrated
           ? imagePackage.attachments
           : imagePackage.attachments.filter((item) => selectedAttachmentIds.has(item.id));
         for (const [offset, attachment] of attachmentsToStage.entries()) {
-          const fileName = manualV2
+          const fileName = manualHydrated
             ? path.posix.join("attachments", `attachment-${String(offset + 1).padStart(2, "0")}${extension(attachment.mimeType)}`)
             : `attachment-${String(offset + 1).padStart(2, "0")}${extension(attachment.mimeType)}`;
           staged.attachments.push({
             id: attachment.id,
-            path: manualV2
+            path: manualHydrated
               ? await stage(attachment.storagePath, attachment.checksum, fileName, {
                 sizeBytes: attachment.sizeBytes,
                 mimeType: attachment.mimeType,
@@ -436,11 +444,11 @@ export function createAiContentAssetRenderer({
         }
         if (
           staged.productImages.length !== selectedProductIds.size
-          || (manualV2 ? staged.attachments.length !== imagePackage.attachments.length : staged.attachments.length !== selectedAttachmentIds.size)
+          || (manualHydrated ? staged.attachments.length !== imagePackage.attachments.length : staged.attachments.length !== selectedAttachmentIds.size)
         ) throw new Error("ai_content_asset_binding_invalid");
         if (imagePackage.avatarStyleImageId !== null && staged.styleImages.filter((item) => item.avatar).length !== 1) throw new Error("ai_content_avatar_stage_invalid");
 
-        if (manualV2) {
+        if (manualHydrated) {
           await writeReadOnlyJson(path.join(inputDir, "attachments", "index.json"), {
             contractVersion: "ai-content-attachment-index.v1",
             referenceSemantics: "optional_visual_reference",
