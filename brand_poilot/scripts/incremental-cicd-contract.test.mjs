@@ -31,6 +31,10 @@ test("workflow detects production impact and builds an affected image matrix", (
   assert.match(prImpactBranch, /--profile structured-social-render-semantics/);
   assert.match(prImpactBranch, /impact\.verifiedScope && impact\.productionDeployAllowed/);
   assert.match(prImpactBranch, /else[\s\S]*release-impact\.mjs --base "\$base_sha" --head "\$GITHUB_SHA"/);
+  const productionImpactBranch = workflow.match(/else\n([\s\S]*?)bootstrap=false\n\s*fi/)?.[1] ?? "";
+  assert.match(productionImpactBranch, /release-impact\.mjs --base "\$PRODUCTION_RELEASE_SHA" --head "\$GITHUB_SHA" --profile structured-social-render-semantics/);
+  assert.match(productionImpactBranch, /impact\.verifiedScope && impact\.productionDeployAllowed/);
+  assert.match(productionImpactBranch, /else[\s\S]*release-impact\.mjs --base "\$PRODUCTION_RELEASE_SHA" --head "\$GITHUB_SHA"/);
   assert.match(workflow, /strategy:[\s\S]*matrix:[\s\S]*fromJSON/);
   assert.match(workflow, /docker\/build-push-action/);
   assert.match(workflow, /cache-from: type=gha/);
