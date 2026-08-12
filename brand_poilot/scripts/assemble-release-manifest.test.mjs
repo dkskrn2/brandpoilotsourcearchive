@@ -78,6 +78,37 @@ test("reuses unchanged digest and component source revision", () => {
   assert.equal(next.CARD_NEWS_WORKER_CHANGED, "false");
 });
 
+test("API-only descendants preserve every non-API digest and source revision", () => {
+  const currentText = assembleReleaseManifest({
+    releaseSha: SHA_A,
+    currentManifest: null,
+    builtImages: allBuilt,
+    changedImageKeys: IMAGE_KEYS,
+    staticValues,
+  });
+  const current = parseReleaseManifest(currentText);
+  const nextApi = { image: image("API_IMAGE", "f"), sourceSha: SHA_B };
+  const next = parseReleaseManifest(assembleReleaseManifest({
+    releaseSha: SHA_B,
+    currentManifest: currentText,
+    builtImages: { API_IMAGE: nextApi },
+    changedImageKeys: ["API_IMAGE"],
+    staticValues,
+  }));
+
+  assert.equal(next.RELEASE_SCHEMA, "3");
+  assert.equal(next.RELEASE_SHA, SHA_B);
+  assert.equal(next.API_IMAGE, nextApi.image);
+  assert.equal(next.API_SOURCE_SHA, SHA_B);
+  assert.equal(next.API_CHANGED, "true");
+  for (const key of IMAGE_KEYS.filter((key) => key !== "API_IMAGE")) {
+    const prefix = key.slice(0, -"_IMAGE".length);
+    assert.equal(next[key], current[key], `${key} digest changed`);
+    assert.equal(next[`${prefix}_SOURCE_SHA`], current[`${prefix}_SOURCE_SHA`], `${prefix} source changed`);
+    assert.equal(next[`${prefix}_CHANGED`], "false", `${prefix} was marked changed`);
+  }
+});
+
 test("fails closed when a changed or reusable component is missing", () => {
   assert.throws(() => assembleReleaseManifest({
     releaseSha: SHA_A,

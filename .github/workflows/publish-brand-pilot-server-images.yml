@@ -340,17 +340,78 @@ jobs:
         run: |
           set -Eeuo pipefail
           [[ "$PRODUCTION_RELEASE_SHA" =~ ^[0-9a-f]{40}$ ]]
-          run_id="$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/publish-brand-pilot-server-images.yml/runs?head_sha=$PRODUCTION_RELEASE_SHA&status=success&per_page=100" --jq '.workflow_runs[0].id')"
-          [[ "$run_id" =~ ^[0-9]+$ ]] || { echo "production_manifest_run_missing" >&2; exit 1; }
-          artifact_id="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$run_id/artifacts" --jq ".artifacts[] | select(.name == \"brand-pilot-release-$PRODUCTION_RELEASE_SHA\") | .id" | head -n1)"
+          artifact_id=""
+          artifact_source=""
+          recovery_run_id=""
+          recovery_workflow_head_sha=""
+          while read -r run_id; do
+            [[ "$run_id" =~ ^[0-9]+$ ]] || continue
+            artifact_id="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$run_id/artifacts" \
+              --jq ".artifacts[] | select(.expired == false and .name == \"brand-pilot-release-$PRODUCTION_RELEASE_SHA\") | .id" | head -n1)"
+            if [[ "$artifact_id" =~ ^[0-9]+$ ]]; then
+              artifact_source="publish"
+              break
+            fi
+          done < <(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/publish-brand-pilot-server-images.yml/runs?head_sha=$PRODUCTION_RELEASE_SHA&status=success&per_page=100" \
+            --jq '.workflow_runs[] | select(.conclusion == "success") | .id')
+          if [[ -z "$artifact_id" ]]; then
+            while read -r run_id; do
+              [[ "$run_id" =~ ^[0-9]+$ ]] || continue
+              trusted_run_head_sha="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$run_id" \
+                --jq 'if .conclusion == "success" and .event == "workflow_dispatch" and .head_branch == "main" and .path == ".github/workflows/recover-brand-pilot-production-baseline.yml" then .head_sha else "" end')"
+              [[ "$trusted_run_head_sha" =~ ^[0-9a-f]{40}$ ]] || continue
+              artifact_id="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$run_id/artifacts" \
+                --jq ".artifacts[] | select(.expired == false and .name == \"brand-pilot-release-$PRODUCTION_RELEASE_SHA\") | .id" | head -n1)"
+              if [[ "$artifact_id" =~ ^[0-9]+$ ]]; then
+                artifact_source="recovery"
+                recovery_run_id="$run_id"
+                recovery_workflow_head_sha="$trusted_run_head_sha"
+                break
+              fi
+            done < <(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/recover-brand-pilot-production-baseline.yml/runs?status=success&per_page=100" \
+              --jq '.workflow_runs[] | select(.conclusion == "success" and .path == ".github/workflows/recover-brand-pilot-production-baseline.yml") | .id')
+          fi
           [[ "$artifact_id" =~ ^[0-9]+$ ]] || { echo "production_manifest_artifact_missing" >&2; exit 1; }
           gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/$artifact_id/zip" > current-release.zip
           unzip -q current-release.zip -d current-release
+          if [[ "$artifact_source" == "recovery" ]]; then
+            PRODUCTION_RELEASE_SHA="$PRODUCTION_RELEASE_SHA" RECOVERY_RUN_ID="$recovery_run_id" RECOVERY_WORKFLOW_HEAD_SHA="$recovery_workflow_head_sha" node --input-type=module <<'NODE'
+          import { createHash } from "node:crypto";
+          import { readFileSync } from "node:fs";
+          const fail = () => { console.error("production_manifest_recovery_provenance_invalid"); process.exit(1); };
+          let provenance;
+          try { provenance = JSON.parse(readFileSync("current-release/baseline-recovery-provenance.json", "utf8")); } catch { fail(); }
+          const bundlePath = `current-release/release-bundle-${process.env.PRODUCTION_RELEASE_SHA}.tar.gz`;
+          const bundleSha256 = createHash("sha256").update(readFileSync(bundlePath)).digest("hex");
+          const integritySha256 = createHash("sha256").update(readFileSync("current-release/release-integrity.sha256")).digest("hex");
+          const keys = Object.keys(provenance ?? {}).sort().join(",");
+          const expectedKeys = ["apiDigest","contractVersion","releaseBundleSha256","releaseEnvSha256","releaseIntegritySha256","releaseSha","sourceWorkflow","workflowHeadSha","workflowRunId"].sort().join(",");
+          if (keys !== expectedKeys
+            || provenance.contractVersion !== "brand-pilot-baseline-recovery.v1"
+            || provenance.sourceWorkflow !== ".github/workflows/recover-brand-pilot-production-baseline.yml"
+            || provenance.workflowRunId !== process.env.RECOVERY_RUN_ID
+            || provenance.workflowHeadSha !== process.env.RECOVERY_WORKFLOW_HEAD_SHA
+            || provenance.releaseSha !== process.env.PRODUCTION_RELEASE_SHA
+            || provenance.releaseBundleSha256 !== bundleSha256
+            || provenance.releaseIntegritySha256 !== integritySha256
+            || !/^sha256:[0-9a-f]{64}$/.test(provenance.apiDigest)
+            || !/^[0-9a-f]{64}$/.test(provenance.releaseEnvSha256)) fail();
+          NODE
+          fi
           (
             cd current-release
             sha256sum --check "release-bundle-$PRODUCTION_RELEASE_SHA.tar.gz.sha256"
             tar -xzf "release-bundle-$PRODUCTION_RELEASE_SHA.tar.gz"
           )
+          grep -Fx 'RELEASE_SCHEMA=3' current-release/release.env
+          grep -Fx "RELEASE_SHA=$PRODUCTION_RELEASE_SHA" current-release/release.env
+          if [[ "$artifact_source" == "recovery" ]]; then
+            release_env_sha256="$(sha256sum -- current-release/release.env | awk '{print $1}')"
+            provenance_release_env_sha256="$(jq -r '.releaseEnvSha256' current-release/baseline-recovery-provenance.json)"
+            [[ "$release_env_sha256" == "$provenance_release_env_sha256" ]] || { echo "production_manifest_recovery_provenance_invalid" >&2; exit 1; }
+            provenance_api_digest="$(jq -r '.apiDigest' current-release/baseline-recovery-provenance.json)"
+            grep -Eq "^API_IMAGE=[^[:space:]]+@$provenance_api_digest$" current-release/release.env || { echo "production_manifest_recovery_provenance_invalid" >&2; exit 1; }
+          fi
           cp "current-release/release.env" brand_poilot/current-release.env
       - name: Assemble immutable release bundle
         working-directory: brand_poilot
@@ -384,7 +445,7 @@ jobs:
           });
           writeFileSync("release.env", release, { mode: 0o600 });
           NODE
-          grep -Fx 'RELEASE_SCHEMA=2' release.env
+          grep -Fx 'RELEASE_SCHEMA=3' release.env
           sha256sum release.env > release.env.sha256
           tar -czf "release-bundle-$GITHUB_SHA.tar.gz" deploy release.env release.env.sha256
           sha256sum "release-bundle-$GITHUB_SHA.tar.gz" > "release-bundle-$GITHUB_SHA.tar.gz.sha256"

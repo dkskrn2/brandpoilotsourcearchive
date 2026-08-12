@@ -20,6 +20,7 @@ import { test } from "node:test";
 
 const read = (path) => readFileSync(path, "utf8");
 const publishWorkflowPath = "../.github/workflows/publish-brand-pilot-server-images.yml";
+const baselineRecoveryWorkflowPath = "../.github/workflows/recover-brand-pilot-production-baseline.yml";
 const ubuntuRunbookPath = "docs/operations/UBUNTU_DEPLOYMENT.md";
 const oauthCutoverRunbookPath = "docs/operations/OAUTH_CUTOVER.md";
 const previewAuthRunbookPath = "docs/operations/VERCEL_PREVIEW_AUTH.md";
@@ -2220,13 +2221,64 @@ test("CI publishing pins every third-party action to its verified commit", () =>
   assert.doesNotMatch(workflow, /^\s*(?:-\s+)?uses:\s+\S+@v\d+(?:\s|$)/m);
 });
 
-test("CI release manifest is schema 2, assembled from digests, and checksummed", () => {
+test("CI release manifest remains schema 3, assembled from digests, and checksummed", () => {
   const workflow = read(publishWorkflowPath);
   assert.match(workflow, /assemble-release-manifest\.mjs/);
-  assert.match(workflow, /grep -Fx 'RELEASE_SCHEMA=2' release\.env/);
+  assert.match(workflow, /grep -Fx 'RELEASE_SCHEMA=3' release\.env/);
+  assert.doesNotMatch(workflow, /grep -Fx 'RELEASE_SCHEMA=2' release\.env/);
   assert.match(workflow, /IMAGE_DIGEST.*sha256:\[0-9a-f\]\{64\}/);
   assert.match(workflow, /sha256sum release\.env > release\.env\.sha256/);
   assert.match(workflow, /release-bundle-\$GITHUB_SHA\.tar\.gz/);
+});
+
+test("production baseline recovery is manual, pinned, read-only, and provenance-bound", () => {
+  assert.equal(existsSync(baselineRecoveryWorkflowPath), true);
+  const recovery = read(baselineRecoveryWorkflowPath);
+  assert.match(recovery, /^name: Recover Brand Pilot production baseline$/m);
+  assert.match(recovery, /^ {2}workflow_dispatch:\n {4}inputs:/m);
+  for (const input of [
+    "expected_release_sha",
+    "expected_api_digest",
+    "expected_release_env_sha256",
+    "expected_release_integrity_sha256",
+  ]) {
+    assert.match(recovery, new RegExp(`^ {6}${input}:$`, "m"));
+  }
+  assert.match(recovery, /^ {4}environment: Production$/m);
+  assert.match(recovery, /validate_release_directory "\$release_dir" candidate/);
+  assert.match(recovery, /state\/current/);
+  assert.match(recovery, /brand-pilot-api-primary-1/);
+  assert.match(recovery, /brand-pilot-api-canary-1/);
+  assert.match(recovery, /runs-on: \[self-hosted, Windows, X64, brand-pilot-recovery\]/);
+  assert.match(recovery, /\/c\/Windows\/System32\/OpenSSH\/ssh\.exe/);
+  assert.match(recovery, /recovery_archive_member_invalid/);
+  assert.match(recovery, /recovery_archive_member_duplicate/);
+  assert.match(recovery, /recovery_archive_file_set_invalid/);
+  assert.match(recovery, /target\.open\("xb"\)/);
+  assert.match(recovery, /baseline-recovery-provenance\.json/);
+  assert.match(recovery, /workflowRunId: process\.env\.GITHUB_RUN_ID/);
+  assert.match(recovery, /workflowHeadSha: process\.env\.GITHUB_SHA/);
+  assert.match(recovery, /brand-pilot-release-\$\{\{ inputs\.expected_release_sha \}\}/);
+  assert.match(recovery, /uses: actions\/upload-artifact@[0-9a-f]{40}\s+# v4\.6\.2/);
+  assert.doesNotMatch(
+    recovery,
+    /docker compose[^\n]*(?:up|down|restart|stop|rm)|\b(?:promote|rollback|deploy)\.sh\b|\b(?:rm|mv|cp|install|chmod|chown)\b[^\n]*\/opt\/brand-pilot/,
+  );
+});
+
+test("normal publishing accepts recovery artifacts only from the successful recovery workflow", () => {
+  const workflow = read(publishWorkflowPath);
+  assert.match(workflow, /recover-brand-pilot-production-baseline\.yml/);
+  assert.match(workflow, /baseline-recovery-provenance\.json/);
+  assert.match(workflow, /brand-pilot-baseline-recovery\.v1/);
+  assert.match(workflow, /\.conclusion == "success"/);
+  assert.match(workflow, /\.event == "workflow_dispatch"/);
+  assert.match(workflow, /\.head_branch == "main"/);
+  assert.match(workflow, /\.path == "\.github\/workflows\/recover-brand-pilot-production-baseline\.yml"/);
+  assert.match(workflow, /provenance\.workflowRunId !== process\.env\.RECOVERY_RUN_ID/);
+  assert.match(workflow, /provenance\.workflowHeadSha !== process\.env\.RECOVERY_WORKFLOW_HEAD_SHA/);
+  assert.match(workflow, /production_manifest_recovery_provenance_invalid/);
+  assert.doesNotMatch(workflow, /artifacts\?name=brand-pilot-release-/);
 });
 
 test("CI publishing uploads a complete bundle and keeps production mutation credential gated", () => {
