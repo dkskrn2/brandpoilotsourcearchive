@@ -189,7 +189,7 @@ interface CreateServerOptions {
   kakao?: { restApiKey: string; clientSecret?: string; redirectUri: string; frontendUrl: string };
   instagramLogin?: { appId: string; appSecret: string; redirectUri: string; frontendUrl: string };
   facebookLogin?: { appId: string; appSecret: string; redirectUri: string; frontendUrl: string };
-  metaWebhook?: { appSecret: string; verifyToken: string };
+  metaWebhook?: { appSecret?: string; appSecrets?: readonly string[]; verifyToken: string };
   brandLogoService?: BrandLogoService;
   aiContentUpload?: {
     readWriteToken: string;
@@ -1352,7 +1352,11 @@ export function createServer(
     });
 
     webhookApp.post<{ Body: unknown }>("/webhooks/meta/instagram", { config: { rawBody: true } }, async (request, reply) => {
-      if (!metaWebhook?.appSecret) {
+      const appSecrets = [...new Set([
+        metaWebhook?.appSecret,
+        ...(metaWebhook?.appSecrets ?? []),
+      ].filter((value): value is string => typeof value === "string" && value.length > 0))];
+      if (appSecrets.length === 0) {
         reply.code(503);
         return { error: "webhook_not_configured" };
       }
@@ -1360,7 +1364,7 @@ export function createServer(
         ? request.headers["x-hub-signature-256"][0]
         : request.headers["x-hub-signature-256"];
       const raw = request.rawBody;
-      if (!Buffer.isBuffer(raw) || !verifyInstagramSignature(raw, signature, metaWebhook.appSecret)) {
+      if (!Buffer.isBuffer(raw) || !appSecrets.some((appSecret) => verifyInstagramSignature(raw, signature, appSecret))) {
         reply.code(403);
         return { error: "webhook_signature_invalid" };
       }

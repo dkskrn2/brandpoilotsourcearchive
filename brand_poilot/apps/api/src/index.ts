@@ -239,8 +239,8 @@ const serverOptions: Parameters<typeof createServer>[0] & {
       frontendUrl: process.env.AUTH_FRONTEND_URL ?? "http://localhost:5173"
     },
     instagramLogin: {
-      appId: process.env.META_APP_ID ?? "",
-      appSecret: process.env.META_APP_SECRET ?? "",
+      appId: process.env.META_INSTAGRAM_APP_ID ?? process.env.META_APP_ID ?? "",
+      appSecret: process.env.META_INSTAGRAM_APP_SECRET ?? process.env.META_APP_SECRET ?? "",
       redirectUri: process.env.META_OAUTH_REDIRECT_URI ?? "",
       frontendUrl: process.env.AUTH_FRONTEND_URL ?? "http://localhost:5173"
     },
@@ -252,7 +252,7 @@ const serverOptions: Parameters<typeof createServer>[0] & {
       frontendUrl: process.env.AUTH_FRONTEND_URL ?? "http://localhost:5173"
     },
     metaWebhook: {
-      appSecret: process.env.META_APP_SECRET ?? "",
+      appSecrets: [process.env.META_APP_SECRET ?? "", process.env.META_INSTAGRAM_APP_SECRET ?? ""],
       verifyToken: process.env.META_WEBHOOK_VERIFY_TOKEN ?? ""
     },
     aiContentUpload: {

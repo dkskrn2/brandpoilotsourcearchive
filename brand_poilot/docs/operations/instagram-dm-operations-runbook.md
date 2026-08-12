@@ -52,6 +52,8 @@ Instagram DM 자동답변에서 사람이 확인해야 하는 상태를 안전�
 
 - 권한 만료 또는 insufficient permission이면 채널 연결 상태를 확인하고 OAuth 재연결을 진행한다.
 - Webhook 구독, callback URL, verify token은 Meta Developer 설정과 중앙 API 환경값이 일치해야 한다.
+- Instagram Login 제품의 앱 ID와 Secret은 `META_INSTAGRAM_APP_ID`, `META_INSTAGRAM_APP_SECRET`에 설정한다. 기존 Facebook Login 앱과 Secret이 다르면 두 값을 반드시 분리한다.
+- 중앙 API는 이전 연결 호환성을 위해 `META_APP_SECRET`과 `META_INSTAGRAM_APP_SECRET` 중 유효한 서명을 허용한다.
 - app secret이나 access token을 화면 캡처, 이슈, 채팅, 저장소에 남기지 않는다.
 
 ## 운영 환경값

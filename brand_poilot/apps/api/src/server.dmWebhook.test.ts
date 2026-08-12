@@ -61,6 +61,35 @@ describe("Instagram DM webhook routes", () => {
     expect(receive).toHaveBeenCalledWith(expect.objectContaining({ messageId: "mid-1", senderId: "sender-1" }));
   });
 
+  it("accepts a webhook signed by the Instagram Login app secret", async () => {
+    const receive = vi.fn(async () => ({ status: "queued" }));
+    const repository = {
+      health: vi.fn(async () => ({ database: "ok" as const })),
+      receiveInstagramWebhookMessage: receive,
+    } as any;
+    const app = createServer({
+      repository,
+      metaWebhook: {
+        appSecrets: ["parent-meta-secret", "instagram-login-secret"],
+        verifyToken: "verify-token",
+      },
+      logger: false,
+    });
+    const raw = JSON.stringify(webhookPayload);
+    const signature = createHmac("sha256", "instagram-login-secret").update(raw).digest("hex");
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/webhooks/meta/instagram",
+      headers: { "content-type": "application/json", "x-hub-signature-256": `sha256=${signature}` },
+      payload: raw,
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({ ok: true, received: 1, outcomes: ["queued"] });
+    expect(receive).toHaveBeenCalledTimes(1);
+  });
+
   it("exposes authenticated profile claim/run/fail worker hooks", async () => {
     const repository = {
       health: vi.fn(async () => ({ database: "ok" as const })),
