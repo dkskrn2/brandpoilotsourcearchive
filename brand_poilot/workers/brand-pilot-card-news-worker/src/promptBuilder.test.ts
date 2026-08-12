@@ -79,6 +79,8 @@ describe("card-news V3 prompt", () => {
     expect(prompt).toContain("선택된 구성안의 콘셉트와 목적을 유지");
     expect(prompt).toContain("일반적인 배경 정보나 점검 안내로 대체하지 마세요");
     expect(prompt).toContain("before, after");
+    expect(prompt).toContain("페이지 번호, 장면 번호, 현재/전체 장수, 진행률 배지 또는 페이지 인디케이터를 기획하거나 출력하지 마세요");
+    expect(prompt).not.toContain("여백, 번호, 아이콘");
     expect(prompt).not.toContain("한 장이 부실하지 않게");
   });
 

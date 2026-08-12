@@ -182,6 +182,7 @@ describe("reel purpose prompt", () => {
     expect(prompt).toContain("모든 장면의 headline만 순서대로 읽어도");
     expect(prompt).toContain("선택된 구성안의 콘셉트와 목적을 유지");
     expect(prompt).toContain("before, after");
+    expect(prompt).toContain("페이지 번호, 장면 번호, 현재/전체 장수, 진행률 배지 또는 페이지 인디케이터를 기획하거나 출력하지 마세요");
     expect(prompt).not.toContain("장면을 채우기 위한 문장");
     expect(prompt).toContain("attachment 선택");
   });

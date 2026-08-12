@@ -26,5 +26,9 @@ describe("Reel Storyboard deterministic render prompt", () => {
     }
     expect(prompt).toContain("publish-ready 9:16 Reel scene");
     expect(prompt).toContain("inputs/product-01.png");
+    expect(prompt).toContain("Do not render page or scene numbering");
+    expect(prompt).toContain("1/6");
+    expect(prompt).toContain("Page 1");
+    expect(prompt).toContain("retry, or fail the job based on whether such numbering appears");
   });
 });
