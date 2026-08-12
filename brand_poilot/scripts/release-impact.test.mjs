@@ -250,6 +250,8 @@ test("structured social render profile selects only its four coordinated consume
     "brand_poilot/docs/superpowers/specs/2026-08-11-structured-social-scene-copy-design.md",
     "brand_poilot/scripts/release-impact.mjs",
     "brand_poilot/scripts/release-impact.test.mjs",
+    ".github/workflows/publish-brand-pilot-server-images.yml",
+    "brand_poilot/scripts/incremental-cicd-contract.test.mjs",
   ], { profile: STRUCTURED_SOCIAL_RENDER_SEMANTICS_PROFILE });
 
   assert.deepEqual(enabled(impact), ["api", "cardNewsWorker", "imageWorker", "reelWorker"]);

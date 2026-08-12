@@ -125,6 +125,8 @@ const STRUCTURED_SOCIAL_IMAGE_PATHS = new Set([
 ]);
 
 const STRUCTURED_SOCIAL_TOOLING_PATHS = new Set([
+  ".github/workflows/publish-brand-pilot-server-images.yml",
+  "scripts/incremental-cicd-contract.test.mjs",
   "scripts/release-impact.mjs",
   "scripts/release-impact.test.mjs",
 ]);
