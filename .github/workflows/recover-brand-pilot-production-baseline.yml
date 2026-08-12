@@ -1,0 +1,208 @@
+name: Recover Brand Pilot production baseline
+
+on:
+  workflow_dispatch:
+    inputs:
+      expected_release_sha:
+        description: Exact 40-character SHA currently recorded in /opt/brand-pilot/state/current
+        required: true
+        type: string
+      expected_api_digest:
+        description: Exact immutable API digest currently running in both API containers
+        required: true
+        type: string
+      expected_release_env_sha256:
+        description: SHA-256 of the installed release.env file
+        required: true
+        type: string
+      expected_release_integrity_sha256:
+        description: SHA-256 of the installed release-integrity.sha256 file
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  recover:
+    environment: Production
+    concurrency:
+      group: brand-pilot-production-baseline-recovery
+      cancel-in-progress: false
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ inputs.expected_release_sha }}
+          persist-credentials: false
+
+      - name: Validate pinned recovery inputs and credentials
+        shell: bash
+        env:
+          EXPECTED_RELEASE_SHA: ${{ inputs.expected_release_sha }}
+          EXPECTED_API_DIGEST: ${{ inputs.expected_api_digest }}
+          EXPECTED_RELEASE_ENV_SHA256: ${{ inputs.expected_release_env_sha256 }}
+          EXPECTED_RELEASE_INTEGRITY_SHA256: ${{ inputs.expected_release_integrity_sha256 }}
+          DEPLOY_HOST: ${{ secrets.BRAND_PILOT_DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.BRAND_PILOT_DEPLOY_USER }}
+          DEPLOY_SSH_KEY: ${{ secrets.BRAND_PILOT_DEPLOY_SSH_KEY }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.BRAND_PILOT_DEPLOY_KNOWN_HOSTS }}
+        run: |
+          set -Eeuo pipefail
+          [[ "$EXPECTED_RELEASE_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "recovery_release_sha_invalid" >&2; exit 1; }
+          [[ "$EXPECTED_API_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "recovery_api_digest_invalid" >&2; exit 1; }
+          [[ "$EXPECTED_RELEASE_ENV_SHA256" =~ ^[0-9a-f]{64}$ ]] || { echo "recovery_release_env_sha256_invalid" >&2; exit 1; }
+          [[ "$EXPECTED_RELEASE_INTEGRITY_SHA256" =~ ^[0-9a-f]{64}$ ]] || { echo "recovery_release_integrity_sha256_invalid" >&2; exit 1; }
+          [[ "$(git rev-parse HEAD)" == "$EXPECTED_RELEASE_SHA" ]] || { echo "recovery_checkout_sha_mismatch" >&2; exit 1; }
+          for value in "$DEPLOY_HOST" "$DEPLOY_USER" "$DEPLOY_SSH_KEY" "$DEPLOY_KNOWN_HOSTS"; do
+            [[ -n "$value" ]] || { echo "recovery_credentials_missing" >&2; exit 1; }
+          done
+
+      - name: Configure pinned SSH host identity
+        shell: bash
+        env:
+          DEPLOY_SSH_KEY: ${{ secrets.BRAND_PILOT_DEPLOY_SSH_KEY }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.BRAND_PILOT_DEPLOY_KNOWN_HOSTS }}
+        run: |
+          set -Eeuo pipefail
+          install -d -m 0700 "$HOME/.ssh"
+          printf '%s\n' "$DEPLOY_SSH_KEY" > "$HOME/.ssh/id_ed25519"
+          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          chmod 0600 "$HOME/.ssh/id_ed25519" "$HOME/.ssh/known_hosts"
+
+      - name: Validate and stream the installed production release read-only
+        shell: bash
+        env:
+          EXPECTED_RELEASE_SHA: ${{ inputs.expected_release_sha }}
+          EXPECTED_API_DIGEST: ${{ inputs.expected_api_digest }}
+          EXPECTED_RELEASE_ENV_SHA256: ${{ inputs.expected_release_env_sha256 }}
+          EXPECTED_RELEASE_INTEGRITY_SHA256: ${{ inputs.expected_release_integrity_sha256 }}
+          DEPLOY_HOST: ${{ secrets.BRAND_PILOT_DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.BRAND_PILOT_DEPLOY_USER }}
+        run: |
+          set -Eeuo pipefail
+          ssh -o BatchMode=yes -o StrictHostKeyChecking=yes "$DEPLOY_USER@$DEPLOY_HOST" \
+            bash -s -- "$EXPECTED_RELEASE_SHA" "$EXPECTED_API_DIGEST" \
+            "$EXPECTED_RELEASE_ENV_SHA256" "$EXPECTED_RELEASE_INTEGRITY_SHA256" <<'REMOTE' \
+            > recovered-release.tar.gz
+          set -Eeuo pipefail
+          expected_release_sha="$1"
+          expected_api_digest="$2"
+          expected_release_env_sha256="$3"
+          expected_release_integrity_sha256="$4"
+          root=/opt/brand-pilot
+          current_sha="$(cat "$root/state/current")"
+          [[ "$current_sha" == "$expected_release_sha" ]] || { echo "recovery_current_sha_mismatch" >&2; exit 1; }
+          release_dir="$root/releases/$expected_release_sha"
+          # shellcheck source=/dev/null
+          source "$release_dir/scripts/lib.sh"
+          validate_release_directory "$release_dir" candidate
+          grep -Fx "RELEASE_SCHEMA=3" "$release_dir/release.env" >/dev/null
+          grep -Fx "RELEASE_SHA=$expected_release_sha" "$release_dir/release.env" >/dev/null
+          grep -Eq "^API_IMAGE=[^[:space:]]+@$expected_api_digest$" "$release_dir/release.env"
+          grep -Fx "API_SOURCE_SHA=$expected_release_sha" "$release_dir/release.env" >/dev/null
+          [[ "$(sha256sum -- "$release_dir/release.env" | awk '{print $1}')" == "$expected_release_env_sha256" ]]
+          [[ "$(sha256sum -- "$release_dir/release-integrity.sha256" | awk '{print $1}')" == "$expected_release_integrity_sha256" ]]
+          for container in brand-pilot-api-primary-1 brand-pilot-api-canary-1; do
+            [[ "$(docker inspect --format '{{.Config.Image}}' "$container")" == *"@$expected_api_digest" ]]
+            [[ "$(docker inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$container")" == "$expected_release_sha" ]]
+            [[ "$(docker inspect --format '{{.State.Status}}' "$container")" == "running" ]]
+          done
+          mapfile -t release_files < <(awk '{print $3}' "$release_dir/release-integrity.sha256")
+          release_files+=(release-integrity.sha256)
+          tar --numeric-owner -C "$release_dir" -czf - -- "${release_files[@]}"
+          REMOTE
+          EXPECTED_RELEASE_SHA="$EXPECTED_RELEASE_SHA" python3 <<'PYTHON'
+          import os
+          import pathlib
+          import tarfile
+
+          destination = pathlib.Path("recovered-release") / os.environ["EXPECTED_RELEASE_SHA"]
+          destination.mkdir(parents=True)
+          with tarfile.open("recovered-release.tar.gz", "r:gz") as archive:
+              members = archive.getmembers()
+              if not members:
+                  raise SystemExit("recovery_archive_empty")
+              for member in members:
+                  path = pathlib.PurePosixPath(member.name)
+                  if path.is_absolute() or ".." in path.parts or not member.isfile():
+                      raise SystemExit("recovery_archive_member_invalid")
+              archive.extractall(destination, members=members, filter="data")
+          PYTHON
+          [[ -z "$(find recovered-release -type l -print -quit)" ]] || { echo "recovery_symlink_forbidden" >&2; exit 1; }
+
+      - name: Verify recovered files against integrity metadata and source commit
+        shell: bash
+        env:
+          EXPECTED_RELEASE_SHA: ${{ inputs.expected_release_sha }}
+          EXPECTED_RELEASE_ENV_SHA256: ${{ inputs.expected_release_env_sha256 }}
+          EXPECTED_RELEASE_INTEGRITY_SHA256: ${{ inputs.expected_release_integrity_sha256 }}
+        run: |
+          set -Eeuo pipefail
+          release_dir="recovered-release/$EXPECTED_RELEASE_SHA"
+          [[ "$(sha256sum -- "$release_dir/release.env" | awk '{print $1}')" == "$EXPECTED_RELEASE_ENV_SHA256" ]]
+          [[ "$(sha256sum -- "$release_dir/release-integrity.sha256" | awk '{print $1}')" == "$EXPECTED_RELEASE_INTEGRITY_SHA256" ]]
+          (
+            cd "$release_dir"
+            sha256sum --check release.env.sha256
+          )
+          while read -r checksum mode relative; do
+            [[ "$checksum" =~ ^[0-9a-f]{64}$ && "$mode" =~ ^[0-7]{3}$ ]]
+            [[ "$relative" != /* && "$relative" != *".."* && "$relative" != *\\* ]]
+            path="$release_dir/$relative"
+            [[ -f "$path" && ! -L "$path" ]]
+            [[ "$(stat -c '%a' -- "$path")" == "$mode" ]]
+            [[ "$(sha256sum -- "$path" | awk '{print $1}')" == "$checksum" ]]
+            case "$relative" in
+              release.env|release.env.sha256|marketing-worker-retirement.json) ;;
+              *) cmp --silent "$path" "brand_poilot/deploy/$relative" || {
+                echo "recovery_source_file_mismatch:$relative" >&2
+                exit 1
+              } ;;
+            esac
+          done < "$release_dir/release-integrity.sha256"
+
+      - name: Reconstruct immutable release artifact with recovery provenance
+        shell: bash
+        env:
+          EXPECTED_RELEASE_SHA: ${{ inputs.expected_release_sha }}
+          EXPECTED_API_DIGEST: ${{ inputs.expected_api_digest }}
+          EXPECTED_RELEASE_ENV_SHA256: ${{ inputs.expected_release_env_sha256 }}
+          EXPECTED_RELEASE_INTEGRITY_SHA256: ${{ inputs.expected_release_integrity_sha256 }}
+        run: |
+          set -Eeuo pipefail
+          release_dir="recovered-release/$EXPECTED_RELEASE_SHA"
+          mkdir recovery-bundle recovery-artifact
+          cp -a brand_poilot/deploy recovery-bundle/deploy
+          cp "$release_dir/release.env" "$release_dir/release.env.sha256" recovery-bundle/
+          (
+            cd recovery-bundle
+            tar -czf "../recovery-artifact/release-bundle-$EXPECTED_RELEASE_SHA.tar.gz" \
+              deploy release.env release.env.sha256
+          )
+          (
+            cd recovery-artifact
+            sha256sum "release-bundle-$EXPECTED_RELEASE_SHA.tar.gz" > \
+              "release-bundle-$EXPECTED_RELEASE_SHA.tar.gz.sha256"
+          )
+          cp "$release_dir/release-integrity.sha256" recovery-artifact/
+          bundle_sha256="$(sha256sum -- "recovery-artifact/release-bundle-$EXPECTED_RELEASE_SHA.tar.gz" | awk '{print $1}')"
+          jq -cnS \
+            --arg contractVersion "brand-pilot-baseline-recovery.v1" \
+            --arg sourceWorkflow ".github/workflows/recover-brand-pilot-production-baseline.yml" \
+            --arg releaseSha "$EXPECTED_RELEASE_SHA" \
+            --arg apiDigest "$EXPECTED_API_DIGEST" \
+            --arg releaseEnvSha256 "$EXPECTED_RELEASE_ENV_SHA256" \
+            --arg releaseIntegritySha256 "$EXPECTED_RELEASE_INTEGRITY_SHA256" \
+            --arg releaseBundleSha256 "$bundle_sha256" \
+            --arg workflowRunId "$GITHUB_RUN_ID" \
+            --arg workflowHeadSha "$GITHUB_SHA" \
+            '{contractVersion:$contractVersion,sourceWorkflow:$sourceWorkflow,workflowRunId:$workflowRunId,workflowHeadSha:$workflowHeadSha,releaseSha:$releaseSha,apiDigest:$apiDigest,releaseEnvSha256:$releaseEnvSha256,releaseIntegritySha256:$releaseIntegritySha256,releaseBundleSha256:$releaseBundleSha256}' \
+            > recovery-artifact/baseline-recovery-provenance.json
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: brand-pilot-release-${{ inputs.expected_release_sha }}
+          path: recovery-artifact/
+          if-no-files-found: error
+          retention-days: 30
