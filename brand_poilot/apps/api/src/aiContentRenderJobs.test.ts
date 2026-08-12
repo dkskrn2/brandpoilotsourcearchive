@@ -13,6 +13,58 @@ import {
 } from "./aiContentRenderJobs.js";
 
 describe("ai-content render job boundary helpers", () => {
+  it("records editorial diagnostics idempotently with INSERT-only audit privileges", async () => {
+    const inserts: Array<{ sql: string; params: unknown[] }> = [];
+    const client = {
+      query: async (sql: string, params: unknown[] = []) => {
+        const normalized = sql.replace(/\s+/g, " ").trim().toLowerCase();
+        if (["begin", "commit", "rollback"].includes(normalized)) return { rows: [] };
+        if (normalized.includes("from ai_content_generation_render_jobs where id=$1 for update")) {
+          return { rows: [{
+            id: "10000000-0000-4000-8000-000000000001",
+            workspace_id: "20000000-0000-4000-8000-000000000001",
+            brand_id: "30000000-0000-4000-8000-000000000001",
+            status: "succeeded", job_kind: "image_asset", asset_index: 1,
+            worker_id: "image-worker", lease_token: "lease",
+            payload_json: {
+              contractVersion: "ai-content-card-deck-render-job.v1",
+              cardDeckBinding: { deckSha256: "a".repeat(64) },
+            },
+          }] };
+        }
+        if (normalized.startsWith("insert into audit_events")) {
+          if (normalized.includes("from audit_events")) throw new Error("audit_select_forbidden");
+          inserts.push({ sql: normalized, params });
+          return { rows: [], rowCount: 1 };
+        }
+        throw new Error(`unexpected query: ${normalized}`);
+      },
+      release() {},
+    };
+    const repository = createAiContentRenderJobsRepository({ connect: async () => client } as never, async () => ({}) as never);
+    const diagnostic = {
+      contractVersion: "ai-content-editorial-render-diagnostic.v1" as const,
+      sourceContractVersion: "card-deck-editorial-plan.v1" as const,
+      sourceSha256: "a".repeat(64), sceneIndex: 1,
+      compiledPromptVersion: "image-card-deck.v1" as const,
+      compiledPromptSha256: "b".repeat(64),
+      actualToolArgumentsObservation: "not_emitted_by_runner" as const,
+      actualToolArgumentsSha256: null,
+    };
+
+    await repository.appendEditorialDiagnostic({
+      jobId: "10000000-0000-4000-8000-000000000001", workerId: "image-worker", leaseToken: "lease", diagnostic,
+    });
+    await repository.appendEditorialDiagnostic({
+      jobId: "10000000-0000-4000-8000-000000000001", workerId: "image-worker", leaseToken: "lease", diagnostic,
+    });
+
+    expect(inserts).toHaveLength(2);
+    expect(inserts[0]!.sql).toContain("on conflict (id) do nothing");
+    expect(inserts[0]!.params[0]).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-5[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+    expect(inserts[1]!.params[0]).toBe(inserts[0]!.params[0]);
+  });
+
   it("stores the named Card Deck binding without a legacy transport selector", async () => {
     const writes: unknown[][] = [];
     const query = vi.fn(async (_sql: string, params: unknown[]) => {

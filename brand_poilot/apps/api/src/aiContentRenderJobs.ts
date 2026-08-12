@@ -58,6 +58,14 @@ function canonicalJson(value: unknown): string {
   return JSON.stringify(normalize(value));
 }
 
+function deterministicAuditEventId(seed: string): string {
+  const bytes = Buffer.from(createHash("sha256").update(seed).digest().subarray(0, 16));
+  bytes[6] = (bytes[6]! & 0x0f) | 0x50;
+  bytes[8] = (bytes[8]! & 0x3f) | 0x80;
+  const hex = bytes.toString("hex");
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
+
 
 export interface AiContentRenderedAsset {
   index: number;
@@ -1301,17 +1309,16 @@ export function createAiContentRenderJobsRepository(
           || (diagnostic.actualToolArgumentsSha256 !== null && !/^[0-9a-f]{64}$/.test(diagnostic.actualToolArgumentsSha256))) {
           throw new Error("ai_content_editorial_render_diagnostic_invalid");
         }
+        const diagnosticJson = canonicalJson(diagnostic);
+        const eventId = deterministicAuditEventId([
+          "ai_content_editorial_render_diagnostic", input.jobId, input.workerId, diagnosticJson,
+        ].join(":"));
         await client.query(
           `insert into audit_events(
-             workspace_id,brand_id,actor_type,actor_external_id,event_type,entity_type,entity_id,metadata
-           ) select $1,$2,'worker',$3,'ai_content_editorial_render_diagnostic','ai_content_generation_render_job',$4,$5::jsonb
-             where not exists (
-               select 1 from audit_events
-                where workspace_id=$1 and brand_id=$2 and actor_type='worker' and actor_external_id=$3
-                  and event_type='ai_content_editorial_render_diagnostic'
-                  and entity_type='ai_content_generation_render_job' and entity_id=$4 and metadata=$5::jsonb
-             )`,
-          [row.workspace_id, row.brand_id, input.workerId, input.jobId, JSON.stringify(diagnostic)],
+             id,workspace_id,brand_id,actor_type,actor_external_id,event_type,entity_type,entity_id,metadata
+           ) values($1,$2,$3,'worker',$4,'ai_content_editorial_render_diagnostic','ai_content_generation_render_job',$5,$6::jsonb)
+             on conflict (id) do nothing`,
+          [eventId, row.workspace_id, row.brand_id, input.workerId, input.jobId, diagnosticJson],
         );
         await client.query("COMMIT");
       } catch (error) {
