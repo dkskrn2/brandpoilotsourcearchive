@@ -71,12 +71,6 @@ jobs:
           if [[ "$GITHUB_EVENT_NAME" == "pull_request" ]]; then
             git fetch --no-tags origin "$GITHUB_BASE_REF"
             base_sha="$(git merge-base "origin/$GITHUB_BASE_REF" "$GITHUB_SHA")"
-            if [[ -n "$PRODUCTION_RELEASE_SHA" ]] \
-              && [[ "$PRODUCTION_RELEASE_SHA" =~ ^[0-9a-f]{40}$ ]] \
-              && git cat-file -e "${PRODUCTION_RELEASE_SHA}^{commit}" 2>/dev/null \
-              && git merge-base --is-ancestor "$PRODUCTION_RELEASE_SHA" "$GITHUB_SHA"; then
-              base_sha="$PRODUCTION_RELEASE_SHA"
-            fi
             impact_json="$(node scripts/release-impact.mjs --base "$base_sha" --head "$GITHUB_SHA")"
             bootstrap=false
           elif [[ -z "$PRODUCTION_RELEASE_SHA" || "$SCHEMA2_READY" != "true" ]]; then

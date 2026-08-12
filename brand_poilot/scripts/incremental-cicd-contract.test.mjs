@@ -25,6 +25,9 @@ test("publishing is main-only and stale releases are serialized and rejected", (
 test("workflow detects production impact and builds an affected image matrix", () => {
   assert.match(workflow, /scripts\/release-impact\.mjs/);
   assert.match(workflow, /PRODUCTION_RELEASE_SHA/);
+  const prImpactBranch = workflow.match(/if \[\[ "\$GITHUB_EVENT_NAME" == "pull_request" \]\]; then([\s\S]*?)elif/)?.[1] ?? "";
+  assert.match(prImpactBranch, /base_sha="\$\(git merge-base "origin\/\$GITHUB_BASE_REF" "\$GITHUB_SHA"\)"/);
+  assert.doesNotMatch(prImpactBranch, /base_sha="\$PRODUCTION_RELEASE_SHA"/);
   assert.match(workflow, /strategy:[\s\S]*matrix:[\s\S]*fromJSON/);
   assert.match(workflow, /docker\/build-push-action/);
   assert.match(workflow, /cache-from: type=gha/);
