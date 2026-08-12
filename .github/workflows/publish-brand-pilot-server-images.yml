@@ -71,7 +71,15 @@ jobs:
           if [[ "$GITHUB_EVENT_NAME" == "pull_request" ]]; then
             git fetch --no-tags origin "$GITHUB_BASE_REF"
             base_sha="$(git merge-base "origin/$GITHUB_BASE_REF" "$GITHUB_SHA")"
-            impact_json="$(node scripts/release-impact.mjs --base "$base_sha" --head "$GITHUB_SHA")"
+            scoped_impact_json="$(node scripts/release-impact.mjs --base "$base_sha" --head "$GITHUB_SHA" --profile structured-social-render-semantics)"
+            if IMPACT_JSON="$scoped_impact_json" node --input-type=module -e '
+              const impact = JSON.parse(process.env.IMPACT_JSON);
+              process.exit(impact.verifiedScope && impact.productionDeployAllowed ? 0 : 1);
+            '; then
+              impact_json="$scoped_impact_json"
+            else
+              impact_json="$(node scripts/release-impact.mjs --base "$base_sha" --head "$GITHUB_SHA")"
+            fi
             bootstrap=false
           elif [[ -z "$PRODUCTION_RELEASE_SHA" || "$SCHEMA2_READY" != "true" ]]; then
             impact_json="$(node --input-type=module -e 'import { classifyChangedPaths } from "./scripts/release-impact.mjs"; console.log(JSON.stringify(classifyChangedPaths(["package-lock.json"])))')"
