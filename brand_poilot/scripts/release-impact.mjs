@@ -77,8 +77,13 @@ const STRUCTURED_SOCIAL_API_PATHS = new Set([
 ]);
 
 const STRUCTURED_SOCIAL_CARD_PATHS = new Set([
+  "workers/brand-pilot-card-news-worker/.agents/skills/card-news-creator/SKILL.md",
+  "workers/brand-pilot-card-news-worker/Dockerfile",
+  "workers/brand-pilot-card-news-worker/scripts/card-news-plan-draft-v1.schema.json",
   "workers/brand-pilot-card-news-worker/scripts/card-news-plan-draft-v2.schema.json",
+  "workers/brand-pilot-card-news-worker/scripts/run-codex-card-news-v2-plan.mjs",
   "workers/brand-pilot-card-news-worker/src/editorialPlan.ts",
+  "workers/brand-pilot-card-news-worker/src/productionRuntime.test.ts",
   "workers/brand-pilot-card-news-worker/src/promptBuilder.test.ts",
   "workers/brand-pilot-card-news-worker/src/promptBuilder.ts",
   "workers/brand-pilot-card-news-worker/src/structuredSceneDraft.test.ts",
@@ -88,9 +93,12 @@ const STRUCTURED_SOCIAL_CARD_PATHS = new Set([
 ]);
 
 const STRUCTURED_SOCIAL_REEL_PATHS = new Set([
+  "workers/brand-pilot-reel-worker/Dockerfile",
   "workers/brand-pilot-reel-worker/scripts/reel-plan-draft-v2.schema.json",
+  "workers/brand-pilot-reel-worker/scripts/run-codex-reel-plan.mjs",
   "workers/brand-pilot-reel-worker/src/contracts.test.ts",
   "workers/brand-pilot-reel-worker/src/contracts.ts",
+  "workers/brand-pilot-reel-worker/src/productionRuntime.test.ts",
   "workers/brand-pilot-reel-worker/src/promptBuilder.test.ts",
   "workers/brand-pilot-reel-worker/src/promptBuilder.ts",
   "workers/brand-pilot-reel-worker/src/structuredSceneDraft.ts",
@@ -122,7 +130,9 @@ const STRUCTURED_SOCIAL_TOOLING_PATHS = new Set([
 ]);
 
 const STRUCTURED_SOCIAL_DOC_PATHS = new Set([
+  "docs/superpowers/plans/2026-08-11-structured-social-scene-copy.md",
   "docs/superpowers/plans/2026-08-12-structured-scene-render-semantics.md",
+  "docs/superpowers/specs/2026-08-11-structured-social-scene-copy-design.md",
 ]);
 
 const WORKER_PATHS = Object.freeze([
