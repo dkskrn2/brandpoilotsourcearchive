@@ -1317,7 +1317,7 @@ export function createAiContentRenderJobsRepository(
           `insert into audit_events(
              id,workspace_id,brand_id,actor_type,actor_external_id,event_type,entity_type,entity_id,metadata
            ) values($1,$2,$3,'worker',$4,'ai_content_editorial_render_diagnostic','ai_content_generation_render_job',$5,$6::jsonb)
-             on conflict (id) do nothing`,
+             on conflict do nothing`,
           [eventId, row.workspace_id, row.brand_id, input.workerId, input.jobId, diagnosticJson],
         );
         await client.query("COMMIT");

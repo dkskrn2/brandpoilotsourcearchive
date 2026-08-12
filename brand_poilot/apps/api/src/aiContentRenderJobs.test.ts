@@ -60,7 +60,8 @@ describe("ai-content render job boundary helpers", () => {
     });
 
     expect(inserts).toHaveLength(2);
-    expect(inserts[0]!.sql).toContain("on conflict (id) do nothing");
+    expect(inserts[0]!.sql).toContain("on conflict do nothing");
+    expect(inserts[0]!.sql).not.toContain("on conflict (id)");
     expect(inserts[0]!.params[0]).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-5[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
     expect(inserts[1]!.params[0]).toBe(inserts[0]!.params[0]);
   });
