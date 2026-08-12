@@ -97,6 +97,7 @@ function runtimeHarness(
   initialStatus: "queued" | "processing" | "succeeded",
   lineageOrigin: "manual" | "scheduled_crawl" | null = null,
   stored: { plan?: ReelPlanV2; renderSemanticContract?: typeof renderSemanticContract } = {},
+  fault: { renderInsert?: boolean } = {},
 ) {
   const statements: Array<{ sql: string; params: unknown[] }> = [];
   let generationStatus = initialStatus === "queued" ? "queued" : initialStatus === "succeeded" ? "generating" : "planning";
@@ -126,6 +127,9 @@ function runtimeHarness(
     query: vi.fn(async (sql: string, params: unknown[] = []) => {
       statements.push({ sql, params });
       if (["BEGIN", "COMMIT", "ROLLBACK"].includes(sql)) return { rows: [], rowCount: 0 };
+      if (fault.renderInsert && sql.includes("insert into ai_content_generation_render_jobs")) {
+        throw new Error("render_insert_fault");
+      }
       if (sql === "select assert_ai_content_writable()") return { rows: [{}], rowCount: 1 };
       if (sql.includes("from ai_content_generation_jobs") && (
         sql.includes("attempt_count >= max_attempts")
@@ -280,6 +284,18 @@ describe("V3 generation runtime contract", () => {
     expect(jobWrite?.sql).toContain("renderSemanticContract");
     expect(JSON.parse(String(jobWrite?.params[2]))).toEqual(renderSemanticContract);
     expect(run.statements.at(-1)?.sql).toBe("COMMIT");
+  });
+
+  it("rolls back the plan and semantic write when render enqueue faults", async () => {
+    const run = runtimeHarness("processing", "manual", {}, { renderInsert: true });
+    await expect(run.repository.completeAiContentJob({
+      jobId: uid(6), workerId: "worker-1", leaseToken: "lease-1", skillVersion: "reel.v3",
+      jobType: "generate", plan, renderSemanticContract,
+    } as never)).rejects.toThrow("render_insert_fault");
+    const sql = run.statements.map(({ sql }) => sql).join("\n");
+    expect(sql).toMatch(/set plan_json=coalesce[\s\S]*insert into ai_content_generation_render_jobs/i);
+    expect(sql).not.toMatch(/status = 'succeeded'/i);
+    expect(run.statements.at(-1)?.sql).toBe("ROLLBACK");
   });
 
   it.each([
