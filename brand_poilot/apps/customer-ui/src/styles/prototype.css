@@ -2627,7 +2627,7 @@ details.panel > summary.panel-head::-webkit-details-marker {
 .brand-intelligence-step { max-width: 960px; margin-inline: auto; }
 .brand-evidence-form, .brand-review-fields { display: grid; gap: 20px; }
 .field-stack { display: grid; gap: 8px; }
-.field-stack input, .field-stack textarea, .brand-competitor-list input, .brand-competitor-list textarea {
+.field-stack input, .field-stack textarea, .brand-review-list-input, .brand-competitor-list input, .brand-competitor-list textarea {
   width: 100%;
   box-sizing: border-box;
   border: 1px solid #cbd5e1;
@@ -2637,6 +2637,10 @@ details.panel > summary.panel-head::-webkit-details-marker {
   color: #111827;
   font: inherit;
   resize: vertical;
+}
+.brand-review-list-input:focus-visible {
+  outline: 3px solid rgba(37, 99, 235, .24);
+  outline-offset: 2px;
 }
 .field-label { color: #1f2937; font-weight: 700; }
 .field-stack small { color: #64748b; }
@@ -2660,6 +2664,156 @@ details.panel > summary.panel-head::-webkit-details-marker {
 .brand-intelligence-review--wide > .panel,
 .brand-intelligence-review--wide .brand-intelligence-step { width: 100%; max-width: none; margin-inline: 0; }
 .brand-intelligence-review--wide .auto-resize-textarea { min-height: 112px; resize: none; overflow-y: hidden; }
+.brand-review-shell {
+  display: grid;
+  grid-template-columns: 220px minmax(0, 1fr);
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface);
+  box-shadow: 0 16px 36px rgb(15 23 42 / 7%);
+}
+.brand-review-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 22px 14px;
+  border-right: 1px solid var(--line);
+  background: #f8fafc;
+}
+.brand-review-nav button {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 44px;
+  padding: 0 13px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  color: #667085;
+  background: transparent;
+  font: inherit;
+  font-weight: 750;
+  text-align: left;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: border-color .16s ease, color .16s ease, background .16s ease;
+}
+.brand-review-nav button:hover { color: var(--text); background: #eef2f6; }
+.brand-review-nav button.is-active {
+  border-color: #bfdbfe;
+  color: var(--primary);
+  background: #eff6ff;
+}
+.brand-review-nav button:focus-visible { outline: 3px solid rgba(37, 99, 235, .24); outline-offset: 2px; }
+.brand-review-workspace { min-width: 0; background: var(--surface); }
+.brand-review-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 26px 30px 22px;
+  border-bottom: 1px solid var(--line);
+}
+.brand-review-heading h2,
+.brand-review-section-head h2,
+.brand-review-list-head h3 { margin: 0; color: var(--text); }
+.brand-review-heading h2 { margin-top: 5px; font-size: 22px; }
+.brand-review-heading p,
+.brand-review-section-head p,
+.brand-review-list-head p { margin: 6px 0 0; color: var(--muted); }
+.brand-review-panel { padding: 28px 30px 34px; }
+.brand-review-panel[hidden] { display: none; }
+.brand-review-section-head,
+.brand-review-list-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+  margin-bottom: 24px;
+}
+.brand-review-count {
+  display: inline-flex;
+  align-items: center;
+  min-height: 30px;
+  padding: 0 10px;
+  border-radius: 999px;
+  color: var(--primary);
+  background: var(--info-bg);
+  font-size: 13px;
+  font-weight: 800;
+}
+.brand-review-list-field { display: grid; gap: 12px; }
+.brand-review-list-head { margin-bottom: 0; }
+.brand-review-list-head .button,
+.brand-review-savebar .button,
+.brand-review-add-button { display: inline-flex; align-items: center; gap: 7px; }
+.brand-review-list-items,
+.brand-review-offerings,
+.brand-review-competitors { display: grid; gap: 14px; }
+.brand-review-list-row {
+  display: grid;
+  grid-template-columns: 30px minmax(0, 1fr) 38px;
+  align-items: start;
+  gap: 10px;
+}
+.brand-review-list-index,
+.brand-review-item-title > span {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  color: var(--primary);
+  background: var(--info-bg);
+  font-size: 12px;
+  font-weight: 800;
+}
+.brand-review-list-row textarea { min-height: 58px !important; }
+.brand-review-list-row .icon-button {
+  width: 38px;
+  min-height: 38px;
+  padding: 0;
+  color: #667085;
+}
+.brand-review-list-row .icon-button:hover { border-color: #fecaca; color: #b42318; background: #fff7f6; }
+.brand-review-offerings article,
+.brand-review-competitors article {
+  display: grid;
+  gap: 18px;
+  padding: 22px;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  background: #fbfcfe;
+}
+.brand-review-item-title { display: flex; align-items: center; gap: 9px; }
+.brand-review-item-title strong { color: #344054; }
+.brand-review-item-title .icon-button { width: 38px; min-height: 38px; margin-left: auto; padding: 0; color: #667085; }
+.brand-review-item-title .icon-button:hover { border-color: #fecaca; color: #b42318; background: #fff7f6; }
+.button.danger-subtle { color: #b42318; }
+.brand-review-add-button { justify-self: start; }
+.brand-review-savebar {
+  position: sticky;
+  bottom: 0;
+  z-index: 2;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 18px;
+  padding: 18px 30px;
+  border-top: 1px solid var(--line);
+  background: rgb(255 255 255 / 96%);
+  backdrop-filter: blur(10px);
+}
+.brand-review-savebar .alert { margin: 0; }
+.brand-review-preview-notice {
+  margin: 0 0 16px;
+  padding: 12px 14px;
+  border: 1px solid #bbf7d0;
+  border-radius: 8px;
+  color: #166534;
+  background: #f0fdf4;
+  font-weight: 700;
+}
 .brand-competitor-list { display: grid; gap: 16px; }
 .brand-competitor-list article { display: grid; gap: 8px; border-bottom: 1px solid #e5e7eb; padding-bottom: 16px; }
 .evidence-links { display: flex; flex-wrap: wrap; gap: 10px; }
@@ -2676,6 +2830,26 @@ details.panel > summary.panel-head::-webkit-details-marker {
 @media (max-width: 720px) {
   .brand-intelligence-steps li { flex-direction: column; font-size: 12px; }
   .brand-category-fields { grid-template-columns: 1fr; }
+  .brand-review-shell { grid-template-columns: 1fr; border-radius: 9px; }
+  .brand-review-nav {
+    flex-direction: row;
+    overflow-x: auto;
+    padding: 10px;
+    border-right: 0;
+    border-bottom: 1px solid var(--line);
+  }
+  .brand-review-nav button { flex: 0 0 auto; }
+  .brand-review-heading,
+  .brand-review-panel,
+  .brand-review-savebar { padding-left: 16px; padding-right: 16px; }
+  .brand-review-section-head,
+  .brand-review-list-head { align-items: stretch; flex-direction: column; }
+  .brand-review-list-head .button { justify-self: start; }
+  .brand-review-list-row { grid-template-columns: 26px minmax(0, 1fr) 38px; gap: 8px; }
+  .brand-review-offerings article,
+  .brand-review-competitors article { padding: 16px; }
+  .brand-review-savebar { grid-template-columns: 1fr; }
+  .brand-review-savebar .button { width: 100%; }
   .brand-analysis-progress ol { flex-direction: column; gap: 8px; }
   .brand-intelligence-summary div { grid-template-columns: 1fr; gap: 6px; }
 }

@@ -38,6 +38,11 @@ const job: BrandAnalysisJob = {
   leaseToken: "lease-1",
   leaseExpiresAt: new Date(Date.now() + 60_000).toISOString(),
   attemptCount: 1,
+  categoryRegistry: [{
+    code: "marketing",
+    name: "마케팅",
+    subcategories: [{ code: "content", name: "콘텐츠 마케팅" }],
+  }],
   availableAt: "2026-07-21T00:00:00.000Z",
   errorCode: null,
   errorMessage: null,
@@ -108,6 +113,13 @@ describe("brand intelligence worker", () => {
     const runner = createCodexRunner({
       runtimeRoot,
       spawnProcess: async (_command, args) => {
+        const jobArgument = args.find((arg) => arg.startsWith("--job-file="));
+        if (!jobArgument) throw new Error("missing_job_file_argument");
+        const serializedJob = JSON.parse(await readFile(
+          jobArgument.slice("--job-file=".length),
+          "utf8",
+        ));
+        expect(serializedJob.categoryRegistry).toEqual(job.categoryRegistry);
         const errorArgument = args.find((arg) => arg.startsWith("--error-file="));
         if (!errorArgument) throw new Error("missing_error_file_argument");
         await writeFile(errorArgument.slice("--error-file=".length), JSON.stringify({
@@ -429,9 +441,9 @@ describe("brand intelligence worker", () => {
     );
     expect(script).toContain("droppedOwnedFactCount += parsedFactBatch.droppedCount");
     expect(script).toContain("supportedFacts.length === 0 ? {} : coreResponse");
-    expect(script).toContain(
-      "JSON.stringify({ companyName: effectiveCompanyName, facts: supportedFacts })",
-    );
+    expect(script).toContain("categoryRegistry: job.categoryRegistry ?? []");
+    expect(script).toContain("대표분야는 categoryRegistry의 code와 name을 정확히 복사");
+    expect(script).toContain("직접입력(code:null)을 만들지 마라");
     expect(script).not.toContain(
       "JSON.stringify({ companyName: effectiveCompanyName, facts })",
     );
@@ -440,7 +452,7 @@ describe("brand intelligence worker", () => {
     expect(script).toContain("oneLineDefinition: null");
     expect(script).toContain("observedTone: null");
     expect(script).toContain(
-      "subcategories의 각 항목은 {code:string|null,name:string}, valueProposition은 string|null",
+      "subcategories의 각 항목은 {code:string,name:string}, valueProposition은 string|null",
     );
   });
 

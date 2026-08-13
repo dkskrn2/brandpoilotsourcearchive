@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 import { AvatarLibraryPanel } from "../components/brand-center/AvatarLibraryPanel";
 import { BrandCenterPage } from "../pages/BrandCenterPage";
 import { BrandCenterPreviewPage } from "../pages/BrandCenterPreviewPage";
+import { BrandAnalysisReviewPreviewPage } from "../pages/BrandAnalysisReviewPreviewPage";
 import { LegacyBrandSettingsRedirect, router } from "../routes";
 
 function LocationProbe() {
@@ -54,5 +55,21 @@ describe("legacy brand settings redirect", () => {
       .toBe(BrandCenterPreviewPage);
     expect(isValidElement(onboardingElement) && onboardingElement.props)
       .toMatchObject({ mode: "live" });
+  });
+
+  it("mounts the development review preview outside the authenticated app shell", () => {
+    const previewRoute = router.routes.find(
+      (route) => route.path === "/brand-analysis-review-preview",
+    );
+    const previewElement = previewRoute && "element" in previewRoute
+      ? previewRoute.element
+      : null;
+    const appRoute = router.routes.find((route) => route.path === "/");
+
+    expect(isValidElement(previewElement) && previewElement.type)
+      .toBe(BrandAnalysisReviewPreviewPage);
+    expect(appRoute?.children?.some(
+      (route) => route.path === "brand-analysis-review-preview",
+    )).toBe(false);
   });
 });

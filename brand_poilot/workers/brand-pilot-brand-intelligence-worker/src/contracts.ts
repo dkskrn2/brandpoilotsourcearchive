@@ -96,6 +96,12 @@ export interface BrandIntelligenceValidationRegistry {
   externalSources: Array<{ sourceId: string; url: string }>;
 }
 
+export interface BrandAnalysisCategoryRegistryItem {
+  code: string;
+  name: string;
+  subcategories: Array<{ code: string; name: string }>;
+}
+
 export interface BrandAnalysisJob {
   id: string;
   workspaceId: string;
@@ -112,6 +118,7 @@ export interface BrandAnalysisJob {
   leaseToken: string;
   leaseExpiresAt: string;
   attemptCount: number;
+  categoryRegistry: BrandAnalysisCategoryRegistryItem[];
   pipelineVersion: 2;
   contractVersion: "brand-intelligence-result.v2";
   executionContract: {

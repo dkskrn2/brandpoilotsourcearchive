@@ -116,8 +116,14 @@ describe("brand intelligence repository", () => {
         deleted_at timestamptz,
         unique (id, workspace_id)
       );
-      create table content_categories (id uuid primary key, code text unique, name text not null);
-      create table content_subcategories (id uuid primary key, code text unique, name text not null);
+      create table content_categories (
+        id uuid primary key, code text unique, name text not null,
+        active boolean not null default true, sort_order integer not null default 0
+      );
+      create table content_subcategories (
+        id uuid primary key, category_id uuid not null, code text unique, name text not null,
+        active boolean not null default true, sort_order integer not null default 0
+      );
       create table brand_profiles (
         id uuid primary key default gen_random_uuid(), workspace_id uuid not null, brand_id uuid not null unique,
         primary_customer text, description text, primary_category_id uuid, active_brand_analysis_id uuid,
@@ -279,7 +285,16 @@ describe("brand intelligence repository", () => {
       create unique index wiki_active on wiki_build_requests(workspace_id, brand_id) where status in ('pending', 'building');
     `);
     await database.query("insert into brands (id, workspace_id, name) values ($1, $2, '모종애드')", [brandId, workspaceId]);
-    await database.query("insert into content_categories (id, code, name) values (gen_random_uuid(), 'marketing', '마케팅')");
+    await database.query(
+      `insert into content_categories (id, code, name, sort_order) values
+        ('30000000-0000-4000-8000-000000000001', 'marketing', '마케팅', 1),
+        ('30000000-0000-4000-8000-000000000002', 'software', '소프트웨어', 2)`,
+    );
+    await database.query(
+      `insert into content_subcategories (id, category_id, code, name, sort_order) values
+        (gen_random_uuid(), '30000000-0000-4000-8000-000000000001', 'content', '콘텐츠 마케팅', 1),
+        (gen_random_uuid(), '30000000-0000-4000-8000-000000000002', 'saas', 'SaaS', 1)`,
+    );
   }, 30_000);
   afterEach(async () => database.close());
 
@@ -306,6 +321,15 @@ describe("brand intelligence repository", () => {
     expect(claim).toMatchObject({
       id: requested.id,
       status: "running",
+      categoryRegistry: [{
+        code: "marketing",
+        name: "마케팅",
+        subcategories: [{ code: "content", name: "콘텐츠 마케팅" }],
+      }, {
+        code: "software",
+        name: "소프트웨어",
+        subcategories: [{ code: "saas", name: "SaaS" }],
+      }],
       executionContract: {
         ownedPageLimit: 20,
         externalPageLimit: 10,
@@ -395,6 +419,42 @@ describe("brand intelligence repository", () => {
       status: "draft",
       enabled: false,
     }]);
+  });
+
+  it.each([
+    ["unknown primary code", { primaryCategory: { code: "unknown", name: "미등록" } }],
+    ["mismatched primary name", { primaryCategory: { code: "marketing", name: "다른 이름" } }],
+    ["subcategory from another primary", {
+      primaryCategory: { code: "marketing", name: "마케팅" },
+      subcategories: [{ code: "saas", name: "SaaS" }],
+    }],
+    ["worker-created custom subcategory", {
+      primaryCategory: { code: "marketing", name: "마케팅" },
+      subcategories: [{ code: null, name: "직접 생성" }],
+    }],
+  ])("rejects %s in a worker result", async (_label, categoryPatch) => {
+    const repository = createBrandIntelligenceRepository(pglitePool(database));
+    const requested = await repository.requestBrandAnalysis({
+      workspaceId,
+      brandId,
+      ownedUrl: "https://example.com",
+      uploadIds: [],
+      idempotencyKey: `invalid-category-${_label}`,
+    });
+    const claim = await repository.claimBrandAnalysis({
+      workerId: "worker-category",
+      leaseSeconds: 60,
+      supportedPipelineVersions: [2],
+    });
+
+    await expect(repository.completeBrandAnalysis({
+      analysisId: requested.id,
+      workerId: "worker-category",
+      leaseToken: claim!.leaseToken,
+      evidence: evidenceV2(),
+      result: { ...resultV2(), ...categoryPatch },
+      registry: { ownedFactIds: ["fact-1"], externalSources: [] },
+    })).rejects.toThrow(/brand_intelligence_(primary_category|subcategory)_not_registered/);
   });
 
   it("preserves user-edited product and FAQ rows when the same suggestions are confirmed again", async () => {

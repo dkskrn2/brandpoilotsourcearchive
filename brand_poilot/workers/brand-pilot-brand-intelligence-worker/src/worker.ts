@@ -155,6 +155,7 @@ export function createCodexRunner({
           analysisId: job.id,
           brandId: job.brandId,
           companyName: job.input.companyName ?? null,
+          categoryRegistry: job.categoryRegistry,
           batches: evidence.batches,
           sourceRegistry: job.evidence.map((document) => ({
             sourceId: document.sourceId,
