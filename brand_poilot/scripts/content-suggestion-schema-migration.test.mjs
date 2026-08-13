@@ -101,10 +101,12 @@ test("content suggestion schema runner accepts the exact managed provider sessio
   assert.equal(calls.some(({ sql }) => sql === "alter event trigger ai_content_ddl_guard_074 disable"), true);
   assert.equal(calls.some(({ sql }) => sql === "alter event trigger ai_content_ddl_guard_074 enable"), true);
   const disableIndex = calls.findIndex(({ sql }) => sql === "alter event trigger ai_content_ddl_guard_074 disable");
+  const searchPathIndex = calls.findIndex(({ sql }) => sql === "select set_config('search_path','public,pg_catalog,pg_temp',true)");
   const migrationIndex = calls.findIndex(({ sql }) => sql.includes("create table content_suggestion_batches"));
   const enableIndex = calls.findIndex(({ sql }) => sql === "alter event trigger ai_content_ddl_guard_074 enable");
   const commitIndex = calls.findIndex(({ sql }) => sql === "commit");
-  assert.ok(disableIndex < migrationIndex && migrationIndex < enableIndex && enableIndex < commitIndex);
+  assert.ok(disableIndex < searchPathIndex && searchPathIndex < migrationIndex
+    && migrationIndex < enableIndex && enableIndex < commitIndex);
   const catalogSql = calls.find(({ sql }) => sql.includes("post_075_schema_catalog_v1"))?.sql ?? "";
   for (const privilege of ["SELECT", "INSERT", "UPDATE", "DELETE"]) {
     assert.match(

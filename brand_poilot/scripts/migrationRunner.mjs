@@ -4184,6 +4184,7 @@ export async function runPost075SchemaMigrationsWithClient({
     await client.query("begin");
     try {
       await client.query("alter event trigger ai_content_ddl_guard_074 disable");
+      await client.query("select set_config('search_path','public,pg_catalog,pg_temp',true)");
       await client.query(unwrapFileTransaction(evidenceMigration.sql));
       await client.query(
         "insert into schema_migrations (id, checksum) values ($1, $2)",
