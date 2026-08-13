@@ -95,7 +95,6 @@ function appWithSuggestions(options: { permitted?: boolean; oauth?: boolean } = 
 
 describe("content suggestion HTTP routes", () => {
   it.each([
-    undefined,
     "Bearer invalid-token",
     "Basic credentials",
   ])("returns an OAuth challenge for an invalid MCP credential: %s", async (authorization) => {
@@ -103,13 +102,55 @@ describe("content suggestion HTTP routes", () => {
     const response = await app.inject({
       method: "POST",
       url: "/plugins/content-suggestions/mcp",
-      headers: authorization ? { authorization } : {},
+      headers: { authorization },
       payload: { jsonrpc: "2.0", id: 1, method: "initialize", params: {} },
     });
     expect(response.statusCode).toBe(401);
     expect(response.headers["www-authenticate"]).toContain("Bearer");
     expect(response.headers["www-authenticate"]).toContain("resource_metadata=");
     expect(response.json()).toEqual({ error: "invalid_token" });
+  });
+
+  it("allows unauthenticated MCP initialization so ChatGPT can discover OAuth tools", async () => {
+    const { app } = appWithSuggestions();
+    const response = await app.inject({
+      method: "POST",
+      url: "/plugins/content-suggestions/mcp",
+      headers: { accept: "application/json, text/event-stream" },
+      payload: {
+        jsonrpc: "2.0",
+        id: 1,
+        method: "initialize",
+        params: {
+          protocolVersion: "2025-11-25",
+          capabilities: {},
+          clientInfo: { name: "chatgpt-discovery", version: "1.0.0" },
+        },
+      },
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.body).toContain("brand-pilot-content-suggestions");
+  });
+
+  it("returns a tool-level OAuth challenge when an unauthenticated client calls a protected tool", async () => {
+    const { app } = appWithSuggestions();
+    const response = await app.inject({
+      method: "POST",
+      url: "/plugins/content-suggestions/mcp",
+      headers: { accept: "application/json, text/event-stream" },
+      payload: {
+        jsonrpc: "2.0",
+        id: 2,
+        method: "tools/call",
+        params: {
+          name: "get_content_suggestion_scope",
+          arguments: { categoryCode: "travel_tourism" },
+        },
+      },
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.body).toContain("mcp/www_authenticate");
+    expect(response.body).toContain("error_description=");
   });
 
   it("publishes OAuth protected-resource metadata", async () => {
