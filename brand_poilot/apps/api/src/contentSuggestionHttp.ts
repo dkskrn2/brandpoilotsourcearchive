@@ -52,16 +52,20 @@ export function registerContentSuggestionRoutes(
       return { error: "content_suggestion_oauth_unavailable" };
     }
     const token = bearerToken(request.headers.authorization);
-    let authInfo: AuthInfo;
+    let authInfo: AuthInfo | undefined;
     try {
-      if (!token) throw new Error("invalid_token");
-      authInfo = await options.oauth.verifier.verifyAccessToken(token);
+      if (request.headers.authorization && !token) throw new Error("invalid_token");
+      if (token) {
+        authInfo = await options.oauth.verifier.verifyAccessToken(token);
+      }
     } catch {
       reply.header("www-authenticate", oauthChallenge(options.oauth.config));
       reply.code(401);
       return { error: "invalid_token" };
     }
-    (request.raw as typeof request.raw & { auth?: AuthInfo }).auth = authInfo;
+    if (authInfo) {
+      (request.raw as typeof request.raw & { auth?: AuthInfo }).auth = authInfo;
+    }
 
     const server = createContentSuggestionMcpServer(options.repository, {
       onPublished: (event) => request.log.info({
