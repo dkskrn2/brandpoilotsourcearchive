@@ -737,6 +737,9 @@ export function createAiContentApiGateway(client = apiClient(), blobPut: typeof 
         body: JSON.stringify(input),
       });
     },
+    getPublishQueueResult(brandId, queueId) {
+      return client.requestJson(`/brands/${brandId}/ai-content/publish-queue/${queueId}`, { method: "GET" });
+    },
     listChannels(brandId) {
       return client.requestJson<ApiChannel[]>(`/brands/${brandId}/channels`, { method: "GET" })
         .then((channels) => channels.map(mapApiChannelConnection));

@@ -41,6 +41,13 @@ const v3FormatLabels: Record<string, string> = {
   reel: "릴스",
 };
 
+const publishStatusPollIntervalMs = 2_000;
+const publishStatusPollLimit = 60;
+
+function publishTargetKey(target: AiContentPublishTargetResult) {
+  return `${target.channel}:${target.deliveryFormat}`;
+}
+
 function downloadErrorMessage(error: unknown) {
   if (error instanceof ApiRequestError && error.errorCode === "ai_content_download_limit_reached") {
     return "오늘 신규 다운로드 20회를 모두 사용했습니다. 같은 결과는 다시 다운로드해도 차감되지 않습니다.";
@@ -223,11 +230,30 @@ export function AiContentGenerationPage({
         idempotencyKey: crypto.randomUUID(),
         targets,
       });
-      setPublishResults((current) => {
-        const merged = new Map((current[outputId] ?? []).map((target) => [`${target.channel}:${target.deliveryFormat}`, target]));
-        result.targets.forEach((target) => merged.set(`${target.channel}:${target.deliveryFormat}`, target));
+      const mergeTargets = (nextTargets: AiContentPublishTargetResult[]) => setPublishResults((current) => {
+        const merged = new Map((current[outputId] ?? []).map((target) => [publishTargetKey(target), target]));
+        nextTargets.forEach((target) => merged.set(publishTargetKey(target), target));
         return { ...current, [outputId]: [...merged.values()] };
       });
+      mergeTargets(result.targets);
+
+      await Promise.all(result.targets.map(async (initialTarget) => {
+        if (!initialTarget.queueId || ["published", "failed"].includes(initialTarget.status)) return;
+        let currentTarget = initialTarget;
+        for (let attempt = 0; attempt < publishStatusPollLimit; attempt += 1) {
+          try {
+            currentTarget = await gateway.getPublishQueueResult(brandId, initialTarget.queueId);
+          } catch {
+            if (attempt + 1 < publishStatusPollLimit) {
+              await new Promise((resolve) => window.setTimeout(resolve, publishStatusPollIntervalMs));
+            }
+            continue;
+          }
+          mergeTargets([currentTarget]);
+          if (["published", "failed"].includes(currentTarget.status)) return;
+          await new Promise((resolve) => window.setTimeout(resolve, publishStatusPollIntervalMs));
+        }
+      }));
     } catch (err: unknown) {
       const errorCode = typeof err === "object" && err !== null && "errorCode" in err
         && typeof err.errorCode === "string"

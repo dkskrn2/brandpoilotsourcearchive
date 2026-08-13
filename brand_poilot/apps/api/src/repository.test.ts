@@ -2531,6 +2531,29 @@ describe("repository", () => {
     expect(statements[0]).toContain("interval '30 minutes'");
   });
 
+  it("recovers only persisted AI content publish rows without scheduling unrelated content", async () => {
+    const statements: string[] = [];
+    const query = vi.fn(async (sql: string) => {
+      statements.push(sql);
+      return { rowCount: 0, rows: [] };
+    });
+    const repository = createRepository({ query } as any, { instagramPublish: { enabled: true } });
+
+    await expect(repository.runDueAiContentPublishing!()).resolves.toEqual({
+      processed: 0,
+      created: 0,
+      updated: 0,
+      failed: 0,
+    });
+
+    expect(statements).toHaveLength(2);
+    expect(statements[0]).toContain("output.ai_content_generation_output_id is not null");
+    expect(statements[0]).toContain("publish_delivery_unknown");
+    expect(statements[0]).toContain("interval '30 minutes'");
+    expect(statements[1]).toContain("output.ai_content_generation_output_id is not null");
+    expect(statements.join("\n")).not.toContain("select id from brands");
+  });
+
   it("does not mark deferred provider channels as mock-published", async () => {
     const statements: Array<{ sql: string; values: unknown[] }> = [];
     const query = vi.fn(async (sql: string, values?: unknown[]) => {

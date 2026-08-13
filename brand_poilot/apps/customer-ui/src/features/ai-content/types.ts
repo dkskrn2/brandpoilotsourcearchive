@@ -505,6 +505,7 @@ export interface AiContentGateway {
     idempotencyKey: string;
     targets: AiContentPublishTargetInput[];
   }): Promise<{ outputId: string; publishGroupId: string; targets: AiContentPublishTargetResult[] }>;
+  getPublishQueueResult(brandId: string, queueId: string): Promise<AiContentPublishTargetResult>;
   listChannels(brandId: string): Promise<ChannelConnection[]>;
   getCachedSubjectAnalysis(brandId: string, subjectType: SubjectType, sourceUrl: string): Promise<SubjectAnalysis | null>;
   requestSubjectAnalysis(brandId: string, input: SubjectAnalysisInput | LegacySubjectAnalysisInput): Promise<SubjectAnalysis>;

@@ -981,7 +981,7 @@ describe("API server", () => {
     expect(duePublish.json()).toEqual({ processed: 0, created: 0, updated: 0, failed: 0 });
   });
 
-  it("does not swallow disabled publication after AI content preparation", async () => {
+  it("returns the durable scheduled result before disabled background publication settles", async () => {
     vi.stubEnv("BRAND_PILOT_DEV_WORKSPACE_ID", "workspace-1");
     const repository = createRepository();
     vi.mocked(repository.prepareAiContentPublish).mockResolvedValue({
@@ -1008,9 +1008,50 @@ describe("API server", () => {
       }
     });
 
-    expect(response.statusCode).toBe(503);
-    expect(response.json()).toEqual({ error: "publishing_disabled" });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({ targets: [{ queueId: "queue-1", status: "scheduled" }] });
+    await vi.waitFor(() => expect(repository.publishQueueItem).toHaveBeenCalledWith("queue-1"));
     expect(repository.getAiContentPublishQueueResult).not.toHaveBeenCalled();
+    await app.close();
+  });
+
+  it("starts the scoped AI content publish recovery owner when the repository supports it", async () => {
+    const repository = createRepository();
+    repository.runDueAiContentPublishing = vi.fn(async () => ({
+      processed: 1,
+      created: 0,
+      updated: 1,
+      failed: 0,
+    }));
+    const app = createServer({ repository, logger: false });
+
+    await vi.waitFor(() => expect(repository.runDueAiContentPublishing).toHaveBeenCalledTimes(1));
+
+    await app.close();
+  });
+
+  it("waits for an in-flight scoped publish recovery before closing", async () => {
+    const repository = createRepository();
+    let settleRecovery!: () => void;
+    repository.runDueAiContentPublishing = vi.fn(() => new Promise<{
+      processed: number;
+      created: number;
+      updated: number;
+      failed: number;
+    }>((resolve) => {
+      settleRecovery = () => resolve({ processed: 0, created: 0, updated: 0, failed: 0 });
+    }));
+    const app = createServer({ repository, logger: false });
+    await vi.waitFor(() => expect(repository.runDueAiContentPublishing).toHaveBeenCalledTimes(1));
+
+    let closed = false;
+    const close = app.close().then(() => { closed = true; });
+    await Promise.resolve();
+    expect(closed).toBe(false);
+
+    settleRecovery();
+    await close;
+    expect(closed).toBe(true);
   });
 
   it("returns service unavailable when AI content preparation rejects before mutation", async () => {

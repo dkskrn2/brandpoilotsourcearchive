@@ -392,6 +392,17 @@ export function createMockAiContentGateway(): AiContentGateway {
         })),
       };
     },
+    async getPublishQueueResult(_brandId, queueId) {
+      return {
+        channel: "instagram",
+        deliveryFormat: "instagram_feed_carousel",
+        channelOutputId: `channel-output-${queueId}`,
+        queueId,
+        status: "published",
+        publishedUrl: `https://example.com/published/${queueId}`,
+        errorCode: null,
+      };
+    },
     async listChannels() {
       return [{
         type: "instagram" as const,

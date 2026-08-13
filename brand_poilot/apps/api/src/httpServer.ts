@@ -883,6 +883,88 @@ export function createServer(
   const maintenanceRepository = repository as ApiRepository & {
     assertAiContentWritable?: () => Promise<void>;
   };
+  const aiContentPublishTasks = new Set<Promise<void>>();
+  const aiContentPublishRecoveryIntervalMs = 10_000;
+  const aiContentPublishShutdownGraceMs = 90_000;
+  let aiContentPublishRecoveryRunning = false;
+  let aiContentPublishClosing = false;
+
+  async function recoverAiContentPublishes() {
+    if (!repository.runDueAiContentPublishing || aiContentPublishRecoveryRunning || aiContentPublishClosing) return;
+    aiContentPublishRecoveryRunning = true;
+    let task: Promise<void>;
+    task = repository.runDueAiContentPublishing()
+      .then(() => undefined)
+      .catch((error) => {
+        app.log.warn({
+          event: "ai_content_publish_recovery_failed",
+          errorCode: safeInternalErrorCode(error),
+        }, "ai_content_publish_recovery_failed");
+      })
+      .finally(() => {
+        aiContentPublishRecoveryRunning = false;
+        aiContentPublishTasks.delete(task);
+      });
+    aiContentPublishTasks.add(task);
+    await task;
+  }
+
+  const aiContentPublishRecoveryTimer = repository.runDueAiContentPublishing
+    ? setInterval(() => void recoverAiContentPublishes(), aiContentPublishRecoveryIntervalMs)
+    : null;
+  aiContentPublishRecoveryTimer?.unref();
+  if (repository.runDueAiContentPublishing) setImmediate(() => void recoverAiContentPublishes());
+
+  function dispatchAiContentPublish(
+    request: FastifyRequest,
+    targets: Array<{
+      queueId: string | null;
+      status: string;
+      channel: string;
+      deliveryFormat: string;
+    }>,
+  ) {
+    const scheduledTargets = targets.filter((target) => target.queueId && target.status === "scheduled");
+    if (!scheduledTargets.length) return;
+    let task: Promise<void>;
+    task = new Promise<void>((resolve) => setImmediate(resolve))
+      .then(async () => {
+        for (const target of scheduledTargets) {
+          try {
+            await repository.publishQueueItem(target.queueId!);
+          } catch (error) {
+            request.log.warn({
+              event: "ai_content_publish_background_failed",
+              requestId: request.id,
+              queueId: target.queueId,
+              channel: target.channel,
+              deliveryFormat: target.deliveryFormat,
+              errorCode: safeInternalErrorCode(error),
+            }, "ai_content_publish_background_failed");
+            if (error instanceof Error && error.message === "publishing_disabled") break;
+          }
+        }
+      })
+      .finally(() => {
+        aiContentPublishTasks.delete(task);
+      });
+    aiContentPublishTasks.add(task);
+  }
+
+  app.addHook("onClose", async () => {
+    aiContentPublishClosing = true;
+    if (aiContentPublishRecoveryTimer) clearInterval(aiContentPublishRecoveryTimer);
+    if (!aiContentPublishTasks.size) return;
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    await Promise.race([
+      Promise.allSettled([...aiContentPublishTasks]),
+      new Promise<void>((resolve) => {
+        timeout = setTimeout(resolve, aiContentPublishShutdownGraceMs);
+        timeout.unref();
+      }),
+    ]);
+    if (timeout) clearTimeout(timeout);
+  });
   void app.register(cors, {
     origin: (origin, callback) => callback(null, origin !== undefined && corsAllowedOrigins.has(origin)),
     credentials: true,
@@ -3174,41 +3256,21 @@ export function createServer(
         outputId: request.params.outputId,
         ...publishInput,
       });
-      const targets = [];
-      for (const target of prepared.targets) {
-        if (!target.queueId) {
-          targets.push(target);
-          continue;
-        }
-        try {
-          const published = await repository.publishQueueItem(target.queueId);
-          targets.push({
-            ...target,
-            status: published.status,
-            publishedUrl: published.publishedUrl,
-            errorCode: null,
-          });
-        } catch (error) {
-          if (error instanceof Error && error.message === "publishing_disabled") throw error;
-          const storedResult = await repository.getAiContentPublishQueueResult({
-            ...scope,
-            queueId: target.queueId,
-          });
-          const errorCode = storedResult.errorCode ?? safeInternalErrorCode(error);
-          request.log.warn({
-            event: "ai_content_publish_target_failed",
-            requestId: request.id,
-            outputId: request.params.outputId,
-            queueId: target.queueId,
-            channel: target.channel,
-            deliveryFormat: target.deliveryFormat,
-            errorCode,
-          }, "ai_content_publish_target_failed");
-          targets.push({ ...storedResult, errorCode });
-        }
-      }
-      return { outputId: request.params.outputId, publishGroupId: prepared.publishGroupId, targets };
+      dispatchAiContentPublish(request, prepared.targets);
+      return {
+        outputId: request.params.outputId,
+        publishGroupId: prepared.publishGroupId,
+        targets: prepared.targets,
+      };
     },
+  );
+
+  app.get<{ Params: { brandId: string; queueId: string } }>(
+    "/brands/:brandId/ai-content/publish-queue/:queueId",
+    async (request) => repository.getAiContentPublishQueueResult({
+      ...aiContentScope(request, request.params.brandId),
+      queueId: request.params.queueId,
+    }),
   );
 
   app.get<{ Params: { brandId: string; generationId: string }; Querystring: { outputIds?: string } }>(

@@ -59,6 +59,26 @@ function localAttachment(): GenerationAttachment {
 }
 
 describe("createAiContentApiGateway", () => {
+  it("reads the persisted AI content publish queue result from the brand-scoped route", async () => {
+    const stored = {
+      channel: "instagram",
+      deliveryFormat: "instagram_reel",
+      channelOutputId: "channel-output-reel",
+      queueId: "queue-reel",
+      status: "published",
+      publishedUrl: "https://instagram.example/reel",
+      errorCode: null,
+    };
+    const requestJson = vi.fn().mockResolvedValue(stored);
+    const gateway = createAiContentApiGateway(clientWith(requestJson));
+
+    await expect(gateway.getPublishQueueResult("brand-1", "queue-reel")).resolves.toEqual(stored);
+    expect(requestJson).toHaveBeenCalledWith(
+      "/brands/brand-1/ai-content/publish-queue/queue-reel",
+      { method: "GET" },
+    );
+  });
+
   it("accepts the manual V2 proposal batch resume contract returned by the API", async () => {
     const request = {
       contractVersion: "content-orchestration.v2" as const,

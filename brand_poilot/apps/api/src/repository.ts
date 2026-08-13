@@ -5129,6 +5129,82 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
       return { processed, created, updated, failed };
     },
 
+    async runDueAiContentPublishing() {
+      if (!instagramPublish.enabled) {
+        return { processed: 0, created: 0, updated: 0, failed: 0 };
+      }
+      await pool.query(
+        `with ai_content_queue as (
+           select pq.id
+             from publish_queue pq
+             join channel_outputs output on output.id = pq.channel_output_id
+            where output.ai_content_generation_output_id is not null
+         ), recovered as (
+           update publish_queue pq
+              set status = 'published', published_at = coalesce(
+                    pq.published_at,
+                    (select max(pa.finished_at) from publish_attempts pa where pa.publish_queue_id = pq.id and pa.status = 'succeeded'),
+                    now()
+                  ),
+                  last_error = null, updated_at = now()
+            where pq.id in (select id from ai_content_queue)
+              and pq.status = 'publishing'
+              and exists (
+                select 1 from publish_attempts pa
+                 where pa.publish_queue_id = pq.id and pa.status = 'succeeded'
+              )
+          returning pq.id, pq.brand_id, pq.channel
+         ), recovered_channels as (
+           update brand_channels channel
+              set last_published_at = now(), status = 'connected', last_error = null
+             from recovered
+            where channel.brand_id = recovered.brand_id and channel.channel = recovered.channel
+          returning channel.id
+         ), abandoned as (
+           update publish_queue pq
+              set status = 'failed', failed_at = now(), last_error = 'publish_delivery_unknown', updated_at = now()
+            where pq.id in (select id from ai_content_queue)
+              and pq.status = 'publishing'
+              and pq.publishing_started_at < now() - interval '30 minutes'
+              and not exists (
+                select 1 from publish_attempts pa
+                 where pa.publish_queue_id = pq.id and pa.status = 'succeeded'
+              )
+              and pq.id not in (select id from recovered)
+          returning pq.id
+         )
+         update publish_attempts pa
+            set status = 'failed', error_code = 'publish_delivery_unknown',
+                error_message = 'publish_delivery_unknown', finished_at = now()
+          where pa.status = 'running'
+            and pa.publish_queue_id in (select id from abandoned)`,
+      );
+      const due = await pool.query(
+        `select pq.id
+           from publish_queue pq
+           join channel_outputs output on output.id = pq.channel_output_id
+          where pq.status = 'scheduled'
+            and pq.scheduled_for <= now()
+            and output.ai_content_generation_output_id is not null
+          order by pq.scheduled_for asc, pq.queued_at asc
+          limit 50`,
+      );
+      let processed = 0;
+      let updated = 0;
+      let failed = 0;
+      for (const queue of due.rows) {
+        try {
+          await publishQueueItemInternal(String(queue.id));
+          updated += 1;
+        } catch (error) {
+          if (!(error instanceof Error && error.message === "publish_queue_not_publishable")) failed += 1;
+        } finally {
+          processed += 1;
+        }
+      }
+      return { processed, created: 0, updated, failed };
+    },
+
     async publishQueueItem(queueId) {
       return publishQueueItemInternal(queueId);
     },

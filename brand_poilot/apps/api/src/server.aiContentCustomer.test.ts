@@ -1128,7 +1128,7 @@ describe("AI content customer routes", () => {
     await app.close();
   });
 
-  it("downloads a completed output package and immediately publishes selected targets", async () => {
+  it("downloads a completed output package and returns scheduled targets before publishing settles", async () => {
     const { app, repository } = setup();
     const download = await app.inject({ method: "GET", url: `/brands/${brandId}/ai-content/outputs/${outputId}/download`, headers: auth });
     expect(download.statusCode).toBe(200);
@@ -1136,13 +1136,23 @@ describe("AI content customer routes", () => {
     expect(repository.downloadAiContentOutput).toHaveBeenCalledWith(expect.objectContaining({ workspaceId, brandId, outputId, dailyDownloadLimit: 20 }));
 
     const idempotencyKey = "b4b74082-8a44-46d6-91b6-3e3bd7e26be0";
-    const targets = [
-      { channel: "instagram", deliveryFormat: "instagram_feed_carousel" },
-      { channel: "instagram", deliveryFormat: "instagram_story" },
-    ];
-    vi.mocked(repository.publishQueueItem)
-      .mockResolvedValueOnce({ id: "queue-feed", status: "published", publishedUrl: "https://instagram.example/queue-feed" })
-      .mockRejectedValueOnce(new Error("story_capability_required"));
+    const targets = [{ channel: "instagram", deliveryFormat: "instagram_feed_carousel" }];
+    vi.mocked(repository.prepareAiContentPublish).mockResolvedValueOnce({
+      publishGroupId: "publish-group-1",
+      targets: [{
+        channel: "instagram",
+        deliveryFormat: "instagram_feed_carousel",
+        channelOutputId: "channel-output-feed",
+        queueId: "queue-feed",
+        status: "scheduled",
+        publishedUrl: null,
+        errorCode: null,
+      }],
+    });
+    let settlePublish!: (value: { id: string; status: string; publishedUrl: string | null }) => void;
+    vi.mocked(repository.publishQueueItem).mockReturnValueOnce(new Promise((resolve) => {
+      settlePublish = resolve;
+    }));
     const publish = await app.inject({
       method: "POST",
       url: `/brands/${brandId}/ai-content/outputs/${outputId}/publish`,
@@ -1151,42 +1161,46 @@ describe("AI content customer routes", () => {
     });
     expect(publish.statusCode).toBe(200);
     expect(repository.prepareAiContentPublish).toHaveBeenCalledWith({ workspaceId, brandId, outputId, idempotencyKey, targets });
-    expect(repository.publishQueueItem).toHaveBeenNthCalledWith(1, "queue-feed");
-    expect(repository.publishQueueItem).toHaveBeenNthCalledWith(2, "queue-story");
+    await vi.waitFor(() => expect(repository.publishQueueItem).toHaveBeenCalledWith("queue-feed"));
     expect(publish.json()).toMatchObject({
       outputId,
-      targets: [
-        { queueId: "queue-feed", status: "published", publishedUrl: "https://instagram.example/queue-feed" },
-        { queueId: "queue-story", status: "scheduled", errorCode: "story_capability_required" },
-      ],
+      targets: [{ queueId: "queue-feed", status: "scheduled", publishedUrl: null }],
     });
+    settlePublish({ id: "queue-feed", status: "published", publishedUrl: "https://instagram.example/queue-feed" });
     await app.close();
   });
 
-  it("preserves the provider error code when the failed queue checkpoint has no error yet", async () => {
+  it("keeps multiple prepared publish targets sequential after returning the scheduled response", async () => {
     const { app, repository } = setup();
     vi.mocked(repository.prepareAiContentPublish).mockResolvedValueOnce({
       publishGroupId: "publish-group-1",
-      targets: [{
-        channel: "instagram",
-        deliveryFormat: "instagram_story",
-        channelOutputId: "channel-output-story",
-        queueId: "queue-story",
-        status: "scheduled",
-        publishedUrl: null,
-        errorCode: null,
-      }],
+      targets: [
+        {
+          channel: "instagram",
+          deliveryFormat: "instagram_feed_carousel",
+          channelOutputId: "channel-output-feed",
+          queueId: "queue-feed",
+          status: "scheduled",
+          publishedUrl: null,
+          errorCode: null,
+        },
+        {
+          channel: "instagram",
+          deliveryFormat: "instagram_story",
+          channelOutputId: "channel-output-story",
+          queueId: "queue-story",
+          status: "scheduled",
+          publishedUrl: null,
+          errorCode: null,
+        },
+      ],
     });
-    vi.mocked(repository.publishQueueItem).mockRejectedValueOnce(new Error("instagram_story_publish_failed:media_url_unreachable"));
-    vi.mocked(repository.getAiContentPublishQueueResult).mockResolvedValueOnce({
-      channel: "instagram",
-      deliveryFormat: "instagram_story",
-      channelOutputId: "channel-output-story",
-      queueId: "queue-story",
-      status: "failed",
-      publishedUrl: null,
-      errorCode: null,
-    });
+    let settleFirst!: (value: { id: string; status: string; publishedUrl: string | null }) => void;
+    vi.mocked(repository.publishQueueItem)
+      .mockReturnValueOnce(new Promise((resolve) => {
+        settleFirst = resolve;
+      }))
+      .mockResolvedValueOnce({ id: "queue-story", status: "published", publishedUrl: null });
 
     const response = await app.inject({
       method: "POST",
@@ -1194,18 +1208,46 @@ describe("AI content customer routes", () => {
       headers: auth,
       payload: {
         idempotencyKey: "b4b74082-8a44-46d6-91b6-3e3bd7e26be0",
-        targets: [{ channel: "instagram", deliveryFormat: "instagram_story" }],
+        targets: [
+          { channel: "instagram", deliveryFormat: "instagram_feed_carousel" },
+          { channel: "instagram", deliveryFormat: "instagram_story" },
+        ],
       },
     });
 
     expect(response.statusCode).toBe(200);
-    expect(response.json()).toMatchObject({
-      targets: [{
-        queueId: "queue-story",
-        status: "failed",
-        errorCode: "instagram_story_publish_failed",
-      }],
+    await vi.waitFor(() => expect(repository.publishQueueItem).toHaveBeenCalledWith("queue-feed"));
+    expect(repository.publishQueueItem).toHaveBeenCalledTimes(1);
+    settleFirst({ id: "queue-feed", status: "published", publishedUrl: null });
+    await vi.waitFor(() => expect(repository.publishQueueItem).toHaveBeenNthCalledWith(2, "queue-story"));
+    await app.close();
+  });
+
+  it("reads the stored publish result through the brand-scoped status route", async () => {
+    const { app, repository } = setup();
+    vi.mocked(repository.getAiContentPublishQueueResult).mockResolvedValueOnce({
+      channel: "instagram",
+      deliveryFormat: "instagram_reel",
+      channelOutputId: "channel-output-reel",
+      queueId: "queue-reel",
+      status: "published",
+      publishedUrl: "https://instagram.example/reel",
+      errorCode: null,
     });
+
+    const response = await app.inject({
+      method: "GET",
+      url: `/brands/${brandId}/ai-content/publish-queue/queue-reel`,
+      headers: auth,
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(repository.getAiContentPublishQueueResult).toHaveBeenCalledWith({
+      workspaceId,
+      brandId,
+      queueId: "queue-reel",
+    });
+    expect(response.json()).toMatchObject({ queueId: "queue-reel", status: "published" });
     await app.close();
   });
 
@@ -1235,9 +1277,9 @@ describe("AI content customer routes", () => {
     });
 
     expect(response.statusCode).toBe(200);
-    expect(repository.publishQueueItem).toHaveBeenCalledWith("queue-reel");
+    await vi.waitFor(() => expect(repository.publishQueueItem).toHaveBeenCalledWith("queue-reel"));
     expect(response.json()).toMatchObject({
-      targets: [{ deliveryFormat: "instagram_reel", queueId: "queue-reel", status: "published" }],
+      targets: [{ deliveryFormat: "instagram_reel", queueId: "queue-reel", status: "scheduled" }],
     });
     await app.close();
   });

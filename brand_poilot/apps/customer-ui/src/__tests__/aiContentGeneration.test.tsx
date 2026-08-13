@@ -6,7 +6,7 @@ import { createMockAiContentGateway } from "../features/ai-content/mockAiContent
 import { AiContentGenerationPage } from "../pages/AiContentGenerationPage";
 import type { ChannelConnection } from "../types";
 import { ApiRequestError } from "../lib/apiClient";
-import type { ContentOrchestration } from "../features/ai-content/types";
+import type { AiContentPublishTargetInput, ContentOrchestration } from "../features/ai-content/types";
 
 afterEach(() => {
   cleanup();
@@ -558,6 +558,80 @@ describe("AiContentGenerationPage", () => {
       "href",
       "/publish-queue?queueId=queue-output-card-news-0",
     );
+  });
+
+  it("tracks a scheduled publish through the persisted queue result instead of showing a false failure", async () => {
+    const user = userEvent.setup();
+    const { gateway } = renderGeneration("generation-card-complete", true, (configuredGateway) => {
+      configuredGateway.publishOutput = vi.fn(async (_brandId, outputId, input) => ({
+        outputId,
+        publishGroupId: `publish-${outputId}`,
+        targets: input.targets.map((target: AiContentPublishTargetInput) => ({
+          ...target,
+          channelOutputId: "channel-output-feed",
+          queueId: "queue-feed",
+          status: "scheduled" as const,
+          publishedUrl: null,
+          errorCode: null,
+        })),
+      }));
+      configuredGateway.getPublishQueueResult = vi.fn(async () => ({
+        channel: "instagram" as const,
+        deliveryFormat: "instagram_feed_carousel" as const,
+        channelOutputId: "channel-output-feed",
+        queueId: "queue-feed",
+        status: "published" as const,
+        publishedUrl: "https://instagram.example/feed",
+        errorCode: null,
+      }));
+    });
+
+    await user.click(await screen.findByRole("checkbox", { name: "게시물" }));
+    await user.click(screen.getByRole("button", { name: "선택한 1개 유형 게시" }));
+
+    expect(await screen.findByText("게시 완료")).toBeVisible();
+    expect(gateway.getPublishQueueResult)
+      .toHaveBeenCalledWith("00000000-0000-4000-8000-000000000100", "queue-feed");
+    expect(screen.queryByText(/게시 실패/)).not.toBeInTheDocument();
+  });
+
+  it("retries a transient publish status transport failure without showing a false failure", async () => {
+    const user = userEvent.setup();
+    const { gateway } = renderGeneration("generation-card-complete", true, (configuredGateway) => {
+      configuredGateway.publishOutput = vi.fn(async (_brandId, outputId, input) => ({
+        outputId,
+        publishGroupId: `publish-${outputId}`,
+        targets: input.targets.map((target: AiContentPublishTargetInput) => ({
+          ...target,
+          channelOutputId: "channel-output-feed",
+          queueId: "queue-feed",
+          status: "scheduled" as const,
+          publishedUrl: null,
+          errorCode: null,
+        })),
+      }));
+      configuredGateway.getPublishQueueResult = vi.fn()
+        .mockRejectedValueOnce(new Error("network_unavailable"))
+        .mockResolvedValueOnce({
+          channel: "instagram" as const,
+          deliveryFormat: "instagram_feed_carousel" as const,
+          channelOutputId: "channel-output-feed",
+          queueId: "queue-feed",
+          status: "published" as const,
+          publishedUrl: "https://instagram.example/feed",
+          errorCode: null,
+        });
+    });
+
+    await user.click(await screen.findByRole("checkbox", { name: "게시물" }));
+    await user.click(screen.getByRole("button", { name: "선택한 1개 유형 게시" }));
+
+    expect(await screen.findByText("게시 대기")).toBeVisible();
+    expect(gateway.getPublishQueueResult)
+      .toHaveBeenCalledWith("00000000-0000-4000-8000-000000000100", "queue-feed");
+    expect(await screen.findByText("게시 완료", {}, { timeout: 4_000 })).toBeVisible();
+    expect(gateway.getPublishQueueResult).toHaveBeenCalledTimes(2);
+    expect(screen.queryByText(/게시 실패/)).not.toBeInTheDocument();
   });
 
   it("shows a structured Story preflight failure in Korean", async () => {

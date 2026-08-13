@@ -1230,6 +1230,7 @@ export interface ApiRepository
   getPerformanceInsights?(brandId: string): Promise<PerformanceInsightsDto>;
   schedulePublishQueue(brandId: string, now?: Date): Promise<PipelineRunResult>;
   runDuePublishing(now?: Date): Promise<PipelineRunResult>;
+  runDueAiContentPublishing?(): Promise<PipelineRunResult>;
   publishQueueItem(queueId: string): Promise<{ id: string; status: string; publishedUrl: string | null }>;
   retryPublishQueueItem(queueId: string): Promise<{ id: string; status: "queued" | "scheduled" }>;
   cancelPublishQueueItem(queueId: string): Promise<{ id: string; status: "cancelled" }>;
