@@ -4184,12 +4184,16 @@ export async function runPost075SchemaMigrationsWithClient({
     await client.query("begin");
     try {
       await client.query("alter event trigger ai_content_ddl_guard_074 disable");
+      await client.query(`grant ${quoteIdentifier(provider.schema_owner_role_name)}
+        to ${quoteIdentifier(expectedProviderRoleName)} with set true, inherit true, admin false`);
       await client.query("select set_config('search_path','public,pg_catalog,pg_temp',true)");
       await client.query(unwrapFileTransaction(evidenceMigration.sql));
       await client.query(
         "insert into schema_migrations (id, checksum) values ($1, $2)",
         [evidenceMigration.id, evidenceMigration.checksum],
       );
+      await client.query(`revoke ${quoteIdentifier(provider.schema_owner_role_name)}
+        from ${quoteIdentifier(expectedProviderRoleName)} granted by ${quoteIdentifier(expectedProviderRoleName)}`);
       await client.query("alter event trigger ai_content_ddl_guard_074 enable");
       const catalog = await client.query(
         `/* post_075_schema_catalog_v1 */

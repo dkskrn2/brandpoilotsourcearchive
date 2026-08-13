@@ -101,12 +101,14 @@ test("content suggestion schema runner accepts the exact managed provider sessio
   assert.equal(calls.some(({ sql }) => sql === "alter event trigger ai_content_ddl_guard_074 disable"), true);
   assert.equal(calls.some(({ sql }) => sql === "alter event trigger ai_content_ddl_guard_074 enable"), true);
   const disableIndex = calls.findIndex(({ sql }) => sql === "alter event trigger ai_content_ddl_guard_074 disable");
+  const grantIndex = calls.findIndex(({ sql }) => sql === "grant \"content_schema_owner\" to \"postgres\" with set true, inherit true, admin false");
   const searchPathIndex = calls.findIndex(({ sql }) => sql === "select set_config('search_path','public,pg_catalog,pg_temp',true)");
   const migrationIndex = calls.findIndex(({ sql }) => sql.includes("create table content_suggestion_batches"));
+  const revokeIndex = calls.findIndex(({ sql }) => sql === "revoke \"content_schema_owner\" from \"postgres\" granted by \"postgres\"");
   const enableIndex = calls.findIndex(({ sql }) => sql === "alter event trigger ai_content_ddl_guard_074 enable");
   const commitIndex = calls.findIndex(({ sql }) => sql === "commit");
-  assert.ok(disableIndex < searchPathIndex && searchPathIndex < migrationIndex
-    && migrationIndex < enableIndex && enableIndex < commitIndex);
+  assert.ok(disableIndex < grantIndex && grantIndex < searchPathIndex && searchPathIndex < migrationIndex
+    && migrationIndex < revokeIndex && revokeIndex < enableIndex && enableIndex < commitIndex);
   const catalogSql = calls.find(({ sql }) => sql.includes("post_075_schema_catalog_v1"))?.sql ?? "";
   for (const privilege of ["SELECT", "INSERT", "UPDATE", "DELETE"]) {
     assert.match(
