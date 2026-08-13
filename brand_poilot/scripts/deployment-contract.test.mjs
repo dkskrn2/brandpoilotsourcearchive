@@ -1340,6 +1340,17 @@ test("all CLI worker images install the pinned Codex runtime and run real entryp
 test("brand intelligence image preserves workspace dependencies and invokes Playwright without a pruned bin shim", () => {
   const dockerfile = read("workers/brand-pilot-brand-intelligence-worker/Dockerfile");
 
+  for (const runtimeAsset of [
+    "packages/brand-pilot-content-contracts/package.json",
+    "packages/brand-pilot-content-contracts/dist",
+    "packages/brand-pilot-content-contracts/generated",
+  ]) {
+    assert.match(
+      dockerfile,
+      new RegExp(`/app/${runtimeAsset.replaceAll("/", "\\/")}`),
+      `the runtime image must include ${runtimeAsset} for the shared worker runtime`,
+    );
+  }
   assert.match(
     dockerfile,
     /npm prune --omit=dev --workspaces/,
