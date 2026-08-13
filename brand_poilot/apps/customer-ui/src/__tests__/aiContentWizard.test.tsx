@@ -68,6 +68,19 @@ describe("AiContentWizardPage active entry", () => {
     });
   });
 
+  it("passes the today's-topic deep link to the proposal flow", () => {
+    renderWizard("/ai-content/new?view=today&suggestionId=suggestion-1");
+    expect(latestProps()).toMatchObject({
+      initialSuggestionId: "suggestion-1",
+      initialSuggestionView: true,
+    });
+  });
+
+  it("accepts the legacy suggestions view as an alias for today's topics", () => {
+    renderWizard("/ai-content/new?view=suggestions");
+    expect(latestProps().initialSuggestionView).toBe(true);
+  });
+
   it("removes only an invalid seed reference from the active URL", () => {
     renderWizard("/ai-content/new?reference=missing&proposalFormat=reel");
     act(() => latestProps().onSeedReferenceInvalid?.());

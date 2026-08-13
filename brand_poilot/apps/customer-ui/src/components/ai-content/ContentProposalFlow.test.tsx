@@ -10,6 +10,7 @@ import type { ChannelCapability } from "../../types";
 import type { ContentProposalRecord } from "../../features/ai-content/types";
 import type { ProductServiceItem } from "../../features/libraries/libraryGateway";
 import { ApiRequestError } from "../../lib/apiClient";
+import type { ContentSuggestionList } from "../../features/content-suggestions/contentSuggestionGateway";
 import { ContentProposalFlow } from "./ContentProposalFlow";
 
 afterEach(cleanup);
@@ -118,6 +119,9 @@ function renderFlow(options: {
   styleReferenceLoader?: (brandId: string, referenceId: string) => Promise<unknown>;
   strictMode?: boolean;
   abortFirstBatchLoad?: boolean;
+  suggestionList?: ContentSuggestionList;
+  initialSuggestionId?: string;
+  initialSuggestionView?: boolean;
 } = {}) {
   const gateway = createMockAiContentGateway();
   const create = vi.spyOn(gateway, "createProposalBatch").mockResolvedValue({ batchId: "batch-1", status: "queued" });
@@ -233,6 +237,19 @@ function renderFlow(options: {
     searchInstagramTrends: vi.fn(),
     saveInstagramTrendSource: vi.fn(),
   };
+  const suggestionList: ContentSuggestionList = options.suggestionList ?? {
+    category: null,
+    personal: [],
+    general: [],
+  };
+  const suggestionGateway = {
+    list: vi.fn().mockResolvedValue(suggestionList),
+    get: vi.fn().mockImplementation(async (_brandId: string, suggestionId: string) => {
+      const item = [...suggestionList.personal, ...suggestionList.general].find((candidate) => candidate.id === suggestionId);
+      if (!item) throw new Error("content_suggestion_not_found");
+      return item;
+    }),
+  };
 
   const flow = (brandId: string) => <MemoryRouter><ContentProposalFlow
     brandId={brandId}
@@ -241,6 +258,9 @@ function renderFlow(options: {
     channelCapabilities={channelCapabilities}
     initialBatchId={options.initialBatchId}
     initialSeedReferenceId={options.initialSeedReferenceId}
+    initialSuggestionId={options.initialSuggestionId}
+    initialSuggestionView={options.initialSuggestionView}
+    suggestionGateway={suggestionGateway}
     onSeedReferenceInvalid={options.onSeedReferenceInvalid}
     referenceTrendGateway={referenceTrendGateway}
     {...({ rulesGateway: { getRules }, assetGateway: { getReference } } as object)}
@@ -252,12 +272,84 @@ function renderFlow(options: {
   return {
     gateway, create, getBatch, listReferences, listReferenceSeeds, libraries,
     selectProposal, uploadAttachment,
-    updateFinalizationDraft, startGenerationV2, getRules, getReference,
+    updateFinalizationDraft, startGenerationV2, getRules, getReference, suggestionGateway,
     rerenderBrand: (brandId: string) => rendered.rerender(view(brandId)),
   };
 }
 
 describe("ContentProposalFlow", () => {
+  it("turns a selected daily suggestion into an informational V3 proposal request", async () => {
+    const user = userEvent.setup();
+    const suggestionList: ContentSuggestionList = {
+      category: { code: "beauty", name: "뷰티" },
+      personal: [{
+        id: "suggestion-1",
+        subcategoryCode: "skin-care",
+        subcategoryName: "스킨케어",
+        intent: "trend",
+        title: "장벽 케어 루틴의 변화",
+        whyNow: "환절기 관심이 늘고 있습니다.",
+        contentBrief: "브랜드 코어를 반영해 세 단계로 설명합니다.",
+      }],
+      general: [],
+    };
+    const { create, suggestionGateway } = renderFlow({ suggestionList });
+
+    await user.click(screen.getByRole("radio", { name: /^마케팅성/ }));
+    await user.click(screen.getByRole("button", { name: "목적 완료" }));
+    await user.click(screen.getByRole("button", { name: "오늘의 주제" }));
+    expect(await screen.findByText("장벽 케어 루틴의 변화")).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "AI 콘텐츠로 만들기" }));
+
+    expect(screen.queryByRole("combobox", { name: "제품·서비스" })).not.toBeInTheDocument();
+    expect(screen.getByLabelText("콘텐츠 지시 (선택)")).toHaveValue("브랜드 코어를 반영해 세 단계로 설명합니다.");
+    await user.click(screen.getByRole("button", { name: "주제·자료 완료" }));
+    await user.click(await screen.findByRole("button", { name: "Instagram" }));
+    await user.click(screen.getByRole("button", { name: "AI 구성안 만들기" }));
+
+    await waitFor(() => expect(create).toHaveBeenCalledTimes(1));
+    expect(create.mock.calls[0]?.[1].request).toMatchObject({
+      purpose: "informational",
+      seed: { kind: "topic_text", title: "장벽 케어 루틴의 변화" },
+      contentInstruction: "브랜드 코어를 반영해 세 단계로 설명합니다.",
+    });
+    expect(suggestionGateway.list).toHaveBeenCalledWith("brand-demo", expect.any(AbortSignal));
+  });
+
+  it("keeps the suggestion list and clears a stale deep-link selection", async () => {
+    const user = userEvent.setup();
+    const suggestionList: ContentSuggestionList = {
+      category: { code: "beauty", name: "뷰티" },
+      personal: [{
+        id: "suggestion-valid",
+        subcategoryCode: "skin-care",
+        subcategoryName: "스킨케어",
+        intent: "informational",
+        title: "지금 선택할 수 있는 추천",
+        whyNow: "현재 유효한 추천입니다.",
+        contentBrief: "세 단계로 설명합니다.",
+      }],
+      general: [],
+    };
+    const { suggestionGateway } = renderFlow({
+      suggestionList,
+      initialSuggestionId: "suggestion-stale",
+      initialSuggestionView: true,
+    });
+
+    await user.click(screen.getByRole("radio", { name: /^정보성/ }));
+    await user.click(screen.getByRole("button", { name: "목적 완료" }));
+
+    expect(await screen.findByText("지금 선택할 수 있는 추천")).toBeVisible();
+    expect(screen.getByRole("alert")).toHaveTextContent("선택한 오늘의 주제를 찾지 못했습니다");
+    expect(screen.getByRole("button", { name: "주제·자료 완료" })).toBeDisabled();
+    expect(suggestionGateway.get).toHaveBeenCalledWith(
+      "brand-demo",
+      "suggestion-stale",
+      expect.any(AbortSignal),
+    );
+  });
+
   it("clears a selected marketing product when a refreshed list no longer approves it", async () => {
     const user = userEvent.setup();
     renderFlow({

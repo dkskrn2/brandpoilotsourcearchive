@@ -1,10 +1,11 @@
 import { act, cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { MemoryRouter } from "react-router-dom";
+import { MemoryRouter, useLocation } from "react-router-dom";
 import { readFileSync } from "node:fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { FeedbackProvider, useFeedback } from "../components/feedback/FeedbackContext";
 import type { Dashboard, PublishArtifact } from "../types";
+import type { ContentSuggestionList } from "../features/content-suggestions/contentSuggestionGateway";
 
 const dashboard: Dashboard = {
   period: "30d",
@@ -89,10 +90,26 @@ type ApiMock = {
   getPublishArtifact: ReturnType<typeof vi.fn>;
 };
 
+const suggestion = (id: string, title: string) => ({
+  id,
+  subcategoryCode: id.startsWith("personal") ? "skin-care" : "makeup",
+  subcategoryName: id.startsWith("personal") ? "스킨케어" : "메이크업",
+  intent: id.endsWith("trend") ? "trend" as const : "informational" as const,
+  title,
+  whyNow: "지금 고객의 관심이 커지고 있습니다.",
+  contentBrief: `${title}를 브랜드 관점에서 설명합니다.`,
+});
+
+function Location() {
+  return <span data-testid="dashboard-location">{useLocation().search}</span>;
+}
+
 async function renderDashboardPage(
   getDashboard: ApiMock["getDashboard"] = vi.fn(async () => dashboard),
   getPublishArtifact: ApiMock["getPublishArtifact"] = vi.fn(async () => artifact),
-  openFeedback = vi.fn()
+  openFeedback = vi.fn(),
+  suggestionList: ContentSuggestionList | Error = { category: null, personal: [], general: [] },
+  suggestionRetryList: ContentSuggestionList = { category: null, personal: [], general: [] },
 ) {
   const api = { getDashboard, getPublishArtifact };
   vi.doMock("../lib/apiClient", () => ({
@@ -102,14 +119,23 @@ async function renderDashboardPage(
   }));
   vi.doMock("../components/feedback/FeedbackContext", () => ({ FeedbackProvider, useFeedback }));
   const { DashboardPage } = await import("../pages/DashboardPage");
+  const suggestionGateway = {
+    list: vi.fn(async () => {
+      if (suggestionList instanceof Error && suggestionGateway.list.mock.calls.length === 1) throw suggestionList;
+      if (suggestionList instanceof Error) return suggestionRetryList;
+      return suggestionList;
+    }),
+    get: vi.fn(),
+  };
   render(
     <MemoryRouter>
       <FeedbackProvider onOpenFeedback={openFeedback}>
-        <DashboardPage />
+        <DashboardPage brandId="brand-1" suggestionGateway={suggestionGateway} />
+        <Location />
       </FeedbackProvider>
     </MemoryRouter>
   );
-  return api;
+  return Object.assign(api, { suggestionGateway });
 }
 
 afterEach(() => {
@@ -119,6 +145,66 @@ afterEach(() => {
 });
 
 describe("DashboardPage", () => {
+  it("shows at most six personal-first suggestions and opens the existing content flow", async () => {
+    const user = userEvent.setup();
+    const suggestionList: ContentSuggestionList = {
+      category: { code: "beauty", name: "뷰티" },
+      personal: [
+        suggestion("personal-1", "내 스킨케어 주제"),
+        suggestion("personal-2-trend", "내 트렌드 주제"),
+      ],
+      general: [
+        suggestion("general-1", "일반 주제 1"),
+        suggestion("general-2", "일반 주제 2"),
+        suggestion("general-3", "일반 주제 3"),
+        suggestion("general-4", "일반 주제 4"),
+        suggestion("general-5", "일반 주제 5"),
+      ],
+    };
+    await renderDashboardPage(undefined, undefined, undefined, suggestionList);
+
+    const section = await screen.findByRole("region", { name: "오늘의 콘텐츠 추천" });
+    expect(within(section).getAllByRole("article")).toHaveLength(6);
+    expect(within(section).getByText("내 스킨케어 주제")).toBeVisible();
+    expect(within(section).getByText("일반 주제 4")).toBeVisible();
+    expect(within(section).queryByText("일반 주제 5")).not.toBeInTheDocument();
+    expect(within(section).queryByText(/내 세부분야 추천|출처|\d{4}[.-]\d{1,2}[.-]\d{1,2}/)).not.toBeInTheDocument();
+
+    const firstCard = within(section).getByText("내 스킨케어 주제").closest("article")!;
+    const createButton = within(firstCard).getByRole("button", { name: "AI 콘텐츠로 만들기" });
+    expect(createButton).toHaveClass("button", "primary");
+    await user.click(createButton);
+    expect(screen.getByTestId("dashboard-location")).toHaveTextContent("?view=today&suggestionId=personal-1");
+  });
+
+  it("keeps the dashboard available and retries failed recommendations", async () => {
+    const user = userEvent.setup();
+    const retryList: ContentSuggestionList = {
+      category: { code: "beauty", name: "뷰티" },
+      personal: [suggestion("personal-retry", "다시 불러온 추천")],
+      general: [],
+    };
+    const result = await renderDashboardPage(
+      undefined,
+      undefined,
+      undefined,
+      new Error("suggestions_unavailable"),
+      retryList,
+    );
+
+    expect(await screen.findByRole("heading", { name: "오늘의 운영 현황" })).toBeVisible();
+    const section = await screen.findByRole("region", { name: "오늘의 콘텐츠 추천" });
+    expect(within(section).getByRole("alert")).toHaveTextContent("오늘의 콘텐츠 추천을 불러오지 못했습니다");
+    await user.click(within(section).getByRole("button", { name: "다시 시도" }));
+    expect(await screen.findByText("다시 불러온 추천")).toBeVisible();
+    expect(result.suggestionGateway.list).toHaveBeenCalledTimes(2);
+  });
+
+  it("uses the global line token for suggestion cards rendered outside the wizard", () => {
+    const css = readFileSync("src/styles/content-wizard.css", "utf8");
+    expect(css).toMatch(/\.content-suggestion-card\s*\{[\s\S]*?border:\s*1px solid var\(--bp-color-line\)/);
+  });
+
   it("shows the recent 30-day operational summary and performance sections", async () => {
     const api = await renderDashboardPage();
 

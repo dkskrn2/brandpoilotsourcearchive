@@ -5,6 +5,12 @@ import { describe, expect, it } from "vitest";
 
 import { assertCustomerBuildEnv, productionApiBaseUrl } from "./buildEnv";
 
+const productionSupabaseUrl = "https://ehrtffyawkcmamnjnowu.supabase.co";
+const oauthBuildEnv = {
+  VITE_SUPABASE_URL: productionSupabaseUrl,
+  VITE_SUPABASE_PUBLISHABLE_KEY: "sb_publishable_example",
+};
+
 type HeaderRule = {
   source: string;
   headers: Array<{ key: string; value: string }>;
@@ -66,9 +72,39 @@ describe("assertCustomerBuildEnv", () => {
     expect(
       assertCustomerBuildEnv({
         VERCEL: "1",
-        VITE_API_BASE_URL: productionApiBaseUrl
+        VITE_API_BASE_URL: productionApiBaseUrl,
+        ...oauthBuildEnv,
       })
     ).toBe(productionApiBaseUrl);
+  });
+
+  it("requires the OAuth Supabase settings during a Vercel build", () => {
+    expect(() => assertCustomerBuildEnv({
+      VERCEL: "1",
+      VITE_API_BASE_URL: productionApiBaseUrl,
+    })).toThrowError("VITE_SUPABASE_URL_required");
+
+    expect(() => assertCustomerBuildEnv({
+      VERCEL: "1",
+      VITE_API_BASE_URL: productionApiBaseUrl,
+      VITE_SUPABASE_URL: productionSupabaseUrl,
+    })).toThrowError("VITE_SUPABASE_PUBLISHABLE_KEY_required");
+  });
+
+  it("rejects OAuth settings for a different Supabase project", () => {
+    expect(() => assertCustomerBuildEnv({
+      VERCEL: "1",
+      VITE_API_BASE_URL: productionApiBaseUrl,
+      VITE_SUPABASE_URL: "https://other.supabase.co",
+      VITE_SUPABASE_PUBLISHABLE_KEY: "sb_publishable_example",
+    })).toThrowError("VITE_SUPABASE_URL_invalid");
+
+    expect(() => assertCustomerBuildEnv({
+      VERCEL: "1",
+      VITE_API_BASE_URL: productionApiBaseUrl,
+      VITE_SUPABASE_URL: productionSupabaseUrl,
+      VITE_SUPABASE_PUBLISHABLE_KEY: "service-role-or-malformed-key",
+    })).toThrowError("VITE_SUPABASE_PUBLISHABLE_KEY_invalid");
   });
 
   it("rejects the preview destination in a production Vercel build", () => {
@@ -76,7 +112,8 @@ describe("assertCustomerBuildEnv", () => {
       assertCustomerBuildEnv({
         VERCEL_ENV: "production",
         VITE_API_BASE_URL: productionApiBaseUrl,
-        VITE_AUTH_DESTINATION: "preview"
+        VITE_AUTH_DESTINATION: "preview",
+        ...oauthBuildEnv,
       })
     ).toThrowError("VITE_AUTH_DESTINATION_invalid");
   });
@@ -86,7 +123,8 @@ describe("assertCustomerBuildEnv", () => {
       assertCustomerBuildEnv({
         VERCEL_ENV: "preview",
         VITE_API_BASE_URL: productionApiBaseUrl,
-        VITE_AUTH_DESTINATION: "preview"
+        VITE_AUTH_DESTINATION: "preview",
+        ...oauthBuildEnv,
       })
     ).toBe(productionApiBaseUrl);
 
@@ -94,7 +132,8 @@ describe("assertCustomerBuildEnv", () => {
       assertCustomerBuildEnv({
         VERCEL_ENV: "preview",
         VITE_API_BASE_URL: productionApiBaseUrl,
-        VITE_AUTH_DESTINATION: "https://evil.example"
+        VITE_AUTH_DESTINATION: "https://evil.example",
+        ...oauthBuildEnv,
       })
     ).toThrowError("VITE_AUTH_DESTINATION_invalid");
   });

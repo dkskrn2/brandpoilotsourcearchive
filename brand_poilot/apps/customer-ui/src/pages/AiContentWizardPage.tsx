@@ -46,6 +46,8 @@ export function AiContentWizardPage({
     initialBatchId={params.get("proposalBatch")}
     initialSeedReferenceId={params.get("reference")}
     initialAnalyzedSubjectId={params.get("analysis")}
+    initialSuggestionId={params.get("suggestionId")}
+    initialSuggestionView={["today", "suggestions"].includes(params.get("view") ?? "")}
     initialSetup={{
       family: params.get("proposalFamily") === "informational" || params.get("proposalFamily") === "marketing"
         ? params.get("proposalFamily") as "informational" | "marketing"

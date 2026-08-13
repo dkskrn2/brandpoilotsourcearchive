@@ -44,7 +44,9 @@ beforeAll(async () => {
   const directory = resolve(process.cwd(), "../../db/migrations");
   for (const file of (await readdir(directory)).filter((name) => name.endsWith(".sql")).sort()) {
     const sql = await readFile(resolve(directory, file), "utf8");
-    if (sql.startsWith("-- requires: pgvector") || file === "027_wiki_search_v2.sql") continue;
+    if (sql.startsWith("-- requires: pgvector")
+      || file === "027_wiki_search_v2.sql"
+      || file >= "075_") continue;
     await database.exec(sql);
   }
   db = createDmWorkerDbFromPool(pool(database));

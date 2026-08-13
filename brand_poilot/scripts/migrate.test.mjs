@@ -258,6 +258,40 @@ test("post-075 data migration CLI routes a secure provider file to the dedicated
   assert.equal(JSON.parse(messages[0]).post075DataMigration.status, "applied");
 });
 
+test("post-075 schema migration CLI routes the protected provider file to the sealed runner", async () => {
+  let receivedOptions;
+  const messages = [];
+  await migrateModule.main({
+    env: {
+      SUPABASE_DATABASE_URL_FILE: "/run/secrets/provider-admin-database-url",
+      AI_CONTENT_POST_075_EXPECTED_PROVIDER_ROLE: "postgres",
+    },
+    argv: ["node", "scripts/migrate.mjs", "--post-075-schema"],
+    loadEnvironment: () => {},
+    readDatabaseUrlFileImpl: async () => "postgresql://postgres:secret@database.example/postgres\n",
+    runMigrationsImpl: async (options) => {
+      receivedOptions = options;
+      return {
+        pending: ["077_content_suggestion_batches.sql"],
+        migrations: [{}],
+        baselineRequired: false,
+        post075SchemaMigration: {
+          contractVersion: "post-075-schema-migration-evidence.v1",
+          providerRoleName: "postgres",
+          migrationId: "077_content_suggestion_batches.sql",
+          migrationSha256: "b".repeat(64),
+          status: "applied",
+        },
+      };
+    },
+    logger: { log: (message) => messages.push(message) },
+  });
+  assert.equal(receivedOptions.post075SchemaMigrationMode, true);
+  assert.equal(receivedOptions.expectedProviderRoleName, "postgres");
+  assert.equal(receivedOptions.connectionString, "postgresql://postgres:secret@database.example/postgres");
+  assert.equal(JSON.parse(messages[0]).post075SchemaMigration.status, "applied");
+});
+
 test("migration CLI exposes the 073a-to-074 restart boundary", async () => {
   const messages = [];
   await migrateModule.main({

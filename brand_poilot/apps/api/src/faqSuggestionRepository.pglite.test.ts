@@ -34,7 +34,9 @@ beforeAll(async () => {
     .sort();
   for (const file of files) {
     const sql = await readFile(resolve(migrationDirectory, file), "utf8");
-    if (sql.startsWith("-- requires: pgvector") || file === "027_wiki_search_v2.sql") continue;
+    if (sql.startsWith("-- requires: pgvector")
+      || file === "027_wiki_search_v2.sql"
+      || file >= "075_") continue;
     await database.exec(sql);
   }
   repository = createFaqSuggestionRepository(pglitePool(database));

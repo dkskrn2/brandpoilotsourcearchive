@@ -375,6 +375,10 @@ export function classifyChangedPaths(values, options = {}) {
 
   const components = Object.fromEntries(COMPONENTS.map((component) => [component, false]));
   const unknownPaths = [];
+  const packageManifestPaths = paths.filter((path) => path.endsWith("package.json"));
+  const appWorkspaceOnlyLockUpdate = packageManifestPaths.length > 0
+    && packageManifestPaths.every((path) => path === "apps/api/package.json"
+      || path === "apps/customer-ui/package.json");
   let buildAllServer = false;
   let migrationChanged = false;
   let deployBundleChanged = false;
@@ -452,12 +456,19 @@ export function classifyChangedPaths(values, options = {}) {
       continue;
     }
     if (AI_CONTENT_SCOPED_TOOLING_PATHS.has(path)) continue;
+    if (path === "package-lock.json" && appWorkspaceOnlyLockUpdate) {
+      if (packageManifestPaths.includes("apps/api/package.json")) components.api = true;
+      if (packageManifestPaths.includes("apps/customer-ui/package.json")) components.customerUi = true;
+      continue;
+    }
     if (path === "package.json" || path === "package-lock.json" || path === ".dockerignore" || path.startsWith("workers/brand-pilot-worker-runtime/")) {
       buildAllServer = true;
       enableAllServer(components);
       if (path === "package.json" || path === "package-lock.json") components.customerUi = true;
       continue;
     }
+
+    if (path.startsWith("workers/") && path.endsWith(".test.ts")) continue;
 
     const worker = WORKER_PATHS.find(([prefix]) => path.startsWith(prefix));
     if (worker) {

@@ -93,6 +93,7 @@ export const fullSourceMigrationIds = Object.freeze([
   "074_ai_content_maintenance_write_fence.sql",
   "075_ai_content_three_format_cutover.sql",
   "076_manual_content_generation_brand_rules.sql",
+  "077_content_suggestion_batches.sql",
 ]);
 const legacyTriggerSearchPathMigrationId = "073a_legacy_trigger_function_search_path.sql";
 export const legacyTriggerSearchPathMigrationChecksum =
@@ -105,6 +106,16 @@ const post075DataMigrationIds = Object.freeze([
 export const post075DataMigrationChecksums = Object.freeze({
   "076_manual_content_generation_brand_rules.sql": "da42c957d4307d58c1f37f5d508c8a1f14836727080d6290e4b0537e43167604",
 });
+const post075SchemaMigrationIds = Object.freeze([
+  "077_content_suggestion_batches.sql",
+]);
+export const post075SchemaMigrationChecksums = Object.freeze({
+  "077_content_suggestion_batches.sql": "3b178464c5ae5c4e220428e0752ab3e79a2ca06b5b2b23f1e89c34e983e63f76",
+});
+const post075DeferredMigrationIds = Object.freeze([
+  ...post075DataMigrationIds,
+  ...post075SchemaMigrationIds,
+]);
 const providerAttestationContract = "ai-content-074-provider-attestation.v4";
 
 const isExactFullSourceManifest = (migrations) => migrations.length === fullSourceMigrationIds.length
@@ -142,6 +153,10 @@ export function isExactPost075DataMigrationPlan(migrations, history) {
   if (!isExactFullSourceManifest(migrations)
     || !Array.isArray(history)
     || !history.some(({ id }) => id === cutover075MigrationId)) return false;
+  if (post075SchemaMigrationIds.some((id) => history.some((migration) => migration.id === id))
+    && post075DataMigrationIds.some((id) => !history.some((migration) => migration.id === id))) {
+    return false;
+  }
   const sourceIds = new Set(fullSourceMigrationIds);
   if (history.some(({ id }) => !sourceIds.has(id))) return false;
   let plan;
@@ -150,10 +165,47 @@ export function isExactPost075DataMigrationPlan(migrations, history) {
   } catch {
     return false;
   }
-  if (plan.pending.some(({ id }) => !post075DataMigrationIds.includes(id))) return false;
+  if (plan.pending.some(({ id }) => !post075DeferredMigrationIds.includes(id))) return false;
   try {
     for (const migration of migrations.filter(({ id }) => post075DataMigrationIds.includes(id))) {
       validatePost075DataMigration(migration);
+    }
+  } catch {
+    return false;
+  }
+  return true;
+}
+
+export function validatePost075SchemaMigration(migration) {
+  if (!migration || !post075SchemaMigrationIds.includes(migration.id)
+    || typeof migration.sql !== "string"
+    || !exactHex(migration.checksum, 64)
+    || post075SchemaMigrationChecksums[migration.id] !== migration.checksum
+    || checksum(migration.sql) !== migration.checksum) {
+    throw new Error("post_075_schema_migration_invalid");
+  }
+  return true;
+}
+
+export function isExactPost075SchemaMigrationPlan(migrations, history) {
+  if (!isExactFullSourceManifest(migrations)
+    || !Array.isArray(history)
+    || !history.some(({ id }) => id === cutover075MigrationId)
+    || post075DataMigrationIds.some((id) => !history.some((migration) => migration.id === id))) {
+    return false;
+  }
+  const sourceIds = new Set(fullSourceMigrationIds);
+  if (history.some(({ id }) => !sourceIds.has(id))) return false;
+  let plan;
+  try {
+    plan = buildMigrationPlan(migrations, history);
+  } catch {
+    return false;
+  }
+  if (plan.pending.some(({ id }) => !post075SchemaMigrationIds.includes(id))) return false;
+  try {
+    for (const migration of migrations.filter(({ id }) => post075SchemaMigrationIds.includes(id))) {
+      validatePost075SchemaMigration(migration);
     }
   } catch {
     return false;
@@ -3975,6 +4027,7 @@ export async function runPost075DataMigrationsWithClient({
     const plan = buildMigrationPlan(migrations, history);
     const evidenceMigration = migrations.find(({ id }) => post075DataMigrationIds.includes(id));
     if (!evidenceMigration) throw new Error("post_075_data_migration_plan_invalid");
+    const pendingDataMigrations = plan.pending.filter(({ id }) => post075DataMigrationIds.includes(id));
     const evidence = (status) => ({
       contractVersion: "post-075-data-migration-evidence.v1",
       providerRoleName: expectedProviderRoleName,
@@ -3982,7 +4035,7 @@ export async function runPost075DataMigrationsWithClient({
       migrationSha256: evidenceMigration.checksum,
       status,
     });
-    if (plan.pending.length === 0) {
+    if (pendingDataMigrations.length === 0) {
       return {
         migrations,
         pending: [],
@@ -4033,7 +4086,7 @@ export async function runPost075DataMigrationsWithClient({
 
     await client.query("begin");
     try {
-      for (const migration of plan.pending) {
+      for (const migration of pendingDataMigrations) {
         validatePost075DataMigration(migration);
         await client.query(unwrapFileTransaction(migration.sql));
         await client.query(
@@ -4058,9 +4111,147 @@ export async function runPost075DataMigrationsWithClient({
     }
     return {
       migrations,
-      pending: plan.pending.map(({ id }) => id),
+      pending: pendingDataMigrations.map(({ id }) => id),
       baselineRequired: false,
       post075DataMigration: evidence("applied"),
+    };
+  } finally {
+    await client.query("select pg_advisory_unlock(hashtext($1))", [migrationAdvisoryLockName]);
+  }
+}
+
+export async function runPost075SchemaMigrationsWithClient({
+  client,
+  migrations,
+  expectedProviderRoleName,
+}) {
+  if (!/^[A-Za-z_][A-Za-z0-9_]{0,62}$/.test(expectedProviderRoleName ?? "")) {
+    throw new Error("post_075_provider_role_required");
+  }
+  await client.query("select pg_advisory_lock(hashtext($1))", [migrationAdvisoryLockName]);
+  try {
+    const history = await readHistory(client);
+    if (!isExactPost075SchemaMigrationPlan(migrations, history)) {
+      throw new Error("post_075_schema_migration_plan_invalid");
+    }
+    const plan = buildMigrationPlan(migrations, history);
+    const evidenceMigration = migrations.find(({ id }) => post075SchemaMigrationIds.includes(id));
+    if (!evidenceMigration) throw new Error("post_075_schema_migration_plan_invalid");
+    const evidence = (status) => ({
+      contractVersion: "post-075-schema-migration-evidence.v1",
+      providerRoleName: expectedProviderRoleName,
+      migrationId: evidenceMigration.id,
+      migrationSha256: evidenceMigration.checksum,
+      status,
+    });
+    if (plan.pending.length === 0) {
+      return {
+        migrations,
+        pending: [],
+        baselineRequired: false,
+        post075SchemaMigration: evidence("already_applied"),
+      };
+    }
+
+    await client.query("select set_config('search_path','pg_catalog,public,pg_temp',false)");
+    const identity = await client.query(
+      `/* post_075_schema_provider_session_v1 */
+       select session_user::text as session_user_name,
+              current_user::text as current_user_name,
+              provider.rolsuper as is_superuser,
+              event_trigger.evtname::text as event_trigger_name,
+              event_trigger.evtenabled::text as event_trigger_enabled,
+              event_owner.rolname::text as event_trigger_owner,
+              bootstrap.schema_owner_role_name::text as schema_owner_role_name,
+              bootstrap.application_role_name::text as application_role_name
+         from pg_roles provider
+         cross join public.ai_content_bootstrap_state bootstrap
+         join pg_event_trigger event_trigger on event_trigger.evtname='ai_content_ddl_guard_074'
+         join pg_roles event_owner on event_owner.oid=event_trigger.evtowner
+        where provider.rolname=current_user and bootstrap.singleton`,
+    );
+    const provider = identity.rows[0];
+    if (identity.rows.length !== 1
+      || provider.session_user_name !== expectedProviderRoleName
+      || provider.current_user_name !== expectedProviderRoleName
+      || provider.is_superuser !== true
+      || provider.event_trigger_name !== "ai_content_ddl_guard_074"
+      || provider.event_trigger_enabled !== "O"
+      || provider.event_trigger_owner !== expectedProviderRoleName
+      || !/^[A-Za-z_][A-Za-z0-9_]{0,62}$/.test(provider.schema_owner_role_name ?? "")
+      || !/^[A-Za-z_][A-Za-z0-9_]{0,62}$/.test(provider.application_role_name ?? "")) {
+      throw new Error("post_075_schema_provider_session_invalid");
+    }
+
+    await client.query("begin");
+    try {
+      await client.query("alter event trigger ai_content_ddl_guard_074 disable");
+      await client.query(unwrapFileTransaction(evidenceMigration.sql));
+      await client.query(
+        "insert into schema_migrations (id, checksum) values ($1, $2)",
+        [evidenceMigration.id, evidenceMigration.checksum],
+      );
+      await client.query("alter event trigger ai_content_ddl_guard_074 enable");
+      const catalog = await client.query(
+        `/* post_075_schema_catalog_v1 */
+         select event_trigger.evtenabled::text as guard_enabled,
+                batch_owner.rolname::text as batch_owner,
+                suggestion_owner.rolname::text as suggestion_owner,
+                has_table_privilege($1,'public.content_suggestion_batches','SELECT') as app_batch_select,
+                has_table_privilege($1,'public.content_suggestion_batches','INSERT') as app_batch_insert,
+                has_table_privilege($1,'public.content_suggestion_batches','UPDATE') as app_batch_update,
+                has_table_privilege($1,'public.content_suggestion_batches','DELETE') as app_batch_delete,
+                has_table_privilege($1,'public.content_suggestions','SELECT') as app_suggestion_select,
+                has_table_privilege($1,'public.content_suggestions','INSERT') as app_suggestion_insert,
+                has_table_privilege($1,'public.content_suggestions','UPDATE') as app_suggestion_update,
+                has_table_privilege($1,'public.content_suggestions','DELETE') as app_suggestion_delete,
+                coalesce((select bool_or(acl.grantee=0) from aclexplode(batch.relacl) acl),false) as public_batch_privilege,
+                coalesce((select bool_or(acl.grantee=0) from aclexplode(suggestion.relacl) acl),false) as public_suggestion_privilege
+           from pg_event_trigger event_trigger
+           join pg_class batch on batch.oid='public.content_suggestion_batches'::regclass
+           join pg_roles batch_owner on batch_owner.oid=batch.relowner
+           join pg_class suggestion on suggestion.oid='public.content_suggestions'::regclass
+           join pg_roles suggestion_owner on suggestion_owner.oid=suggestion.relowner
+          where event_trigger.evtname='ai_content_ddl_guard_074'`,
+        [provider.application_role_name],
+      );
+      const sealed = catalog.rows[0];
+      if (catalog.rows.length !== 1
+        || sealed.guard_enabled !== "O"
+        || sealed.batch_owner !== provider.schema_owner_role_name
+        || sealed.suggestion_owner !== provider.schema_owner_role_name
+        || sealed.app_batch_select !== true
+        || sealed.app_batch_insert !== true
+        || sealed.app_batch_update !== true
+        || sealed.app_batch_delete !== true
+        || sealed.app_suggestion_select !== true
+        || sealed.app_suggestion_insert !== true
+        || sealed.app_suggestion_update !== true
+        || sealed.app_suggestion_delete !== true
+        || sealed.public_batch_privilege !== false
+        || sealed.public_suggestion_privilege !== false) {
+        throw new Error("post_075_schema_catalog_invalid");
+      }
+      const marker = await client.query(
+        `/* post_075_schema_migration_marker_v1 */
+         select id,checksum from schema_migrations where id=$1`,
+        [evidenceMigration.id],
+      );
+      if (marker.rows.length !== 1
+        || marker.rows[0]?.id !== evidenceMigration.id
+        || marker.rows[0]?.checksum !== evidenceMigration.checksum) {
+        throw new Error("post_075_schema_migration_marker_invalid");
+      }
+      await client.query("commit");
+    } catch (error) {
+      await client.query("rollback");
+      throw error;
+    }
+    return {
+      migrations,
+      pending: [evidenceMigration.id],
+      baselineRequired: false,
+      post075SchemaMigration: evidence("applied"),
     };
   } finally {
     await client.query("select pg_advisory_unlock(hashtext($1))", [migrationAdvisoryLockName]);
@@ -4190,7 +4381,7 @@ export async function runMigrationsWithClient({
       }
       plan = buildMigrationPlan(migrations, history);
       const pendingIds = plan.pending
-        .filter((migration) => !post075DataMigrationIds.includes(migration.id))
+        .filter((migration) => !post075DeferredMigrationIds.includes(migration.id))
         .map((migration) => migration.id);
       const applying074 = pendingIds.includes(bootstrap074MigrationId);
       const exact074Pending = pendingIds.length === 1 && pendingIds[0] === bootstrap074MigrationId;
@@ -4322,7 +4513,7 @@ export async function runMigrationsWithClient({
         ? await verifyCutover075Preconditions({ client, migration: migration075, cutover, bootstrap074, migration074, recovery: true })
         : undefined;
     for (const migration of plan.pending) {
-      if (migration.id === cutover075MigrationId || post075DataMigrationIds.includes(migration.id)) {
+      if (migration.id === cutover075MigrationId || post075DeferredMigrationIds.includes(migration.id)) {
         continue;
       }
       await client.query("begin");
@@ -4590,8 +4781,8 @@ export async function runMigrationsWithClient({
       migrations,
       pending: deferPending075
         ? plan.pending.filter((migration) => migration.id !== cutover075MigrationId
-          && !post075DataMigrationIds.includes(migration.id)).map((migration) => migration.id)
-        : plan.pending.filter((migration) => !post075DataMigrationIds.includes(migration.id))
+          && !post075DeferredMigrationIds.includes(migration.id)).map((migration) => migration.id)
+        : plan.pending.filter((migration) => !post075DeferredMigrationIds.includes(migration.id))
           .map((migration) => migration.id),
       baselineRequired: false,
       ...(deferPending075 ? {
@@ -4621,6 +4812,7 @@ export async function runMigrations({
   bootstrap074PrerequisiteProviderRoleName,
   cutover,
   post075DataMigrationMode = false,
+  post075SchemaMigrationMode = false,
   expectedProviderRoleName,
 }) {
   if (!connectionString) throw new Error("database_url_required");
@@ -4630,8 +4822,18 @@ export async function runMigrations({
   }));
   await client.connect();
   try {
+    if (post075DataMigrationMode && post075SchemaMigrationMode) {
+      throw new Error("post_075_migration_mode_ambiguous");
+    }
     if (post075DataMigrationMode) {
       return await runPost075DataMigrationsWithClient({
+        client,
+        migrations,
+        expectedProviderRoleName,
+      });
+    }
+    if (post075SchemaMigrationMode) {
+      return await runPost075SchemaMigrationsWithClient({
         client,
         migrations,
         expectedProviderRoleName,

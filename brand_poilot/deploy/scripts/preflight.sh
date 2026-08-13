@@ -167,6 +167,38 @@ require_exact_boolean "AI_CONTENT_ATTACHMENT_UPLOAD_SESSIONS_ENABLED" "true" "$A
 require_exact_boolean "AUTOMATED_CONTENT_ENABLED" "false" "$API_ENV_FILE"
 require_exact_boolean "CONTENT_PROPOSALS_ENABLED" "true" "$API_ENV_FILE"
 require_exact_boolean "DM_WORKERS_ENABLED" "false" "$API_ENV_FILE"
+for oauth_key in \
+  CONTENT_SUGGESTION_OAUTH_ISSUER \
+  CONTENT_SUGGESTION_OAUTH_JWKS_URI \
+  CONTENT_SUGGESTION_OAUTH_RESOURCE; do
+  oauth_declaration_count="$(grep -Ec "^${oauth_key}=" "$API_ENV_FILE" || true)"
+  [[ "$oauth_declaration_count" == "1" ]] || fail "content_suggestion_oauth_config_invalid"
+  oauth_value="$(grep -E "^${oauth_key}=" "$API_ENV_FILE" | sed 's/^[^=]*=//')"
+  [[ "$oauth_value" =~ ^https://[^[:space:]#]+$ ]] || fail "content_suggestion_oauth_config_invalid"
+done
+oauth_audience_declaration_count="$(grep -Ec '^CONTENT_SUGGESTION_OAUTH_AUDIENCE=' "$API_ENV_FILE" || true)"
+[[ "$oauth_audience_declaration_count" == "1" ]] || fail "content_suggestion_oauth_config_invalid"
+oauth_subject_declaration_count="$(grep -Ec '^CONTENT_SUGGESTION_OAUTH_ALLOWED_SUBJECTS=' "$API_ENV_FILE" || true)"
+[[ "$oauth_subject_declaration_count" == "1" ]] || fail "content_suggestion_oauth_subjects_invalid"
+CONTENT_SUGGESTION_OAUTH_ALLOWED_SUBJECTS_VALUE="$(grep -E '^CONTENT_SUGGESTION_OAUTH_ALLOWED_SUBJECTS=' "$API_ENV_FILE" | sed 's/^[^=]*=//')"
+IFS=',' read -r -a oauth_subjects <<< "$CONTENT_SUGGESTION_OAUTH_ALLOWED_SUBJECTS_VALUE"
+(( ${#oauth_subjects[@]} > 0 )) || fail "content_suggestion_oauth_subjects_invalid"
+declare -A oauth_seen_subjects=()
+for oauth_subject in "${oauth_subjects[@]}"; do
+  [[ "$oauth_subject" =~ ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$ ]] ||
+    fail "content_suggestion_oauth_subjects_invalid"
+  oauth_normalized_subject="${oauth_subject,,}"
+  [[ -z "${oauth_seen_subjects[$oauth_normalized_subject]:-}" ]] ||
+    fail "content_suggestion_oauth_subjects_invalid"
+  oauth_seen_subjects[$oauth_normalized_subject]=1
+done
+CONTENT_SUGGESTION_OAUTH_AUDIENCE_VALUE="$(grep -E '^CONTENT_SUGGESTION_OAUTH_AUDIENCE=' "$API_ENV_FILE" | sed 's/^[^=]*=//')"
+CONTENT_SUGGESTION_OAUTH_RESOURCE_VALUE="$(grep -E '^CONTENT_SUGGESTION_OAUTH_RESOURCE=' "$API_ENV_FILE" | sed 's/^[^=]*=//')"
+[[ "$CONTENT_SUGGESTION_OAUTH_AUDIENCE_VALUE" == "authenticated" ]] ||
+  fail "content_suggestion_oauth_audience_invalid"
+[[ "$CONTENT_SUGGESTION_OAUTH_RESOURCE_VALUE" == "https://api.danbammsg.co.kr/plugins/content-suggestions/mcp" ]] ||
+  fail "content_suggestion_oauth_resource_invalid"
+status_ok "content_suggestion_oauth"
 require_matching_env_secret \
   "CONTENT_PROPOSAL_WORKER_API_TOKEN" \
   "$API_ENV_FILE" \

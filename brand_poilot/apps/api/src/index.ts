@@ -36,6 +36,8 @@ import { createAiContentProposalV2Service } from "./aiContentProposalV2Service.j
 import { resolveContentProposalV2Input } from "./contentOrchestration.js";
 import { parseContentOrchestrationV2 } from "./aiContentGenerationInputV3.js";
 import { createPerformanceProposalAdapter } from "./performanceProposalAdapter.js";
+import { createContentSuggestionRepository } from "./contentSuggestionRepository.js";
+import { createContentSuggestionOAuthTokenVerifier } from "./contentSuggestionOAuth.js";
 
 const runtimeConfig = loadApiRuntimeConfig();
 const port = Number(process.env.PORT ?? 4000);
@@ -220,12 +222,24 @@ const brandLogoService = createBrandLogoService({
   storage: createSupabaseBrandLogoStorage(),
   store: createPostgresBrandLogoStore(pool, (brandId) => repository.getBrandProfile(brandId))
 });
+const contentSuggestionRepository = createContentSuggestionRepository(pool);
 const serverOptions: Parameters<typeof createServer>[0] & {
   runtimePolicy: typeof runtimeConfig.http;
 } = {
     runtimePolicy: runtimeConfig.http,
     readinessPolicy: runtimeConfig.readiness,
     repository,
+    contentSuggestions: {
+      repository: contentSuggestionRepository,
+      ...(runtimeConfig.contentSuggestionOAuth ? {
+        oauth: {
+          config: runtimeConfig.contentSuggestionOAuth,
+          verifier: createContentSuggestionOAuthTokenVerifier(
+            runtimeConfig.contentSuggestionOAuth,
+          ),
+        },
+      } : {}),
+    },
     aiContentProposalV2,
     brandLogoService,
     workerApiToken: process.env.WORKER_API_TOKEN,

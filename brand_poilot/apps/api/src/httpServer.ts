@@ -96,6 +96,14 @@ import { registerBrandCenterRoutes } from "./brandCenterHttp.js";
 import type { ApiHttpRuntimePolicy } from "./runtimeConfig.js";
 import { assessApiReadiness } from "./runtime.js";
 import type { AiContentJobRecord } from "./aiContentRepository.js";
+import {
+  CONTENT_SUGGESTION_MCP_PATH,
+  CONTENT_SUGGESTION_PROTECTED_RESOURCE_PATH,
+  registerContentSuggestionRoutes,
+} from "./contentSuggestionHttp.js";
+import type { ContentSuggestionRepository } from "./contentSuggestionRepository.js";
+import type { OAuthTokenVerifier } from "@modelcontextprotocol/sdk/server/auth/provider.js";
+import type { ContentSuggestionOAuthConfig } from "./contentSuggestionOAuth.js";
 
 export type { ApiHttpRuntimePolicy } from "./runtimeConfig.js";
 
@@ -179,6 +187,10 @@ function instagramLoginCallbackUrl(
 
 interface CreateServerOptions {
   repository: ApiRepository;
+  contentSuggestions?: {
+    repository: ContentSuggestionRepository;
+    oauth?: { config: ContentSuggestionOAuthConfig; verifier: OAuthTokenVerifier };
+  };
   aiContentProposalV2?: {
     service: AiContentProposalV2Service;
     snapshotRepository: AiContentSnapshotRepository;
@@ -855,7 +867,7 @@ export function createFastifyOptions(logger?: boolean | FastifyLoggerOptions) {
 }
 
 export function createServer(
-  { repository, aiContentProposalV2, workerApiToken, contentProposalWorkerApiToken, cronSecret, kakaoAuth, kakao, instagramLogin, facebookLogin, metaWebhook, brandLogoService, aiContentUpload, aiContentAttachmentGc, assetLibraryUpload, aiContentLimits, subjectAnalysis, brandIntelligenceRepository, brandAnalysisUpload, runtimePolicy, readinessPolicy, logger }: CreateServerOptions,
+  { repository, contentSuggestions, aiContentProposalV2, workerApiToken, contentProposalWorkerApiToken, cronSecret, kakaoAuth, kakao, instagramLogin, facebookLogin, metaWebhook, brandLogoService, aiContentUpload, aiContentAttachmentGc, assetLibraryUpload, aiContentLimits, subjectAnalysis, brandIntelligenceRepository, brandAnalysisUpload, runtimePolicy, readinessPolicy, logger }: CreateServerOptions,
   app: FastifyInstance = Fastify(createFastifyOptions(logger))
 ) {
   const aiContentAttachmentRepository = aiContentUpload
@@ -1267,7 +1279,7 @@ export function createServer(
       && aiContentMutation) {
       await maintenanceRepository.assertAiContentWritable();
     }
-    if (!kakaoAuth || route === "/health" || route === "/ready" || request.url.startsWith("/auth/") || request.url.startsWith("/admin/v1/") || request.url.startsWith("/webhooks/") || request.url.startsWith("/worker/") || request.url.startsWith("/workers/") || request.url.startsWith("/internal/cron/")) return;
+    if (!kakaoAuth || route === "/health" || route === "/ready" || route === CONTENT_SUGGESTION_PROTECTED_RESOURCE_PATH || request.url.startsWith("/auth/") || request.url.startsWith("/admin/v1/") || request.url.startsWith("/webhooks/") || request.url.startsWith("/worker/") || request.url.startsWith("/workers/") || request.url.startsWith("/internal/cron/") || request.url.startsWith(CONTENT_SUGGESTION_MCP_PATH)) return;
     const token = readCookie(request.headers.cookie, "bp_session");
     const session = token ? await kakaoAuth.getSession(token) : null;
     if (!session) {
@@ -1295,6 +1307,10 @@ export function createServer(
       return reply;
     }
   });
+
+  if (contentSuggestions) {
+    registerContentSuggestionRoutes(app, contentSuggestions);
+  }
 
   app.get("/health", async () => {
     return { ok: true };

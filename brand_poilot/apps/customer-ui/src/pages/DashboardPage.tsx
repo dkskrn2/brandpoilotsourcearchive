@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { AlertTriangle, ExternalLink, RefreshCw, X } from "lucide-react";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { api, DEMO_BRAND_ID } from "../lib/apiClient";
 import { PageSkeleton } from "../components/ui/LoadingState";
 import { FocusTrap } from "../components/ui/FocusTrap";
@@ -15,6 +15,13 @@ import { DashboardPerformancePanel } from "../components/dashboard/DashboardPerf
 import { createDashboardViewModel } from "../features/dashboard/dashboardViewModel";
 import { useBrandStatus } from "../lib/brandStatus";
 import { useAiContentUsage } from "../features/ai-content/AiContentUsageContext";
+import { ContentSuggestionCards } from "../components/content-suggestions/ContentSuggestionCards";
+import {
+  contentSuggestionGateway,
+  type ContentSuggestion,
+  type ContentSuggestionGateway,
+  type ContentSuggestionList,
+} from "../features/content-suggestions/contentSuggestionGateway";
 import type { ChannelStatus, ChannelType, Dashboard, PublishArtifact } from "../types";
 
 const channelLabels: Record<ChannelType, string> = {
@@ -268,9 +275,30 @@ function DailyExposureChart({ rows }: { rows: Dashboard["dailyExposure"] }) {
   );
 }
 
-function DashboardContent({ dashboard }: { dashboard: Dashboard }) {
+function visibleDashboardSuggestions(suggestions: ContentSuggestionList | null): ContentSuggestion[] {
+  if (!suggestions) return [];
+  const seen = new Set<string>();
+  return [...suggestions.personal, ...suggestions.general].filter((item) => {
+    if (seen.has(item.id)) return false;
+    seen.add(item.id);
+    return true;
+  }).slice(0, 6);
+}
+
+function DashboardContent({
+  dashboard,
+  suggestions,
+  suggestionsError,
+  onRetrySuggestions,
+}: {
+  dashboard: Dashboard;
+  suggestions: ContentSuggestionList | null;
+  suggestionsError: boolean;
+  onRetrySuggestions(): void;
+}) {
   const [selectedContent, setSelectedContent] = useState<PerformanceContent | null>(null);
   const performanceTriggerRef = useRef<HTMLButtonElement | null>(null);
+  const navigate = useNavigate();
   const { status: brandStatus } = useBrandStatus();
   const { usage } = useAiContentUsage();
   const viewModel = useMemo(
@@ -278,6 +306,7 @@ function DashboardContent({ dashboard }: { dashboard: Dashboard }) {
     [brandStatus, dashboard, usage],
   );
   const attentionItems = uniqueAttentionItems(dashboard.attentionItems);
+  const suggestionItems = visibleDashboardSuggestions(suggestions);
 
   function closePerformanceDialog() {
     setSelectedContent(null);
@@ -299,6 +328,25 @@ function DashboardContent({ dashboard }: { dashboard: Dashboard }) {
           <PageGuideButton />
         </div>
       </header>
+
+      {suggestionItems.length || suggestionsError ? <section
+        className="dashboard-section dashboard-content-suggestions"
+        aria-labelledby="dashboard-content-suggestions-title"
+      >
+        <div className="dashboard-section__head">
+          <div>
+            <h2 id="dashboard-content-suggestions-title">오늘의 콘텐츠 추천</h2>
+            <p>브랜드 분야와 선택한 세부분야를 우선 반영한 주제입니다.</p>
+          </div>
+        </div>
+        {suggestionsError ? <div className="content-suggestion-state" role="alert">
+          <p>오늘의 콘텐츠 추천을 불러오지 못했습니다.</p>
+          <button type="button" className="button" onClick={onRetrySuggestions}>다시 시도</button>
+        </div> : <ContentSuggestionCards
+            items={suggestionItems}
+            onSelect={(item) => navigate(`/ai-content/new?view=today&suggestionId=${encodeURIComponent(item.id)}`)}
+          />}
+      </section> : null}
 
       <DashboardKpiGrid items={viewModel.kpis} />
 
@@ -410,8 +458,17 @@ function DashboardContent({ dashboard }: { dashboard: Dashboard }) {
   );
 }
 
-export function DashboardPage() {
+export function DashboardPage({
+  brandId = DEMO_BRAND_ID,
+  suggestionGateway = contentSuggestionGateway,
+}: {
+  brandId?: string;
+  suggestionGateway?: ContentSuggestionGateway;
+} = {}) {
   const [dashboard, setDashboard] = useState<Dashboard | null>(null);
+  const [suggestions, setSuggestions] = useState<ContentSuggestionList | null>(null);
+  const [suggestionsError, setSuggestionsError] = useState(false);
+  const [suggestionsReloadKey, setSuggestionsReloadKey] = useState(0);
   const [error, setError] = useState(false);
   const [reloadKey, setReloadKey] = useState(0);
 
@@ -419,11 +476,21 @@ export function DashboardPage() {
     let ignore = false;
     setDashboard(null);
     setError(false);
-    api.getDashboard(DEMO_BRAND_ID)
+    api.getDashboard(brandId)
       .then((result) => { if (!ignore) setDashboard(result); })
       .catch(() => { if (!ignore) setError(true); });
     return () => { ignore = true; };
-  }, [reloadKey]);
+  }, [brandId, reloadKey]);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    setSuggestions(null);
+    setSuggestionsError(false);
+    void suggestionGateway.list(brandId, controller.signal)
+      .then((result) => { if (!controller.signal.aborted) setSuggestions(result); })
+      .catch(() => { if (!controller.signal.aborted) setSuggestionsError(true); });
+    return () => controller.abort();
+  }, [brandId, suggestionGateway, suggestionsReloadKey]);
 
   const state = useMemo(() => {
     if (error) return "error";
@@ -448,5 +515,10 @@ export function DashboardPage() {
     );
   }
 
-  return <section className="content dashboard-page"><DashboardContent dashboard={dashboard} /></section>;
+  return <section className="content dashboard-page"><DashboardContent
+    dashboard={dashboard}
+    suggestions={suggestions}
+    suggestionsError={suggestionsError}
+    onRetrySuggestions={() => setSuggestionsReloadKey((key) => key + 1)}
+  /></section>;
 }

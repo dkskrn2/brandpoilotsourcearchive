@@ -1,3 +1,4 @@
+import { lazy, Suspense } from "react";
 import { createBrowserRouter, Navigate, useLocation } from "react-router-dom";
 import { App } from "./App";
 import { BillingPage } from "./pages/BillingPage";
@@ -14,6 +15,19 @@ import { AiContentGenerationPage } from "./pages/AiContentGenerationPage";
 import { BrandCenterPage } from "./pages/BrandCenterPage";
 import { BrandCenterPreviewPage } from "./pages/BrandCenterPreviewPage";
 import { ReferenceLibraryPage } from "./pages/ReferenceLibraryPage";
+
+const OAuthConsentPage = lazy(async () => {
+  const module = await import("./pages/OAuthConsentPage");
+  return { default: module.OAuthConsentPage };
+});
+
+function OAuthConsentRoute() {
+  return (
+    <Suspense fallback={<main><p role="status">연결 화면을 준비하고 있습니다.</p></main>}>
+      <OAuthConsentPage />
+    </Suspense>
+  );
+}
 
 export function LegacyBrandSettingsRedirect() {
   const location = useLocation();
@@ -55,6 +69,7 @@ export function LegacySourcesRedirect() {
 export const router = createBrowserRouter(
   [
     { path: "/login", element: <LoginPage /> },
+    { path: "/oauth/consent", element: <OAuthConsentRoute /> },
     {
       path: "/",
       element: <App />,

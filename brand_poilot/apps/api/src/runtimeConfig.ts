@@ -14,6 +14,13 @@ export interface ApiRuntimeConfig {
     caCertificate?: string;
   };
   aiContentDatabaseUrlFile?: string;
+  contentSuggestionOAuth?: {
+    issuer: string;
+    jwksUri: string;
+    audience: string;
+    resource: string;
+    allowedSubjects: string[];
+  };
   schedulerEnabled: boolean;
   instagramPublishEnabled: boolean;
   aiContentAttachmentUploadSessionsEnabled: boolean;
@@ -47,6 +54,11 @@ const productionRequiredKeys = [
   "SUPABASE_URL",
   "SUPABASE_SERVICE_ROLE_KEY",
   "BLOB_READ_WRITE_TOKEN",
+  "CONTENT_SUGGESTION_OAUTH_ISSUER",
+  "CONTENT_SUGGESTION_OAUTH_JWKS_URI",
+  "CONTENT_SUGGESTION_OAUTH_AUDIENCE",
+  "CONTENT_SUGGESTION_OAUTH_RESOURCE",
+  "CONTENT_SUGGESTION_OAUTH_ALLOWED_SUBJECTS",
 ] as const;
 
 const productionFrontendOrigin = "https://app.danbammsg.co.kr";
@@ -58,6 +70,18 @@ const productionCorsOrigins = new Set([
 
 function invalid(key: string): never {
   throw new Error(`runtime_config_invalid:${key}`);
+}
+
+const uuidPattern = /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i;
+
+function parseUuidList(value: string, key: string): string[] {
+  const entries = value.split(",").map((entry) => entry.trim().toLowerCase()).filter(Boolean);
+  if (
+    entries.length === 0
+    || entries.some((entry) => !uuidPattern.test(entry))
+    || new Set(entries).size !== entries.length
+  ) invalid(key);
+  return entries;
 }
 
 function parseBoolean(value: string | undefined, key: string, fallback = false) {
@@ -99,6 +123,25 @@ function parseOrigin(value: string, key: string, production: boolean) {
   }
   if (production && url.protocol !== "https:") return invalid(key);
   return url.origin;
+}
+
+function parseHttpsUrl(value: string, key: string) {
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    return invalid(key);
+  }
+  if (url.protocol !== "https:" || url.username || url.password || url.hash
+    || url.toString() !== value) {
+    return invalid(key);
+  }
+  return url.toString();
+}
+
+function parseOAuthAudience(value: string, key: string) {
+  if (value === "authenticated") return value;
+  return parseHttpsUrl(value, key);
 }
 
 function parseCorsOrigins(
@@ -208,6 +251,27 @@ export function loadApiRuntimeConfig(
   }
 
   const caCertificate = decodeCaCertificate(env.DB_SSL_CA_BASE64);
+  const contentSuggestionOAuthValues = [
+    env.CONTENT_SUGGESTION_OAUTH_ISSUER,
+    env.CONTENT_SUGGESTION_OAUTH_JWKS_URI,
+    env.CONTENT_SUGGESTION_OAUTH_AUDIENCE,
+    env.CONTENT_SUGGESTION_OAUTH_RESOURCE,
+    env.CONTENT_SUGGESTION_OAUTH_ALLOWED_SUBJECTS,
+  ];
+  const hasContentSuggestionOAuth = contentSuggestionOAuthValues.some((value) => value?.trim());
+  if (hasContentSuggestionOAuth && contentSuggestionOAuthValues.some((value) => !value?.trim())) {
+    throw new Error("runtime_config_missing:CONTENT_SUGGESTION_OAUTH_CONFIGURATION");
+  }
+  const contentSuggestionOAuth = hasContentSuggestionOAuth ? {
+    issuer: parseHttpsUrl(env.CONTENT_SUGGESTION_OAUTH_ISSUER!.trim(), "CONTENT_SUGGESTION_OAUTH_ISSUER"),
+    jwksUri: parseHttpsUrl(env.CONTENT_SUGGESTION_OAUTH_JWKS_URI!.trim(), "CONTENT_SUGGESTION_OAUTH_JWKS_URI"),
+    audience: parseOAuthAudience(env.CONTENT_SUGGESTION_OAUTH_AUDIENCE!.trim(), "CONTENT_SUGGESTION_OAUTH_AUDIENCE"),
+    resource: parseHttpsUrl(env.CONTENT_SUGGESTION_OAUTH_RESOURCE!.trim(), "CONTENT_SUGGESTION_OAUTH_RESOURCE"),
+    allowedSubjects: parseUuidList(
+      env.CONTENT_SUGGESTION_OAUTH_ALLOWED_SUBJECTS!.trim(),
+      "CONTENT_SUGGESTION_OAUTH_ALLOWED_SUBJECTS",
+    ),
+  } : undefined;
   return {
     http: {
       cookieSecure,
@@ -230,6 +294,7 @@ export function loadApiRuntimeConfig(
       ...(caCertificate ? { caCertificate } : {}),
     },
     ...(aiContentDatabaseUrlFile ? { aiContentDatabaseUrlFile } : {}),
+    ...(contentSuggestionOAuth ? { contentSuggestionOAuth } : {}),
     schedulerEnabled,
     instagramPublishEnabled,
     aiContentAttachmentUploadSessionsEnabled,

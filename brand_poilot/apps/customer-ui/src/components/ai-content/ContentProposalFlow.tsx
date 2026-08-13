@@ -32,6 +32,12 @@ import { AiContentPhaseProgress } from "./AiContentPhaseProgress";
 import { PageGuideButton } from "../layout/PageHeader";
 import { api, ApiRequestError } from "../../lib/apiClient";
 import { brandCenterGateway } from "../../features/brand-center/brandCenterGateway";
+import {
+  contentSuggestionGateway,
+  type ContentSuggestion,
+  type ContentSuggestionGateway,
+  type ContentSuggestionList,
+} from "../../features/content-suggestions/contentSuggestionGateway";
 
 const sections: Array<[ContentSetupSection, string, string, string]> = [
   ["intent", "1. 목적", "01", "콘텐츠의 역할과 목표를 정합니다"],
@@ -114,6 +120,9 @@ export function ContentProposalFlow({
   assetGateway = libraryGateway,
   rulesGateway = brandCenterGateway,
   initialAnalyzedSubjectId = null,
+  initialSuggestionId = null,
+  initialSuggestionView = false,
+  suggestionGateway = contentSuggestionGateway,
   initialSetup,
   referenceTrendGateway = api,
 }: {
@@ -127,6 +136,9 @@ export function ContentProposalFlow({
   assetGateway?: StyleAssetGateway;
   rulesGateway?: RulesGateway;
   initialAnalyzedSubjectId?: string | null;
+  initialSuggestionId?: string | null;
+  initialSuggestionView?: boolean;
+  suggestionGateway?: ContentSuggestionGateway;
   referenceTrendGateway?: ReferenceTrendGateway;
   initialSetup?: {
     family: ContentFamily | null;
@@ -140,7 +152,9 @@ export function ContentProposalFlow({
   const capabilityGateway = useRef(channelCapabilities ?? createChannelCapabilityGateway());
   const [machine, setMachine] = useState(createContentWizardState);
   const [family, setFamily] = useState<ContentFamily | null>(initialSetup?.family ?? null);
-  const [subjectMode, setSubjectMode] = useState<ContentSubjectMode>("topic_text");
+  const [subjectMode, setSubjectMode] = useState<ContentSubjectMode>(
+    initialSuggestionView || initialSuggestionId ? "suggestion" : "topic_text",
+  );
   const [topic, setTopic] = useState(initialSetup?.topic ?? "");
   const [topicUrl, setTopicUrl] = useState("");
   const [selectedProductId, setSelectedProductId] = useState<string | null>(null);
@@ -153,6 +167,12 @@ export function ContentProposalFlow({
   );
   const [channel, setChannel] = useState<ContentChannelTarget | null>(initialSetup?.channels[0] ?? null);
   const [contentInstruction, setContentInstruction] = useState(initialSetup?.brief ?? "");
+  const [suggestions, setSuggestions] = useState<ContentSuggestionList | null>(null);
+  const [suggestionsLoading, setSuggestionsLoading] = useState(false);
+  const [suggestionsError, setSuggestionsError] = useState(false);
+  const [suggestionSelectionError, setSuggestionSelectionError] = useState(false);
+  const [suggestionLoadAttempt, setSuggestionLoadAttempt] = useState(0);
+  const [selectedSuggestionId, setSelectedSuggestionId] = useState<string | null>(initialSuggestionId);
   const [batch, setBatch] = useState<ContentProposalBatch | null>(null);
   const [selectedProposal, setSelectedProposal] = useState<ContentProposalRecord | ContentProposalRecordV2 | null>(null);
   const [selectedReferences, setSelectedReferences] = useState<ContentReferenceSelectionV2[]>([]);
@@ -191,6 +211,18 @@ export function ContentProposalFlow({
     { label: "결과 형식", value: format || "미정" },
     { label: "게시 채널", value: channel ?? "미정" },
   ].filter((item): item is { label: string; value: string } => Boolean(item)), [channel, family, format, selectedProduct?.displayName, selectedReferences.length, subjectMode, topic, topicUrl]);
+
+  function chooseSuggestion(item: ContentSuggestion) {
+    setSuggestionSelectionError(false);
+    setSubjectMode("suggestion");
+    setSelectedSuggestionId(item.id);
+    setFamily("informational");
+    setSelectedProductId(null);
+    setSelectedReferences([]);
+    setTopic(item.title);
+    setTopicUrl("");
+    setContentInstruction(item.contentBrief);
+  }
 
   async function loadBatch(batchId: string, signal?: AbortSignal, requestedBrandId = brandId) {
     const next = await gateway.getProposalBatch(requestedBrandId, batchId, signal);
@@ -268,7 +300,7 @@ export function ContentProposalFlow({
     capabilityGateway.current.cancel();
     setMachine(createContentWizardState());
     setFamily(null);
-    setSubjectMode("topic_text");
+    setSubjectMode(initialSuggestionView || initialSuggestionId ? "suggestion" : "topic_text");
     setTopic("");
     setTopicUrl("");
     setSelectedProductId(null);
@@ -276,6 +308,11 @@ export function ContentProposalFlow({
     setFormat("card_news");
     setChannel(null);
     setContentInstruction("");
+    setSuggestions(null);
+    setSuggestionsLoading(false);
+    setSuggestionsError(false);
+    setSuggestionSelectionError(false);
+    setSelectedSuggestionId(initialSuggestionId);
     setBatch(null);
     setSelectedProposal(null);
     setSelectedReferences([]);
@@ -295,7 +332,46 @@ export function ContentProposalFlow({
     proposalKey.current = null;
     selectionKey.current = null;
     generationStartKey.current = null;
-  }, [brandId]);
+  }, [brandId, initialSuggestionId, initialSuggestionView]);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    const requestedBrandId = brandId;
+    setSuggestionsLoading(true);
+    setSuggestionsError(false);
+    setSuggestionSelectionError(false);
+    void suggestionGateway.list(requestedBrandId, controller.signal).then(async (next) => {
+      if (controller.signal.aborted || activeBrandId.current !== requestedBrandId) return;
+      setSuggestions(next);
+      if (!initialSuggestionId) return;
+      const listed = [...next.personal, ...next.general].find((item) => item.id === initialSuggestionId);
+      if (listed) {
+        chooseSuggestion(listed);
+        return;
+      }
+      try {
+        const selected = await suggestionGateway.get(
+          requestedBrandId,
+          initialSuggestionId,
+          controller.signal,
+        );
+        if (controller.signal.aborted || activeBrandId.current !== requestedBrandId) return;
+        chooseSuggestion(selected);
+      } catch {
+        if (controller.signal.aborted || activeBrandId.current !== requestedBrandId) return;
+        setSelectedSuggestionId(null);
+        setTopic("");
+        setContentInstruction("");
+        setSuggestionSelectionError(true);
+      }
+    }).catch(() => {
+      if (controller.signal.aborted || activeBrandId.current !== requestedBrandId) return;
+      setSuggestionsError(true);
+    }).finally(() => {
+      if (!controller.signal.aborted && activeBrandId.current === requestedBrandId) setSuggestionsLoading(false);
+    });
+    return () => controller.abort();
+  }, [brandId, initialSuggestionId, suggestionGateway, suggestionLoadAttempt]);
 
   useEffect(() => {
     if (resumableBatchScope.current.batchId !== initialBatchId) {
@@ -367,7 +443,9 @@ export function ContentProposalFlow({
         ? !topic.trim()
         : subjectMode === "topic_url"
           ? !topicUrl.trim()
-          : selectedReferences.length === 0 || selectedReferences.some((item) => item.roles.length === 0))
+          : subjectMode === "suggestion"
+            ? !selectedSuggestionId || !topic.trim()
+            : selectedReferences.length === 0 || selectedReferences.some((item) => item.roles.length === 0))
       || (family === "marketing" && !approvedProduct)
       || !format
       || !channel
@@ -379,7 +457,7 @@ export function ContentProposalFlow({
         contractVersion: "content-orchestration.v2",
         brandId,
         purpose: family,
-        seed: subjectMode === "topic_text"
+        seed: subjectMode === "topic_text" || subjectMode === "suggestion"
           ? { kind: "topic_text", title: topic.trim() }
           : subjectMode === "topic_url"
             ? { kind: "topic_url", url: topicUrl.trim() }
@@ -593,12 +671,19 @@ export function ContentProposalFlow({
                 }}
               />}
               referenceValid={selectedReferences.length > 0 && selectedReferences.every((item) => item.roles.length > 0)}
+              suggestions={suggestions}
+              suggestionsLoading={suggestionsLoading}
+              suggestionsError={suggestionsError}
+              suggestionSelectionError={suggestionSelectionError}
+              selectedSuggestionId={selectedSuggestionId}
               loading={loadingSubjects}
               onModeChange={setSubjectMode}
               onTopicTextChange={setTopic}
               onTopicUrlChange={setTopicUrl}
               onContentInstructionChange={setContentInstruction}
               onProductChange={setSelectedProductId}
+              onSuggestionSelect={chooseSuggestion}
+              onRetrySuggestions={() => setSuggestionLoadAttempt((attempt) => attempt + 1)}
               onComplete={() => complete("sources")}
             /> : null}
             {section === "delivery" ? <ContentStrategyStep

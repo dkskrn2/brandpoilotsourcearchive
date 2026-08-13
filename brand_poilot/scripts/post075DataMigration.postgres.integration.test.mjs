@@ -79,7 +79,10 @@ test("post-075 provider migration rejects lower roles and succeeds with provider
       grant usage on schema public to content_schema_owner,content_migration;
       grant select on public.schema_migrations to content_schema_owner,content_migration;
     `);
-    for (const migration of migrations.filter(({ id }) => id !== migration076.id)) {
+    for (const migration of migrations.filter(({ id }) => ![
+      migration076.id,
+      "077_content_suggestion_batches.sql",
+    ].includes(id))) {
       await provider.query(
         "insert into public.schema_migrations(id,checksum) values($1,$2)",
         [migration.id, migration.checksum],

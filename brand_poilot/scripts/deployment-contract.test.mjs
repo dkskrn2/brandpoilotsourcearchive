@@ -86,7 +86,7 @@ const deploymentScripts = [
   ubuntuBootstrapPath,
 ];
 
-test("cutover API image contains ordered 074, 075, and post-cutover 076 migrations", () => {
+test("cutover API image contains ordered migrations through content suggestion 077", () => {
   const dockerfile = read("apps/api/Dockerfile");
   const migrate = read("scripts/migrate.mjs");
   const runner = read("scripts/migrationRunner.mjs");
@@ -99,6 +99,7 @@ test("cutover API image contains ordered 074, 075, and post-cutover 076 migratio
   assert.equal(existsSync("db/migrations/074_ai_content_maintenance_write_fence.sql"), true);
   assert.equal(existsSync("db/migrations/075_ai_content_three_format_cutover.sql"), true);
   assert.equal(existsSync("db/migrations/076_manual_content_generation_brand_rules.sql"), true);
+  assert.equal(existsSync("db/migrations/077_content_suggestion_batches.sql"), true);
   assert.match(migrate, /AI_CONTENT_074_AUTHORIZATION_PUBLIC_KEY_FILE/);
   assert.match(migrate, /AI_CONTENT_074_PROVIDER_ATTESTATION_PUBLIC_KEY_FILE/);
   assert.doesNotMatch(migrate, /readFile\([^\n]*(?:PRIVATE|SIGNING)|createPrivateKey|AI_CONTENT_074_(?:AUTHORIZATION|PROVIDER_ATTESTATION)_KEY_FILE/);
@@ -144,6 +145,18 @@ test("deployment applies or verifies the pinned post-075 data migration before c
   assert.ok(migrationGate >= 0 && migrationGate < transition && transition < canary);
 });
 
+test("deployment applies the sealed content suggestion schema after 076 and before canary mutation", () => {
+  const deploy = read("deploy/scripts/deploy.sh");
+  assert.match(deploy, /077_content_suggestion_batches\.sql/);
+  assert.match(deploy, /3b178464c5ae5c4e220428e0752ab3e79a2ca06b5b2b23f1e89c34e983e63f76/);
+  assert.match(deploy, /scripts\/migrate\.mjs --post-075-schema/);
+  assert.match(deploy, /post-075-schema-migration-evidence\.v1/);
+  const dataGate = deploy.lastIndexOf("run_post_075_data_migration_gate");
+  const schemaGate = deploy.lastIndexOf("run_post_075_schema_migration_gate");
+  const transition = deploy.indexOf("begin_transition");
+  assert.ok(dataGate >= 0 && dataGate < schemaGate && schemaGate < transition);
+});
+
 test("cutover API image contains both ordered migrations in an actual no-network container", {
   skip: process.env.RUN_DOCKER_FENCE_IMAGE_INSPECTION !== "1",
 }, () => {
@@ -156,7 +169,7 @@ test("cutover API image contains both ordered migrations in an actual no-network
   try {
     const script = [
       "const fs=require('node:fs');",
-      "const required=['/app/db/migrations/074_ai_content_maintenance_write_fence.sql','/app/db/migrations/075_ai_content_three_format_cutover.sql','/app/db/migrations/076_manual_content_generation_brand_rules.sql','/app/scripts/migrationRunner.mjs','/app/scripts/migrate.mjs','/app/scripts/databaseTls.mjs'];",
+      "const required=['/app/db/migrations/074_ai_content_maintenance_write_fence.sql','/app/db/migrations/075_ai_content_three_format_cutover.sql','/app/db/migrations/076_manual_content_generation_brand_rules.sql','/app/db/migrations/077_content_suggestion_batches.sql','/app/scripts/migrationRunner.mjs','/app/scripts/migrate.mjs','/app/scripts/databaseTls.mjs'];",
       "for(const path of required)if(!fs.existsSync(path))throw new Error('missing:'+path);",
     ].join("");
     const inspect = spawnSync("docker", ["run", "--rm", "--network", "none", "--entrypoint", "node", tag, "-e", script], {
@@ -1414,6 +1427,35 @@ test("content proposal worker authentication is present in the API operator cont
   );
 });
 
+test("content suggestion MCP requires external OAuth resource configuration", () => {
+  const apiEnv = read("deploy/env/api.env.example");
+  const preflight = read("deploy/scripts/preflight.sh");
+  const runtimeConfig = read("apps/api/src/runtimeConfig.ts");
+  const http = read("apps/api/src/contentSuggestionHttp.ts");
+  for (const key of [
+    "CONTENT_SUGGESTION_OAUTH_ISSUER",
+    "CONTENT_SUGGESTION_OAUTH_JWKS_URI",
+    "CONTENT_SUGGESTION_OAUTH_RESOURCE",
+  ]) {
+    assert.match(apiEnv, new RegExp(`^${key}=https://`, "m"));
+    assert.match(preflight, new RegExp(key));
+    assert.match(runtimeConfig, new RegExp(`"${key}"`));
+  }
+  assert.match(apiEnv, /^CONTENT_SUGGESTION_OAUTH_AUDIENCE=authenticated$/m);
+  assert.match(preflight, /CONTENT_SUGGESTION_OAUTH_AUDIENCE/);
+  assert.match(preflight, /CONTENT_SUGGESTION_OAUTH_AUDIENCE_VALUE" == "authenticated"/);
+  assert.doesNotMatch(preflight, /CONTENT_SUGGESTION_OAUTH_AUDIENCE_VALUE" == "\$CONTENT_SUGGESTION_OAUTH_RESOURCE_VALUE"/);
+  assert.match(runtimeConfig, /"CONTENT_SUGGESTION_OAUTH_AUDIENCE"/);
+  assert.match(apiEnv, /^CONTENT_SUGGESTION_OAUTH_ALLOWED_SUBJECTS=[0-9a-f-]+$/m);
+  assert.match(preflight, /oauth_subject_declaration_count/);
+  assert.match(preflight, /\[0-9a-fA-F\]\{8\}-\[0-9a-fA-F\]\{4\}-\[0-9a-fA-F\]\{4\}-\[0-9a-fA-F\]\{4\}-\[0-9a-fA-F\]\{12\}/);
+  assert.match(preflight, /declare -A oauth_seen_subjects/);
+  assert.match(runtimeConfig, /"CONTENT_SUGGESTION_OAUTH_ALLOWED_SUBJECTS"/);
+  assert.match(http, /\.well-known\/oauth-protected-resource/);
+  assert.match(http, /bodyLimit:\s*1024\s*\*\s*1024/);
+  assert.doesNotMatch(apiEnv, /CONTENT_SUGGESTION_PLUGIN_TOKEN/);
+});
+
 test("preflight rejects missing or mismatched content proposal worker tokens without leaking them", () => {
   const bash = findBash();
   assert.ok(bash, "Bash is required for the shared secret contract");
@@ -2522,7 +2564,7 @@ if [[ "$*" == *"%U"* ]]; then
 fi
 path="\${@: -1}"
 case "$path" in
-  */post-075-data-migrations) printf '700\\n' ;;
+  */post-075-data-migrations|*/post-075-schema-migrations) printf '700\\n' ;;
   */scripts/*.sh) printf '755\\n' ;;
   */compose.production.yml|*/Caddyfile|*/Caddyfile.canary) printf '644\\n' ;;
   *) printf '600\\n' ;;
@@ -2539,7 +2581,7 @@ stat() {
   fi
   path="\${@: -1}"
   case "$path" in
-    */post-075-data-migrations) printf '700\\n' ;;
+    */post-075-data-migrations|*/post-075-schema-migrations) printf '700\\n' ;;
     */scripts/*.sh) printf '755\\n' ;;
     */compose.production.yml|*/Caddyfile|*/Caddyfile.canary) printf '644\\n' ;;
     *) printf '600\\n' ;;
@@ -2578,6 +2620,17 @@ function runDeployFixture({
       providerRoleName: "postgres",
       migrationId: "076_manual_content_generation_brand_rules.sql",
       migrationSha256: "da42c957d4307d58c1f37f5d508c8a1f14836727080d6290e4b0537e43167604",
+      status: "already_applied",
+    },
+  }, null, 2)}\n`, { mode: 0o600 });
+  const post075SchemaState = join(root, "state", "post-075-schema-migrations");
+  mkdirSync(post075SchemaState, { recursive: true, mode: 0o700 });
+  writeFileSync(join(post075SchemaState, "077_content_suggestion_batches.sql.json"), `${JSON.stringify({
+    post075SchemaMigration: {
+      contractVersion: "post-075-schema-migration-evidence.v1",
+      providerRoleName: "postgres",
+      migrationId: "077_content_suggestion_batches.sql",
+      migrationSha256: "3b178464c5ae5c4e220428e0752ab3e79a2ca06b5b2b23f1e89c34e983e63f76",
       status: "already_applied",
     },
   }, null, 2)}\n`, { mode: 0o600 });
@@ -3528,7 +3581,13 @@ test("a successful canary atomically records candidate while preserving current"
     );
     assert.deepEqual(
       readdirSync(join(fixture.root, "state")).sort(),
-      ["candidate", "current", "deploy.lock", "post-075-data-migrations"],
+      [
+        "candidate",
+        "current",
+        "deploy.lock",
+        "post-075-data-migrations",
+        "post-075-schema-migrations",
+      ],
     );
   } finally {
     rmSync(fixture.fixture, { recursive: true, force: true });

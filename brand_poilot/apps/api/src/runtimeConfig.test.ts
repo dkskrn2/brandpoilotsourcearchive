@@ -23,6 +23,11 @@ function validProductionEnv(): NodeJS.ProcessEnv {
     SUPABASE_URL: "https://project.supabase.co",
     SUPABASE_SERVICE_ROLE_KEY: "supabase-secret",
     BLOB_READ_WRITE_TOKEN: "blob-secret",
+    CONTENT_SUGGESTION_OAUTH_ISSUER: "https://login.example.com/",
+    CONTENT_SUGGESTION_OAUTH_JWKS_URI: "https://login.example.com/.well-known/jwks.json",
+    CONTENT_SUGGESTION_OAUTH_AUDIENCE: "authenticated",
+    CONTENT_SUGGESTION_OAUTH_RESOURCE: "https://api.danbammsg.co.kr/plugins/content-suggestions/mcp",
+    CONTENT_SUGGESTION_OAUTH_ALLOWED_SUBJECTS: "11111111-1111-4111-8111-111111111111",
     COOKIE_SECURE: "true",
     CORS_ALLOWED_ORIGINS: "https://app.danbammsg.co.kr,https://www.danbammsg.co.kr",
     DEV_AUTH_ENABLED: "false",
@@ -56,6 +61,45 @@ describe("loadApiRuntimeConfig", () => {
 
     expect(() => loadApiRuntimeConfig(env)).toThrow(
       "runtime_config_missing:CONTENT_PROPOSAL_WORKER_API_TOKEN",
+    );
+  });
+
+  it.each([
+    "CONTENT_SUGGESTION_OAUTH_ISSUER",
+    "CONTENT_SUGGESTION_OAUTH_JWKS_URI",
+    "CONTENT_SUGGESTION_OAUTH_AUDIENCE",
+    "CONTENT_SUGGESTION_OAUTH_RESOURCE",
+    "CONTENT_SUGGESTION_OAUTH_ALLOWED_SUBJECTS",
+  ])("requires %s in production", (key) => {
+    const env = validProductionEnv();
+    delete env[key];
+    expect(() => loadApiRuntimeConfig(env)).toThrow(`runtime_config_missing:${key}`);
+  });
+
+  it("parses the content suggestion OAuth resource-server configuration", () => {
+    expect(loadApiRuntimeConfig(validProductionEnv()).contentSuggestionOAuth).toEqual({
+      issuer: "https://login.example.com/",
+      jwksUri: "https://login.example.com/.well-known/jwks.json",
+      audience: "authenticated",
+      resource: "https://api.danbammsg.co.kr/plugins/content-suggestions/mcp",
+      allowedSubjects: ["11111111-1111-4111-8111-111111111111"],
+    });
+  });
+
+  it("rejects malformed or duplicate content suggestion OAuth subjects", () => {
+    const malformed = validProductionEnv();
+    malformed.CONTENT_SUGGESTION_OAUTH_ALLOWED_SUBJECTS = "not-a-uuid";
+    expect(() => loadApiRuntimeConfig(malformed)).toThrow(
+      "runtime_config_invalid:CONTENT_SUGGESTION_OAUTH_ALLOWED_SUBJECTS",
+    );
+
+    const duplicate = validProductionEnv();
+    duplicate.CONTENT_SUGGESTION_OAUTH_ALLOWED_SUBJECTS = [
+      "11111111-1111-4111-8111-111111111111",
+      "11111111-1111-4111-8111-111111111111",
+    ].join(",");
+    expect(() => loadApiRuntimeConfig(duplicate)).toThrow(
+      "runtime_config_invalid:CONTENT_SUGGESTION_OAUTH_ALLOWED_SUBJECTS",
     );
   });
 

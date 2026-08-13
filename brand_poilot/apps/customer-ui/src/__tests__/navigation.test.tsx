@@ -431,6 +431,8 @@ describe("AppShell navigation", () => {
   });
 
   it("uses the dashboard as the authenticated index route", () => {
+    expect(router.routes.find((route) => route.path === "/oauth/consent")).toBeTruthy();
+
     const appRoute = router.routes.find((route) => route.path === "/");
     const indexRoute = appRoute?.children?.find((route) => route.index);
     const dashboardRoute = appRoute?.children?.find((route) => route.path === "dashboard");

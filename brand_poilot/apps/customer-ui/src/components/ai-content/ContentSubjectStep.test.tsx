@@ -2,6 +2,7 @@ import "@testing-library/jest-dom/vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
+import type { ContentSuggestionList } from "../../features/content-suggestions/contentSuggestionGateway";
 import type { ProductServiceItem } from "../../features/libraries/libraryGateway";
 import { ContentSubjectStep } from "./ContentSubjectStep";
 
@@ -39,6 +40,28 @@ const approvedProduct: ProductServiceItem = {
     updatedAt: "2026-07-28T00:00:00.000Z",
   },
   draft: null,
+};
+
+const suggestions: ContentSuggestionList = {
+  category: { code: "beauty", name: "뷰티" },
+  personal: [{
+    id: "suggestion-personal",
+    subcategoryCode: "skin-care",
+    subcategoryName: "스킨케어",
+    intent: "informational",
+    title: "피부 장벽을 지키는 세안 순서",
+    whyNow: "환절기 피부 고민이 늘고 있습니다.",
+    contentBrief: "초보자용 체크리스트로 구성합니다.",
+  }],
+  general: [{
+    id: "suggestion-general",
+    subcategoryCode: "makeup",
+    subcategoryName: "메이크업",
+    intent: "trend",
+    title: "올여름 베이스 메이크업 변화",
+    whyNow: "가벼운 표현이 주목받고 있습니다.",
+    contentBrief: "최근 변화를 세 가지로 정리합니다.",
+  }],
 };
 
 const baseProps = {
@@ -123,7 +146,20 @@ describe("ContentSubjectStep", () => {
     expect(screen.getByRole("button", { name: "주제·자료 완료" })).toBeDisabled();
   });
 
-  it("keeps direct text, URL, and reference mutually exclusive and leaves today disabled", async () => {
+  it("does not complete a suggestion with only a stale ID and no topic", () => {
+    render(<ContentSubjectStep
+      {...baseProps}
+      purpose="informational"
+      mode="suggestion"
+      topicText="   "
+      selectedSuggestionId="stale-suggestion"
+      referencePicker={<p>레퍼런스 목록</p>}
+    />);
+
+    expect(screen.getByRole("button", { name: "주제·자료 완료" })).toBeDisabled();
+  });
+
+  it("keeps entry modes mutually exclusive and opens today's suggestions", async () => {
     const user = userEvent.setup();
     const onModeChange = vi.fn();
     const { rerender } = render(<ContentSubjectStep
@@ -133,15 +169,16 @@ describe("ContentSubjectStep", () => {
       referencePicker={<p>인기 레퍼런스</p>}
     />);
 
-    expect(screen.getByRole("button", { name: /오늘의 주제/ })).toBeDisabled();
-    expect(screen.getByRole("button", { name: /오늘의 주제/ })).toHaveAttribute("aria-disabled", "true");
-    expect(screen.getByText("준비 중")).toBeVisible();
+    expect(screen.getByRole("button", { name: "오늘의 주제" })).toBeEnabled();
     expect(screen.getByLabelText("콘텐츠 주제")).toBeVisible();
     expect(screen.queryByLabelText("주제 URL")).not.toBeInTheDocument();
     expect(screen.queryByText("인기 레퍼런스")).not.toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "URL" }));
     expect(onModeChange).toHaveBeenCalledWith("topic_url");
+
+    await user.click(screen.getByRole("button", { name: "오늘의 주제" }));
+    expect(onModeChange).toHaveBeenCalledWith("suggestion");
 
     rerender(<ContentSubjectStep
       {...baseProps}
@@ -154,5 +191,30 @@ describe("ContentSubjectStep", () => {
     expect(screen.getByText("인기 레퍼런스")).toBeVisible();
     expect(screen.queryByLabelText("콘텐츠 주제")).not.toBeInTheDocument();
     expect(screen.queryByLabelText("주제 URL")).not.toBeInTheDocument();
+  });
+
+  it("shows personal cards immediately and filters the general suggestions without date or source", async () => {
+    const user = userEvent.setup();
+    const onSuggestionSelect = vi.fn();
+    render(<ContentSubjectStep
+      {...baseProps}
+      purpose="informational"
+      mode="suggestion"
+      suggestions={suggestions}
+      selectedSuggestionId={null}
+      onSuggestionSelect={onSuggestionSelect}
+      referencePicker={<p>레퍼런스 목록</p>}
+    />);
+
+    expect(screen.getByText("피부 장벽을 지키는 세안 순서")).toBeVisible();
+    expect(screen.queryByText(/내 세부분야 추천/)).not.toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "전체 주제" })).toBeVisible();
+    expect(screen.getByRole("combobox", { name: "주제 유형" })).toBeVisible();
+    expect(screen.getByRole("combobox", { name: "세부분야" })).toBeVisible();
+    expect(screen.queryByText(/출처/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/\d{4}[.-]\d{1,2}[.-]\d{1,2}/)).not.toBeInTheDocument();
+
+    await user.click(screen.getAllByRole("button", { name: "AI 콘텐츠로 만들기" })[0]!);
+    expect(onSuggestionSelect).toHaveBeenCalledWith(suggestions.personal[0]);
   });
 });

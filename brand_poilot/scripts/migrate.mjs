@@ -55,8 +55,12 @@ export function resolveMigrationRuntimeConfig(
   argv = process.argv,
 ) {
   const post075DataMigrationMode = argv.includes("--post-075-data");
+  const post075SchemaMigrationMode = argv.includes("--post-075-schema");
+  if (post075DataMigrationMode && post075SchemaMigrationMode) {
+    throw new Error("post_075_migration_mode_ambiguous");
+  }
   const expectedProviderRoleName = env.AI_CONTENT_POST_075_EXPECTED_PROVIDER_ROLE;
-  if (post075DataMigrationMode
+  if ((post075DataMigrationMode || post075SchemaMigrationMode)
     && !/^[A-Za-z_][A-Za-z0-9_]{0,62}$/.test(expectedProviderRoleName ?? "")) {
     throw new Error("post_075_provider_role_required");
   }
@@ -139,6 +143,10 @@ export function resolveMigrationRuntimeConfig(
     dryRun: argv.includes("--dry-run"),
     ...(post075DataMigrationMode ? {
       post075DataMigrationMode: true,
+      expectedProviderRoleName,
+    } : {}),
+    ...(post075SchemaMigrationMode ? {
+      post075SchemaMigrationMode: true,
       expectedProviderRoleName,
     } : {}),
     ...(caCertificate ? { caCertificate } : {}),
@@ -315,7 +323,7 @@ export async function main({
   loadEnvironment();
   const databaseUrlFiles = [env.SUPABASE_DATABASE_URL_FILE, env.DATABASE_URL_FILE].filter(Boolean);
   const inlineDatabaseUrls = [env.SUPABASE_DATABASE_URL, env.DATABASE_URL].filter(Boolean);
-  if (argv.includes("--post-075-data")
+  if ((argv.includes("--post-075-data") || argv.includes("--post-075-schema"))
     && (databaseUrlFiles.length !== 1 || inlineDatabaseUrls.length !== 0)) {
     throw new Error("post_075_provider_url_file_required");
   }
@@ -362,6 +370,9 @@ export async function main({
     ...(result.cutover ? { cutover: result.cutover } : {}),
     ...(result.post075DataMigration ? {
       post075DataMigration: result.post075DataMigration,
+    } : {}),
+    ...(result.post075SchemaMigration ? {
+      post075SchemaMigration: result.post075SchemaMigration,
     } : {}),
   }, null, 2));
 }

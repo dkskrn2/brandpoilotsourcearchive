@@ -8129,3 +8129,20 @@ test("075 gives usage reservation, one exact reversal, and retry operations dura
     ]);
   });
 });
+
+test("077 defines the bounded content suggestion batch contract", async () => {
+  const migration = await readFile(
+    "db/migrations/077_content_suggestion_batches.sql",
+    "utf8",
+  );
+  assert.match(migration, /create table content_suggestion_batches/i);
+  assert.match(migration, /unique\s*\(category_id,\s*generation_date\)/i);
+  assert.match(migration, /item_count between 1 and 28/i);
+  assert.match(migration, /create table content_suggestions/i);
+  assert.match(migration, /intent in \('informational',\s*'trend'\)/i);
+  assert.match(migration, /position between 1 and 2/i);
+  assert.match(
+    migration,
+    /unique\s*\(batch_id,\s*subcategory_id,\s*intent,\s*position\)/i,
+  );
+});

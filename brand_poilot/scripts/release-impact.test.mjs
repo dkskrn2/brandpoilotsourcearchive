@@ -31,6 +31,14 @@ test("builds the shared DM and Wiki image once for DM worker changes", () => {
   assert.deepEqual(enabled(impact), ["dmWikiWorker"]);
 });
 
+test("does not rebuild the DM and Wiki image for a PGlite-only fixture change", () => {
+  const impact = classifyChangedPaths([
+    "brand_poilot/workers/brand-pilot-dm-worker/src/faqSuggestionDb.test.ts",
+  ]);
+  assert.deepEqual(enabled(impact), []);
+  assert.equal(impact.verifiedScope, true);
+});
+
 test("classifies reel worker changes without reviving the retired marketing worker component", () => {
   const impact = classifyChangedPaths(["brand_poilot/workers/brand-pilot-reel-worker/src/worker.ts"]);
   assert.deepEqual(enabled(impact), ["reelWorker"]);
@@ -47,6 +55,29 @@ test("widens shared runtime and dependency graph changes to every server image",
     assert.equal(impact.buildAllServer, true, path);
     assert.deepEqual(enabled(impact).filter((name) => name !== "customerUi"), [...SERVER_COMPONENTS].sort(), path);
   }
+});
+
+test("attributes an API workspace dependency lock update only to the API image", () => {
+  const impact = classifyChangedPaths([
+    "brand_poilot/apps/api/package.json",
+    "brand_poilot/package-lock.json",
+  ]);
+
+  assert.deepEqual(enabled(impact), ["api"]);
+  assert.equal(impact.buildAllServer, false);
+  assert.deepEqual(impact.unknownPaths, []);
+});
+
+test("attributes API and UI workspace dependency lock updates without rebuilding workers", () => {
+  const impact = classifyChangedPaths([
+    "brand_poilot/apps/api/package.json",
+    "brand_poilot/apps/customer-ui/package.json",
+    "brand_poilot/package-lock.json",
+  ]);
+
+  assert.deepEqual(enabled(impact), ["api", "customerUi"]);
+  assert.equal(impact.buildAllServer, false);
+  assert.deepEqual(impact.unknownPaths, []);
 });
 
 test("limits the Codex account pool runtime change to manual content generation", () => {
