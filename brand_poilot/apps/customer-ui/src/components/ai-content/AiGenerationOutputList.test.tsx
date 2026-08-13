@@ -47,7 +47,7 @@ const callbacks = {
 };
 
 describe("AiGenerationOutputList V3 capabilities", () => {
-  it("keeps V3 reel download visible while hiding publish actions", () => {
+  it("keeps V3 reel download visible and exposes direct Reel publishing", () => {
     const output = {
       id: "output-reel",
       generationId: "generation-1",
@@ -64,7 +64,7 @@ describe("AiGenerationOutputList V3 capabilities", () => {
       },
       outputFormat: "reel",
       manifestVersion: "ai-content.v3",
-      publishSupported: false,
+      publishSupported: true,
       failureReason: null,
       downloadedAt: null,
     } satisfies AiGenerationOutput;
@@ -72,7 +72,8 @@ describe("AiGenerationOutputList V3 capabilities", () => {
     render(<AiGenerationOutputList generation={generationWith(output)} downloadedKeys={new Set()} selectedForZip={new Set()} channels={[]} retryingOutputId={null} publishingOutputIds={new Set()} publishResults={{}} {...callbacks} />);
 
     expect(screen.getByRole("button", { name: "릴스 결과 ZIP 다운로드" })).toBeEnabled();
-    expect(screen.queryByRole("region", { name: "SNS에 바로 게시" })).not.toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "SNS에 바로 게시" })).toBeInTheDocument();
+    expect(screen.queryByText(/다운로드만 지원/)).not.toBeInTheDocument();
   });
 
   it("shows publish actions only for a V3 card-news result", () => {

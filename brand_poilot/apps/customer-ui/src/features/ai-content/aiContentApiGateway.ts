@@ -520,7 +520,7 @@ function mapGeneration(value: ApiGeneration): AiContentGeneration {
         downloadedAt: output.downloadedAt,
         manifestVersion: manifest?.version ?? null,
         outputFormat,
-        publishSupported: manifest?.outputFormat === "card_news",
+        publishSupported: manifest?.outputFormat === "card_news" || manifest?.outputFormat === "reel",
       };
     }),
     evidenceSnapshot: value.evidenceSnapshot ?? null,

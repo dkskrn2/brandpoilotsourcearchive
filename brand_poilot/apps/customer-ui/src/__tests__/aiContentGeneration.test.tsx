@@ -291,7 +291,7 @@ describe("AiContentGenerationPage", () => {
     const rows = within(await screen.findByRole("list", { name: "생성 결과 목록" }))
       .getAllByRole("listitem");
     const failedRow = rows[1];
-    expect(screen.queryByRole("region", { name: "SNS에 바로 게시" })).not.toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "SNS에 바로 게시" })).toBeInTheDocument();
     await user.type(within(failedRow).getByLabelText("문제 해결형 다시 생성 사유"), "다시 생성");
     await user.click(within(failedRow).getByRole("button", { name: /결과 2 다시 생성/ }));
 
@@ -299,7 +299,7 @@ describe("AiContentGenerationPage", () => {
     expect(within(failedRow).queryByRole("button", { name: /결과 2 다시 생성/ })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "혜택 강조형 결과 ZIP 다운로드" })).toBeEnabled();
     expect(screen.getByRole("button", { name: "전체 ZIP" })).toBeEnabled();
-    expect(screen.queryByRole("region", { name: "SNS에 바로 게시" })).not.toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "SNS에 바로 게시" })).toBeInTheDocument();
     expect(gateway.retryOutput).toHaveBeenCalledTimes(1);
   });
 
@@ -364,6 +364,15 @@ describe("AiContentGenerationPage", () => {
 
     expect(screen.getByRole("button", { name: "선택 결과 ZIP" })).toBeEnabled();
     expect(screen.getByRole("button", { name: "전체 ZIP" })).toBeEnabled();
+  });
+
+  it("shows a separately completed Reel with its video and direct publish region", async () => {
+    renderGeneration("generation-reel-complete");
+
+    expect(await screen.findByText("형식: 릴스 · 완성된 릴스 콘텐츠")).toBeVisible();
+    expect(screen.getByRole("region", { name: "SNS에 바로 게시" })).toBeInTheDocument();
+    expect(screen.queryByText(/다운로드만 지원/)).not.toBeInTheDocument();
+    expect(screen.queryByRole("tab")).not.toBeInTheDocument();
   });
 
   it("shows completed results and publishing in one view while keeping planning evidence hidden", async () => {
@@ -493,7 +502,7 @@ describe("AiContentGenerationPage", () => {
     expect(screen.queryByRole("button", { name: /다시 생성/ })).not.toBeInTheDocument();
   });
 
-  it("hides unsupported revision and publish actions for a V3 reel result", async () => {
+  it("hides unsupported revision actions while keeping direct publish for a completed V3 Reel output", async () => {
     renderGeneration("generation-partial", true, (gateway) => {
       const getGeneration = gateway.getGeneration.bind(gateway);
       gateway.getGeneration = vi.fn(async (brandId, generationId) => {
@@ -510,8 +519,8 @@ describe("AiContentGenerationPage", () => {
 
     expect(await screen.findByRole("button", { name: "혜택 강조형 결과 ZIP 다운로드" })).toBeEnabled();
     expect(screen.queryByRole("button", { name: /훅.*재생성|카피.*재생성|카드.*재생성/ })).not.toBeInTheDocument();
-    expect(screen.queryByRole("region", { name: "SNS에 바로 게시" })).not.toBeInTheDocument();
-    expect(screen.getByText("현재 릴스 결과는 다운로드만 지원하며 Instagram 직접 게시는 지원하지 않습니다.")).toBeVisible();
+    expect(screen.getByRole("region", { name: "SNS에 바로 게시" })).toBeInTheDocument();
+    expect(screen.queryByText(/다운로드만 지원/)).not.toBeInTheDocument();
   });
 
   it("keeps completed outputs untouched while retrying only a failed output from review", async () => {

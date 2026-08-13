@@ -480,7 +480,7 @@ export interface AiContentPublishTargetInput {
 export interface AiContentPublishTargetResult extends AiContentPublishTargetInput {
   channelOutputId: string;
   queueId: string | null;
-  status: "rendering" | "scheduled" | "publishing" | "published" | "failed";
+  status: "scheduled" | "publishing" | "published" | "failed";
   publishedUrl: string | null;
   errorCode: string | null;
 }

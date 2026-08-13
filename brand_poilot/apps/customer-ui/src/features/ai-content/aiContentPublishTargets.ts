@@ -33,6 +33,14 @@ function isConnected(channel: ChannelConnection | undefined) {
 }
 
 function instagramFormats(outputFormat: ContentOutputFormatV2, assetCount: number): AiContentPublishFormatOption[] {
+  if (outputFormat === "reel") {
+    return [{
+      deliveryFormat: "instagram_reel",
+      label: "릴스",
+      enabled: assetCount >= 1,
+      reason: assetCount >= 1 ? null : "영상 결과 필요",
+    }];
+  }
   if (outputFormat !== "card_news") return [];
 
   const feed: AiContentPublishFormatOption = {

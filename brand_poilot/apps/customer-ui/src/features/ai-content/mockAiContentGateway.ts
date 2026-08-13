@@ -30,6 +30,14 @@ const cardNewsImage: PublishArtifactAsset = {
   height: 1200
 };
 
+const completedReelVideo: PublishArtifactAsset = {
+  url: "https://assets.public.blob.vercel-storage.com/mock/completed-reel.mp4",
+  fileName: "completed-reel.mp4",
+  mimeType: "video/mp4",
+  width: 1080,
+  height: 1920,
+};
+
 const emptyDraft = (): AiContentDraft => ({
   subjectType: null,
   subjectInput: { sourceUrl: "", name: "", promotion: "", description: "" },
@@ -135,6 +143,31 @@ const jobs: AiContentGeneration[] = [
     updatedAt: "2026-07-17T01:17:00.000Z"
   },
   {
+    id: "generation-reel-complete",
+    brandId: "brand-demo",
+    title: "완성된 릴스 콘텐츠",
+    outputFormat: "reel",
+    purpose: "marketing",
+    status: "completed",
+    currentStep: 5,
+    draft: emptyDraft(),
+    outputs: [{
+      id: "output-reel-complete",
+      generationId: "generation-reel-complete",
+      title: "완성된 릴스",
+      status: "completed",
+      artifact: artifact("output-reel-complete", "video", [completedReelVideo], "완성된 릴스 설명"),
+      failureReason: null,
+      downloadedAt: null,
+      manifestVersion: "ai-content.v3",
+      outputFormat: "reel",
+      publishSupported: true,
+    }],
+    attachmentsLockedAt: null, terminalAt: null, retryableUntil: null,
+    createdAt: "2026-07-16T05:00:00.000Z",
+    updatedAt: "2026-07-16T05:08:00.000Z",
+  },
+  {
     id: "generation-partial",
     brandId: "brand-demo",
     title: "신제품 출시 마케팅 소재",
@@ -144,7 +177,7 @@ const jobs: AiContentGeneration[] = [
     currentStep: 5,
     draft: emptyDraft(),
     outputs: [
-      { id: "output-marketing-1", generationId: "generation-partial", title: "혜택 강조형", status: "completed", artifact: artifact("output-marketing-1", "video"), failureReason: null, downloadedAt: null, manifestVersion: "ai-content.v3", outputFormat: "reel", publishSupported: false },
+      { id: "output-marketing-1", generationId: "generation-partial", title: "혜택 강조형", status: "completed", artifact: artifact("output-marketing-1", "video"), failureReason: null, downloadedAt: null, manifestVersion: "ai-content.v3", outputFormat: "reel", publishSupported: true },
       { id: "output-marketing-2", generationId: "generation-partial", title: "문제 해결형", status: "failed", artifact: null, failureReason: "이미지 생성 실패", downloadedAt: null, manifestVersion: null, outputFormat: "reel", publishSupported: false }
     ],
     attachmentsLockedAt: null, terminalAt: null, retryableUntil: null,

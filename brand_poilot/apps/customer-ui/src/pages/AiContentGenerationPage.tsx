@@ -297,9 +297,7 @@ export function AiContentGenerationPage({
                 <div><dt>콘텐츠 제목</dt><dd>{generation.title}</dd></div>
                 <div><dt>생성 ID</dt><dd><code>{generation.id}</code></dd></div>
               </dl>
-              <p>{generation.outputFormat === "reel"
-                ? "릴스 결과는 다운로드할 수 있으며, 현재 Instagram 직접 게시는 지원하지 않습니다."
-                : "다운로드와 지원되는 게시 작업은 각각 실행되며 기존 기능은 그대로 유지됩니다."}</p>
+              <p>다운로드와 지원되는 게시 작업은 각각 실행되며 기존 기능은 그대로 유지됩니다.</p>
             </aside>
           </div>
         </section>

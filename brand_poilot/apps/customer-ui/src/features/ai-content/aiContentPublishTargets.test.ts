@@ -47,8 +47,15 @@ describe("buildAiContentPublishOptions", () => {
     expect(instagram.formats).toEqual([]);
   });
 
-  it("does not expose direct publishing formats for reel video", () => {
+  it("exposes only direct Reel publishing for a completed reel video", () => {
     const instagram = buildAiContentPublishOptions({ outputFormat: "reel", assetCount: 2, channels: [connectedInstagram] })[0];
-    expect(instagram.formats).toEqual([]);
+    expect(instagram.formats).toEqual([
+      {
+        deliveryFormat: "instagram_reel",
+        label: "릴스",
+        enabled: true,
+        reason: null,
+      },
+    ]);
   });
 });
