@@ -158,4 +158,32 @@ describe("OAuth consent", () => {
       },
     });
   });
+
+  it("shows operator login when Supabase reports a missing session", async () => {
+    vi.stubEnv("VITE_SUPABASE_URL", "https://project.supabase.co");
+    vi.stubEnv("VITE_SUPABASE_PUBLISHABLE_KEY", "publishable-key");
+    sdk.getUser.mockResolvedValue({
+      data: { user: null },
+      error: { name: "AuthSessionMissingError" },
+    });
+    sdk.createClient.mockReturnValue({
+      auth: {
+        getUser: sdk.getUser,
+        signInWithOtp: sdk.signInWithOtp,
+        oauth: {
+          getAuthorizationDetails: sdk.getAuthorizationDetails,
+          approveAuthorization: sdk.approveAuthorization,
+          denyAuthorization: sdk.denyAuthorization,
+        },
+      },
+    });
+
+    render(
+      <MemoryRouter initialEntries={["/oauth/consent?authorization_id=auth-1"]}>
+        <OAuthConsentPage />
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByRole("textbox", { name: "운영자 이메일" })).toBeVisible();
+  });
 });

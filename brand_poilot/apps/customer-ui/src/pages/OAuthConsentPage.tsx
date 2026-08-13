@@ -85,7 +85,7 @@ function createOAuthConsentClient(): OAuthConsentClient {
   return {
     async getUser() {
       const { data, error } = await supabase.auth.getUser();
-      if (error) throw error;
+      if (error && error.name !== "AuthSessionMissingError") throw error;
       return { user: data.user ? { id: data.user.id } : null };
     },
     async sendSignInLink(email, redirectTo) {
