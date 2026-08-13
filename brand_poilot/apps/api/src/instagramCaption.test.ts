@@ -11,7 +11,7 @@ describe("formatInstagramCaption", () => {
     );
   });
 
-  it("rejects generic CTA copy and fewer than five hashtags", () => {
+  it("rejects generic CTA copy", () => {
     expect(() => formatInstagramCaption(
       "서비스를 더 잘 전달하는 기준을 정리했습니다.\n\n자세히 확인하기",
       ["#브랜딩", "#콘텐츠마케팅", "#사업성장"]
@@ -24,6 +24,15 @@ describe("formatInstagramCaption", () => {
       ["#Growthline", "#마케팅통합솔루션", "#브랜드콘텐츠", "#콘텐츠운영", "#브랜드전략"]
     )).toBe(
       "브랜드 자료를 일관된 발행 흐름으로 연결합니다.\n\n#Growthline #마케팅통합솔루션 #브랜드콘텐츠 #콘텐츠운영 #브랜드전략"
+    );
+  });
+
+  it("publishes a generated caption with four valid hashtags", () => {
+    expect(formatInstagramCaption(
+      "콘텐츠 운영 기준을 정리해 브랜드 신뢰를 높입니다.",
+      ["#콘텐츠운영", "#브랜드신뢰", "#콘텐츠마케팅", "#AI콘텐츠"]
+    )).toBe(
+      "콘텐츠 운영 기준을 정리해 브랜드 신뢰를 높입니다.\n\n#콘텐츠운영 #브랜드신뢰 #콘텐츠마케팅 #AI콘텐츠"
     );
   });
 });

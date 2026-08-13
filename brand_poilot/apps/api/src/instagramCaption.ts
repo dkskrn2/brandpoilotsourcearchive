@@ -11,7 +11,7 @@ function normalizeHashtags(hashtags: unknown) {
   if (!Array.isArray(hashtags)) throw new Error("instagram_caption_hashtags_invalid");
   const normalized = hashtags.map((tag) => typeof tag === "string" ? tag.trim() : "");
   if (
-    normalized.length !== 5 ||
+    normalized.length > 5 ||
     normalized.some((tag) => !/^#[^\s#]+$/.test(tag)) ||
     new Set(normalized).size !== normalized.length
   ) {
