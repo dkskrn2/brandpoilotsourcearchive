@@ -15,6 +15,18 @@ const manifest = {
   content: { caption: "여름 운영 전에 확인할 내용입니다.", hashtags: ["#여름운영"], cta: "저장해 두세요." },
 };
 
+const reelManifest = {
+  version: "ai-content.v3",
+  purpose: "informational",
+  outputFormat: "reel",
+  title: "완성된 릴스",
+  assets: [
+    { role: "scene", index: 1, url: "https://assets.public.blob.vercel-storage.com/scene-1.png", fileName: "scene-1.png", mimeType: "image/png", width: 1080, height: 1920 },
+    { role: "video", index: 1, url: "https://assets.public.blob.vercel-storage.com/reel.mp4", fileName: "reel.mp4", mimeType: "video/mp4", width: 1080, height: 1920, durationSeconds: 4, videoCodec: "h264", fps: 30, audioCodec: null },
+  ],
+  content: { caption: "완성된 릴스 설명", hashtags: ["#릴스"], cta: "확인" },
+};
+
 const staticPublishActionFixture = {
   workspaceId: "workspace-1",
   brandId: "brand-1",
@@ -155,6 +167,50 @@ describe("AI content direct publishing", () => {
     const channelLookup = statements.find((sql) => sql.includes("from brand_channels channel"));
     expect(channelLookup).toContain("credential.expires_at is null");
     expect(channelLookup).toContain("credential.expires_at > now()");
+  });
+
+  it("queues the completed Reel MP4 directly without creating another render job", async () => {
+    const { repository, statements, query } = setup({ outputFormat: "reel", outputManifest: reelManifest });
+
+    await expect(repository.prepareAiContentPublish({
+      ...staticPublishActionFixture,
+      targets: [{ channel: "instagram", deliveryFormat: "instagram_reel" }],
+    })).resolves.toMatchObject({
+      publishGroupId: "publish-group-1",
+      targets: [{ deliveryFormat: "instagram_reel", queueId: "queue-instagram_reel", status: "scheduled" }],
+    });
+
+    expect(statements.filter((sql) => sql.includes("insert into jobs"))).toHaveLength(0);
+    expect(statements.filter((sql) => sql.includes("insert into publish_queue"))).toHaveLength(1);
+    const channelInsert = query.mock.calls.find(([sql]) => String(sql).includes("insert into channel_outputs"));
+    expect(JSON.parse(String(channelInsert?.[1]?.[8]))).toMatchObject({
+      deliveryFormat: "instagram_reel",
+      caption: "완성된 릴스 설명",
+      hashtags: ["#릴스"],
+      video: {
+        role: "video",
+        mimeType: "video/mp4",
+        url: "https://assets.public.blob.vercel-storage.com/reel.mp4",
+      },
+    });
+  });
+
+  it("rejects a Reel manifest without one canonical MP4 before creating publish rows", async () => {
+    const { repository, statements } = setup({
+      outputFormat: "reel",
+      outputManifest: {
+        ...reelManifest,
+        assets: reelManifest.assets.filter((asset) => asset.role !== "video"),
+      },
+    });
+
+    await expect(repository.prepareAiContentPublish({
+      ...staticPublishActionFixture,
+      targets: [{ channel: "instagram", deliveryFormat: "instagram_reel" }],
+    })).rejects.toThrow("ai_content_publish_reel_video_invalid");
+    expect(statements).toContain("ROLLBACK");
+    expect(statements.some((sql) => sql.includes("insert into channel_outputs"))).toBe(false);
+    expect(statements.some((sql) => sql.includes("insert into publish_queue"))).toBe(false);
   });
 
   it("prepares a publish with the production content_topics SELECT and INSERT privileges", async () => {
@@ -396,7 +452,7 @@ describe("AI content direct publishing", () => {
     expect(statements.filter((sql) => sql.includes("insert into channel_outputs"))).toHaveLength(1);
   });
 
-  it("publishes a one-image V3 card through the existing instagram feed single adapter", async () => {
+  it("normalizes a one-image V3 card to the existing carousel adapter", async () => {
     const v3Card = {
       version: "ai-content.v3",
       purpose: "informational",
@@ -410,10 +466,10 @@ describe("AI content direct publishing", () => {
     await expect(repository.prepareAiContentPublish({
       ...staticPublishActionFixture,
       targets: [{ channel: "instagram", deliveryFormat: "instagram_feed_single" }],
-    })).resolves.toMatchObject({ targets: [{ deliveryFormat: "instagram_feed_single", status: "scheduled" }] });
+    })).resolves.toMatchObject({ targets: [{ deliveryFormat: "instagram_feed_carousel", status: "scheduled" }] });
     const insert = query.mock.calls.find(([sql]) => String(sql).includes("insert into channel_outputs"));
     expect(JSON.parse(String(insert?.[1]?.[8]))).toMatchObject({
-      deliveryFormat: "instagram_feed_single",
+      deliveryFormat: "instagram_feed_carousel",
       cards: [{ mimeType: "image/png" }],
     });
   });
@@ -443,17 +499,6 @@ describe("AI content direct publishing", () => {
   });
 
   it.each([
-    ["reel", {
-      version: "ai-content.v3",
-      purpose: "marketing",
-      outputFormat: "reel",
-      title: "V2 릴스",
-      assets: [
-        { role: "scene", index: 1, url: "https://assets.public.blob.vercel-storage.com/scene-1.png", fileName: "scene-1.png", mimeType: "image/png", width: 1080, height: 1920 },
-        { role: "video", index: 1, url: "https://assets.public.blob.vercel-storage.com/reel.mp4", fileName: "reel.mp4", mimeType: "video/mp4", width: 1080, height: 1920, durationSeconds: 4, videoCodec: "h264", fps: 30, audioCodec: null },
-      ],
-      content: { caption: "릴스", hashtags: [], cta: "보기" },
-    }],
     ["blog", {
       version: "ai-content.v3",
       purpose: "informational",

@@ -6,13 +6,15 @@ describe("AI content publish target contracts", () => {
     ["card_news", 3, "instagram_feed_carousel", true],
     ["card_news", 1, "instagram_feed_single", true],
     ["card_news", 3, "instagram_story", true],
-    ["card_news", 3, "instagram_reel", true],
-    ["marketing", 1, "instagram_feed_single", true],
-    ["marketing", 1, "instagram_story", true],
+    ["card_news", 3, "instagram_reel", false],
+    ["reel", 6, "instagram_reel", true],
+    ["reel", 6, "instagram_story", false],
+    ["reel", 6, "instagram_feed_carousel", false],
     ["blog", 0, "instagram_feed_single", false],
-  ] as const)("resolves %s with %s assets for %s", (type, assetCount, deliveryFormat, supported) => {
+    ["blog", 1, "instagram_reel", false],
+  ] as const)("resolves %s with %s assets for %s", (outputFormat, assetCount, deliveryFormat, supported) => {
     expect(resolveAiContentPublishTarget(
-      { type, assetCount },
+      { outputFormat, assetCount },
       { channel: "instagram", deliveryFormat },
     ).supported).toBe(supported);
   });
@@ -29,7 +31,17 @@ describe("AI content publish target contracts", () => {
 
   it("promotes a stale single-feed request to carousel for multi-asset card news", () => {
     expect(resolveAiContentPublishTarget(
-      { type: "card_news", assetCount: 3 },
+      { outputFormat: "card_news", assetCount: 3 },
+      { channel: "instagram", deliveryFormat: "instagram_feed_single" },
+    )).toEqual({
+      supported: true,
+      target: { channel: "instagram", deliveryFormat: "instagram_feed_carousel" },
+    });
+  });
+
+  it("normalizes a stale single-feed request to carousel even for one-card output", () => {
+    expect(resolveAiContentPublishTarget(
+      { outputFormat: "card_news", assetCount: 1 },
       { channel: "instagram", deliveryFormat: "instagram_feed_single" },
     )).toEqual({
       supported: true,

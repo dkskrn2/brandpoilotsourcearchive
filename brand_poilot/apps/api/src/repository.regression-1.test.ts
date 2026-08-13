@@ -541,6 +541,82 @@ describe("repository regressions", () => {
     }));
   });
 
+  it("publishes a canonical AI Reel manifest by its single MP4 asset", async () => {
+    const publishInstagramOutput = vi.fn(async () => ({ externalPostId: "ai-reel-post", publishedUrl: null }));
+    const query = vi.fn(async (sql: string) => {
+      if (sql.includes("from publish_queue pq") && sql.includes("join channel_outputs")) {
+        return { rowCount: 1, rows: [{
+          id: "queue-1",
+          workspace_id: "workspace-1",
+          brand_id: "brand-1",
+          channel: "instagram",
+          channel_output_id: "output-1",
+          delivery_format: "instagram_reel",
+          output_json: { caption: "AI Reel caption", hashtags: ["#ai"] },
+          rendered_manifest_url: "https://cdn.example.com/manifest.json",
+          ...readyInstagramPublishContext(),
+          external_account_id: "account-1",
+          encrypted_payload: encryptCredential("meta-token"),
+          credential_id: "credential-1",
+          attempt_id: "attempt-1",
+        }] };
+      }
+      if (sql.includes("set status = 'published'")) {
+        return { rowCount: 1, rows: [{ id: "queue-1", status: "published" }] };
+      }
+      return { rowCount: 1, rows: [] };
+    });
+    const repository = createRepository({ query } as any, {
+      instagramPublish: { enabled: true },
+      fetchInstagramImageManifest: async () => ({
+        version: "ai-content.v3",
+        outputFormat: "reel",
+        assets: [
+          { role: "scene", mimeType: "image/png", url: "https://cdn.example.com/scene.png" },
+          { role: "video", mimeType: "video/mp4", url: "https://cdn.example.com/ai-reel.mp4" },
+        ],
+      }),
+      publishInstagramOutput,
+    } as any);
+
+    await repository.publishQueueItem("queue-1");
+
+    expect(publishInstagramOutput).toHaveBeenCalledWith(expect.objectContaining({
+      deliveryFormat: "instagram_reel",
+      videoUrl: "https://cdn.example.com/ai-reel.mp4",
+      caption: "AI Reel caption\n\n#ai",
+    }));
+  });
+
+  it("rejects an ambiguous canonical Reel manifest instead of guessing a video", async () => {
+    const publishInstagramOutput = vi.fn();
+    const query = vi.fn(async (sql: string) => {
+      if (sql.includes("from publish_queue pq") && sql.includes("join channel_outputs")) {
+        return { rowCount: 1, rows: [{
+          id: "queue-1", workspace_id: "workspace-1", brand_id: "brand-1", channel: "instagram",
+          channel_output_id: "output-1", delivery_format: "instagram_reel", output_json: {},
+          rendered_manifest_url: "https://cdn.example.com/manifest.json",
+          ...readyInstagramPublishContext(), external_account_id: "account-1",
+          encrypted_payload: encryptCredential("meta-token"), credential_id: "credential-1", attempt_id: "attempt-1",
+        }] };
+      }
+      return { rowCount: 1, rows: [] };
+    });
+    const repository = createRepository({ query } as any, {
+      instagramPublish: { enabled: true },
+      fetchInstagramImageManifest: async () => ({
+        assets: [
+          { role: "video", mimeType: "video/mp4", url: "https://cdn.example.com/reel-1.mp4" },
+          { role: "video", mimeType: "video/mp4", url: "https://cdn.example.com/reel-2.mp4" },
+        ],
+      }),
+      publishInstagramOutput,
+    } as any);
+
+    await expect(repository.publishQueueItem("queue-1")).rejects.toThrow("reel_video_required");
+    expect(publishInstagramOutput).not.toHaveBeenCalled();
+  });
+
   it("stores transient classification and reschedules only 429 or 5xx failures", async () => {
     const failureUpdates: Array<{ sql: string; values?: unknown[] }> = [];
     const query = vi.fn(async (sql: string, values?: unknown[]) => {
