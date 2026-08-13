@@ -333,6 +333,57 @@ function assertV2RegisteredCategories(
   }
 }
 
+async function resolveCatalogSelection(
+  queryable: Queryable,
+  result: BrandIntelligenceResult,
+) {
+  const categoryCode = result.primaryCategory?.code;
+  if (!categoryCode) throw new Error("brand_analysis_category_invalid");
+  const categoryResult = await queryable.query(
+    `select id, code, name from content_categories
+      where code = $1 and active = true
+      limit 1`,
+    [categoryCode],
+  );
+  if (!categoryResult.rowCount) throw new Error("brand_analysis_category_invalid");
+  const category = categoryResult.rows[0] as { id: string; code: string; name: string };
+  const subcategoryCodes = result.subcategories.map((subcategory) => subcategory.code);
+  if (subcategoryCodes.some((code) => !code)
+    || new Set(subcategoryCodes).size !== subcategoryCodes.length) {
+    throw new Error("brand_analysis_subcategory_invalid");
+  }
+  const subcategoryResult = subcategoryCodes.length
+    ? await queryable.query(
+        `select id, code, name from content_subcategories
+          where category_id = $1 and active = true and code = any($2::text[])`,
+        [category.id, subcategoryCodes],
+      )
+    : { rowCount: 0, rows: [] };
+  if (subcategoryResult.rowCount !== subcategoryCodes.length) {
+    throw new Error("brand_analysis_subcategory_invalid");
+  }
+  const subcategoriesByCode = new Map(subcategoryResult.rows.map((row) => [
+    String(row.code),
+    { id: String(row.id), code: String(row.code), name: String(row.name) },
+  ]));
+  const subcategories = subcategoryCodes.map((code) => subcategoriesByCode.get(code!));
+  if (subcategories.some((subcategory) => !subcategory)) {
+    throw new Error("brand_analysis_subcategory_invalid");
+  }
+  return {
+    category,
+    subcategories: subcategories.map((subcategory) => subcategory!),
+    result: {
+      ...result,
+      primaryCategory: { code: category.code, name: category.name },
+      subcategories: subcategories.map((subcategory) => ({
+        code: subcategory!.code,
+        name: subcategory!.name,
+      })),
+    } as BrandIntelligenceResult,
+  };
+}
+
 async function transaction<T>(pool: Pool, operation: (client: PoolClient) => Promise<T>): Promise<T> {
   const client = await pool.connect();
   try {
@@ -733,19 +784,27 @@ export function createBrandIntelligenceRepository(
 
     async updateBrandAnalysisDraft(input) {
       const parsed = parseBrandIntelligenceResult(input.editedResult);
-      const updated = await pool.query(
-        `update brand_analysis_runs
-            set edited_result_json = $4::jsonb, updated_at = now()
-          where id = $1 and workspace_id = $2 and brand_id = $3 and status = 'review_ready'
-          returning ${columns}`,
-        [input.analysisId, input.workspaceId, input.brandId, JSON.stringify(parsed)],
-      );
-      if (!updated.rowCount) {
-        const exists = await this.getBrandAnalysis(input);
-        if (!exists) throw new Error("brand_analysis_not_found");
-        throw new Error("brand_analysis_not_review_ready");
-      }
-      return mapRun(updated.rows[0] as Record<string, unknown>);
+      return transaction(pool, async (client) => {
+        const found = await client.query(
+          `select status from brand_analysis_runs
+            where id = $1 and workspace_id = $2 and brand_id = $3
+            for update`,
+          [input.analysisId, input.workspaceId, input.brandId],
+        );
+        if (!found.rowCount) throw new Error("brand_analysis_not_found");
+        if (String(found.rows[0]!.status) !== "review_ready") {
+          throw new Error("brand_analysis_not_review_ready");
+        }
+        const selection = await resolveCatalogSelection(client, parsed);
+        const updated = await client.query(
+          `update brand_analysis_runs
+              set edited_result_json = $2::jsonb, updated_at = now()
+            where id = $1
+            returning ${columns}`,
+          [input.analysisId, JSON.stringify(selection.result)],
+        );
+        return mapRun(updated.rows[0] as Record<string, unknown>);
+      });
     },
 
     async cancelBrandAnalysis(input) {
@@ -934,17 +993,23 @@ export function createBrandIntelligenceRepository(
         if (current.status !== "review_ready" || !current.effectiveResult) {
           throw new Error("brand_analysis_not_review_ready");
         }
-        const effective = parseBrandIntelligenceResult(
+        const parsedEffective = parseBrandIntelligenceResult(
           input.editedResult ?? current.effectiveResult,
         );
-        const common = toBrandIntelligenceCommonView(effective, input.companyName ?? current.input.companyName);
-        if (!effective.companyOverview || !effective.businessDescription
-          || !effective.primaryCategory || !effective.primaryTarget
-          || !effective.coreAppeal
-          || (effective.contractVersion === "brand-intelligence-result.v2"
-            && !effective.valueProposition)) {
+        if (!parsedEffective.companyOverview || !parsedEffective.businessDescription
+          || !parsedEffective.primaryCategory || !parsedEffective.primaryTarget
+          || !parsedEffective.coreAppeal
+          || (parsedEffective.contractVersion === "brand-intelligence-result.v2"
+            && !parsedEffective.valueProposition)) {
           throw new Error("brand_analysis_required_fields_missing");
         }
+        const selection = await resolveCatalogSelection(client, parsedEffective);
+        const effective = selection.result;
+        const { category, subcategories: selectedSubcategories } = selection;
+        const common = toBrandIntelligenceCommonView(
+          effective,
+          input.companyName ?? current.input.companyName,
+        );
         const requestedCompanyName = input.companyName
           ?? current.input.companyName
           ?? null;
@@ -1029,8 +1094,7 @@ export function createBrandIntelligenceRepository(
         const profile = await client.query(
           `insert into brand_profiles
              (workspace_id, brand_id, primary_customer, description, primary_category_id, active_brand_analysis_id)
-           values ($1, $2, $3, $4,
-             (select id from content_categories where code = $5 or lower(name) = lower($6) limit 1), $7)
+           values ($1, $2, $3, $4, $5, $6)
            on conflict (brand_id) do update set
              primary_customer = excluded.primary_customer,
              description = excluded.description,
@@ -1038,7 +1102,7 @@ export function createBrandIntelligenceRepository(
              active_brand_analysis_id = excluded.active_brand_analysis_id
            returning id`,
           [input.workspaceId, input.brandId, effective.primaryTarget, effective.businessDescription,
-            effective.primaryCategory.code, effective.primaryCategory.name, input.analysisId],
+            category.id, input.analysisId],
         );
         const profileId = String(profile.rows[0]!.id);
         const compatibilityResult = effective.contractVersion === "brand-intelligence-result.v1"
@@ -1215,28 +1279,14 @@ export function createBrandIntelligenceRepository(
           }
         }
         await client.query("delete from brand_profile_subcategories where brand_profile_id = $1", [profileId]);
-        for (const subcategory of effective.subcategories) {
-          let inserted = { rowCount: 0 as number | null };
-          inserted = await client.query(
-              `insert into brand_profile_subcategories
-                 (workspace_id, brand_id, brand_profile_id, subcategory_id)
-               select $1, $2, $3, id from content_subcategories
-                where code = $4 or lower(name) = lower($5)
-               on conflict do nothing`,
-              [input.workspaceId, input.brandId, profileId, subcategory.code, subcategory.name],
-            );
-          if (!inserted.rowCount) {
-            const customName = subcategory.name.normalize("NFKC").trim();
-            if (Array.from(customName).length > 30) throw new Error("brand_analysis_subcategory_too_long");
-            const customKey = customName.toLocaleLowerCase("ko-KR");
-            await client.query(
-              `insert into brand_profile_subcategories
-                 (workspace_id, brand_id, brand_profile_id, custom_name, custom_key)
-               values ($1, $2, $3, $4, $5)
-               on conflict do nothing`,
-              [input.workspaceId, input.brandId, profileId, customName, customKey],
-            );
-          }
+        for (const subcategory of selectedSubcategories) {
+          await client.query(
+            `insert into brand_profile_subcategories
+               (workspace_id, brand_id, brand_profile_id, subcategory_id)
+             values ($1, $2, $3, $4)
+             on conflict do nothing`,
+            [input.workspaceId, input.brandId, profileId, subcategory!.id],
+          );
         }
         const knowledgeImport = await client.query(
           `insert into knowledge_imports
@@ -1253,7 +1303,7 @@ export function createBrandIntelligenceRepository(
         const knowledgeContent = [
           `기업 개요\n${effective.companyOverview}`,
           `사업 소개\n${effective.businessDescription}`,
-          `대표 분야\n${effective.primaryCategory.name}`,
+          `대표 분야\n${category.name}`,
           `세부 분야\n${effective.subcategories.map((item) => item.name).join(", ") || "없음"}`,
           `핵심 타깃\n${effective.primaryTarget}`,
           `차별점\n${effective.differentiators}`,

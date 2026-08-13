@@ -5,6 +5,7 @@ import type {
   BrandIntelligenceGateway,
   BrandOnboardingContext,
 } from "./types";
+import type { ContentCategory } from "../../types";
 
 async function fileBytes(file: File) {
   if (typeof file.arrayBuffer === "function") return file.arrayBuffer();
@@ -40,6 +41,9 @@ export function createBrandIntelligenceGateway(
   blobPut: typeof putBlob = putBlob,
 ): BrandIntelligenceGateway {
   return {
+    listContentCategories() {
+      return client.requestJson<ContentCategory[]>("/content-categories", { method: "GET" });
+    },
     async getCurrent(brandId) {
       const payload = await client.requestJson<{ intelligence: BrandAnalysis | null }>(
         `/brands/${brandId}/brand-intelligence`,
@@ -184,6 +188,7 @@ export function createBrandIntelligenceGateway(
 }
 
 export const brandIntelligenceGateway: BrandIntelligenceGateway = {
+  listContentCategories: (...args) => createBrandIntelligenceGateway().listContentCategories!(...args),
   getCurrent: (...args) => createBrandIntelligenceGateway().getCurrent(...args),
   getWorkflow: (...args) => createBrandIntelligenceGateway().getWorkflow(...args),
   getOnboarding: (...args) => createBrandIntelligenceGateway().getOnboarding!(...args),

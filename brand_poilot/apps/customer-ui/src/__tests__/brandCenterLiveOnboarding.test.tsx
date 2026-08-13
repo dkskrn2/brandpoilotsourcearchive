@@ -13,11 +13,18 @@ import type {
   BrandIntelligenceGateway,
   BrandIntelligenceResult,
 } from "../features/brand-intelligence/types";
-import { api, ApiRequestError } from "../lib/apiClient";
+import { ApiRequestError } from "../lib/apiClient";
 import { BrandCenterPreviewPage } from "../pages/BrandCenterPreviewPage";
+import type { ContentCategory } from "../types";
 
 const storageScope = { workspaceId: "workspace-1", userId: "user-1" };
 const persistenceKey = "brand-pilot:brand-intelligence:workspace-1:user-1:brand-1";
+const contentCategories: ContentCategory[] = [{
+  code: "software",
+  name: "소프트웨어",
+  recommendedHashtags: [],
+  subcategories: [{ code: "brand-ops", name: "브랜드 운영" }],
+}];
 
 const result: BrandIntelligenceResult = {
   contractVersion: "brand-intelligence-result.v1",
@@ -85,7 +92,11 @@ function analysis(status: BrandAnalysis["status"]): BrandAnalysis {
   };
 }
 
-function gateway(overrides: Partial<BrandIntelligenceGateway> = {}): BrandIntelligenceGateway {
+type TestGateway = BrandIntelligenceGateway & {
+  listContentCategories: ReturnType<typeof vi.fn>;
+};
+
+function gateway(overrides: Partial<BrandIntelligenceGateway> = {}): TestGateway {
   return {
     getCurrent: vi.fn().mockResolvedValue(null),
     getWorkflow: vi.fn().mockResolvedValue(null),
@@ -98,8 +109,9 @@ function gateway(overrides: Partial<BrandIntelligenceGateway> = {}): BrandIntell
       effectiveResult: draft,
     })),
     confirm: vi.fn().mockResolvedValue(analysis("confirmed")),
+    listContentCategories: vi.fn().mockResolvedValue(contentCategories),
     ...overrides,
-  };
+  } as TestGateway;
 }
 
 function LocationProbe() {
@@ -170,7 +182,6 @@ describe("live Brand Center onboarding", () => {
   beforeEach(() => {
     localStorage.clear();
     vi.useRealTimers();
-    vi.spyOn(api, "listContentCategories").mockResolvedValue([]);
     Object.defineProperty(document, "hidden", {
       configurable: true,
       value: false,
@@ -200,42 +211,42 @@ describe("live Brand Center onboarding", () => {
   });
 
   it("loads registry categories for the live review", async () => {
-    vi.mocked(api.listContentCategories).mockResolvedValue([{
-      code: "software",
-      name: "소프트웨어",
-      recommendedHashtags: [],
-      subcategories: [{ code: "brand-ops", name: "브랜드 운영" }],
-    }]);
     const review = {
       ...analysis("review_ready"),
       result: suggestedResult,
       effectiveResult: suggestedResult,
     };
+    const api = gateway({ getWorkflow: vi.fn().mockResolvedValue(review) });
     renderLive(
-      gateway({ getWorkflow: vi.fn().mockResolvedValue(review) }),
+      api,
       "/onboarding/brand-intelligence",
     );
 
     expect(await screen.findByRole("combobox", { name: "분석 결과 대표 분야" }))
       .toHaveValue("software");
     expect(screen.getByRole("checkbox", { name: "브랜드 운영" })).toBeChecked();
+    expect(screen.queryByRole("textbox", { name: "직접 입력 세부 분야" })).not.toBeInTheDocument();
+    expect(api.listContentCategories).toHaveBeenCalledTimes(1);
   });
 
-  it("keeps direct category input when the registry request fails", async () => {
-    vi.mocked(api.listContentCategories).mockRejectedValue(new Error("category registry unavailable"));
+  it("blocks category confirmation when the registry request fails", async () => {
     const review = {
       ...analysis("review_ready"),
       result: suggestedResult,
       effectiveResult: suggestedResult,
     };
     renderLive(
-      gateway({ getWorkflow: vi.fn().mockResolvedValue(review) }),
+      gateway({
+        getWorkflow: vi.fn().mockResolvedValue(review),
+        listContentCategories: vi.fn().mockRejectedValue(new Error("category registry unavailable")),
+      }),
       "/onboarding/brand-intelligence",
     );
 
-    expect(await screen.findByRole("textbox", { name: "대표 분야" })).toHaveValue("소프트웨어");
-    expect(screen.queryByRole("combobox", { name: "분석 결과 대표 분야" }))
-      .not.toBeInTheDocument();
+    expect(await screen.findByText("분야 목록을 불러오지 못했습니다.")).toBeVisible();
+    expect(screen.getByRole("combobox", { name: "분석 결과 대표 분야" })).toBeDisabled();
+    expect(screen.queryByRole("textbox", { name: "대표 분야" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "확인하고 저장" })).toBeDisabled();
   });
 
   it("resumes a pending server workflow without rendering Step 1 and locks sources", async () => {
@@ -495,8 +506,8 @@ describe("live Brand Center onboarding", () => {
 
     await act(() => vi.advanceTimersByTimeAsync(2_000));
     expect(screen.getByDisplayValue("기존 기업 개요")).toBeInTheDocument();
-    expect(screen.getByDisplayValue("소프트웨어")).toBeInTheDocument();
-    expect(screen.getByDisplayValue("브랜드 운영")).toBeInTheDocument();
+    expect(screen.getByRole("combobox", { name: "분석 결과 대표 분야" })).toHaveValue("software");
+    expect(screen.getByRole("checkbox", { name: "브랜드 운영" })).toBeChecked();
     expect(screen.queryByLabelText("대표 분야 코드")).not.toBeInTheDocument();
     expect(screen.queryByLabelText("추가 확인이 필요한 정보")).not.toBeInTheDocument();
     expect(screen.getByLabelText("경쟁사 1 이름")).toBeInTheDocument();

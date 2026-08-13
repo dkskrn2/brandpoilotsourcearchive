@@ -2,6 +2,18 @@ import { describe, expect, it, vi } from "vitest";
 import { createBrandIntelligenceGateway } from "./brandIntelligenceGateway";
 
 describe("brand intelligence gateway", () => {
+  it("loads the existing content category catalog", async () => {
+    const categories = [{ code: "software", name: "소프트웨어", subcategories: [] }];
+    const requestJson = vi.fn().mockResolvedValue(categories);
+    const gateway = createBrandIntelligenceGateway({ requestJson } as never);
+
+    await expect(gateway.listContentCategories!()).resolves.toEqual(categories);
+    expect(requestJson).toHaveBeenCalledWith(
+      "/content-categories",
+      { method: "GET" },
+    );
+  });
+
   it("loads the current open workflow from the dedicated endpoint", async () => {
     const workflow = { id: "analysis-1", status: "review_ready" };
     const requestJson = vi.fn().mockResolvedValue({ workflow });

@@ -27,7 +27,7 @@ import type {
   PreviewStep,
 } from "../features/brand-center-preview/types";
 import { useAuth } from "../lib/auth";
-import { api, ApiRequestError, DEMO_BRAND_ID } from "../lib/apiClient";
+import { ApiRequestError, DEMO_BRAND_ID } from "../lib/apiClient";
 import type { ContentCategory } from "../types";
 
 export interface BrandIntelligenceStorageScope {
@@ -197,11 +197,16 @@ function LiveBrandCenterOnboardingState({
 
   useEffect(() => {
     let active = true;
-    void api.listContentCategories()
-      .then((items) => { if (active) setCategories(items); })
-      .catch(() => { if (active) setCategories([]); });
+    if (!gateway.listContentCategories) return () => { active = false; };
+    void gateway.listContentCategories()
+      .then((loadedCategories) => {
+        if (active) setCategories(loadedCategories);
+      })
+      .catch(() => {
+        if (active) setCategories([]);
+      });
     return () => { active = false; };
-  }, []);
+  }, [gateway]);
 
   const resumeWorkflow = useCallback((workflow: BrandAnalysis) => {
     setActiveAnalysis(workflow);

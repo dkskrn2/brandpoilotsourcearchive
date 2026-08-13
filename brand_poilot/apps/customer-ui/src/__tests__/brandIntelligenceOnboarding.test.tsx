@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useState } from "react";
 import { describe, expect, it, vi } from "vitest";
@@ -6,6 +6,7 @@ import { BrandAnalysisReviewStep } from "../components/brand-intelligence/BrandA
 import { BrandEvidenceInputStep } from "../components/brand-intelligence/BrandEvidenceInputStep";
 import { resolveBrandAnalysisFileMimeType } from "../features/brand-intelligence/brandIntelligenceGateway";
 import type { BrandIntelligenceResult } from "../features/brand-intelligence/types";
+import type { ContentCategory } from "../types";
 
 const initial: BrandIntelligenceResult = {
   contractVersion: "brand-intelligence-result.v1",
@@ -62,11 +63,16 @@ const completeV2: BrandIntelligenceResult = {
   sourceGaps: ["가격 근거 부족"],
 };
 
-const categories = [{
+const categories: ContentCategory[] = [{
   code: "marketing",
   name: "마케팅",
   recommendedHashtags: [],
   subcategories: [{ code: "content", name: "콘텐츠 마케팅" }],
+}, {
+  code: "commerce",
+  name: "커머스",
+  recommendedHashtags: [],
+  subcategories: [{ code: "store", name: "온라인 스토어" }],
 }];
 
 describe("brand intelligence onboarding review", () => {
@@ -82,7 +88,7 @@ describe("brand intelligence onboarding review", () => {
     const confirm = vi.fn(async () => undefined);
     function Harness() {
       const [draft, setDraft] = useState(initial);
-      return <BrandAnalysisReviewStep draft={draft} saving={false} error={null} onChange={setDraft} onConfirm={confirm} />;
+      return <BrandAnalysisReviewStep draft={draft} saving={false} error={null} categories={categories} onChange={setDraft} onConfirm={confirm} />;
     }
     render(<Harness />);
     const user = userEvent.setup();
@@ -131,8 +137,8 @@ describe("brand intelligence onboarding review", () => {
     });
   });
 
-  it("maps the reviewed category to the catalog and keeps custom subcategories", async () => {
-    const confirm = vi.fn(async () => undefined);
+  it("keeps only catalog categories and subcategories in the confirmed draft", async () => {
+    const confirm = vi.fn(async (_draft: BrandIntelligenceResult) => undefined);
     function Harness() {
       const [draft, setDraft] = useState<BrandIntelligenceResult>({ ...initial, primaryCategory: { code: null, name: "광고" } });
       return (
@@ -140,24 +146,48 @@ describe("brand intelligence onboarding review", () => {
           draft={draft}
           saving={false}
           error={null}
-          categories={[{
-            code: "marketing",
-            name: "마케팅",
-            recommendedHashtags: [],
-            subcategories: [{ code: "content", name: "콘텐츠 마케팅" }],
-          }]}
+          categories={categories}
           onChange={setDraft}
-          onConfirm={confirm}
+          onConfirm={async () => confirm(draft)}
         />
       );
     }
     render(<Harness />);
     const user = userEvent.setup();
+    expect(screen.queryByRole("textbox", { name: "대표 분야" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("textbox", { name: "직접 입력 세부 분야" })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "확인하고 저장" })).toBeDisabled();
     await user.selectOptions(screen.getByRole("combobox", { name: "분석 결과 대표 분야" }), "marketing");
     await user.click(screen.getByRole("checkbox", { name: "콘텐츠 마케팅" }));
-    expect(screen.getByRole("textbox", { name: "직접 입력 세부 분야" })).toHaveValue("콘텐츠 운영");
     expect(screen.getByRole("button", { name: "확인하고 저장" })).toBeEnabled();
+    await user.click(screen.getByRole("button", { name: "확인하고 저장" }));
+    expect(confirm).toHaveBeenCalledWith(expect.objectContaining({
+      primaryCategory: { code: "marketing", name: "마케팅" },
+      subcategories: [{ code: "content", name: "콘텐츠 마케팅" }],
+    }));
+
+    await user.selectOptions(screen.getByRole("combobox", { name: "분석 결과 대표 분야" }), "commerce");
+    expect(screen.queryByRole("checkbox", { name: "콘텐츠 마케팅" })).not.toBeInTheDocument();
+    expect(screen.getByRole("checkbox", { name: "온라인 스토어" })).not.toBeChecked();
+  });
+
+  it("blocks confirmation when the catalog cannot be loaded", async () => {
+    const confirm = vi.fn(async () => undefined);
+    render(
+      <BrandAnalysisReviewStep
+        draft={initial}
+        saving={false}
+        error={null}
+        categories={[]}
+        onChange={vi.fn()}
+        onConfirm={confirm}
+      />,
+    );
+
+    expect(screen.getByRole("combobox", { name: "분석 결과 대표 분야" })).toBeDisabled();
+    expect(screen.getByText("분야 목록을 불러오지 못했습니다.")).toBeVisible();
+    expect(screen.getByRole("button", { name: "확인하고 저장" })).toBeDisabled();
+    await waitFor(() => expect(confirm).not.toHaveBeenCalled());
   });
 
   it("organizes every production v2 field into review tabs without dropping controls", async () => {
