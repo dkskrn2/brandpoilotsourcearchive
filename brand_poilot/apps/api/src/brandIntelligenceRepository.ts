@@ -333,6 +333,57 @@ function assertV2RegisteredCategories(
   }
 }
 
+async function resolveCatalogSelection(
+  queryable: Queryable,
+  result: BrandIntelligenceResult,
+) {
+  const categoryCode = result.primaryCategory?.code;
+  if (!categoryCode) throw new Error("brand_analysis_category_invalid");
+  const categoryResult = await queryable.query(
+    `select id, code, name from content_categories
+      where code = $1 and active = true
+      limit 1`,
+    [categoryCode],
+  );
+  if (!categoryResult.rowCount) throw new Error("brand_analysis_category_invalid");
+  const category = categoryResult.rows[0] as { id: string; code: string; name: string };
+  const subcategoryCodes = result.subcategories.map((subcategory) => subcategory.code);
+  if (subcategoryCodes.some((code) => !code)
+    || new Set(subcategoryCodes).size !== subcategoryCodes.length) {
+    throw new Error("brand_analysis_subcategory_invalid");
+  }
+  const subcategoryResult = subcategoryCodes.length
+    ? await queryable.query(
+        `select id, code, name from content_subcategories
+          where category_id = $1 and active = true and code = any($2::text[])`,
+        [category.id, subcategoryCodes],
+      )
+    : { rowCount: 0, rows: [] };
+  if (subcategoryResult.rowCount !== subcategoryCodes.length) {
+    throw new Error("brand_analysis_subcategory_invalid");
+  }
+  const subcategoriesByCode = new Map(subcategoryResult.rows.map((row) => [
+    String(row.code),
+    { id: String(row.id), code: String(row.code), name: String(row.name) },
+  ]));
+  const subcategories = subcategoryCodes.map((code) => subcategoriesByCode.get(code!));
+  if (subcategories.some((subcategory) => !subcategory)) {
+    throw new Error("brand_analysis_subcategory_invalid");
+  }
+  return {
+    category,
+    subcategories: subcategories.map((subcategory) => subcategory!),
+    result: {
+      ...result,
+      primaryCategory: { code: category.code, name: category.name },
+      subcategories: subcategories.map((subcategory) => ({
+        code: subcategory!.code,
+        name: subcategory!.name,
+      })),
+    } as BrandIntelligenceResult,
+  };
+}
+
 async function transaction<T>(pool: Pool, operation: (client: PoolClient) => Promise<T>): Promise<T> {
   const client = await pool.connect();
   try {
@@ -733,19 +784,27 @@ export function createBrandIntelligenceRepository(
 
     async updateBrandAnalysisDraft(input) {
       const parsed = parseBrandIntelligenceResult(input.editedResult);
-      const updated = await pool.query(
-        `update brand_analysis_runs
-            set edited_result_json = $4::jsonb, updated_at = now()
-          where id = $1 and workspace_id = $2 and brand_id = $3 and status = 'review_ready'
-          returning ${columns}`,
-        [input.analysisId, input.workspaceId, input.brandId, JSON.stringify(parsed)],
-      );
-      if (!updated.rowCount) {
-        const exists = await this.getBrandAnalysis(input);
-        if (!exists) throw new Error("brand_analysis_not_found");
-        throw new Error("brand_analysis_not_review_ready");
-      }
-      return mapRun(updated.rows[0] as Record<string, unknown>);
+      return transaction(pool, async (client) => {
+        const found = await client.query(
+          `select status from brand_analysis_runs
+            where id = $1 and workspace_id = $2 and brand_id = $3
+            for update`,
+          [input.analysisId, input.workspaceId, input.brandId],
+        );
+        if (!found.rowCount) throw new Error("brand_analysis_not_found");
+        if (String(found.rows[0]!.status) !== "review_ready") {
+          throw new Error("brand_analysis_not_review_ready");
+        }
+        const selection = await resolveCatalogSelection(client, parsed);
+        const updated = await client.query(
+          `update brand_analysis_runs
+              set edited_result_json = $2::jsonb, updated_at = now()
+            where id = $1
+            returning ${columns}`,
+          [input.analysisId, JSON.stringify(selection.result)],
+        );
+        return mapRun(updated.rows[0] as Record<string, unknown>);
+      });
     },
 
     async cancelBrandAnalysis(input) {
@@ -934,57 +993,19 @@ export function createBrandIntelligenceRepository(
         if (current.status !== "review_ready" || !current.effectiveResult) {
           throw new Error("brand_analysis_not_review_ready");
         }
-        let effective = parseBrandIntelligenceResult(
+        const parsedEffective = parseBrandIntelligenceResult(
           input.editedResult ?? current.effectiveResult,
         );
-        if (!effective.companyOverview || !effective.businessDescription
-          || !effective.primaryCategory || !effective.primaryTarget
-          || !effective.coreAppeal
-          || (effective.contractVersion === "brand-intelligence-result.v2"
-            && !effective.valueProposition)) {
+        if (!parsedEffective.companyOverview || !parsedEffective.businessDescription
+          || !parsedEffective.primaryCategory || !parsedEffective.primaryTarget
+          || !parsedEffective.coreAppeal
+          || (parsedEffective.contractVersion === "brand-intelligence-result.v2"
+            && !parsedEffective.valueProposition)) {
           throw new Error("brand_analysis_required_fields_missing");
         }
-        const categoryCode = effective.primaryCategory.code;
-        if (!categoryCode) throw new Error("brand_analysis_category_invalid");
-        const categoryResult = await client.query(
-          `select id, code, name from content_categories
-            where code = $1 and active = true
-            limit 1`,
-          [categoryCode],
-        );
-        if (!categoryResult.rowCount) throw new Error("brand_analysis_category_invalid");
-        const category = categoryResult.rows[0] as { id: string; code: string; name: string };
-        const subcategoryCodes = effective.subcategories.map((subcategory) => subcategory.code);
-        if (subcategoryCodes.some((code) => !code)
-          || new Set(subcategoryCodes).size !== subcategoryCodes.length) {
-          throw new Error("brand_analysis_subcategory_invalid");
-        }
-        const subcategoryResult = subcategoryCodes.length
-          ? await client.query(
-              `select id, code, name from content_subcategories
-                where category_id = $1 and active = true and code = any($2::text[])`,
-              [category.id, subcategoryCodes],
-            )
-          : { rowCount: 0, rows: [] };
-        if (subcategoryResult.rowCount !== subcategoryCodes.length) {
-          throw new Error("brand_analysis_subcategory_invalid");
-        }
-        const subcategoriesByCode = new Map(subcategoryResult.rows.map((row) => [
-          String(row.code),
-          { id: String(row.id), code: String(row.code), name: String(row.name) },
-        ]));
-        const selectedSubcategories = subcategoryCodes.map((code) => subcategoriesByCode.get(code!));
-        if (selectedSubcategories.some((subcategory) => !subcategory)) {
-          throw new Error("brand_analysis_subcategory_invalid");
-        }
-        effective = {
-          ...effective,
-          primaryCategory: { code: category.code, name: category.name },
-          subcategories: selectedSubcategories.map((subcategory) => ({
-            code: subcategory!.code,
-            name: subcategory!.name,
-          })),
-        };
+        const selection = await resolveCatalogSelection(client, parsedEffective);
+        const effective = selection.result;
+        const { category, subcategories: selectedSubcategories } = selection;
         const common = toBrandIntelligenceCommonView(
           effective,
           input.companyName ?? current.input.companyName,

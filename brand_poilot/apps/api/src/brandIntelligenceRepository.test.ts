@@ -465,6 +465,58 @@ describe("brand intelligence repository", () => {
     })).rejects.toThrow(/brand_intelligence_(primary_category|subcategory)_not_registered/);
   });
 
+  it("rejects non-catalog draft categories and stores canonical catalog names", async () => {
+    const repository = createBrandIntelligenceRepository(pglitePool(database));
+    const requested = await prepareAnalysis(repository, {
+      ownedUrl: "https://example.com",
+      idempotencyKey: "draft-catalog-validation",
+    });
+    const base = resultV2();
+    const invalidInputs: Array<{ result: BrandIntelligenceResultV2; error: string }> = [
+      { result: { ...base, primaryCategory: { code: null, name: "마케팅" } }, error: "brand_analysis_category_invalid" },
+      { result: { ...base, primaryCategory: { code: "arbitrary", name: "임의 분야" } }, error: "brand_analysis_category_invalid" },
+      { result: { ...base, primaryCategory: { code: "inactive", name: "비활성 분야" } }, error: "brand_analysis_category_invalid" },
+      { result: { ...base, subcategories: [{ code: null, name: "자유 입력" }] }, error: "brand_analysis_subcategory_invalid" },
+      { result: { ...base, subcategories: [{ code: "unknown", name: "임의 세부 분야" }] }, error: "brand_analysis_subcategory_invalid" },
+      { result: { ...base, subcategories: [{ code: "lead-generation", name: "리드 발굴" }] }, error: "brand_analysis_subcategory_invalid" },
+      { result: { ...base, subcategories: [{ code: "inactive-content", name: "비활성 콘텐츠" }] }, error: "brand_analysis_subcategory_invalid" },
+      {
+        result: {
+          ...base,
+          subcategories: [
+            { code: "content", name: "콘텐츠 마케팅" },
+            { code: "content", name: "콘텐츠 마케팅" },
+          ],
+        },
+        error: "brand_analysis_subcategory_invalid",
+      },
+    ];
+
+    for (const invalid of invalidInputs) {
+      await expect(repository.updateBrandAnalysisDraft({
+        workspaceId,
+        brandId,
+        analysisId: requested.id,
+        editedResult: invalid.result,
+      })).rejects.toThrow(invalid.error);
+    }
+
+    const updated = await repository.updateBrandAnalysisDraft({
+      workspaceId,
+      brandId,
+      analysisId: requested.id,
+      editedResult: {
+        ...base,
+        primaryCategory: { code: "marketing", name: "사용자 임의 이름" },
+        subcategories: [{ code: "content", name: "사용자 임의 세부 이름" }],
+      },
+    });
+    expect(updated.editedResult).toMatchObject({
+      primaryCategory: { code: "marketing", name: "마케팅" },
+      subcategories: [{ code: "content", name: "콘텐츠 마케팅" }],
+    });
+  });
+
   it("rejects categories and subcategories that are not active members of the catalog", async () => {
     const repository = createBrandIntelligenceRepository(pglitePool(database));
     const requested = await prepareAnalysis(repository, {
@@ -871,6 +923,28 @@ describe("brand intelligence repository", () => {
     const confirmed = await repository.confirmBrandAnalysis({ workspaceId, brandId, analysisId: requested.id });
     expect(confirmed.status).toBe("confirmed");
     expect(confirmed.isActive).toBe(true);
+
+    const beforeRepeatedConfirm = await database.query(
+      `select primary_category_id, primary_customer, active_brand_analysis_id
+         from brand_profiles where brand_id = $1`,
+      [brandId],
+    );
+    const repeated = await repository.confirmBrandAnalysis({
+      workspaceId,
+      brandId,
+      analysisId: requested.id,
+      editedResult: {
+        ...resultV2("덮어쓰면 안 되는 고객"),
+        primaryCategory: { code: "arbitrary", name: "임의 분야" },
+      },
+    });
+    expect(repeated).toEqual(confirmed);
+    const afterRepeatedConfirm = await database.query(
+      `select primary_category_id, primary_customer, active_brand_analysis_id
+         from brand_profiles where brand_id = $1`,
+      [brandId],
+    );
+    expect(afterRepeatedConfirm.rows).toEqual(beforeRepeatedConfirm.rows);
 
     const profile = await database.query("select primary_customer, description, active_brand_analysis_id from brand_profiles where brand_id = $1", [brandId]);
     expect(profile.rows[0]).toMatchObject({
