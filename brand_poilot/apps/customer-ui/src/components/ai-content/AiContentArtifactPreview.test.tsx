@@ -75,6 +75,8 @@ describe("AiContentArtifactPreview", () => {
     const { container } = render(<AiContentArtifactPreview output={reel} />);
 
     const video = container.querySelector("video");
+    expect(container.querySelector(".ai-content-artifact--reel-frame")).toContainElement(video);
+    expect(video).toHaveClass("ai-content-artifact__reel-video");
     expect(video).toHaveAttribute("src", "https://cdn.test/reel.mp4");
     expect(video).toHaveAttribute("poster", "https://cdn.test/scene-01.png");
     expect(video).toHaveAttribute("controls");

@@ -30,6 +30,27 @@ const manifest = {
   content: { caption: "Tea", hashtags: [], cta: "Save" },
 };
 
+const reelManifest = {
+  version: "ai-content.v3",
+  outputFormat: "reel",
+  purpose: "informational",
+  title: "Tea Reel",
+  assets: [
+    {
+      role: "scene", index: 1,
+      url: "https://assets.public.blob.vercel-storage.com/scene.png",
+      fileName: "scene.png", mimeType: "image/png", width: 1080, height: 1920,
+    },
+    {
+      role: "video", index: 1,
+      url: "https://assets.public.blob.vercel-storage.com/reel.mp4",
+      fileName: "reel.mp4", mimeType: "video/mp4", width: 1080, height: 1920,
+      durationSeconds: 4, videoCodec: "h264", fps: 30, audioCodec: null,
+    },
+  ],
+  content: { caption: "Tea Reel", hashtags: ["#tea"], cta: "Watch" },
+};
+
 describe("AI content publish artifact ownership with postgres semantics", () => {
   let db: PGlite;
   let repository: ReturnType<typeof createAiContentPublishRepository>;
@@ -180,5 +201,35 @@ describe("AI content publish artifact ownership with postgres semantics", () => 
     expect(artifacts.rows).toEqual([{ id: ids.artifact }]);
     const outputs = await db.query<{ rendered_artifact_id: string }>("select rendered_artifact_id from channel_outputs");
     expect(outputs.rows).toEqual([{ rendered_artifact_id: ids.artifact }]);
+  });
+
+  it("stores one direct Reel publish queue from the completed canonical MP4", async () => {
+    await db.query("update ai_content_generations set output_format='reel', title='Tea Reel' where id=$1", [ids.generation]);
+    await db.query(
+      "update ai_content_generation_outputs set artifact_manifest_json=$2::jsonb where id=$1",
+      [ids.output, JSON.stringify(reelManifest)],
+    );
+
+    const result = await repository.prepareAiContentPublish({
+      ...input(),
+      targets: [{ channel: "instagram", deliveryFormat: "instagram_reel" }],
+    });
+
+    expect(result.targets).toEqual([
+      expect.objectContaining({ deliveryFormat: "instagram_reel", status: "scheduled", queueId: expect.any(String) }),
+    ]);
+    const outputs = await db.query<{ delivery_format: string; output_json: Record<string, unknown> }>(
+      "select delivery_format, output_json from channel_outputs",
+    );
+    expect(outputs.rows).toEqual([{
+      delivery_format: "instagram_reel",
+      output_json: expect.objectContaining({
+        caption: "Tea Reel",
+        hashtags: ["#tea"],
+        video: expect.objectContaining({ mimeType: "video/mp4", url: "https://assets.public.blob.vercel-storage.com/reel.mp4" }),
+      }),
+    }]);
+    const queued = await db.query<{ count: number }>("select count(*)::integer as count from publish_queue");
+    expect(Number(queued.rows[0]?.count)).toBe(1);
   });
 });

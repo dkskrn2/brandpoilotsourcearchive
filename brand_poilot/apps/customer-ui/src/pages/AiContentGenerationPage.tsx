@@ -13,7 +13,6 @@ import type {
   AiContentGateway,
   AiContentPublishTargetInput,
   AiContentPublishTargetResult,
-  ContentOrchestration,
 } from "../features/ai-content/types";
 import { ApiRequestError, DEMO_BRAND_ID } from "../lib/apiClient";
 import type { ChannelConnection } from "../types";
@@ -36,68 +35,11 @@ const generationStatusLabels: Record<AiContentGeneration["status"], string> = {
   failed: "실패"
 };
 
-type ReviewTab = "planning" | "final" | "publish";
-
-const reviewTabs: Array<{ id: ReviewTab; label: string }> = [
-  { id: "planning", label: "기획 근거" },
-  { id: "final", label: "완성본" },
-  { id: "publish", label: "게시" },
-];
-
-const familyLabels: Record<ContentOrchestration["contentFamily"], string> = {
-  informational: "정보성",
-  marketing: "마케팅성",
-};
-
-const strategyLabels: Record<ContentOrchestration["strategy"], string> = {
-  problem_solution: "문제 해결",
-  how_to: "방법 안내",
-  comparison: "비교",
-  faq: "FAQ",
-  insight: "인사이트",
-  benefit: "혜택",
-  social_proof: "사회적 증거",
-  brand_story: "브랜드 스토리",
-  cta: "행동 유도",
-};
-
-const formatLabels: Record<ContentOrchestration["outputFormat"], string> = {
-  card_news: "카드뉴스",
-  blog: "블로그",
-  single_image: "단일 이미지",
-  channel_text: "채널 텍스트",
-};
-
 const v3FormatLabels: Record<string, string> = {
   card_news: "카드뉴스",
   blog: "블로그",
   reel: "릴스",
 };
-
-const referenceRoleLabels: Record<ContentOrchestration["references"][number]["roles"][number], string> = {
-  planning: "기획",
-  copy_pattern: "카피 패턴",
-  visual_composition: "시각 구성",
-};
-
-function snapshotName(value: Record<string, unknown>) {
-  for (const key of ["name", "title", "label"]) {
-    if (typeof value[key] === "string" && value[key]) return String(value[key]);
-  }
-  return Object.keys(value).length ? JSON.stringify(value) : "저장된 snapshot";
-}
-
-function record(value: unknown): Record<string, unknown> {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? value as Record<string, unknown>
-    : {};
-}
-
-function subjectLabel(orchestration: ContentOrchestration) {
-  if (orchestration.subject.mode === "brand_topic") return orchestration.subject.topic;
-  if (orchestration.subject.mode === "product_service") return `제품·서비스 ${orchestration.subject.productServiceId}`;
-  return `신규 주제 분석 ${orchestration.subject.subjectAnalysisId}`;
-}
 
 function downloadErrorMessage(error: unknown) {
   if (error instanceof ApiRequestError && error.errorCode === "ai_content_download_limit_reached") {
@@ -122,7 +64,6 @@ export function AiContentGenerationPage({
   const [publishingOutputIds, setPublishingOutputIds] = useState<Set<string>>(new Set());
   const [publishResults, setPublishResults] = useState<Record<string, AiContentPublishTargetResult[]>>({});
   const [actionError, setActionError] = useState<string | null>(null);
-  const [selectedReviewTab, setSelectedReviewTab] = useState<ReviewTab | null>(null);
   const actionLocks = useRef({
     retry: new Set<string>(),
     download: new Set<string>(),
@@ -198,13 +139,6 @@ export function AiContentGenerationPage({
   const reviewing = terminal || generation.outputs.some((output) =>
     output.status === "completed" || output.status === "failed",
   );
-  const orchestration = generation.draft.orchestration ?? null;
-  const evidenceSnapshot = generation.evidenceSnapshot ?? null;
-  const frozenGenerationInput = record(evidenceSnapshot?.generationInput);
-  const v3Planning = frozenGenerationInput.contractVersion === "content-generation-input.v3"
-    ? frozenGenerationInput
-    : null;
-  const activeReviewTab = selectedReviewTab ?? (orchestration || v3Planning ? "planning" : "final");
 
   function toggleSelection(outputId: string) {
     setSelectedForZip((current) => {
@@ -347,119 +281,24 @@ export function AiContentGenerationPage({
         : null}
       {actionError ? <div className="alert bad" role="alert">{actionError}</div> : null}
       {!reviewing ? outputList : (
-        <section className="ai-content-review" aria-label="변경·검토·보완">
-          <div className="tabs" role="tablist" aria-label="콘텐츠 검토">
-            {reviewTabs.map((tab) => (
-              <button
-                key={tab.id}
-                type="button"
-                role="tab"
-                aria-selected={activeReviewTab === tab.id}
-                aria-controls={`content-review-${tab.id}`}
-                id={`content-review-tab-${tab.id}`}
-                className={activeReviewTab === tab.id ? "active" : ""}
-                onClick={() => setSelectedReviewTab(tab.id)}
-              >
-                {tab.label}
-              </button>
-            ))}
-          </div>
-
-          <div
-            id={`content-review-${activeReviewTab}`}
-            role="tabpanel"
-            aria-labelledby={`content-review-tab-${activeReviewTab}`}
-          >
-            {activeReviewTab === "planning" ? (
-              <section className="panel content-review-evidence">
-                <h2>생성 시점 기획 근거</h2>
-                {orchestration ? (
-                  <>
-                    <dl>
-                      <div><dt>콘텐츠 성격</dt><dd>{familyLabels[orchestration.contentFamily]}</dd></div>
-                      <div><dt>선택 구성안</dt><dd>{evidenceSnapshot?.proposal ? snapshotName(evidenceSnapshot.proposal) : generation.title}</dd></div>
-                      <div><dt>전략</dt><dd>{strategyLabels[orchestration.strategy]}</dd></div>
-                      <div><dt>형식</dt><dd>{formatLabels[orchestration.outputFormat]}</dd></div>
-                      <div><dt>주제</dt><dd>{subjectLabel(orchestration)}</dd></div>
-                      <div><dt>타깃 snapshot</dt><dd>{snapshotName(orchestration.target.snapshot)}</dd></div>
-                    </dl>
-                    <h3>URL·레퍼런스 근거 snapshot</h3>
-                    {(evidenceSnapshot?.references.length ?? 0) > 0 ? (
-                      <ul>
-                        {evidenceSnapshot!.references.map((reference) => (
-                          <li key={reference.id}>
-                            {reference.title}
-                            {reference.url ? <> · <a href={reference.url} target="_blank" rel="noreferrer">원본 URL</a></> : null}
-                            {reference.roles.length ? ` · ${reference.roles.map((role) => referenceRoleLabels[role as keyof typeof referenceRoleLabels] ?? role).join(", ")}` : ""}
-                          </li>
-                        ))}
-                      </ul>
-                    ) : orchestration.references.length ? (
-                      <ul>
-                        {orchestration.references.map((reference) => (
-                          <li key={reference.referenceItemId}>
-                            {reference.referenceItemId} · {reference.roles.map((role) => referenceRoleLabels[role]).join(", ")}
-                          </li>
-                        ))}
-                      </ul>
-                    ) : <p className="muted">선택한 레퍼런스가 없습니다.</p>}
-                    <h3>아바타 snapshot</h3>
-                    <p>{evidenceSnapshot?.avatar
-                      ? snapshotName(evidenceSnapshot.avatar)
-                      : orchestration.avatar ? snapshotName(orchestration.avatar.snapshot) : "사용하지 않음"}</p>
-                  </>
-                ) : v3Planning ? (
-                  <>
-                    <dl>
-                      <div><dt>콘텐츠 성격</dt><dd>{record(v3Planning.outputSettings).purpose === "marketing" ? "마케팅성" : "정보성"}</dd></div>
-                      <div><dt>선택 구성안</dt><dd>{evidenceSnapshot?.proposal ? snapshotName(evidenceSnapshot.proposal) : snapshotName(record(v3Planning.selectedProposal))}</dd></div>
-                      <div><dt>형식</dt><dd>{v3FormatLabels[String(record(v3Planning.outputSettings).outputFormat)] ?? String(record(v3Planning.outputSettings).outputFormat ?? "저장된 형식")}</dd></div>
-                      <div><dt>주제</dt><dd>{snapshotName(record(v3Planning.subject))}</dd></div>
-                      <div><dt>제품·서비스</dt><dd>{v3Planning.product === null ? "사용하지 않음" : snapshotName(record(v3Planning.product))}</dd></div>
-                    </dl>
-                    <h3>URL·레퍼런스 근거 snapshot</h3>
-                    {(evidenceSnapshot?.references.length ?? 0) > 0 ? (
-                      <ul>
-                        {evidenceSnapshot!.references.map((reference) => (
-                          <li key={reference.id}>
-                            {reference.title}
-                            {reference.url ? <> · <a href={reference.url} target="_blank" rel="noreferrer">원본 URL</a></> : null}
-                            {reference.roles.length ? ` · ${reference.roles.map((role) => referenceRoleLabels[role as keyof typeof referenceRoleLabels] ?? role).join(", ")}` : ""}
-                          </li>
-                        ))}
-                      </ul>
-                    ) : <p className="muted">선택한 레퍼런스가 없습니다.</p>}
-                    <h3>아바타 snapshot</h3>
-                    <p>{evidenceSnapshot?.avatar ? snapshotName(evidenceSnapshot.avatar) : "사용하지 않음"}</p>
-                  </>
-                ) : (
-                  <p className="muted">기존 생성 건에는 orchestration snapshot이 없어 저장된 초안과 결과만 표시합니다.</p>
-                )}
-              </section>
-            ) : null}
-
-            {activeReviewTab === "final" || activeReviewTab === "publish" ? (
-              <div className="ai-content-result-layout">
-                <div className="ai-content-result-primary">
-                  {activeReviewTab === "final" ? (
-                    <p className="small muted">개별·선택·전체 ZIP을 받을 수 있으며 이미 받은 파일을 다시 다운로드해도 신규 다운로드 사용량은 차감되지 않습니다.</p>
-                  ) : null}
-                  {outputList}
-                </div>
-                <aside className="ai-content-result-summary" aria-label="결과 정보">
-                  <span className="ai-content-result-summary__eyebrow">RESULT DETAILS</span>
-                  <h2>결과 정보</h2>
-                  <dl>
-                    <div><dt>상태</dt><dd>{generationStatusLabels[generation.status]}</dd></div>
-                    <div><dt>형식</dt><dd>{displayFormat}</dd></div>
-                    <div><dt>완료 결과</dt><dd>{completedOutputIds.length} / {generation.outputs.length}</dd></div>
-                    <div><dt>콘텐츠 제목</dt><dd>{generation.title}</dd></div>
-                    <div><dt>생성 ID</dt><dd><code>{generation.id}</code></dd></div>
-                  </dl>
-                  <p>다운로드와 게시는 각각 실행되며, 기존 결과 파일과 게시 기능은 그대로 유지됩니다.</p>
-                </aside>
-              </div>
-            ) : null}
+        <section className="ai-content-review ai-content-review--unified" aria-label="결과 확인">
+          <div className="ai-content-result-layout">
+            <div className="ai-content-result-primary">
+              <p className="small muted">결과 확인, 다운로드와 지원되는 게시 작업을 한 화면에서 진행할 수 있습니다. 이미 받은 파일을 다시 다운로드해도 신규 다운로드 사용량은 차감되지 않습니다.</p>
+              {outputList}
+            </div>
+            <aside className="ai-content-result-summary" aria-label="결과 정보">
+              <span className="ai-content-result-summary__eyebrow">RESULT DETAILS</span>
+              <h2>결과 정보</h2>
+              <dl>
+                <div><dt>상태</dt><dd>{generationStatusLabels[generation.status]}</dd></div>
+                <div><dt>형식</dt><dd>{displayFormat}</dd></div>
+                <div><dt>완료 결과</dt><dd>{completedOutputIds.length} / {generation.outputs.length}</dd></div>
+                <div><dt>콘텐츠 제목</dt><dd>{generation.title}</dd></div>
+                <div><dt>생성 ID</dt><dd><code>{generation.id}</code></dd></div>
+              </dl>
+              <p>다운로드와 지원되는 게시 작업은 각각 실행되며 기존 기능은 그대로 유지됩니다.</p>
+            </aside>
           </div>
         </section>
       )}

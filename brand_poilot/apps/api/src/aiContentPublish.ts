@@ -5,8 +5,6 @@ import type {
   ContentStudioOutputFormat,
   SocialManifestContent,
 } from "@brand-pilot/content-contracts";
-import { buildImageRenderJobPayload } from "./imageRenderJobs.js";
-import { deliveryFormatToRenderJobType } from "./instagramFormats.js";
 import { parseActiveAiContentManifestV3 } from "./aiContentManifest.js";
 import {
   resolveAiContentPublishTarget,
@@ -33,7 +31,7 @@ export interface AiContentPublishTargetResult {
   deliveryFormat: AiContentPublishDeliveryFormat;
   channelOutputId: string;
   queueId: string | null;
-  status: "rendering" | "scheduled" | "publishing" | "published" | "failed";
+  status: "scheduled" | "publishing" | "published" | "failed";
   publishedUrl: string | null;
   errorCode: string | null;
   recovery?: {
@@ -114,28 +112,63 @@ function publishRecovery(status: AiContentPublishTargetResult["status"], errorCo
 }
 
 function outputCopy(manifest: AiContentManifestV3) {
-  if (manifest.outputFormat !== "card_news" || !("caption" in manifest.content)) {
+  if ((manifest.outputFormat !== "card_news" && manifest.outputFormat !== "reel") || !("caption" in manifest.content)) {
     throw new Error("ai_content_publish_type_not_supported");
   }
   const content = manifest.content as SocialManifestContent;
   return {
     angle: text(content.caption) || manifest.title,
-    previewBody: `카드뉴스 ${manifest.assets.length}장`,
+    previewBody: manifest.outputFormat === "reel"
+      ? "완성된 릴스 영상"
+      : `카드뉴스 ${manifest.assets.length}장`,
     draft: { title: manifest.title, caption: content.caption, hashtags: content.hashtags, cta: content.cta },
     output: { caption: content.caption, hashtags: content.hashtags, cta: content.cta },
   };
 }
 
 function assertPublishableManifest(manifest: AiContentManifestV3) {
-  if (manifest.outputFormat !== "card_news") {
-    throw new Error("ai_content_publish_type_not_supported");
+  if (manifest.outputFormat === "card_news") {
+    if (manifest.assets.some((asset) => asset.role !== "slide" || asset.mimeType !== "image/png")) {
+      throw new Error("ai_content_publish_type_not_supported");
+    }
+    return;
   }
-  if (manifest.assets.some((asset) => asset.mimeType !== "image/png")) {
-    throw new Error("ai_content_publish_type_not_supported");
+  if (manifest.outputFormat === "reel") {
+    const videos = manifest.assets.filter((asset) => asset.role === "video" && asset.mimeType === "video/mp4");
+    if (videos.length !== 1) throw new Error("ai_content_publish_reel_video_invalid");
+    return;
   }
+  throw new Error("ai_content_publish_type_not_supported");
+}
+
+function manifestVideo(manifest: AiContentManifestV3) {
+  const videos = manifest.assets.filter((asset) => asset.role === "video" && asset.mimeType === "video/mp4");
+  if (manifest.outputFormat !== "reel" || videos.length !== 1) {
+    throw new Error("ai_content_publish_reel_video_invalid");
+  }
+  const video = videos[0];
+  if (!("durationSeconds" in video)) {
+    throw new Error("ai_content_publish_reel_video_invalid");
+  }
+  return {
+    index: video.index,
+    role: video.role,
+    url: video.url,
+    fileName: video.fileName,
+    mimeType: video.mimeType,
+    width: video.width,
+    height: video.height,
+    durationSeconds: video.durationSeconds,
+    videoCodec: video.videoCodec,
+    fps: video.fps,
+    audioCodec: video.audioCodec,
+  };
 }
 
 function manifestAssets(manifest: AiContentManifestV3, target: AiContentPublishTarget) {
+  if (manifest.outputFormat !== "card_news") {
+    throw new Error("ai_content_publish_type_not_supported");
+  }
   const assets = target.deliveryFormat === "instagram_story" || target.deliveryFormat === "instagram_feed_single"
     ? manifest.assets.slice(0, 1)
     : manifest.assets;
@@ -225,66 +258,6 @@ export async function storeManifestArtifact(client: PoolClient, input: BrandOutp
   return String(row.id);
 }
 
-async function enqueueReelRenderJob(
-  client: PoolClient,
-  input: BrandOutputScope,
-  context: PublishContext,
-  channelOutputId: string,
-  manifest: AiContentManifestV3,
-) {
-  const brandResult = await client.query(
-    `select brand.name as brand_name, profile.industry, profile.primary_customer,
-            profile.description, profile.tone, profile.brand_color
-       from brands brand
-       join brand_profiles profile on profile.brand_id = brand.id
-      where brand.id = $1 and brand.workspace_id = $2 and brand.deleted_at is null`,
-    [input.brandId, input.workspaceId],
-  );
-  if (!brandResult.rowCount) throw new Error("brand_profile_not_found");
-  const brand = brandResult.rows[0];
-  const copy = outputCopy(manifest);
-  const jobId = crypto.randomUUID();
-  const payload = {
-    ...buildImageRenderJobPayload({
-      deliveryFormat: "instagram_reel",
-      topic: {
-        title: manifest.title,
-        angle: copy.angle,
-        targetCustomer: text(brand.primary_customer) || null,
-        region: null,
-        season: null,
-        notes: "AI 콘텐츠 스튜디오 결과의 핵심 메시지를 유지해 릴스용 세로형 영상으로 변환합니다.",
-      },
-      brand: {
-        name: text(brand.brand_name),
-        categoryContext: text(brand.industry) || null,
-        primaryCustomer: text(brand.primary_customer) || null,
-        description: text(brand.description) || null,
-        tone: text(brand.tone) || null,
-        brandColor: text(brand.brand_color) || null,
-      },
-    }),
-    contentTopicId: context.topicId,
-    storagePrefix: `brands/${input.brandId}/topics/${context.topicId}/instagram_reel/${jobId}`,
-  };
-  await client.query(
-    `insert into jobs (id, workspace_id, brand_id, channel_output_id, job_type, status, payload_json)
-     values ($1, $2, $3, $4, $5, 'queued', $6::jsonb)
-     on conflict (channel_output_id)
-       where job_type in ('instagram_feed_render', 'instagram_story_render', 'instagram_reel_render')
-         and status in ('queued', 'running')
-       do nothing`,
-    [
-      jobId,
-      input.workspaceId,
-      input.brandId,
-      channelOutputId,
-      deliveryFormatToRenderJobType("instagram_reel"),
-      JSON.stringify(payload),
-    ],
-  );
-}
-
 async function findExistingTarget(
   client: PoolClient,
   outputId: string,
@@ -368,13 +341,25 @@ export function createAiContentPublishRepository(pool: Pool): AiContentPublishRe
       if (!output) throw new Error("ai_content_output_not_found");
       if (output.status !== "completed") throw new Error("ai_content_output_not_completed");
 
-      const manifest = parseActiveAiContentManifestV3(output.artifact_manifest_json);
+      let manifest: AiContentManifestV3;
+      try {
+        manifest = parseActiveAiContentManifestV3(output.artifact_manifest_json);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "";
+        if (
+          output.output_format === "reel"
+          && ["ai_content_reel_asset_invalid", "ai_content_reel_video_metadata_invalid"].includes(message)
+        ) {
+          throw new Error("ai_content_publish_reel_video_invalid");
+        }
+        throw error;
+      }
       if (manifest.outputFormat !== output.output_format || manifest.purpose !== output.purpose) {
         throw new Error("ai_content_publish_manifest_mismatch");
       }
       assertPublishableManifest(manifest);
       const normalizedTargets = input.targets.map((target) => {
-        const resolution = resolveAiContentPublishTarget({ type: "card_news", assetCount: manifest.assets.length }, target);
+        const resolution = resolveAiContentPublishTarget({ outputFormat: manifest.outputFormat, assetCount: manifest.assets.length }, target);
         if (!resolution.supported) throw new Error(resolution.reason);
         return resolution.target;
       });
@@ -413,19 +398,8 @@ export function createAiContentPublishRepository(pool: Pool): AiContentPublishRe
           targets.push(existing.result);
           continue;
         }
-        if (target.deliveryFormat === "instagram_reel" && existing) {
-          targets.push({
-            channel: target.channel,
-            deliveryFormat: target.deliveryFormat,
-            channelOutputId: existing.channelOutputId,
-            queueId: null,
-            status: "rendering",
-            publishedUrl: null,
-            errorCode: null,
-          });
-          continue;
-        }
-        const assets = manifestAssets(manifest, target);
+        const assets = manifest.outputFormat === "card_news" ? manifestAssets(manifest, target) : [];
+        const video = manifest.outputFormat === "reel" ? manifestVideo(manifest) : undefined;
         const outputJson = {
           ...copy.output,
           deliveryFormat: target.deliveryFormat,
@@ -434,6 +408,7 @@ export function createAiContentPublishRepository(pool: Pool): AiContentPublishRe
           artifactStatus: "ready",
           cards: assets,
           story: target.deliveryFormat === "instagram_story" ? assets[0] : undefined,
+          video,
           publishRequestIdempotencyKey: input.idempotencyKey,
         };
         const channelOutput = existing ? null : await client.query(
@@ -459,19 +434,6 @@ export function createAiContentPublishRepository(pool: Pool): AiContentPublishRe
           ],
         );
         const channelOutputId = existing?.channelOutputId ?? String(channelOutput?.rows[0].id);
-        if (target.deliveryFormat === "instagram_reel") {
-          await enqueueReelRenderJob(client, input, context, channelOutputId, manifest);
-          targets.push({
-            channel: target.channel,
-            deliveryFormat: target.deliveryFormat,
-            channelOutputId,
-            queueId: null,
-            status: "rendering",
-            publishedUrl: null,
-            errorCode: null,
-          });
-          continue;
-        }
         const queueIdempotencyKey = `ai-content:${input.outputId}:${target.channel}:${target.deliveryFormat}:${input.idempotencyKey}`;
         const queue = existing?.queueId && (existing.queueStatus === "failed" || existing.queueStatus === "cancelled")
           ? await client.query(
@@ -565,9 +527,11 @@ export function createAiContentPublishRepository(pool: Pool): AiContentPublishRe
         [input.outputId, input.workspaceId, input.brandId],
       );
       if (!output.rowCount) throw new Error("ai_content_output_not_found");
-      const deliveryFormat: AiContentPublishDeliveryFormat = Number(output.rows[0].asset_count) > 1
-        ? "instagram_feed_carousel"
-        : "instagram_feed_single";
+      const deliveryFormat: AiContentPublishDeliveryFormat = output.rows[0].output_format === "reel"
+        ? "instagram_reel"
+        : output.rows[0].output_format === "card_news"
+          ? "instagram_feed_carousel"
+          : (() => { throw new Error("ai_content_publish_type_not_supported"); })();
       const prepared = await prepareAiContentPublish({
         ...input,
         idempotencyKey: crypto.randomUUID(),

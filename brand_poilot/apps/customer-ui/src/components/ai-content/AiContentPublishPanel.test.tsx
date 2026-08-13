@@ -86,6 +86,8 @@ describe("AiContentPublishPanel", () => {
     ["meta_token_invalid", "Instagram 인증이 만료되었거나 권한이 없습니다."],
     ["instagram_manifest_fetch_failed", "게시 이미지 준비가 지연되었습니다. 잠시 후 다시 시도해 주세요."],
     ["instagram_public_url_required", "Instagram에서 결과물 이미지에 접근하지 못했습니다. 공개 이미지 주소를 확인해 주세요."],
+    ["ai_content_publish_reel_video_invalid", "게시할 릴스 영상을 확인할 수 없습니다."],
+    ["reel_video_required", "게시 큐에서 릴스 영상 주소를 확인하지 못했습니다."],
   ])("shows an actionable message for %s", (errorCode, message) => {
     render(<AiContentPublishPanel
       manifestVersion="ai-content.v3"
@@ -116,8 +118,21 @@ describe("AiContentPublishPanel", () => {
     expect(screen.getByText("연결 준비 중")).toBeVisible();
   });
 
-  it.each(["reel", "blog"] as const)("does not expose remote publish actions for V3 %s results", (outputFormat) => {
-    render(<AiContentPublishPanel manifestVersion="ai-content.v3" outputFormat={outputFormat} assetCount={2} channels={channels} publishing={false} results={[]} onPublish={vi.fn()} />);
+  it("submits the completed Reel video without exposing card-news formats", async () => {
+    const user = userEvent.setup();
+    const onPublish = vi.fn(async () => undefined);
+    render(<AiContentPublishPanel manifestVersion="ai-content.v3" outputFormat="reel" assetCount={2} channels={channels} publishing={false} results={[]} onPublish={onPublish} />);
+
+    const reel = screen.getByRole("checkbox", { name: "릴스" });
+    expect(screen.queryByRole("checkbox", { name: "게시물" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("checkbox", { name: "스토리" })).not.toBeInTheDocument();
+    await user.click(reel);
+    await user.click(screen.getByRole("button", { name: "선택한 1개 유형 게시" }));
+    expect(onPublish).toHaveBeenCalledWith([{ channel: "instagram", deliveryFormat: "instagram_reel" }]);
+  });
+
+  it("does not expose remote publish actions for V3 blog results", () => {
+    render(<AiContentPublishPanel manifestVersion="ai-content.v3" outputFormat="blog" assetCount={2} channels={channels} publishing={false} results={[]} onPublish={vi.fn()} />);
 
     expect(screen.queryByRole("region", { name: "SNS에 바로 게시" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /게시/ })).not.toBeInTheDocument();

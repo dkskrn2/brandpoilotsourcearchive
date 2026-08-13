@@ -84,8 +84,8 @@ export const helpGuides: HelpGuide[] = [
     path: "/ai-content/:generationId",
     title: "AI 콘텐츠 결과",
     summary: "전용 워커가 만든 실제 이미지 또는 HTML과 사용한 생성 조건을 확인합니다.",
-    sections: [{ title: "결과 관리", items: ["생성 중에는 generation과 output 상태만 갱신하며 완료 결과는 검토 화면으로 전환됩니다.", "검토에서는 기획 근거, 카피, 완성본, 게시 탭으로 고정된 생성 조건과 실제 산출물을 확인합니다.", "실패한 output만 사유를 입력해 다시 생성하고 성공 output과 개별·선택·전체 ZIP 다운로드는 그대로 유지합니다."] }],
-    tour: [pageHeaderStep("요청한 생성 조건, 작업 상태와 결과 제목을 확인합니다."), { selector: ":is(.ai-content-review,.ai-generation-output-list)", title: "생성 상태와 검토", description: "생성 중에는 output별 진행 상태를, 완료 후에는 기획 근거부터 게시까지 순서대로 확인합니다." }]
+    sections: [{ title: "결과 관리", items: ["생성 중에는 generation과 output 상태만 갱신하며 완료 결과는 결과 확인 화면으로 전환됩니다.", "완료 화면에서는 최종 산출물, 다운로드와 지원되는 게시 기능을 한 화면에서 확인합니다.", "실패한 output만 사유를 입력해 다시 생성하고 성공 output과 개별·선택·전체 ZIP 다운로드는 그대로 유지합니다."] }],
+    tour: [pageHeaderStep("요청한 생성 조건, 작업 상태와 결과 제목을 확인합니다."), { selector: ":is(.ai-content-review,.ai-generation-output-list)", title: "생성 상태와 결과 확인", description: "생성 중에는 output별 진행 상태를, 완료 후에는 산출물·다운로드·지원되는 게시 기능을 한 화면에서 확인합니다." }]
   },
   {
     id: "publish-queue",

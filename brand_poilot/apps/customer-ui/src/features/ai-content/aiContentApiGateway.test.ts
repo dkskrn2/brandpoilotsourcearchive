@@ -486,8 +486,8 @@ describe("createAiContentApiGateway", () => {
     ["card_news", "marketing", "image_gallery", true],
     ["blog", "informational", "html", false],
     ["blog", "marketing", "html", false],
-    ["reel", "informational", "video", false],
-    ["reel", "marketing", "video", false],
+    ["reel", "informational", "video", true],
+    ["reel", "marketing", "video", true],
   ] as const)(
     "maps active V3 %s/%s results from manifest content and final columns",
     async (outputFormat, purpose, artifactKind, publishSupported) => {

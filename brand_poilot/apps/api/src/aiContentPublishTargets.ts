@@ -1,4 +1,3 @@
-import type { AiContentType } from "./aiContentContracts.js";
 import type { Channel } from "./types.js";
 
 export type AiContentPublishDeliveryFormat =
@@ -94,37 +93,31 @@ export function parseAiContentPublishRequest(value: unknown): AiContentPublishRe
 }
 
 export function resolveAiContentPublishTarget(
-  output: { type: AiContentType; assetCount: number },
+  output: { outputFormat: "card_news" | "reel" | "blog"; assetCount: number },
   target: AiContentPublishTarget,
 ): AiContentPublishTargetResolution {
-  if (target.channel !== "instagram" || output.type === "blog") {
+  if (target.channel !== "instagram" || output.outputFormat === "blog") {
     return { supported: false, reason: "ai_content_publish_target_unsupported" };
   }
   if (output.assetCount < 1) {
     return { supported: false, reason: "delivery_format_asset_mismatch" };
   }
-  if (target.deliveryFormat === "instagram_story") return { supported: true, target };
-  if (target.deliveryFormat === "instagram_reel") return { supported: true, target };
-  if (output.type === "marketing") {
-    return target.deliveryFormat === "instagram_feed_single"
+
+  if (output.outputFormat === "reel") {
+    return target.deliveryFormat === "instagram_reel"
       ? { supported: true, target }
-      : { supported: false, reason: "delivery_format_asset_mismatch" };
+      : { supported: false, reason: "ai_content_publish_target_unsupported" };
   }
+
+  if (target.deliveryFormat === "instagram_story") return { supported: true, target };
   if (target.deliveryFormat === "instagram_feed_single") {
-    if (output.type === "card_news" && output.assetCount >= 2) {
-      return {
-        supported: true,
-        target: { ...target, deliveryFormat: "instagram_feed_carousel" },
-      };
-    }
-    return output.assetCount === 1
-      ? { supported: true, target }
-      : { supported: false, reason: "delivery_format_asset_mismatch" };
+    return {
+      supported: true,
+      target: { ...target, deliveryFormat: "instagram_feed_carousel" },
+    };
   }
   if (target.deliveryFormat === "instagram_feed_carousel") {
-    return output.assetCount >= 2
-      ? { supported: true, target }
-      : { supported: false, reason: "delivery_format_asset_mismatch" };
+    return { supported: true, target };
   }
   return { supported: false, reason: "ai_content_publish_target_unsupported" };
 }

@@ -1209,7 +1209,7 @@ describe("AI content customer routes", () => {
     await app.close();
   });
 
-  it("returns a rendering reel target without publishing a queue before the video exists", async () => {
+  it("publishes a completed Reel through the existing publish queue", async () => {
     const { app, repository } = setup();
     vi.mocked(repository.prepareAiContentPublish).mockResolvedValueOnce({
       publishGroupId: "publish-group-1",
@@ -1217,8 +1217,8 @@ describe("AI content customer routes", () => {
         channel: "instagram",
         deliveryFormat: "instagram_reel",
         channelOutputId: "channel-output-reel",
-        queueId: null,
-        status: "rendering",
+        queueId: "queue-reel",
+        status: "scheduled",
         publishedUrl: null,
         errorCode: null,
       }],
@@ -1235,9 +1235,9 @@ describe("AI content customer routes", () => {
     });
 
     expect(response.statusCode).toBe(200);
-    expect(repository.publishQueueItem).not.toHaveBeenCalled();
+    expect(repository.publishQueueItem).toHaveBeenCalledWith("queue-reel");
     expect(response.json()).toMatchObject({
-      targets: [{ deliveryFormat: "instagram_reel", queueId: null, status: "rendering" }],
+      targets: [{ deliveryFormat: "instagram_reel", queueId: "queue-reel", status: "published" }],
     });
     await app.close();
   });
@@ -1252,6 +1252,28 @@ describe("AI content customer routes", () => {
     });
     expect(response.statusCode).toBe(400);
     expect(repository.prepareAiContentPublish).not.toHaveBeenCalled();
+    await app.close();
+  });
+
+  it.each([
+    ["card-news to Reel", "instagram_reel"],
+    ["Reel to Story", "instagram_story"],
+  ] as const)("rejects unsupported %s publishing before a queue is executed", async (_label, deliveryFormat) => {
+    const { app, repository } = setup();
+    vi.mocked(repository.prepareAiContentPublish).mockRejectedValueOnce(new Error("ai_content_publish_target_unsupported"));
+
+    const response = await app.inject({
+      method: "POST",
+      url: `/brands/${brandId}/ai-content/outputs/${outputId}/publish`,
+      headers: auth,
+      payload: {
+        idempotencyKey: "b4b74082-8a44-46d6-91b6-3e3bd7e26be0",
+        targets: [{ channel: "instagram", deliveryFormat }],
+      },
+    });
+
+    expect(response.statusCode).toBe(409);
+    expect(repository.publishQueueItem).not.toHaveBeenCalled();
     await app.close();
   });
 

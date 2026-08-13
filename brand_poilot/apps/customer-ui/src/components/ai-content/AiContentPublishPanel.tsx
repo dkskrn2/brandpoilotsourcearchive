@@ -28,7 +28,6 @@ function targetKey(target: AiContentPublishTargetInput) {
 }
 
 function resultLabel(result: AiContentPublishTargetResult) {
-  if (result.status === "rendering") return "릴스 변환 중";
   if (result.status === "published") return "게시 완료";
   if (result.status === "failed") return "게시 실패";
   if (result.status === "publishing") return "게시 중";
@@ -62,6 +61,10 @@ export function aiContentPublishErrorMessage(errorCode: string | null) {
     case "delivery_format_asset_mismatch":
     case "instagram_manifest_delivery_format_mismatch":
       return "선택한 게시 유형과 결과물 형식이 맞지 않습니다.";
+    case "ai_content_publish_reel_video_invalid":
+      return "게시할 릴스 영상을 확인할 수 없습니다.";
+    case "reel_video_required":
+      return "게시 큐에서 릴스 영상 주소를 확인하지 못했습니다.";
     default:
       return errorCode ? `게시 실패 (${errorCode})` : "게시 실패 원인을 확인하지 못했습니다.";
   }
@@ -106,8 +109,8 @@ export function AiContentPublishPanel({
     .filter((format) => selected.has(`${option.channel}:${format.deliveryFormat}`))
     .map((format) => ({ channel: option.channel, deliveryFormat: format.deliveryFormat })));
 
-  if (manifestVersion !== "ai-content.v3" || outputFormat !== "card_news") {
-    return <p className="small muted ai-publish-panel__unsupported">현재 카드뉴스 결과만 SNS 직접 게시를 지원합니다.</p>;
+  if (manifestVersion !== "ai-content.v3" || (outputFormat !== "card_news" && outputFormat !== "reel")) {
+    return <p className="small muted ai-publish-panel__unsupported">이 결과 유형은 SNS 직접 게시를 지원하지 않습니다.</p>;
   }
 
   return (

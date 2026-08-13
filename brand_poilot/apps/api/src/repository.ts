@@ -1264,6 +1264,18 @@ function extractManifestAssetUrl(value: unknown) {
   return nullableText(record.url ?? record.publicUrl);
 }
 
+function extractManifestVideoUrl(value: unknown) {
+  const manifest = recordValue(value);
+  const topLevelVideo = extractManifestAssetUrl(manifest.video);
+  if (topLevelVideo) return topLevelVideo;
+  if (!Array.isArray(manifest.assets)) return null;
+  const videos = manifest.assets
+    .map((asset) => recordValue(asset))
+    .filter((asset) => asset.role === "video" && asset.mimeType === "video/mp4");
+  if (videos.length !== 1) return null;
+  return extractManifestAssetUrl(videos[0]);
+}
+
 function formatInstagramReelCaption(caption: unknown, hashtags: unknown) {
   const text = nullableText(caption) ?? "";
   const tags = Array.isArray(hashtags)
@@ -1799,7 +1811,7 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
             break;
           }
           case "instagram_reel": {
-            const videoUrl = extractManifestAssetUrl(manifestRecord.video);
+            const videoUrl = extractManifestVideoUrl(manifestRecord);
             if (!videoUrl) throw new Error("reel_video_required");
             const caption = formatInstagramReelCaption(
               queue.output_json?.caption ?? manifestRecord.caption,
