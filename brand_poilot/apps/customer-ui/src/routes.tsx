@@ -14,6 +14,7 @@ import { AiContentWizardPage } from "./pages/AiContentWizardPage";
 import { AiContentGenerationPage } from "./pages/AiContentGenerationPage";
 import { BrandCenterPage } from "./pages/BrandCenterPage";
 import { BrandCenterPreviewPage } from "./pages/BrandCenterPreviewPage";
+import { BrandAnalysisReviewPreviewPage } from "./pages/BrandAnalysisReviewPreviewPage";
 import { ReferenceLibraryPage } from "./pages/ReferenceLibraryPage";
 
 const OAuthConsentPage = lazy(async () => {
@@ -70,6 +71,9 @@ export const router = createBrowserRouter(
   [
     { path: "/login", element: <LoginPage /> },
     { path: "/oauth/consent", element: <OAuthConsentRoute /> },
+    ...(import.meta.env.DEV
+      ? [{ path: "/brand-analysis-review-preview", element: <BrandAnalysisReviewPreviewPage /> }]
+      : []),
     {
       path: "/",
       element: <App />,

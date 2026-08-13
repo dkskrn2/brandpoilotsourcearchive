@@ -27,7 +27,8 @@ import type {
   PreviewStep,
 } from "../features/brand-center-preview/types";
 import { useAuth } from "../lib/auth";
-import { ApiRequestError, DEMO_BRAND_ID } from "../lib/apiClient";
+import { api, ApiRequestError, DEMO_BRAND_ID } from "../lib/apiClient";
+import type { ContentCategory } from "../types";
 
 export interface BrandIntelligenceStorageScope {
   workspaceId: string;
@@ -99,6 +100,7 @@ function LiveResultEditor({
   draft,
   saving,
   error,
+  categories,
   onCompanyNameChange,
   onChange,
   onComplete,
@@ -107,6 +109,7 @@ function LiveResultEditor({
   draft: BrandIntelligenceResult;
   saving: boolean;
   error: string | null;
+  categories: ContentCategory[];
   onCompanyNameChange(value: string): void;
   onChange(draft: BrandIntelligenceResult): void;
   onComplete(): void;
@@ -121,6 +124,7 @@ function LiveResultEditor({
         draft={draft}
         saving={saving}
         error={error}
+        categories={categories}
         onCompanyNameChange={onCompanyNameChange}
         onChange={onChange}
         onConfirm={async () => onComplete()}
@@ -185,10 +189,19 @@ function LiveBrandCenterOnboardingState({
   const [saving, setSaving] = useState(false);
   const [cancelling, setCancelling] = useState(false);
   const [confirmed, setConfirmed] = useState(false);
+  const [categories, setCategories] = useState<ContentCategory[]>([]);
   const [bootstrapComplete, setBootstrapComplete] = useState(false);
   const [bootstrapAttempt, setBootstrapAttempt] = useState(0);
   const [pollingRequired, setPollingRequired] = useState(false);
   const requestRef = useRef(0);
+
+  useEffect(() => {
+    let active = true;
+    void api.listContentCategories()
+      .then((items) => { if (active) setCategories(items); })
+      .catch(() => { if (active) setCategories([]); });
+    return () => { active = false; };
+  }, []);
 
   const resumeWorkflow = useCallback((workflow: BrandAnalysis) => {
     setActiveAnalysis(workflow);
@@ -706,6 +719,7 @@ function LiveBrandCenterOnboardingState({
           draft={draft}
           saving={saving}
           error={analysisError}
+          categories={categories}
           onCompanyNameChange={setCompanyName}
           onChange={setDraft}
           onComplete={() => void complete()}

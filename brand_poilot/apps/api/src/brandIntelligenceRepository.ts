@@ -63,6 +63,7 @@ export interface BrandAnalysisClaim extends BrandAnalysisRecord {
     checksum: string;
     accessUrl: string;
   }>;
+  categoryRegistry: BrandAnalysisCategoryRegistryItem[];
   executionContract: {
     ownedPageLimit: 20;
     externalPageLimit: 10;
@@ -71,6 +72,12 @@ export interface BrandAnalysisClaim extends BrandAnalysisRecord {
     promptVersion: "brand-intelligence-v2.1";
     resultContractVersion: "brand-intelligence-result.v2";
   } | null;
+}
+
+export interface BrandAnalysisCategoryRegistryItem {
+  code: string;
+  name: string;
+  subcategories: Array<{ code: string; name: string }>;
 }
 
 export interface BrandIntelligenceRepository {
@@ -272,6 +279,58 @@ async function loadOpenRun(client: Queryable, input: BrandAnalysisScope): Promis
     [input.workspaceId, input.brandId],
   );
   return found.rowCount ? mapRun(found.rows[0] as Record<string, unknown>) : null;
+}
+
+async function loadCategoryRegistry(
+  client: Queryable,
+): Promise<BrandAnalysisCategoryRegistryItem[]> {
+  const found = await client.query(
+    `select category.code,
+            category.name,
+            coalesce((
+              select jsonb_agg(
+                jsonb_build_object('code', subcategory.code, 'name', subcategory.name)
+                order by subcategory.sort_order
+              )
+              from content_subcategories subcategory
+              where subcategory.category_id = category.id
+                and subcategory.active = true
+            ), '[]'::jsonb) as subcategories
+       from content_categories category
+       where category.active = true
+       order by category.sort_order`,
+  );
+  return found.rows.map((row) => ({
+    code: String(row.code),
+    name: String(row.name),
+    subcategories: json<Array<{ code?: unknown; name?: unknown }>>(row.subcategories, [])
+      .map((subcategory) => ({
+        code: String(subcategory.code),
+        name: String(subcategory.name),
+      })),
+  }));
+}
+
+function assertV2RegisteredCategories(
+  result: BrandIntelligenceResult,
+  registry: BrandAnalysisCategoryRegistryItem[],
+): void {
+  if (result.contractVersion !== "brand-intelligence-result.v2") return;
+  const primary = result.primaryCategory;
+  const registeredPrimary = primary
+    ? registry.find((item) => item.code === primary.code && item.name === primary.name)
+    : undefined;
+  if (primary && !registeredPrimary) {
+    throw new Error("brand_intelligence_primary_category_not_registered");
+  }
+  if (result.subcategories.some((subcategory) => (
+    subcategory.code === null
+    || !registeredPrimary?.subcategories.some((item) => (
+      item.code === subcategory.code && item.name === subcategory.name
+    ))
+  ))) {
+    throw new Error("brand_intelligence_subcategory_not_registered");
+  }
 }
 
 async function transaction<T>(pool: Pool, operation: (client: PoolClient) => Promise<T>): Promise<T> {
@@ -1296,8 +1355,10 @@ export function createBrandIntelligenceRepository(
             order by created_at, id`,
           [run.id],
         );
+        const categoryRegistry = await loadCategoryRegistry(client);
         return {
           ...run,
+          categoryRegistry,
           executionContract: run.pipelineVersion === 2 ? {
             ownedPageLimit: 20,
             externalPageLimit: 10,
@@ -1557,6 +1618,9 @@ export function createBrandIntelligenceRepository(
         if (pipelineVersion === 2
           && (!input.registry?.ownedFactIds || !input.registry.externalSources)) {
           throw new Error("brand_intelligence_validation_registry_required");
+        }
+        if (pipelineVersion === 2) {
+          assertV2RegisteredCategories(parsed, await loadCategoryRegistry(client));
         }
         assertV2EvidenceGrounding(parsed, evidence);
         const storedEvidence = pipelineVersion === 2

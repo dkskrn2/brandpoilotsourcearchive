@@ -15,6 +15,29 @@ afterEach(() => {
 });
 
 describe("brand intelligence API client transient retries", () => {
+  it("rejects a v2 claim without a category registry", async () => {
+    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify({
+      job: {
+        pipelineVersion: 2,
+        contractVersion: "brand-intelligence-result.v2",
+        executionContract: {
+          ownedPageLimit: 20,
+          externalPageLimit: 10,
+          offeringLimit: 5,
+          pipelineVersion: 2,
+          promptVersion: "brand-intelligence-v2.1",
+          resultContractVersion: "brand-intelligence-result.v2",
+        },
+      },
+    }), { status: 200, headers: { "content-type": "application/json" } }));
+    const api = createClient("https://api.example.com", "token", fetchImpl);
+
+    await expect(api.claim("worker-1", 900)).rejects.toMatchObject({
+      status: 409,
+      message: "brand_intelligence_execution_contract_mismatch",
+    });
+  });
+
   it("leaves resource heartbeat retry ownership to the lease manager", async () => {
     vi.useFakeTimers();
     const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(unavailable());

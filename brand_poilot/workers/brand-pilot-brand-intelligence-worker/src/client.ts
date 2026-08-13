@@ -106,6 +106,7 @@ export function createClient(
         || job.executionContract?.pipelineVersion !== 2
         || job.executionContract?.promptVersion !== "brand-intelligence-v2.1"
         || job.executionContract?.resultContractVersion !== "brand-intelligence-result.v2"
+        || !Array.isArray(job.categoryRegistry)
       )) {
         throw new BrandIntelligenceApiError("brand_intelligence_execution_contract_mismatch", 409);
       }

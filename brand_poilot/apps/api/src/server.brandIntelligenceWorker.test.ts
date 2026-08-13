@@ -15,7 +15,7 @@ const claim = {
   failedPageCount: 0, requiredPageCount: 0, completedCliStageCount: 0,
   totalCliStageCount: 0,
   executionContract: null,
-  uploads: [], activeStartedAt: "2026-07-21T00:00:00.000Z",
+  uploads: [], categoryRegistry: [], activeStartedAt: "2026-07-21T00:00:00.000Z",
   deadlineAt: "2099-01-01T00:00:00.000Z",
   availableAt: "2026-07-21T00:00:00.000Z", errorCode: null, errorMessage: null,
   createdAt: "2026-07-21T00:00:00.000Z", updatedAt: "2026-07-21T00:00:00.000Z",

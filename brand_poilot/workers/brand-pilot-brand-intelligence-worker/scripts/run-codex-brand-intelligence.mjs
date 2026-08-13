@@ -337,8 +337,14 @@ const effectiveCompanyName = job.companyName ?? companyNameSuggestion?.name ?? n
 const coreResponse = await invokeStage(5, [
   "검증된 사실만 사용해 브랜드 코어를 한국어 JSON으로 정리하라.",
   "필드: oneLineDefinition, companyOverview, businessDescription, primaryCategory({code,name}|null), subcategories, primaryTarget, secondaryTargets, customerNeeds, valueProposition, differentiators, coreAppeal, supportingAppeals, keywords, observedTone({summary,sourceFactIds}|null), sourceGaps.",
+  "대표분야는 categoryRegistry의 code와 name을 정확히 복사하고, 맞는 분야가 없으면 primaryCategory를 null로 두어라.",
+  "세부분야는 선택한 대표분야 아래 항목의 code와 name만 정확히 복사하라. 직접입력(code:null)을 만들지 마라. 맞는 항목이 없으면 빈 배열로 두어라.",
   "회사명은 결과 필드에 넣지 말고, 없는 내용은 null 또는 빈 배열로 두어라.",
-  JSON.stringify({ companyName: effectiveCompanyName, facts: supportedFacts }),
+  JSON.stringify({
+    companyName: effectiveCompanyName,
+    categoryRegistry: job.categoryRegistry ?? [],
+    facts: supportedFacts,
+  }),
 ].join("\n"));
 const core = supportedFacts.length === 0 ? {} : coreResponse;
 
@@ -478,12 +484,14 @@ const audited = await invokeStage(7, [
   "아래 후보 JSON을 내용 추가 없이 스키마와 근거 무결성만 감사하라.",
   "반드시 brand-intelligence-result.v2 JSON 하나만 반환한다.",
   "companyNameSuggestion과 faqSuggestions를 유지하되 근거가 잘못된 항목만 제거하라.",
-  "subcategories의 각 항목은 {code:string|null,name:string}, valueProposition은 string|null 타입을 지켜라.",
+  "subcategories의 각 항목은 {code:string,name:string}, valueProposition은 string|null 타입을 지켜라.",
+  "primaryCategory와 subcategories는 categoryRegistry에 등록된 code와 name만 유지하고 직접입력(code:null)은 제거하라.",
   "offerings는 최대 5개, faqSuggestions는 최대 20개, 외부 distinct URL은 최대 10개다.",
   "등록되지 않은 sourceFactIds, 외부 URL, 근거 없는 수치·효능·성과는 제거한다.",
   "companyName 필드를 추가하지 마라.",
   JSON.stringify({
     candidate,
+    categoryRegistry: job.categoryRegistry ?? [],
     allowedFactIds: [...factIds],
     allowedExternalUrls: [...new Set([
       ...candidate.competitors.flatMap((item) => item.sourceUrls ?? []),
