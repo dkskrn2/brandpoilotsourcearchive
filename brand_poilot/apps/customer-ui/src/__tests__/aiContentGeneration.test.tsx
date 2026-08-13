@@ -304,7 +304,6 @@ describe("AiContentGenerationPage", () => {
   });
 
   it("shows blog/download-only contracts", async () => {
-    const user = userEvent.setup();
     renderGeneration("generation-completed");
 
     expect(await screen.findByRole("heading", { name: "생성 결과 상세" })).toBeVisible();
@@ -312,7 +311,7 @@ describe("AiContentGenerationPage", () => {
     expect(screen.queryByRole("button", { name: "게시 관리로 보내기" })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "운영 가이드 결과 ZIP 다운로드" })).toBeEnabled();
     expect(screen.getByTitle("블로그 미리보기")).toBeVisible();
-    await user.click(screen.getByRole("tab", { name: "게시" }));
+    expect(screen.queryByRole("tablist", { name: "콘텐츠 검토" })).not.toBeInTheDocument();
     expect(screen.queryByRole("region", { name: "SNS에 바로 게시" })).not.toBeInTheDocument();
   });
 
@@ -367,8 +366,7 @@ describe("AiContentGenerationPage", () => {
     expect(screen.getByRole("button", { name: "전체 ZIP" })).toBeEnabled();
   });
 
-  it("moves a completed orchestration into four review tabs and shows its frozen snapshots", async () => {
-    const user = userEvent.setup();
+  it("shows completed results and publishing in one view while keeping planning evidence hidden", async () => {
     const { gateway } = renderGeneration("generation-card-complete", false, (configuredGateway) => {
       const getGeneration = configuredGateway.getGeneration.bind(configuredGateway);
       configuredGateway.listReferences = vi.fn(configuredGateway.listReferences);
@@ -419,27 +417,18 @@ describe("AiContentGenerationPage", () => {
       });
     });
 
-    expect(await screen.findByRole("tab", { name: "기획 근거" })).toHaveAttribute("aria-selected", "true");
-    expect(screen.queryByRole("tab", { name: "카피" })).not.toBeInTheDocument();
-    expect(screen.getByRole("tab", { name: "완성본" })).toBeVisible();
-    expect(screen.getByRole("tab", { name: "게시" })).toBeVisible();
-    expect(screen.getByText("여름 피부 관리")).toBeVisible();
-    expect(screen.getByText("민감성 피부 고객")).toBeVisible();
-    expect(screen.getByText("동결된 구현안 제목")).toBeVisible();
-    expect(screen.getByText(/동결된 레퍼런스 제목/)).toBeVisible();
-    expect(screen.getByText("동결된 브랜드 모델")).toBeVisible();
-
-    await user.click(screen.getByRole("tab", { name: "완성본" }));
-    expect(screen.getByText("핵심 메시지: 여름 캠페인 시작")).toBeVisible();
+    expect(await screen.findByText("핵심 메시지: 여름 캠페인 시작")).toBeVisible();
+    expect(screen.queryByRole("tablist", { name: "콘텐츠 검토" })).not.toBeInTheDocument();
+    expect(screen.queryByText("생성 시점 기획 근거")).not.toBeInTheDocument();
+    expect(screen.queryByText("동결된 구현안 제목")).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "카드뉴스 표지 결과 ZIP 다운로드" })).toBeEnabled();
-    await user.click(screen.getByRole("tab", { name: "게시" }));
     expect(screen.getByText("Instagram OAuth 게시 계정 미연결")).toBeVisible();
 
     expect(gateway.listReferences).not.toHaveBeenCalled();
     expect(gateway.retryOutput).not.toHaveBeenCalled();
   });
 
-  it("shows v3 immutable planning evidence instead of calling it a legacy generation", async () => {
+  it("keeps v3 immutable planning evidence in data while hiding it from the result view", async () => {
     renderGeneration("generation-card-complete", false, (configuredGateway) => {
       const getGeneration = configuredGateway.getGeneration.bind(configuredGateway);
       configuredGateway.getGeneration = vi.fn(async (brandId, generationId) => ({
@@ -466,11 +455,11 @@ describe("AiContentGenerationPage", () => {
       }));
     });
 
-    expect(await screen.findByRole("tab", { name: "기획 근거" })).toHaveAttribute("aria-selected", "true");
-    expect(screen.getByText("동결된 URL 주제")).toBeVisible();
-    expect(screen.getByText("동결된 v3 구성안")).toBeVisible();
-    expect(screen.getByText(/동결된 v3 레퍼런스/)).toBeVisible();
-    expect(screen.queryByText(/기존 생성 건에는 orchestration snapshot이 없어/)).not.toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "생성 결과 상세" })).toBeVisible();
+    expect(screen.queryByRole("tablist", { name: "콘텐츠 검토" })).not.toBeInTheDocument();
+    expect(screen.queryByText("동결된 URL 주제")).not.toBeInTheDocument();
+    expect(screen.queryByText("동결된 v3 구성안")).not.toBeInTheDocument();
+    expect(screen.queryByText(/동결된 v3 레퍼런스/)).not.toBeInTheDocument();
   });
 
   it("does not expose the retired save-copy contract even when stale output metadata advertises it", async () => {
@@ -496,7 +485,8 @@ describe("AiContentGenerationPage", () => {
       });
     });
 
-    expect(await screen.findByRole("tab", { name: "완성본" })).toBeVisible();
+    expect(await screen.findByRole("heading", { name: "생성 결과 상세" })).toBeVisible();
+    expect(screen.queryByRole("tablist", { name: "콘텐츠 검토" })).not.toBeInTheDocument();
     expect(screen.queryByRole("tab", { name: "카피" })).not.toBeInTheDocument();
     expect(screen.queryByDisplayValue("저장 전 훅")).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /카피 저장/ })).not.toBeInTheDocument();
@@ -521,6 +511,7 @@ describe("AiContentGenerationPage", () => {
     expect(await screen.findByRole("button", { name: "혜택 강조형 결과 ZIP 다운로드" })).toBeEnabled();
     expect(screen.queryByRole("button", { name: /훅.*재생성|카피.*재생성|카드.*재생성/ })).not.toBeInTheDocument();
     expect(screen.queryByRole("region", { name: "SNS에 바로 게시" })).not.toBeInTheDocument();
+    expect(screen.getByText("현재 릴스 결과는 다운로드만 지원하며 Instagram 직접 게시는 지원하지 않습니다.")).toBeVisible();
   });
 
   it("keeps completed outputs untouched while retrying only a failed output from review", async () => {
@@ -529,8 +520,7 @@ describe("AiContentGenerationPage", () => {
       configuredGateway.retryOutput = vi.fn(configuredGateway.retryOutput);
     });
 
-    await user.click(await screen.findByRole("tab", { name: "완성본" }));
-    const outputRows = within(screen.getByRole("list", { name: "생성 결과 목록" }))
+    const outputRows = within(await screen.findByRole("list", { name: "생성 결과 목록" }))
       .getAllByRole("listitem");
     const failedOutputRow = outputRows[1];
     await user.type(within(failedOutputRow).getByLabelText("문제 해결형 다시 생성 사유"), "실패한 이미지만 다시 생성");

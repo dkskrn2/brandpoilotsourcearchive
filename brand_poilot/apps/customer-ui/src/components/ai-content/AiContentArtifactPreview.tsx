@@ -59,8 +59,8 @@ export function AiContentArtifactPreview({ output }: Props) {
 
   if (output.outputFormat === "reel") {
     const video = artifact.assets.find((asset) => asset.mimeType === "video/mp4");
-    return <div className="ai-content-artifact ai-content-artifact--reel" onContextMenu={preventContextMenu}>
-      {video ? <video src={video.url} poster={artifact.posterUrl ?? undefined} controls muted playsInline preload="metadata">릴스 미리보기를 지원하지 않는 브라우저입니다.</video> : <p>동영상 미리보기를 불러올 수 없습니다.</p>}
+    return <div className="ai-content-artifact ai-content-artifact--reel ai-content-artifact--reel-frame" onContextMenu={preventContextMenu}>
+      {video ? <video className="ai-content-artifact__reel-video" src={video.url} poster={artifact.posterUrl ?? undefined} controls muted playsInline preload="metadata">릴스 미리보기를 지원하지 않는 브라우저입니다.</video> : <p>동영상 미리보기를 불러올 수 없습니다.</p>}
     </div>;
   }
 

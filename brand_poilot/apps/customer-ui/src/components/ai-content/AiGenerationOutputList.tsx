@@ -183,6 +183,12 @@ export function AiGenerationOutputList({
               />
             ) : null}
 
+            {output.status === "completed" && output.outputFormat === "reel" && !output.publishSupported ? (
+              <p className="small muted ai-publish-panel__unsupported">
+                현재 릴스 결과는 다운로드만 지원하며 Instagram 직접 게시는 지원하지 않습니다.
+              </p>
+            ) : null}
+
             {outputFormat === "reel" ? (
               <label className="ai-generation-output-list__select">
                 <input

@@ -25,7 +25,7 @@ describe("통합형 도움말", () => {
   it("동적 AI 콘텐츠 결과 경로에 맞는 가이드를 찾는다", () => {
     const guide = guideForPath("/ai-content/generation-1");
     expect(guide?.id).toBe("ai-content-result");
-    expect(guide?.sections.flatMap((section) => section.items).join(" ")).toMatch(/생성 중.*상태|검토.*기획 근거/);
+    expect(guide?.sections.flatMap((section) => section.items).join(" ")).toMatch(/생성 중.*상태|완료 화면.*최종 산출물/);
   });
 
   it.each([
