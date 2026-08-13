@@ -40,7 +40,7 @@ test("content suggestion schema is a sealed 077 post-cutover migration", async (
   );
 });
 
-test("content suggestion schema runner uses the exact provider session and restores the DDL guard", async () => {
+test("content suggestion schema runner accepts the exact managed provider session and restores the DDL guard", async () => {
   const migrations = await migrationRunner.loadMigrations();
   const migration077 = migrations.find(({ id }) => id === "077_content_suggestion_batches.sql");
   assert.ok(migration077);
@@ -59,7 +59,7 @@ test("content suggestion schema runner uses the exact provider session and resto
         return { rows: [{
           session_user_name: "postgres",
           current_user_name: "postgres",
-          is_superuser: true,
+          is_superuser: false,
           event_trigger_name: "ai_content_ddl_guard_074",
           event_trigger_enabled: "O",
           event_trigger_owner: "postgres",

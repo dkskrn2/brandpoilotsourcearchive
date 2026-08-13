@@ -4158,7 +4158,6 @@ export async function runPost075SchemaMigrationsWithClient({
       `/* post_075_schema_provider_session_v1 */
        select session_user::text as session_user_name,
               current_user::text as current_user_name,
-              provider.rolsuper as is_superuser,
               event_trigger.evtname::text as event_trigger_name,
               event_trigger.evtenabled::text as event_trigger_enabled,
               event_owner.rolname::text as event_trigger_owner,
@@ -4174,7 +4173,6 @@ export async function runPost075SchemaMigrationsWithClient({
     if (identity.rows.length !== 1
       || provider.session_user_name !== expectedProviderRoleName
       || provider.current_user_name !== expectedProviderRoleName
-      || provider.is_superuser !== true
       || provider.event_trigger_name !== "ai_content_ddl_guard_074"
       || provider.event_trigger_enabled !== "O"
       || provider.event_trigger_owner !== expectedProviderRoleName
