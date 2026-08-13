@@ -706,7 +706,7 @@ describe("AI content customer routes", () => {
       payload: attachment,
     });
 
-    expect(response.statusCode).toBe(409);
+    expect(response.statusCode).toBe(400);
     expect(response.json()).toEqual({ error: errorCode });
     expect(repository.createAiContentUploadSession).not.toHaveBeenCalled();
     expect(generateClientToken).not.toHaveBeenCalled();
