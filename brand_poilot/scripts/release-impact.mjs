@@ -154,8 +154,29 @@ const CARD_DECK_CONTRACT_PATHS = new Set([
 
 const CARD_DECK_DOC_PATHS = new Set([
   "docs/superpowers/plans/2026-08-12-card-deck-editorial-pipeline.md",
+  "docs/superpowers/plans/2026-08-13-unified-results-and-reel-publishing.md",
   "docs/superpowers/specs/2026-08-12-card-deck-editorial-pipeline-design.md",
   "docs/superpowers/specs/2026-08-12-editorial-render-contracts-final.md",
+  "docs/superpowers/specs/2026-08-13-ai-content-reel-direct-publishing-design.md",
+]);
+
+const CARD_DECK_CUSTOMER_UI_PATHS = new Set([
+  "apps/customer-ui/src/__tests__/aiContentGeneration.test.tsx",
+  "apps/customer-ui/src/__tests__/helpGuidance.test.tsx",
+  "apps/customer-ui/src/components/ai-content/AiContentArtifactPreview.test.tsx",
+  "apps/customer-ui/src/components/ai-content/AiContentArtifactPreview.tsx",
+  "apps/customer-ui/src/components/ai-content/AiContentPublishPanel.test.tsx",
+  "apps/customer-ui/src/components/ai-content/AiContentPublishPanel.tsx",
+  "apps/customer-ui/src/components/ai-content/AiGenerationOutputList.test.tsx",
+  "apps/customer-ui/src/features/ai-content/aiContentApiGateway.test.ts",
+  "apps/customer-ui/src/features/ai-content/aiContentApiGateway.ts",
+  "apps/customer-ui/src/features/ai-content/aiContentPublishTargets.test.ts",
+  "apps/customer-ui/src/features/ai-content/aiContentPublishTargets.ts",
+  "apps/customer-ui/src/features/ai-content/mockAiContentGateway.ts",
+  "apps/customer-ui/src/features/ai-content/types.ts",
+  "apps/customer-ui/src/features/help/helpGuides.ts",
+  "apps/customer-ui/src/pages/AiContentGenerationPage.tsx",
+  "apps/customer-ui/src/styles/ai-content-flow.css",
 ]);
 
 const CARD_DECK_TOOLING_PATHS = new Set([
@@ -330,6 +351,10 @@ function classifyStructuredSocialRenderPath(path, components) {
 
 function classifyCardDeckEditorialPipelinePath(path, components) {
   if (CARD_DECK_DOC_PATHS.has(path)) return { known: true, documentation: true };
+  if (CARD_DECK_CUSTOMER_UI_PATHS.has(path)) {
+    components.customerUi = true;
+    return { known: true };
+  }
   if (CARD_DECK_CONTRACT_PATHS.has(path)) {
     for (const component of ["api", "contentProposalWorker", "cardNewsWorker", "imageWorker", "reelWorker"]) {
       components[component] = true;

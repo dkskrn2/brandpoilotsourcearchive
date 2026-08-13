@@ -326,7 +326,31 @@ test("editorial pipeline selects exactly its five Card and Reel server consumers
   assert.deepEqual(impact.unknownPaths, []);
 });
 
-test("editorial pipeline rejects UI, Blog, marketing, and migration paths", () => {
+test("editorial pipeline accepts the unified result UI without widening unrelated UI scope", () => {
+  const impact = classifyChangedPaths([
+    "brand_poilot/apps/api/src/aiContentPublish.ts",
+    "brand_poilot/apps/customer-ui/src/pages/AiContentGenerationPage.tsx",
+    "brand_poilot/apps/customer-ui/src/components/ai-content/AiContentPublishPanel.tsx",
+    "brand_poilot/apps/customer-ui/src/styles/ai-content-flow.css",
+    "brand_poilot/docs/superpowers/plans/2026-08-13-unified-results-and-reel-publishing.md",
+    "brand_poilot/docs/superpowers/specs/2026-08-13-ai-content-reel-direct-publishing-design.md",
+  ], { profile: CARD_DECK_EDITORIAL_PIPELINE_PROFILE });
+
+  assert.deepEqual(enabled(impact), ["api", "customerUi"]);
+  assert.equal(impact.buildAllServer, false);
+  assert.equal(impact.migrationChanged, false);
+  assert.equal(impact.productionDeployAllowed, true);
+  assert.equal(impact.verifiedScope, true);
+  assert.deepEqual(impact.unknownPaths, []);
+
+  const unrelated = classifyChangedPaths([
+    "brand_poilot/apps/customer-ui/src/App.tsx",
+  ], { profile: CARD_DECK_EDITORIAL_PIPELINE_PROFILE });
+  assert.equal(unrelated.productionDeployAllowed, false);
+  assert.deepEqual(unrelated.unknownPaths, ["brand_poilot/apps/customer-ui/src/App.tsx"]);
+});
+
+test("editorial pipeline rejects unrelated UI, Blog, marketing, and migration paths", () => {
   for (const path of [
     "brand_poilot/apps/customer-ui/src/App.tsx",
     "brand_poilot/workers/brand-pilot-blog-worker/src/worker.ts",
