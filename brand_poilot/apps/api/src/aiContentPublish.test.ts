@@ -41,6 +41,7 @@ function setup(options: {
   queueResultError?: string;
   outputManifest?: Record<string, unknown>;
   artifactOwner?: { workspaceId: string; brandId: string };
+  restrictContentTopicsToSelectAndInsert?: boolean;
 } = {}) {
   const statements: string[] = [];
   let outputInsert = 0;
@@ -62,7 +63,12 @@ function setup(options: {
     if (sql.includes("from brand_channels channel")) return options.connected === false
       ? { rowCount: 0, rows: [] }
       : { rowCount: 1, rows: [{ id: "channel-instagram", channel: "instagram" }] };
-    if (sql.includes("from content_topics topic") && sql.includes("aiContentOutputId")) return { rowCount: 0, rows: [] };
+    if (sql.includes("from content_topics topic") && sql.includes("aiContentOutputId")) {
+      if (options.restrictContentTopicsToSelectAndInsert && /\bfor\s+update\s+of\s+topic\b/i.test(sql)) {
+        throw Object.assign(new Error("permission denied for table content_topics"), { code: "42501" });
+      }
+      return { rowCount: 0, rows: [] };
+    }
     if (sql.includes("insert into content_topics")) return { rowCount: 1, rows: [{ id: "topic-1" }] };
     if (sql.includes("insert into master_drafts")) return { rowCount: 1, rows: [{ id: "master-1" }] };
     if (sql.includes("insert into topic_publish_groups")) return { rowCount: 1, rows: [{ id: "publish-group-1" }] };
@@ -149,6 +155,18 @@ describe("AI content direct publishing", () => {
     const channelLookup = statements.find((sql) => sql.includes("from brand_channels channel"));
     expect(channelLookup).toContain("credential.expires_at is null");
     expect(channelLookup).toContain("credential.expires_at > now()");
+  });
+
+  it("prepares a publish with the production content_topics SELECT and INSERT privileges", async () => {
+    const { repository, statements } = setup({ restrictContentTopicsToSelectAndInsert: true });
+
+    await expect(repository.prepareAiContentPublish(staticPublishActionFixture)).resolves.toMatchObject({
+      publishGroupId: "publish-group-1",
+    });
+    const outputLookup = statements.find((sql) => sql.includes("from ai_content_generation_outputs output"));
+    expect(outputLookup).toMatch(/\bfor\s+update\s+of\s+output\b/i);
+    const topicLookup = statements.find((sql) => sql.includes("from content_topics topic") && sql.includes("aiContentOutputId"));
+    expect(topicLookup).not.toMatch(/\bfor\s+update\s+of\s+topic\b/i);
   });
 
   it("rejects a colliding manifest artifact owned by another tenant before attaching it to channel outputs", async () => {

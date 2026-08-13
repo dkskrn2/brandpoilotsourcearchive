@@ -163,8 +163,7 @@ async function getOrCreatePublishContext(
        join topic_publish_groups topic_group on topic_group.content_topic_id = topic.id
       where topic.workspace_id = $1 and topic.brand_id = $2
         and topic.source_context ->> 'aiContentOutputId' = $3
-      limit 1
-      for update of topic`,
+      limit 1`,
     [input.workspaceId, input.brandId, input.outputId],
   );
   if (existing.rowCount) {
