@@ -1,3 +1,5 @@
+import type { ContentCategory } from "../../types";
+
 export type BrandAnalysisStatus =
   | "queued"
   | "accepting_uploads"
@@ -125,6 +127,7 @@ export interface BrandOnboardingContext {
 }
 
 export interface BrandIntelligenceGateway {
+  listContentCategories?(): Promise<ContentCategory[]>;
   getCurrent(brandId: string): Promise<BrandAnalysis | null>;
   getWorkflow(brandId: string): Promise<BrandAnalysis | null>;
   getOnboarding?(brandId: string): Promise<BrandOnboardingContext>;

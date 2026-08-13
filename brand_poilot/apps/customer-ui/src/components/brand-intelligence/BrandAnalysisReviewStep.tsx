@@ -1,4 +1,4 @@
-import { useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import {
   BadgeInfo,
   Building2,
@@ -21,6 +21,22 @@ type ReviewSection = "core" | "customer" | "message" | "offerings" | "competitor
 function resizeTextarea(element: HTMLTextAreaElement) {
   element.style.height = "auto";
   if (element.scrollHeight > 0) element.style.height = `${element.scrollHeight}px`;
+}
+
+function resolveCatalogSubcategories(
+  subcategories: Array<{ code: string | null; name: string }>,
+  category: ContentCategory | undefined,
+) {
+  if (!category) return [];
+  const seen = new Set<string>();
+  return subcategories.flatMap((subcategory) => {
+    const catalogSubcategory = category.subcategories.find(
+      (item) => item.code === subcategory.code,
+    );
+    if (!catalogSubcategory || seen.has(catalogSubcategory.code)) return [];
+    seen.add(catalogSubcategory.code);
+    return [{ code: catalogSubcategory.code, name: catalogSubcategory.name }];
+  });
 }
 
 function AutoResizeTextarea({
@@ -261,6 +277,7 @@ export function BrandAnalysisReviewStep({
   const isV2 = draft.contractVersion === "brand-intelligence-result.v2";
   const primaryCategory = draft.primaryCategory ?? { code: null, name: "" };
   const selectedCategory = categories.find((category) => category.code === primaryCategory.code);
+  const selectedSubcategories = resolveCatalogSubcategories(draft.subcategories, selectedCategory);
   const differentiators = isV2 ? draft.differentiators.join("\n") : draft.differentiators;
   const required = [
     draft.companyOverview,
@@ -279,7 +296,13 @@ export function BrandAnalysisReviewStep({
     draft.keywords,
   ].every((items) => items.every((item) => Boolean(item.trim())));
   const canConfirm = required.every((value) => Boolean(value?.trim()))
-    && (categories.length === 0 || Boolean(primaryCategory.code))
+    && categories.length > 0
+    && Boolean(selectedCategory)
+    && selectedSubcategories.length === draft.subcategories.length
+    && selectedSubcategories.every((subcategory, index) => (
+      subcategory.code === draft.subcategories[index]?.code
+      && subcategory.name === draft.subcategories[index]?.name
+    ))
     && arrayFieldsValid
     && (!isV2 || (
       draft.offerings.length <= 5
@@ -290,9 +313,6 @@ export function BrandAnalysisReviewStep({
     key: "companyOverview" | "businessDescription" | "primaryTarget" | "coreAppeal",
     value: string,
   ) => onChange({ ...draft, [key]: value });
-  const updateCategory = (value: { code: string | null; name: string }) => (
-    onChange({ ...draft, primaryCategory: value })
-  );
   const updateV2 = <K extends keyof BrandIntelligenceResultV2>(
     key: K,
     value: BrandIntelligenceResultV2[K],
@@ -301,6 +321,32 @@ export function BrandAnalysisReviewStep({
       onChange({ ...draft, [key]: value });
     }
   };
+
+  useEffect(() => {
+    if (!categories.length) return;
+    const canonicalCategory = categories.find((category) => category.code === primaryCategory.code);
+    const canonicalSubcategories = resolveCatalogSubcategories(
+      draft.subcategories,
+      canonicalCategory,
+    );
+    const categoryChanged = canonicalCategory
+      ? primaryCategory.name !== canonicalCategory.name
+        || primaryCategory.code !== canonicalCategory.code
+      : false;
+    const subcategoriesChanged = canonicalSubcategories.length !== draft.subcategories.length
+      || canonicalSubcategories.some((subcategory, index) => (
+        subcategory.code !== draft.subcategories[index]?.code
+        || subcategory.name !== draft.subcategories[index]?.name
+      ));
+    if (!categoryChanged && !subcategoriesChanged) return;
+    onChange({
+      ...draft,
+      ...(canonicalCategory
+        ? { primaryCategory: { code: canonicalCategory.code, name: canonicalCategory.name } }
+        : {}),
+      subcategories: canonicalSubcategories,
+    });
+  }, [categories, draft, onChange, primaryCategory.code, primaryCategory.name]);
   const sections: Array<{
     id: ReviewSection;
     label: string;
@@ -384,67 +430,39 @@ export function BrandAnalysisReviewStep({
               <div className="brand-category-fields">
                 <label className="field-stack">
                   <span className="field-label">대표 분야</span>
-                  {categories.length ? (
-                    <select
-                      aria-label="분석 결과 대표 분야"
-                      value={primaryCategory.code ?? ""}
-                      onChange={(event) => {
-                        const category = categories.find((item) => item.code === event.currentTarget.value);
-                        if (!category) return;
-                        const allowed = new Set(category.subcategories.map((item) => item.code));
-                        onChange({
-                          ...draft,
-                          primaryCategory: { code: category.code, name: category.name },
-                          subcategories: draft.subcategories.filter((item) => item.code === null
-                            || (item.code !== null && allowed.has(item.code))),
-                        });
-                      }}
-                    >
-                      <option value="">대표 분야를 선택하세요</option>
-                      {categories.map((category) => (
-                        <option key={category.code} value={category.code}>{category.name}</option>
-                      ))}
-                    </select>
-                  ) : (
-                    <input
-                      value={primaryCategory.name}
-                      onChange={(event) => updateCategory({
-                        ...primaryCategory,
-                        name: event.currentTarget.value,
-                      })}
-                    />
-                  )}
+                  <select
+                    aria-label="분석 결과 대표 분야"
+                    value={selectedCategory?.code ?? ""}
+                    disabled={!categories.length}
+                    onChange={(event) => {
+                      const category = categories.find((item) => item.code === event.currentTarget.value);
+                      if (!category) return;
+                      const allowed = new Set(category.subcategories.map((item) => item.code));
+                      onChange({
+                        ...draft,
+                        primaryCategory: { code: category.code, name: category.name },
+                        subcategories: selectedSubcategories.filter((item) => allowed.has(item.code)),
+                      });
+                    }}
+                  >
+                    <option value="">대표 분야를 선택하세요</option>
+                    {categories.map((category) => (
+                      <option key={category.code} value={category.code}>{category.name}</option>
+                    ))}
+                  </select>
                   {categories.length && !primaryCategory.code && primaryCategory.name
                     ? <small>분석 제안: {primaryCategory.name}</small>
                     : null}
                 </label>
-                <label className="field-stack">
-                  <span className="field-label">직접 입력 세부 분야</span>
-                  <input
-                    aria-label="직접 입력 세부 분야"
-                    value={draft.subcategories
-                      .filter((item) => categories.length === 0 || item.code === null)
-                      .map((item) => item.name).join(", ")}
-                    onChange={(event) => onChange({
-                      ...draft,
-                      subcategories: [
-                        ...(categories.length
-                          ? draft.subcategories.filter((item) => item.code !== null)
-                          : []),
-                        ...event.currentTarget.value.split(",").map((name) => name.trim())
-                          .filter(Boolean).map((name) => ({ code: null, name })),
-                      ],
-                    })}
-                    placeholder="쉼표로 구분"
-                  />
-                  {categories.length ? <small>목록에 없는 분야만 입력하세요.</small> : null}
-                </label>
               </div>
+              {!categories.length ? (
+                <Alert title="분야 목록 오류" variant="bad">분야 목록을 불러오지 못했습니다.</Alert>
+              ) : null}
               {selectedCategory?.subcategories.length ? (
                 <fieldset className="brand-subcategory-options">
                   <legend>세부 분야 선택</legend>
                   {selectedCategory.subcategories.map((subcategory) => {
-                    const selected = draft.subcategories.some((item) => item.code === subcategory.code);
+                    const selected = selectedSubcategories.some((item) => item.code === subcategory.code);
                     return (
                       <label key={subcategory.code}>
                         <input
@@ -453,8 +471,8 @@ export function BrandAnalysisReviewStep({
                           onChange={() => onChange({
                             ...draft,
                             subcategories: selected
-                              ? draft.subcategories.filter((item) => item.code !== subcategory.code)
-                              : [...draft.subcategories, { code: subcategory.code, name: subcategory.name }],
+                              ? selectedSubcategories.filter((item) => item.code !== subcategory.code)
+                              : [...selectedSubcategories, { code: subcategory.code, name: subcategory.name }],
                           })}
                         />
                         <span>{subcategory.name}</span>

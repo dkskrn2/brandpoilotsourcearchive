@@ -286,14 +286,18 @@ describe("brand intelligence repository", () => {
     `);
     await database.query("insert into brands (id, workspace_id, name) values ($1, $2, '모종애드')", [brandId, workspaceId]);
     await database.query(
-      `insert into content_categories (id, code, name, sort_order) values
-        ('30000000-0000-4000-8000-000000000001', 'marketing', '마케팅', 1),
-        ('30000000-0000-4000-8000-000000000002', 'software', '소프트웨어', 2)`,
+      `insert into content_categories (id, code, name, sort_order, active) values
+        ('30000000-0000-4000-8000-000000000001', 'marketing', '마케팅', 1, true),
+        ('30000000-0000-4000-8000-000000000002', 'software', '소프트웨어', 2, true),
+        ('30000000-0000-4000-8000-000000000003', 'sales', '영업', 3, true),
+        ('30000000-0000-4000-8000-000000000004', 'inactive', '비활성 분야', 4, false)`,
     );
     await database.query(
-      `insert into content_subcategories (id, category_id, code, name, sort_order) values
-        (gen_random_uuid(), '30000000-0000-4000-8000-000000000001', 'content', '콘텐츠 마케팅', 1),
-        (gen_random_uuid(), '30000000-0000-4000-8000-000000000002', 'saas', 'SaaS', 1)`,
+      `insert into content_subcategories (id, category_id, code, name, sort_order, active) values
+        ('40000000-0000-4000-8000-000000000001', '30000000-0000-4000-8000-000000000001', 'content', '콘텐츠 마케팅', 1, true),
+        ('40000000-0000-4000-8000-000000000002', '30000000-0000-4000-8000-000000000002', 'saas', 'SaaS', 1, true),
+        ('40000000-0000-4000-8000-000000000003', '30000000-0000-4000-8000-000000000003', 'lead-generation', '리드 발굴', 1, true),
+        ('40000000-0000-4000-8000-000000000004', '30000000-0000-4000-8000-000000000001', 'inactive-content', '비활성 콘텐츠', 2, false)`,
     );
   }, 30_000);
   afterEach(async () => database.close());
@@ -329,6 +333,10 @@ describe("brand intelligence repository", () => {
         code: "software",
         name: "소프트웨어",
         subcategories: [{ code: "saas", name: "SaaS" }],
+      }, {
+        code: "sales",
+        name: "영업",
+        subcategories: [{ code: "lead-generation", name: "리드 발굴" }],
       }],
       executionContract: {
         ownedPageLimit: 20,
@@ -455,6 +463,79 @@ describe("brand intelligence repository", () => {
       result: { ...resultV2(), ...categoryPatch },
       registry: { ownedFactIds: ["fact-1"], externalSources: [] },
     })).rejects.toThrow(/brand_intelligence_(primary_category|subcategory)_not_registered/);
+  });
+
+  it("rejects categories and subcategories that are not active members of the catalog", async () => {
+    const repository = createBrandIntelligenceRepository(pglitePool(database));
+    const requested = await prepareAnalysis(repository, {
+      ownedUrl: "https://example.com",
+      idempotencyKey: "catalog-validation",
+    });
+    const base = resultV2();
+    const invalidInputs: Array<{ result: BrandIntelligenceResultV2; error: string }> = [
+      { result: { ...base, primaryCategory: { code: null, name: "마케팅" } }, error: "brand_analysis_category_invalid" },
+      { result: { ...base, primaryCategory: { code: "arbitrary", name: "임의 분야" } }, error: "brand_analysis_category_invalid" },
+      { result: { ...base, primaryCategory: { code: "inactive", name: "비활성 분야" } }, error: "brand_analysis_category_invalid" },
+      { result: { ...base, subcategories: [{ code: null, name: "자유 입력" }] }, error: "brand_analysis_subcategory_invalid" },
+      { result: { ...base, subcategories: [{ code: "unknown", name: "임의 세부 분야" }] }, error: "brand_analysis_subcategory_invalid" },
+      { result: { ...base, subcategories: [{ code: "lead-generation", name: "리드 발굴" }] }, error: "brand_analysis_subcategory_invalid" },
+      { result: { ...base, subcategories: [{ code: "inactive-content", name: "비활성 콘텐츠" }] }, error: "brand_analysis_subcategory_invalid" },
+      {
+        result: {
+          ...base,
+          subcategories: [
+            { code: "content", name: "콘텐츠 마케팅" },
+            { code: "content", name: "콘텐츠 마케팅" },
+          ],
+        },
+        error: "brand_analysis_subcategory_invalid",
+      },
+    ];
+
+    for (const invalid of invalidInputs) {
+      await expect(repository.confirmBrandAnalysis({
+        workspaceId,
+        brandId,
+        analysisId: requested.id,
+        editedResult: invalid.result,
+      })).rejects.toThrow(invalid.error);
+    }
+
+    const persisted = await database.query(
+      "select status, is_active from brand_analysis_runs where id = $1",
+      [requested.id],
+    );
+    expect(persisted.rows[0]).toEqual({ status: "review_ready", is_active: false });
+    expect((await database.query("select id from brand_profiles")).rows).toHaveLength(0);
+
+    const confirmed = await repository.confirmBrandAnalysis({
+      workspaceId,
+      brandId,
+      analysisId: requested.id,
+      editedResult: {
+        ...base,
+        primaryCategory: { code: "marketing", name: "사용자 임의 이름" },
+        subcategories: [{ code: "content", name: "사용자 임의 세부 이름" }],
+      },
+    });
+    expect(confirmed.effectiveResult).toMatchObject({
+      primaryCategory: { code: "marketing", name: "마케팅" },
+      subcategories: [{ code: "content", name: "콘텐츠 마케팅" }],
+    });
+    const catalogLinks = await database.query(
+      `select category.code category_code, subcategory.code subcategory_code, selected.custom_name
+         from brand_profiles profile
+         join content_categories category on category.id = profile.primary_category_id
+         left join brand_profile_subcategories selected on selected.brand_profile_id = profile.id
+         left join content_subcategories subcategory on subcategory.id = selected.subcategory_id
+        where profile.brand_id = $1`,
+      [brandId],
+    );
+    expect(catalogLinks.rows).toEqual([{
+      category_code: "marketing",
+      subcategory_code: "content",
+      custom_name: null,
+    }]);
   });
 
   it("preserves user-edited product and FAQ rows when the same suggestions are confirmed again", async () => {
