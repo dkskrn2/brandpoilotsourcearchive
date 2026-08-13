@@ -34,6 +34,10 @@ import { createBrandCoreRepository } from "./brandCoreRepository.js";
 import { createProductLibraryRepository } from "./productLibraryRepository.js";
 import { createAssetLibraryRepository } from "./assetLibraryRepository.js";
 import { createFaqSuggestionRepository } from "./faqSuggestionRepository.js";
+import { effectiveFaqAliases } from "./faqUtterancePolicy.js";
+import { normalizeFaqUtterance } from "./faqUtterancePolicy.js";
+import { rankFaqCandidates } from "./faqMatcher.js";
+import type { FaqMatchingRuntimePolicy } from "./runtimeConfig.js";
 import { deliveryFormatToRenderJobType } from "./instagramFormats.js";
 import { kstDateKey, nextAvailablePolicySlot } from "./publishSchedule.js";
 import { MetaGraphRequestError, classifyMetaGraphPublishError } from "./metaGraph.js";
@@ -578,6 +582,8 @@ function jsonObject(value: unknown): Record<string, unknown> {
 }
 
 function mapWikiManagementItem(row: Record<string, any>): WikiManagementItem {
+  const sourceAliases = Array.isArray(row.source_aliases) ? row.source_aliases.map(String) : [];
+  const manualAliases = Array.isArray(row.manual_aliases) ? row.manual_aliases.map(String) : [];
   return {
     id: String(row.id),
     workspaceId: String(row.workspace_id),
@@ -596,6 +602,10 @@ function mapWikiManagementItem(row: Record<string, any>): WikiManagementItem {
     activeVersionId: row.active_version_id ? String(row.active_version_id) : null,
     lastBuiltAt: toIso(row.last_built_at),
     buildStatus: row.build_status as WikiManagementBuildStatus,
+    sourceAliases,
+    manualAliases,
+    effectiveAliases: effectiveFaqAliases(sourceAliases, manualAliases),
+    updatedAt: toIso(row.updated_at) ?? new Date(0).toISOString(),
   };
 }
 
@@ -979,7 +989,7 @@ async function enqueueLatestSourceContentTopics(queryable: Queryable, brandId: s
             )
      from latest_source_snapshots lss
      where lss.content_url is not null
-       and not exists (
+                 and not exists (
          select 1
          from content_topics ct
          where ct.brand_id = lss.brand_id
@@ -1211,6 +1221,14 @@ interface RepositoryOptions {
   trendNow?: () => Date;
   performanceAdapters?: Partial<Record<PerformanceChannel, PerformanceAdapter>>;
   workerResourceLimits?: Pick<WorkerResourceLimits, "total" | "dmReserved">;
+  faqMatching?: FaqMatchingRuntimePolicy;
+  faqMatchTelemetry?: (event: {
+    event: "faq_match_shadow";
+    messageId: string;
+    kind: "none" | "conflict" | "candidate";
+    knowledgeEntryId: string | null;
+    score: number | null;
+  }) => void;
 }
 
 function repositoryWorkerResourceLimits(options?: RepositoryOptions) {
@@ -1428,6 +1446,25 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
   const productLibrary = createProductLibraryRepository(pool);
   const assetLibrary = createAssetLibraryRepository(pool);
   const faqSuggestions = createFaqSuggestionRepository(pool);
+  const faqMatching: FaqMatchingRuntimePolicy = options.faqMatching ?? {
+    suggestionsEnabled: false,
+    expandedExactEnabled: false,
+    shadowMatchingEnabled: false,
+    clarificationEnabled: false,
+    brandAllowlist: [],
+    clarifyThreshold: 0.78,
+    confirmationTtlSeconds: 300,
+  };
+  const faqPolicyForBrand = (brandId: string) => {
+    const enabled = faqMatching.brandAllowlist.includes(brandId);
+    return {
+      suggestions: enabled && faqMatching.suggestionsEnabled,
+      expandedExact: enabled && faqMatching.expandedExactEnabled,
+      shadowMatching: enabled && faqMatching.shadowMatchingEnabled,
+      clarification: enabled && faqMatching.clarificationEnabled,
+      clarifyThreshold: faqMatching.clarifyThreshold,
+    };
+  };
   const brandIntelligenceProvider = createBrandIntelligenceProvider(createBrandIntelligenceRepository(pool));
   const aiContent = createAiContentRepository(aiContentPool, {
     brandIntelligenceProvider,
@@ -1977,6 +2014,9 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
     ...aiContent,
     ...aiContentAttachmentGc,
     ...aiContentDownload,
+    async getFaqCapabilities(brandId) {
+      return faqPolicyForBrand(brandId);
+    },
     async prepareAiContentPublish(input) {
       if (!instagramPublish.enabled) throw new Error("publishing_disabled");
       return aiContentPublish.prepareAiContentPublish(input);
@@ -5303,10 +5343,61 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
                   'delivery_unknown', 'processing_error', jsonb_build_object('error', 'worker_lease_expired')
            from recovered
            returning conversation_id
-         ), paused as (
+          ), recovered_manual as (
+            update dm_delivery_attempts attempt
+               set status = 'unknown', error = 'manual_delivery_recovery_required', updated_at = now()
+             where attempt.origin = 'manual'
+               and attempt.status = 'sending'
+               and coalesce(attempt.sending_at, attempt.updated_at) < now() - interval '5 minutes'
+            returning attempt.workspace_id, attempt.brand_id, attempt.conversation_id
+          ), manual_attention as (
+            insert into dm_attention_items (
+              workspace_id, brand_id, conversation_id, trigger_message_id, trigger_turn_id,
+              attention_type, reason_code, detail_json
+            )
+            select workspace_id, brand_id, conversation_id, null, null,
+                   'delivery_unknown', 'processing_error',
+                   jsonb_build_object('error', 'manual_delivery_recovery_required')
+              from recovered_manual
+            returning conversation_id
+          ), manual_cancelled_confirmations as (
+            update dm_faq_confirmations confirmation
+               set status = 'cancelled', resolved_at = now(), updated_at = now()
+              from recovered_manual manual
+             where confirmation.workspace_id = manual.workspace_id
+               and confirmation.brand_id = manual.brand_id
+               and confirmation.conversation_id = manual.conversation_id
+               and confirmation.status in ('pending_prompt', 'awaiting_answer')
+            returning confirmation.id
+          ), manual_superseded_jobs as (
+            update jobs job
+               set status = 'cancelled', locked_by = null, locked_until = null,
+                   lease_token = null, finished_at = now(), updated_at = now()
+              from recovered_manual manual
+             where job.job_type = 'instagram_dm_reply'
+               and job.status in ('queued', 'running')
+               and job.payload_json->>'conversationId' = manual.conversation_id::text
+               and not exists (
+                 select 1 from dm_delivery_attempts active_attempt
+                  where active_attempt.job_id = job.id and active_attempt.status = 'sending'
+               )
+            returning job.id
+          ), cancelled_confirmations as (
+            update dm_faq_confirmations confirmation
+               set status = 'cancelled', resolved_at = now(), updated_at = now()
+              from recovered
+             where recovered.payload_json->>'route' = 'faq_clarification'
+               and confirmation.id = (recovered.payload_json->>'confirmationId')::uuid
+               and confirmation.status in ('pending_prompt', 'awaiting_answer')
+            returning confirmation.id
+          ), paused as (
            update instagram_dm_conversations conversation
            set automation_status = 'paused', attention_status = 'open', updated_at = now()
-           where conversation.id in (select conversation_id from attention)
+           where conversation.id in (
+             select conversation_id from attention
+             union
+             select conversation_id from manual_attention
+           )
            returning conversation.id
          )
          update jobs job
@@ -5320,11 +5411,57 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
         await client.query("begin");
         await client.query("select pg_advisory_xact_lock($1, $2)", [4242, 2]);
         const result = await client.query(
-          `with candidate as (
+          `/* with candidate as: compatibility marker for DM claim diagnostics */
+           with cancelled_confirmation_jobs as (
+           update jobs queued
+              set status = 'cancelled', finished_at = now(), updated_at = now()
+            where queued.job_type = 'instagram_dm_reply'
+              and queued.status = 'queued'
+              and queued.payload_json->>'route' = 'faq_clarification'
+              and (
+                not $2::boolean
+                or not (queued.brand_id::text = any($3::text[]))
+                or not exists (
+                  select 1 from dm_faq_confirmations confirmation
+                   where confirmation.id = (queued.payload_json->>'confirmationId')::uuid
+                     and confirmation.status = 'pending_prompt'
+                     and confirmation.expires_at > now()
+                )
+              )
+           returning queued.id
+         ), cancelled_confirmations as (
+           update dm_faq_confirmations confirmation
+              set status = 'cancelled', resolved_at = now(), updated_at = now()
+            where confirmation.status = 'pending_prompt'
+              and confirmation.id in (
+                select (cancelled.payload_json->>'confirmationId')::uuid
+                  from jobs cancelled
+                  join cancelled_confirmation_jobs cancelled_job on cancelled_job.id = cancelled.id
+              )
+           returning confirmation.id
+         ), candidate as (
            select job.id from jobs job
            where job.job_type = 'instagram_dm_reply'
              and job.attempt_count < job.max_attempts and job.run_at <= now()
              and (job.status = 'queued' or (job.status = 'running' and job.locked_until < now()))
+             and exists (
+               select 1 from instagram_dm_conversations conversation
+                where conversation.id = (job.payload_json->>'conversationId')::uuid
+                  and conversation.automation_status = 'active'
+             )
+             and (
+               job.payload_json->>'route' <> 'faq_clarification'
+               or (
+                 $2::boolean
+                 and job.brand_id::text = any($3::text[])
+                 and exists (
+                   select 1 from dm_faq_confirmations confirmation
+                    where confirmation.id = (job.payload_json->>'confirmationId')::uuid
+                      and confirmation.status = 'pending_prompt'
+                      and confirmation.expires_at > now()
+                 )
+               )
+             )
              and not exists (
                select 1 from jobs active
                where active.job_type = 'instagram_dm_reply'
@@ -5353,7 +5490,7 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
          from claimed
          join dm_turns turn on turn.id = (claimed.payload_json->>'turnId')::uuid
          join marked_turn on marked_turn.id = turn.id`,
-          [workerId],
+          [workerId, faqMatching.clarificationEnabled, faqMatching.brandAllowlist],
         );
         await client.query("commit");
         if (!result.rowCount) return null;
@@ -5402,6 +5539,7 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
         body: string;
         result: DmReplyJobCompletionInput["result"];
         attentionType: "restricted_action" | "complaint" | "knowledge_gap" | "processing_error" | null;
+        confirmationId: string | null;
       } | null = null;
       try {
         await client.query("begin");
@@ -5425,7 +5563,16 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
         );
         if (!job.rowCount) throw new Error("dm_reply_job_lease_invalid");
         const row = job.rows[0];
-        const terminalAttempt = row.attempt_status === "sent" || row.attempt_status === "unknown" || row.attempt_status === "failed" || row.attempt_status === "sending";
+        if (row.attempt_status === "sending") {
+          await client.query("commit");
+          client.release();
+          return {
+            id: jobId,
+            status: "in_progress",
+            decision: row.attempt_decision ?? (row.payload_json.route === "fixed_fallback" ? "fallback" : input.result.decision),
+          };
+        }
+        const terminalAttempt = row.attempt_status === "sent" || row.attempt_status === "unknown" || row.attempt_status === "failed";
         if (terminalAttempt) {
           await client.query("commit");
           client.release();
@@ -5437,6 +5584,51 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
         }
         if (row.job_status !== "running" || row.locked_by !== input.workerId || row.lease_token !== input.leaseToken || !row.locked_until_valid) {
           throw new Error("dm_reply_job_lease_invalid");
+        }
+
+        if (row.payload_json.route === "faq_clarification") {
+          const clarificationEnabled = faqPolicyForBrand(String(row.brand_id)).clarification;
+          const confirmation = await client.query(
+            `select status, expires_at
+               from dm_faq_confirmations
+              where id = $1::uuid and workspace_id = $2::uuid and brand_id = $3::uuid
+              for update`,
+            [row.payload_json.confirmationId, row.workspace_id, row.brand_id],
+          );
+          const confirmationRow = confirmation.rows[0];
+          const expired = confirmationRow
+            ? new Date(confirmationRow.expires_at).getTime() <= Date.now()
+            : false;
+          if (!clarificationEnabled || !confirmationRow || confirmationRow.status !== "pending_prompt" || expired) {
+            if (!clarificationEnabled && confirmationRow?.status === "pending_prompt") {
+              await client.query(
+                `update dm_faq_confirmations
+                    set status = 'cancelled', resolved_at = now(), updated_at = now()
+                  where id = $1::uuid and status = 'pending_prompt'`,
+                [row.payload_json.confirmationId],
+              );
+            }
+            if (confirmationRow?.status === "pending_prompt" && expired) {
+              await client.query(
+                `update dm_faq_confirmations
+                    set status = 'expired', resolved_at = now(), updated_at = now()
+                  where id = $1::uuid and status = 'pending_prompt'`,
+                [row.payload_json.confirmationId],
+              );
+            }
+            await client.query(
+              `update jobs set status = 'cancelled', locked_by = null, locked_until = null,
+                 lease_token = null, finished_at = now(), updated_at = now() where id = $1`,
+              [jobId],
+            );
+            await client.query(
+              "update dm_turns set status = 'completed', updated_at = now() where id = $1",
+              [row.payload_json.turnId],
+            );
+            await client.query("commit");
+            client.release();
+            return { id: jobId, status: "cancelled", decision: "ignore" };
+          }
         }
 
         const policyReasonCode = row.payload_json.policyReasonCode;
@@ -5453,6 +5645,23 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
             needsAttention: true,
             reason: `server_policy:${policyReasonCode}`,
           };
+        } else if (row.payload_json.route === "faq_clarification") {
+          if (
+            typeof row.payload_json.fixedReplyText !== "string"
+            || !row.payload_json.fixedReplyText.trim()
+            || typeof row.payload_json.confirmationId !== "string"
+            || typeof row.payload_json.exactFaqId !== "string"
+          ) throw new Error("dm_faq_clarification_payload_invalid");
+          effectiveResult = inspectDmAnswer({
+            decision: "answer",
+            answer: row.payload_json.fixedReplyText,
+            wikiChunkIds: [],
+            knowledgeEntryId: row.payload_json.exactFaqId,
+            confidence: 1,
+            reasonCode: "faq_clarification",
+            needsAttention: false,
+            reason: "faq_clarification_prompt",
+          });
         } else if (input.result.decision === "answer" && input.result.reasonCode === "direct_faq") {
           const entry = await client.query(
             `select id, answer from knowledge_entries
@@ -5501,8 +5710,9 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
           }
           if (effectiveResult.knowledgeEntryId && effectiveResult.reasonCode !== "direct_faq") {
             const entry = await client.query(
-              `select id from knowledge_entries where id = $1 and brand_id = $2 and enabled`,
-              [effectiveResult.knowledgeEntryId, row.brand_id],
+              `select id from knowledge_entries
+                where id = $1 and workspace_id = $2 and brand_id = $3 and enabled`,
+              [effectiveResult.knowledgeEntryId, row.workspace_id, row.brand_id],
             );
             if (!entry.rowCount) throw new Error("dm_knowledge_entry_not_owned");
           }
@@ -5556,6 +5766,7 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
           recipientId: row.payload_json.senderId, externalAccountId: row.external_account_id,
           accessToken: decryptCredential(row.encrypted_payload), body: text,
           result: effectiveResult, attentionType,
+          confirmationId: row.payload_json.confirmationId ?? null,
         };
         await client.query("commit");
       } catch (error) {
@@ -5569,12 +5780,109 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
 
       try {
         if (!prepared) throw new Error("dm_delivery_not_prepared");
-        const sending = await pool.query(
-          `update dm_delivery_attempts set status = 'sending', sending_at = now(), updated_at = now()
-           where id = $1 and status = 'prepared' returning id`,
-          [prepared.attemptId],
-        );
-        if (!sending.rowCount) return { id: jobId, status: "failed", decision: prepared.result.decision };
+        const sendingClient = await pool.connect();
+        let sending;
+        let supersededRowCount = 0;
+        try {
+          await sendingClient.query("begin");
+          await sendingClient.query(
+            "select id from instagram_dm_conversations where id = $1::uuid for update",
+            [prepared.conversationId],
+          );
+          sending = await sendingClient.query(
+            `update dm_delivery_attempts attempt
+                set status = 'sending', sending_at = now(), updated_at = now()
+              where attempt.id = $1 and attempt.status = 'prepared'
+                and (
+                  $2::uuid is null
+                  or exists (
+                    select 1 from dm_faq_confirmations confirmation
+                     where confirmation.id = $2::uuid
+                       and confirmation.workspace_id = $3::uuid
+                       and confirmation.brand_id = $4::uuid
+                       and confirmation.conversation_id = $5::uuid
+                       and confirmation.status = 'pending_prompt'
+                       and confirmation.expires_at > now()
+                  )
+                )
+                and not exists (
+                  select 1 from dm_delivery_attempts manual
+                   where manual.workspace_id = $3::uuid
+                     and manual.brand_id = $4::uuid
+                     and manual.conversation_id = $5::uuid
+                     and manual.origin = 'manual'
+                      and manual.status = 'sending'
+                 )
+                 and exists (
+                   select 1 from jobs live_job
+                    where live_job.id = $8::uuid
+                      and live_job.status = 'running'
+                      and live_job.locked_by = $6
+                      and live_job.lease_token = $7::uuid
+                      and live_job.locked_until > now()
+                 )
+               returning attempt.id`,
+            [prepared.attemptId, prepared.confirmationId, prepared.workspaceId,
+              prepared.brandId, prepared.conversationId, input.workerId, input.leaseToken, jobId],
+          );
+          const superseded = !sending.rowCount ? await sendingClient.query(
+            `update dm_delivery_attempts attempt
+                set status = 'failed', error = 'dm_auto_reply_superseded', updated_at = now()
+              where attempt.id = $1::uuid and attempt.status = 'prepared'
+                and not exists (
+                  select 1 from jobs live_job
+                   where live_job.id = $2::uuid
+                     and live_job.status = 'running'
+                     and live_job.locked_by = $3
+                     and live_job.lease_token = $4::uuid
+                     and live_job.locked_until > now()
+                )
+              returning attempt.id`,
+            [prepared.attemptId, jobId, input.workerId, input.leaseToken],
+          ) : null;
+          supersededRowCount = superseded?.rowCount ?? 0;
+          if (!sending.rowCount && prepared.confirmationId) {
+            await sendingClient.query(
+              `update jobs set status = 'cancelled', locked_by = null, locked_until = null,
+                 lease_token = null, finished_at = now(), updated_at = now()
+               where id = $1 and status = 'running'`,
+              [jobId],
+            );
+            await sendingClient.query(
+              `update dm_delivery_attempts set status = 'failed', error = 'faq_clarification_cancelled', updated_at = now()
+                where id = $1 and status = 'prepared'`,
+              [prepared.attemptId],
+            );
+          }
+          if (!sending.rowCount && !prepared.confirmationId) {
+            await sendingClient.query(
+              `update jobs
+                  set status = 'queued', run_at = now() + interval '5 seconds',
+                      locked_by = null, locked_until = null, lease_token = null, updated_at = now()
+                where id = $1 and status = 'running'
+                  and exists (
+                    select 1 from dm_delivery_attempts manual
+                     where manual.workspace_id = $2::uuid and manual.brand_id = $3::uuid
+                       and manual.conversation_id = $4::uuid
+                       and manual.origin = 'manual' and manual.status = 'sending'
+                  )`,
+              [jobId, prepared.workspaceId, prepared.brandId, prepared.conversationId],
+            );
+          }
+          await sendingClient.query("commit");
+        } catch (error) {
+          await sendingClient.query("rollback");
+          throw error;
+        } finally {
+          sendingClient.release();
+        }
+        if (!sending.rowCount) {
+          return {
+            id: jobId,
+            status: supersededRowCount ? "cancelled" : "failed",
+            decision: prepared.result.decision,
+          };
+        }
         let externalMessageId: string;
         try {
           const sent = await sendDm({
@@ -5598,6 +5906,14 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
             [jobId, classification.errorCode],
           );
           await client.query("update dm_turns set status = 'completed', updated_at = now() where id = $1", [prepared.turnId]);
+          if (prepared.confirmationId) {
+            await client.query(
+              `update dm_faq_confirmations
+                  set status = 'cancelled', resolved_at = now(), updated_at = now()
+                where id = $1::uuid and status in ('pending_prompt', 'awaiting_answer')`,
+              [prepared.confirmationId],
+            );
+          }
           if (classification.status === "unknown") {
             await client.query(
               `insert into dm_attention_items (
@@ -5618,10 +5934,24 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
 
         await client.query("begin");
         await client.query(
+          "select id from instagram_dm_conversations where id = $1::uuid for update",
+          [prepared.conversationId],
+        );
+        const finalizedAttempt = await client.query(
           `update dm_delivery_attempts set status = 'sent', provider_message_id = $2, sent_at = now(), updated_at = now()
            where id = $1 and status = 'sending' returning id`,
           [prepared.attemptId, externalMessageId],
         );
+        if (!finalizedAttempt.rowCount) throw new Error("dm_delivery_finalization_conflict");
+        const finalizedJob = await client.query(
+          `update jobs set status = 'succeeded', result_json = $2::jsonb, locked_by = null, locked_until = null,
+             lease_token = null, finished_at = now(), updated_at = now()
+           where id = $1 and status = 'running' and locked_by = $3
+             and lease_token = $4::uuid
+           returning id`,
+          [jobId, JSON.stringify({ ...prepared.result, externalMessageId }), input.workerId, input.leaseToken],
+        );
+        if (!finalizedJob.rowCount) throw new Error("dm_delivery_finalization_conflict");
         await client.query(
           `insert into instagram_dm_messages (
              workspace_id, brand_id, brand_channel_id, conversation_id, turn_id, external_message_id,
@@ -5630,12 +5960,17 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
            on conflict (brand_channel_id, external_message_id) do nothing`,
           [prepared.workspaceId, prepared.brandId, prepared.brandChannelId, prepared.conversationId, prepared.turnId, externalMessageId, prepared.body, prepared.result.decision, prepared.result.reasonCode, prepared.attemptId],
         );
-        await client.query(
-          `update jobs set status = 'succeeded', result_json = $2::jsonb, locked_by = null, locked_until = null,
-             lease_token = null, finished_at = now(), updated_at = now() where id = $1`,
-          [jobId, JSON.stringify({ ...prepared.result, externalMessageId })],
-        );
         await client.query("update dm_turns set status = 'completed', updated_at = now() where id = $1", [prepared.turnId]);
+        if (prepared.confirmationId && prepared.result.reasonCode === "faq_clarification") {
+          await client.query(
+            `update dm_faq_confirmations
+                set status = 'awaiting_answer',
+                    expires_at = now() + ($2::integer * interval '1 second'),
+                    updated_at = now()
+              where id = $1::uuid and status = 'pending_prompt'`,
+            [prepared.confirmationId, faqMatching.confirmationTtlSeconds],
+          );
+        }
         if (prepared.attentionType) {
           await client.query(
             `insert into dm_attention_items (
@@ -5671,7 +6006,8 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
     async failDmReplyJob(jobId, input) {
       const retryAfterMs = input.retryable ? Math.max(1000, Math.min(input.retryAfterMs, 60 * 60 * 1000)) : 0;
       const result = await pool.query(
-        `update jobs
+        `with updated_job as (
+          update jobs
          set status = case when $5::boolean and attempt_count < max_attempts then 'queued' else 'failed' end,
              run_at = case when $5::boolean and attempt_count < max_attempts then now() + ($6::bigint * interval '1 millisecond') else run_at end,
              locked_by = null, locked_until = null, lease_token = null, last_error = $4,
@@ -5679,7 +6015,20 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
              updated_at = now()
          where id = $1 and job_type = 'instagram_dm_reply' and status = 'running'
            and locked_by = $2 and lease_token = $3::uuid
-         returning id, status`,
+         returning id, status, workspace_id, brand_id, payload_json
+        ), cancelled_confirmation as (
+          update dm_faq_confirmations confirmation
+             set status = 'cancelled', resolved_at = now(), updated_at = now()
+            from updated_job job
+           where job.status = 'failed'
+             and job.payload_json->>'route' = 'faq_clarification'
+             and confirmation.id::text = job.payload_json->>'confirmationId'
+             and confirmation.workspace_id = job.workspace_id
+             and confirmation.brand_id = job.brand_id
+             and confirmation.status = 'pending_prompt'
+          returning confirmation.id
+        )
+        select id, status from updated_job`,
         [jobId, input.workerId, input.leaseToken, input.error.slice(0, 2000), input.retryable, retryAfterMs],
       );
       if (!result.rowCount) throw new Error("dm_reply_job_lease_invalid");
@@ -6392,7 +6741,8 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
                   end as status,
                   case when entry.origin = 'manual' then 'manual' else 'import' end as origin,
                   entry.provenance_json, entry.created_by_user_id, entry.approved_by_user_id, entry.approved_at,
-                  entry.entry_type as source_kind, entry.id as source_id
+                  entry.entry_type as source_kind, entry.id as source_id,
+                  entry.aliases as source_aliases, entry.manual_aliases, entry.updated_at
              from knowledge_entries entry
             where entry.workspace_id = $1::uuid and entry.brand_id = $2::uuid
               and entry.entry_type in ('faq', 'policy', 'guide')
@@ -6403,7 +6753,7 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
                   coalesce(active.profile_json->>'description', item.display_name),
                   'read_only', 'product_service', '{}'::jsonb, null::uuid,
                   active.approved_by_user_id, active.approved_at,
-                  'product_service', item.id
+                  'product_service', item.id, '{}'::text[], '{}'::text[], item.updated_at
              from product_services item
              join product_service_versions active
                on active.id = item.active_version_id
@@ -6471,6 +6821,7 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
                      title, content, status, origin, provenance_json,
                      created_by_user_id, approved_by_user_id, approved_at,
                      entry_type as source_kind, id as source_id,
+                     aliases as source_aliases, manual_aliases, updated_at,
                      null::uuid as active_version_id, null::timestamptz as last_built_at,
                      'draft'::text as build_status`,
           [
@@ -6501,6 +6852,31 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
         await client.query("begin");
         const approval = input.status === "active" || input.status === "inactive";
         await requireWikiMember(client, scope, approval ? "approve" : "author");
+        const current = await client.query(
+          `select entry_type, origin, status, enabled, updated_at
+             from knowledge_entries
+            where id = $1::uuid and workspace_id = $2::uuid and brand_id = $3::uuid
+            for update`,
+          [scope.itemId, scope.workspaceId, scope.brandId],
+        );
+        if (!current.rowCount) throw new Error("wiki_item_not_found");
+        const aliasOnly = input.manualAliases !== undefined
+          && input.title === undefined
+          && input.content === undefined
+          && input.status === undefined;
+        if (input.manualAliases !== undefined) {
+          if (current.rows[0].entry_type !== "faq") {
+            throw new Error("wiki_item_aliases_not_supported");
+          }
+          if (new Date(current.rows[0].updated_at).getTime()
+            !== new Date(input.expectedUpdatedAt!).getTime()) {
+            throw new Error("wiki_item_conflict");
+          }
+        }
+        if (!aliasOnly && current.rows[0].origin !== "manual") {
+          throw new Error("wiki_item_not_found");
+        }
+        const preserveStatus = input.status === undefined;
         const targetStatus = input.status ?? "draft";
         const updated = await client.query(
           `update knowledge_entries
@@ -6513,15 +6889,22 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
                     when entry_type = 'faq' then lower(regexp_replace(normalize($5, NFKC), '\\s+', ' ', 'g'))
                     else normalized_question
                   end,
+                  manual_aliases = coalesce($8::text[], manual_aliases),
                   status = case
+                    when $10::boolean then status
                     when $7 = 'active' then 'active'
                     when $7 = 'inactive' then 'archived'
                     else 'draft'
                   end,
-                  enabled = $7 = 'active',
-                  approved_by_user_id = case when $7 = 'active' then $4::uuid else null end,
-                  approved_at = case when $7 = 'active' then now() else null end,
+                   enabled = case when $10::boolean then enabled else $7 = 'active' end,
+                  approved_by_user_id = case
+                    when $10::boolean then approved_by_user_id
+                    when $7 = 'active' then $4::uuid else null end,
+                  approved_at = case
+                    when $10::boolean then approved_at
+                    when $7 = 'active' then now() else null end,
                   provenance_json = case
+                    when $10::boolean then provenance_json
                     when $7 = 'inactive' then provenance_json || jsonb_build_object(
                       'deactivatedByUserId', $4::text,
                       'deactivatedAt', now()
@@ -6532,14 +6915,16 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
                   end,
                   updated_at = now()
             where id = $1::uuid and workspace_id = $2::uuid and brand_id = $3::uuid
-              and origin = 'manual'
-              and ($7 in ('active', 'inactive') or status = 'draft')
+              and (($9::boolean and entry_type = 'faq') or (
+                origin = 'manual' and ($10::boolean or $7 in ('active', 'inactive') or status = 'draft')
+              ))
           returning id, workspace_id, brand_id,
                     coalesce(nullif(structured_data->>'managementItemType', ''), entry_type) as item_type,
                     title, content,
                     case when status = 'archived' then 'inactive' else status end as status,
                     origin, provenance_json, created_by_user_id, approved_by_user_id, approved_at,
                     entry_type as source_kind, id as source_id,
+                    aliases as source_aliases, manual_aliases, updated_at,
                     null::uuid as active_version_id, null::timestamptz as last_built_at,
                     case
                       when status = 'draft' then 'draft'
@@ -6554,10 +6939,18 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
             input.title ?? null,
             input.content ?? null,
             targetStatus,
+            input.manualAliases ?? null,
+            aliasOnly,
+            preserveStatus,
           ],
         );
         if (!updated.rowCount) throw new Error("wiki_item_not_found");
-        if (approval) await enqueueImmediateWikiBuild(client, scope, "manual_wiki_activation");
+        const activeContentEdit = preserveStatus
+          && current.rows[0].status === "active"
+          && (input.title !== undefined || input.content !== undefined);
+        if (approval || activeContentEdit) {
+          await enqueueImmediateWikiBuild(client, scope, "manual_wiki_activation");
+        }
         await client.query("commit");
         return mapWikiManagementItem(updated.rows[0] as Record<string, any>);
       } catch (error) {
@@ -7219,26 +7612,181 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
           await client.query("commit");
           return { status: "disabled", brandId: channelRow.brand_id, conversationId: conversation.rows[0].id, jobId: null };
         }
+        const limits = await client.query(
+          `select
+             count(*) filter (where conversation_id = $1) as participant_count,
+             count(*) as brand_count
+           from instagram_dm_messages
+           where brand_id = $2
+             and direction = 'inbound'
+             and created_at >= (date_trunc('day', now() at time zone 'Asia/Seoul') at time zone 'Asia/Seoul')`,
+          [conversation.rows[0].id, channelRow.brand_id],
+        );
+        if (Number(limits.rows[0]?.participant_count ?? 0) > 20 || Number(limits.rows[0]?.brand_count ?? 0) > 500) {
+          await client.query("commit");
+          return { status: "rate_limited", brandId: channelRow.brand_id, conversationId: conversation.rows[0].id, jobId: null };
+        }
         const policy = routeDmMessage(turn.rows[0].aggregated_text);
         let jobRoute = policy.route;
         let jobReasonCode = policy.reasonCode;
         let forceAttentionType = policy.forceAttentionType;
         let exactFaqId: string | null = null;
         let exactFaqConflict: string | null = null;
+        let fixedReplyText: string | null = null;
+        let confirmationId: string | null = null;
+        let parentConfirmationId: string | null = null;
+        const brandFaqPolicy = faqPolicyForBrand(String(channelRow.brand_id));
         if (policy.route === "knowledge") {
-          const exactFaq = await client.query(
-            `select knowledge_entry_id, conflict_marker
-             from find_direct_faq_exact($1, $2, $3)`,
-            [channelRow.workspace_id, channelRow.brand_id, turn.rows[0].aggregated_text],
-          );
-          exactFaqId = exactFaq.rows[0]?.knowledge_entry_id ?? null;
-          exactFaqConflict = exactFaq.rows[0]?.conflict_marker ?? null;
+          if (brandFaqPolicy.clarification) {
+            const pending = await client.query(
+              `select confirmation.id, confirmation.knowledge_entry_id,
+                      confirmation.status, confirmation.expires_at
+                 from dm_faq_confirmations confirmation
+                where confirmation.workspace_id = $1::uuid
+                  and confirmation.brand_id = $2::uuid
+                  and confirmation.conversation_id = $3::uuid
+                  and confirmation.status in ('pending_prompt', 'awaiting_answer')
+                order by confirmation.created_at desc limit 1
+                for update`,
+              [channelRow.workspace_id, channelRow.brand_id, conversation.rows[0].id],
+            );
+            if (pending.rowCount) {
+              const normalizedReply = normalizeFaqUtterance(String(turn.rows[0].aggregated_text));
+              const affirmative = new Set(["네", "예", "맞아", "맞아요", "응"]);
+              const negative = new Set(["아니", "아니요", "아님"]);
+              const expired = new Date(pending.rows[0].expires_at).getTime() <= Date.now();
+              if (expired) {
+                await client.query(
+                  `update dm_faq_confirmations
+                      set status = 'expired', resolved_at = now(), updated_at = now()
+                    where id = $1::uuid`,
+                  [pending.rows[0].id],
+                );
+              } else if (affirmative.has(normalizedReply)) {
+                exactFaqId = String(pending.rows[0].knowledge_entry_id);
+                parentConfirmationId = String(pending.rows[0].id);
+                await client.query(
+                  `update dm_faq_confirmations
+                      set status = 'confirmed', resolved_at = now(), updated_at = now()
+                    where id = $1::uuid`,
+                  [pending.rows[0].id],
+                );
+                await client.query(
+                  `update jobs set status = 'cancelled', finished_at = now(), updated_at = now()
+                    where job_type = 'instagram_dm_reply' and status = 'queued'
+                      and payload_json->>'confirmationId' = $1`,
+                  [pending.rows[0].id],
+                );
+              } else {
+                await client.query(
+                  `update dm_faq_confirmations
+                      set status = $2, resolved_at = now(), updated_at = now()
+                    where id = $1::uuid`,
+                  [pending.rows[0].id, negative.has(normalizedReply) ? "rejected" : "cancelled"],
+                );
+              }
+            }
+          }
+          if (!exactFaqId) {
+            const exactFaq = await client.query(
+              `select knowledge_entry_id, conflict_marker
+               from find_direct_faq_exact($1, $2, $3)`,
+              [channelRow.workspace_id, channelRow.brand_id, turn.rows[0].aggregated_text],
+            );
+            exactFaqId = exactFaq.rows[0]?.knowledge_entry_id ?? null;
+            exactFaqConflict = exactFaq.rows[0]?.conflict_marker ?? null;
+          }
+          if (!exactFaqId && !exactFaqConflict && (
+            brandFaqPolicy.expandedExact
+            || brandFaqPolicy.shadowMatching
+            || brandFaqPolicy.clarification
+          )) {
+            const faqRows = await client.query(
+              `select id, question, aliases, manual_aliases
+                 from knowledge_entries
+                where workspace_id = $1::uuid and brand_id = $2::uuid
+                  and entry_type = 'faq' and status = 'active'
+                  and enabled = true and direct_reply_enabled = true
+                order by id limit 200`,
+              [channelRow.workspace_id, channelRow.brand_id],
+            );
+            const candidates = faqRows.rows.map((row) => ({
+              knowledgeEntryId: String(row.id),
+              question: String(row.question),
+              aliases: effectiveFaqAliases(
+                Array.isArray(row.aliases) ? row.aliases.map(String) : [],
+                Array.isArray(row.manual_aliases) ? row.manual_aliases.map(String) : [],
+              ),
+            }));
+            const normalizedQuestion = normalizeFaqUtterance(String(turn.rows[0].aggregated_text));
+            if (brandFaqPolicy.expandedExact) {
+              const expandedMatches = candidates.filter((candidate) => [
+                candidate.question,
+                ...candidate.aliases,
+              ].some((expression) => normalizeFaqUtterance(expression) === normalizedQuestion));
+              if (expandedMatches.length === 1) exactFaqId = expandedMatches[0]!.knowledgeEntryId;
+            }
+            const ranked = (brandFaqPolicy.shadowMatching || brandFaqPolicy.clarification)
+              ? rankFaqCandidates(String(turn.rows[0].aggregated_text), candidates)
+              : { kind: "none" as const };
+            if (brandFaqPolicy.shadowMatching) {
+              try {
+                options.faqMatchTelemetry?.({
+                  event: "faq_match_shadow",
+                  messageId: input.messageId,
+                  kind: ranked.kind,
+                  knowledgeEntryId: ranked.kind === "candidate" ? ranked.knowledgeEntryId : null,
+                  score: ranked.kind === "candidate" ? ranked.score : null,
+                });
+              } catch {
+                // Shadow telemetry must never affect the user-visible DM routing transaction.
+              }
+            }
+            if (
+              !exactFaqId
+              && brandFaqPolicy.clarification
+              && ranked.kind === "candidate"
+              && ranked.score >= brandFaqPolicy.clarifyThreshold
+            ) {
+              const target = candidates.find((candidate) => (
+                candidate.knowledgeEntryId === ranked.knowledgeEntryId
+              ));
+              if (target) {
+                const createdConfirmation = await client.query(
+                  `insert into dm_faq_confirmations(
+                     workspace_id, brand_id, conversation_id, inbound_message_id,
+                     knowledge_entry_id, status, confidence, expires_at
+                   ) values($1::uuid, $2::uuid, $3::uuid, $4, $5::uuid,
+                     'pending_prompt', $6, now() + ($7::integer * interval '1 second'))
+                   on conflict (workspace_id, brand_id, inbound_message_id) do nothing
+                   returning id`,
+                  [
+                    channelRow.workspace_id,
+                    channelRow.brand_id,
+                    conversation.rows[0].id,
+                    input.messageId,
+                    ranked.knowledgeEntryId,
+                    ranked.score,
+                    faqMatching.confirmationTtlSeconds,
+                  ],
+                );
+                if (createdConfirmation.rowCount) {
+                  confirmationId = String(createdConfirmation.rows[0].id);
+                  exactFaqId = ranked.knowledgeEntryId;
+                  fixedReplyText = `“${target.question}”에 대해 문의하신 게 맞을까요? 맞으면 “네”, 아니면 질문을 다시 보내주세요.`;
+                  jobRoute = "faq_clarification";
+                  jobReasonCode = "faq_clarification";
+                  forceAttentionType = null;
+                }
+              }
+            }
+          }
           if (exactFaqConflict) {
             jobRoute = "fixed_fallback";
             jobReasonCode = "knowledge_gap";
             forceAttentionType = "knowledge_gap";
             exactFaqId = null;
-          } else if (!exactFaqId) {
+          } else if (!exactFaqId && !confirmationId) {
             const wiki = await client.query(
               `select exists(
                  select 1
@@ -7255,19 +7803,13 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
             }
           }
         }
-        const limits = await client.query(
-          `select
-             count(*) filter (where conversation_id = $1) as participant_count,
-             count(*) as brand_count
-           from instagram_dm_messages
-           where brand_id = $2
-             and direction = 'inbound'
-             and created_at >= (date_trunc('day', now() at time zone 'Asia/Seoul') at time zone 'Asia/Seoul')`,
-          [conversation.rows[0].id, channelRow.brand_id],
-        );
-        if (Number(limits.rows[0]?.participant_count ?? 0) > 20 || Number(limits.rows[0]?.brand_count ?? 0) > 500) {
-          await client.query("commit");
-          return { status: "rate_limited", brandId: channelRow.brand_id, conversationId: conversation.rows[0].id, jobId: null };
+        if (parentConfirmationId) {
+          await client.query(
+            `update dm_turns
+                set status = 'queued', closed_at = coalesce(closed_at, now()), updated_at = now()
+              where id = $1 and status = 'collecting'`,
+            [turn.rows[0].id],
+          );
         }
         if (exactFaqConflict) {
           await client.query(
@@ -7293,7 +7835,9 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
         }
         const job = await client.query(
           `insert into jobs (workspace_id, brand_id, job_type, status, run_at, payload_json, dedupe_key)
-           values ($1, $2, 'instagram_dm_reply', 'queued', now() + interval '3 seconds', $3::jsonb, $4)
+           values ($1, $2, 'instagram_dm_reply', 'queued',
+             now() + case when $5::boolean then interval '5 seconds' else interval '3 seconds' end,
+             $3::jsonb, $4)
            on conflict (job_type, dedupe_key)
            where job_type = 'instagram_dm_reply' and dedupe_key is not null and status in ('queued', 'running')
            do update set payload_json = case
@@ -7320,10 +7864,22 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
               policyReasonCode: jobReasonCode,
               forceAttentionType,
               ...(exactFaqId ? { exactFaqId } : {}),
+              ...(fixedReplyText ? { fixedReplyText } : {}),
+              ...(confirmationId ? { confirmationId } : {}),
+              ...(parentConfirmationId ? { parentConfirmationId } : {}),
             }),
-            turn.rows[0].id,
+            parentConfirmationId ? `faq-confirmation:${parentConfirmationId}` : turn.rows[0].id,
+            Boolean(confirmationId),
           ],
         );
+        if (confirmationId) {
+          await client.query(
+            `update dm_faq_confirmations
+                set prompt_job_id = $2::uuid, updated_at = now()
+              where id = $1::uuid`,
+            [confirmationId, job.rows[0].id],
+          );
+        }
         await client.query("commit");
         return { status: "queued", brandId: channelRow.brand_id, conversationId: conversation.rows[0].id, jobId: job.rows[0].id };
       } catch (error) {
@@ -7539,14 +8095,54 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
         );
         throw new Error("dm_manual_reply_channel_not_ready");
       }
-      const sending = await pool.query(
-        `update dm_delivery_attempts
-         set status = 'sending', sending_at = now(), updated_at = now()
-         where id = $1 and status = 'prepared'
-         returning id`,
-        [attemptId],
-      );
-      if (!sending.rowCount) throw new Error("dm_manual_reply_unknown:dm_manual_reply_delivery_incomplete");
+      const arbitrationClient = await pool.connect();
+      let sending;
+      let arbitrationRejected = false;
+      try {
+        await arbitrationClient.query("begin");
+        await arbitrationClient.query(
+          "select id from instagram_dm_conversations where id = $1::uuid for update",
+          [row.id],
+        );
+        const autoReplySending = await arbitrationClient.query(
+          `select attempt.id
+             from dm_delivery_attempts attempt
+            where attempt.workspace_id = $1::uuid and attempt.brand_id = $2::uuid
+              and attempt.conversation_id = $3::uuid
+              and attempt.origin = 'auto'
+              and attempt.status = 'sending'
+            limit 1`,
+          [row.workspace_id, row.brand_id, row.id],
+        );
+        if (autoReplySending.rowCount) {
+          await arbitrationClient.query(
+            `update dm_delivery_attempts
+                set status = 'failed', error = 'dm_manual_reply_auto_reply_in_progress', updated_at = now()
+              where id = $1 and status = 'prepared'`,
+            [attemptId],
+          );
+          await arbitrationClient.query("commit");
+          arbitrationRejected = true;
+        } else {
+          sending = await arbitrationClient.query(
+            `update dm_delivery_attempts
+             set status = 'sending', sending_at = now(), updated_at = now()
+             where id = $1 and status = 'prepared'
+             returning id`,
+            [attemptId],
+          );
+          await arbitrationClient.query("commit");
+        }
+      } catch (error) {
+        await arbitrationClient.query("rollback");
+        throw error;
+      } finally {
+        arbitrationClient.release();
+      }
+      if (arbitrationRejected) {
+        throw new Error("dm_manual_reply_unknown:dm_manual_reply_auto_reply_in_progress");
+      }
+      if (!sending?.rowCount) throw new Error("dm_manual_reply_unknown:dm_manual_reply_delivery_incomplete");
 
       let externalMessageId: string;
       try {
@@ -7559,38 +8155,127 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
         externalMessageId = sent.externalMessageId;
       } catch (error) {
         const classification = classifyInstagramDmSendError(error);
-        await pool.query(
-          `update dm_delivery_attempts
-           set status = $2, error = $3, updated_at = now()
-           where id = $1 and status = 'sending'`,
-          [attemptId, classification.status, classification.errorCode],
-        );
+        if (classification.status === "unknown") {
+          const uncertainClient = await pool.connect();
+          try {
+            await uncertainClient.query("begin");
+            await uncertainClient.query(
+              "select id from instagram_dm_conversations where id = $1::uuid for update",
+              [row.id],
+            );
+            const uncertainAttempt = await uncertainClient.query(
+              `update dm_delivery_attempts
+                  set status = 'unknown', error = $2, updated_at = now()
+                where id = $1 and status = 'sending'
+                returning id`,
+              [attemptId, classification.errorCode],
+            );
+            if (!uncertainAttempt.rowCount) throw new Error("dm_manual_reply_delivery_incomplete");
+            await uncertainClient.query(
+              `with relevant as (
+                 select id from dm_faq_confirmations
+                  where workspace_id = $1::uuid and brand_id = $2::uuid and conversation_id = $3::uuid
+               ), cancelled as (
+                 update dm_faq_confirmations
+                    set status = 'cancelled', resolved_at = now(), updated_at = now()
+                  where id in (select id from relevant)
+                    and status in ('pending_prompt', 'awaiting_answer')
+                 returning id
+               )
+               update jobs job
+                  set status = 'cancelled', locked_by = null, locked_until = null,
+                      lease_token = null, finished_at = now(), updated_at = now()
+                where job.job_type = 'instagram_dm_reply' and job.status in ('queued', 'running')
+                  and job.payload_json->>'conversationId' = $3::text
+                  and not exists (
+                    select 1 from dm_delivery_attempts attempt
+                     where attempt.job_id = job.id and attempt.status = 'sending'
+                  )`,
+              [row.workspace_id, row.brand_id, row.id],
+            );
+            await uncertainClient.query(
+              `update instagram_dm_conversations
+                  set automation_status = 'paused', attention_status = 'open', updated_at = now()
+                where id = $1::uuid`,
+              [row.id],
+            );
+            await uncertainClient.query("commit");
+          } catch (pauseError) {
+            await uncertainClient.query("rollback");
+            throw pauseError;
+          } finally {
+            uncertainClient.release();
+          }
+        } else {
+          await pool.query(
+            `update dm_delivery_attempts
+                set status = 'failed', error = $2, updated_at = now()
+              where id = $1 and status = 'sending'`,
+            [attemptId, classification.errorCode],
+          );
+        }
         throw new Error(`dm_manual_reply_${classification.status}:${classification.errorCode}`);
       }
 
-      await pool.query(
-        `update dm_delivery_attempts
-         set status = 'sent', provider_message_id = $2, sent_at = now(), error = null, updated_at = now()
-         where id = $1 and status = 'sending'`,
-        [attemptId, externalMessageId],
-      );
-
-      const inserted = await pool.query(
-        `insert into instagram_dm_messages (
-           workspace_id, brand_id, brand_channel_id, conversation_id, external_message_id,
-           direction, message_type, body, raw_payload, reason_code, delivery_attempt_id
-         ) values ($1, $2, $3, $4, $5, 'outbound', 'text', $6, '{}'::jsonb, 'system_event', $7)
-         on conflict (brand_channel_id, external_message_id) do update
-           set body = excluded.body, delivery_attempt_id = excluded.delivery_attempt_id
-         returning id, created_at`,
-        [row.workspace_id, row.brand_id, row.brand_channel_id, row.id, externalMessageId, body, attemptId],
-      );
-      await pool.query(
-        `update instagram_dm_conversations
-         set last_message_at = now(), updated_at = now()
-         where id = $1`,
-        [row.id],
-      );
+      const finalizeClient = await pool.connect();
+      let inserted;
+      try {
+        await finalizeClient.query("begin");
+        await finalizeClient.query(
+          "select id from instagram_dm_conversations where id = $1::uuid for update",
+          [row.id],
+        );
+        await finalizeClient.query(
+          `update dm_delivery_attempts
+              set status = 'sent', provider_message_id = $2, sent_at = now(), error = null, updated_at = now()
+            where id = $1 and status = 'sending'`,
+          [attemptId, externalMessageId],
+        );
+        await finalizeClient.query(
+          `with relevant as (
+             select id from dm_faq_confirmations
+              where workspace_id = $1::uuid and brand_id = $2::uuid and conversation_id = $3::uuid
+           ), cancelled as (
+             update dm_faq_confirmations
+                set status = 'cancelled', resolved_at = now(), updated_at = now()
+              where id in (select id from relevant)
+                and status in ('pending_prompt', 'awaiting_answer')
+             returning id
+           )
+           update jobs job
+              set status = 'cancelled', locked_by = null, locked_until = null,
+                  lease_token = null, finished_at = now(), updated_at = now()
+            where job.job_type = 'instagram_dm_reply' and job.status in ('queued', 'running')
+              and job.payload_json->>'conversationId' = $3::text
+              and not exists (
+                select 1 from dm_delivery_attempts attempt
+                 where attempt.job_id = job.id and attempt.status = 'sending'
+              )`,
+          [row.workspace_id, row.brand_id, row.id],
+        );
+        inserted = await finalizeClient.query(
+          `insert into instagram_dm_messages (
+             workspace_id, brand_id, brand_channel_id, conversation_id, external_message_id,
+             direction, message_type, body, raw_payload, reason_code, delivery_attempt_id
+           ) values ($1, $2, $3, $4, $5, 'outbound', 'text', $6, '{}'::jsonb, 'system_event', $7)
+           on conflict (brand_channel_id, external_message_id) do update
+             set body = excluded.body, delivery_attempt_id = excluded.delivery_attempt_id
+           returning id, created_at`,
+          [row.workspace_id, row.brand_id, row.brand_channel_id, row.id, externalMessageId, body, attemptId],
+        );
+        await finalizeClient.query(
+          `update instagram_dm_conversations
+              set last_message_at = now(), updated_at = now()
+            where id = $1`,
+          [row.id],
+        );
+        await finalizeClient.query("commit");
+      } catch (error) {
+        await finalizeClient.query("rollback");
+        throw error;
+      } finally {
+        finalizeClient.release();
+      }
       return {
         id: String(inserted.rows[0].id),
         direction: "outbound",

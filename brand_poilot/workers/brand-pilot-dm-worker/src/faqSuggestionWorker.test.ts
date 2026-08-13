@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { runFaqSuggestionOnce } from "./faqSuggestionWorker.js";
+import { buildFaqSuggestionPrompt, runFaqSuggestionOnce } from "./faqSuggestionWorker.js";
 
 const claimed = {
   contractVersion: "faq-suggestion-input.v1" as const,
@@ -43,6 +43,72 @@ function setup(result: unknown = rawResult) {
 }
 
 describe("runFaqSuggestionOnce", () => {
+  it("builds a strict alias-only prompt without source or lease metadata", () => {
+    const aliasInput = {
+      contractVersion: "faq-suggestion-input.v2" as const,
+      mode: "alias_only" as const,
+      runId: claimed.runId,
+      workspaceId: claimed.workspaceId,
+      brandId: claimed.brandId,
+      leaseToken: claimed.leaseToken,
+      targetFaq: {
+        id: "60000000-0000-4000-8000-000000000006",
+        question: "배송은 언제 시작하나요?",
+        answer: "결제 후 안내된 일정에 발송합니다.",
+        updatedAt: "2026-08-12T00:00:00.000Z",
+      },
+    };
+    const prompt = buildFaqSuggestionPrompt(aliasInput);
+    expect(prompt).toContain("faq-alias-suggestion-result.v1");
+    expect(prompt).toContain("3-8");
+    expect(prompt).toContain(aliasInput.targetFaq.question);
+    expect(prompt).not.toContain(aliasInput.workspaceId);
+    expect(prompt).not.toContain(aliasInput.leaseToken);
+  });
+
+  it("runs alias-only generation and completes the discriminated result", async () => {
+    const aliasInput = {
+      contractVersion: "faq-suggestion-input.v2" as const,
+      mode: "alias_only" as const,
+      runId: claimed.runId,
+      workspaceId: claimed.workspaceId,
+      brandId: claimed.brandId,
+      leaseToken: claimed.leaseToken,
+      targetFaq: {
+        id: "60000000-0000-4000-8000-000000000006",
+        question: "배송은 언제 시작하나요?",
+        answer: "결제 후 안내된 일정에 발송합니다.",
+        updatedAt: "2026-08-12T00:00:00.000Z",
+      },
+    };
+    const db = {
+      heartbeatFaqSuggestionWorker: vi.fn(async () => undefined),
+      claimFaqSuggestionRun: vi.fn(async () => aliasInput),
+      heartbeatFaqSuggestionRun: vi.fn(async () => undefined),
+      completeFaqSuggestionRun: vi.fn(async () => undefined),
+      failFaqSuggestionRun: vi.fn(async () => undefined),
+    };
+    const runCodex = vi.fn(async () => ({
+      contractVersion: "faq-alias-suggestion-result.v1",
+      exampleUtterances: ["배송 언제 와요?", "언제 발송돼요?", "배송 일정 알려줘"],
+    }));
+    await expect(runFaqSuggestionOnce({
+      workerId: "faq-worker-1",
+      db,
+      runCodex,
+      runtimeDirectory: "C:/runtime",
+    })).resolves.toEqual({ status: "completed", runId: claimed.runId });
+    expect(db.completeFaqSuggestionRun).toHaveBeenCalledWith(
+      claimed.runId,
+      "faq-worker-1",
+      claimed.leaseToken,
+      {
+        mode: "alias_only",
+        exampleUtterances: ["배송 언제 와요?", "언제 발송돼요?", "배송 일정 알려줘"],
+      },
+    );
+  });
+
   it("claims, invokes CLI once, validates, and completes without prompt secrets", async () => {
     const { db, runCodex } = setup();
     await expect(runFaqSuggestionOnce({

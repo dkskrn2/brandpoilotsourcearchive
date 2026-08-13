@@ -1,0 +1,27 @@
+{
+  "normalization": [
+    { "input": "  배송   언제?  ", "expected": "배송 언제" },
+    { "input": "ＰＲＩＣＥ？", "expected": "price" },
+    { "input": "Café!!!", "expected": "café" },
+    { "input": "교환/환불", "expected": "교환 환불" },
+    { "input": "예약_문의~", "expected": "예약 문의" },
+    { "input": "  A.B,C  ", "expected": "a b c" }
+  ],
+  "parse": [
+    {
+      "input": [" 배송   언제? ", "배송 언제", "가격 문의", "가격   문의!"],
+      "expected": ["배송 언제?", "가격 문의"]
+    },
+    {
+      "input": ["교환/환불", "  반품 가능해요?  "],
+      "expected": ["교환/환불", "반품 가능해요?"]
+    }
+  ],
+  "effective": [
+    {
+      "source": ["배송 언제", "가격 문의"],
+      "manual": ["배송 언제?", "반품 가능해요?"],
+      "expected": ["배송 언제", "가격 문의", "반품 가능해요?"]
+    }
+  ]
+}

@@ -7,6 +7,7 @@ import test from "node:test";
 
 import {
   CARD_DECK_EDITORIAL_PIPELINE_PROFILE,
+  FAQ_UTTERANCE_MATCHING_PROFILE,
   SERVER_COMPONENTS,
   STRUCTURED_SOCIAL_RENDER_SEMANTICS_PROFILE,
   classifyChangedPaths,
@@ -387,6 +388,49 @@ test("editorial pipeline accepts its exact deployment tooling without widening r
   assert.equal(impact.productionDeployAllowed, true);
   assert.equal(impact.verifiedScope, true);
   assert.deepEqual(impact.unknownPaths, []);
+});
+
+test("FAQ utterance profile selects only API, customer UI, and the shared DM image", () => {
+  const impact = classifyChangedPaths([
+    "brand_poilot/apps/api/src/faqMatcher.ts",
+    "brand_poilot/apps/customer-ui/src/components/brand-center/FaqUtteranceEditor.tsx",
+    "brand_poilot/workers/brand-pilot-dm-worker/src/faqSuggestionWorker.ts",
+    "brand_poilot/db/migrations/078_faq_utterance_matching.sql",
+    "brand_poilot/deploy/scripts/rollout-workers.sh",
+    "brand_poilot/scripts/faq-matcher-evaluation-runner.ts",
+    "brand_poilot/scripts/migrationRunner.mjs",
+    "brand_poilot/scripts/release-impact.mjs",
+    "brand_poilot/scripts/release-impact.test.mjs",
+    "brand_poilot/scripts/incremental-cicd-contract.test.mjs",
+    ".github/workflows/publish-brand-pilot-server-images.yml",
+    "brand_poilot/docs/operations/faq-utterance-matching-rollout.md",
+  ], { profile: FAQ_UTTERANCE_MATCHING_PROFILE });
+
+  assert.deepEqual(enabled(impact), ["api", "customerUi", "dmWikiWorker"]);
+  assert.equal(impact.buildAllServer, false);
+  assert.equal(impact.migrationChanged, true);
+  assert.equal(impact.productionDeployAllowed, false);
+  assert.equal(impact.deployBundleChanged, true);
+  assert.equal(impact.verifiedScope, true);
+  assert.deepEqual(impact.unknownPaths, []);
+});
+
+test("FAQ utterance profile rejects unrelated workers and migrations without widening", () => {
+  for (const path of [
+    "brand_poilot/workers/brand-pilot-blog-worker/src/worker.ts",
+    "brand_poilot/db/migrations/079_unrelated.sql",
+    "brand_poilot/scripts/unrelated-runtime.mjs",
+  ]) {
+    const impact = classifyChangedPaths([
+      "brand_poilot/apps/api/src/faqMatcher.ts",
+      path,
+    ], { profile: FAQ_UTTERANCE_MATCHING_PROFILE });
+    assert.deepEqual(enabled(impact), ["api"], path);
+    assert.equal(impact.buildAllServer, false, path);
+    assert.equal(impact.productionDeployAllowed, false, path);
+    assert.equal(impact.verifiedScope, false, path);
+    assert.deepEqual(impact.unknownPaths, [path], path);
+  }
 });
 
 test("CLI includes deleted marketing paths and maps retirement only to reel and deploy", () => {

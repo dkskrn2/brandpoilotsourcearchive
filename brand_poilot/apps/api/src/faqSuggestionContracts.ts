@@ -1,3 +1,5 @@
+import { parseFaqUtterances } from "./faqUtterancePolicy.js";
+
 export const faqSuggestionCategories = [
   "service",
   "product",
@@ -49,6 +51,7 @@ export interface FaqSuggestionItemDto {
   category: FaqSuggestionCategory;
   question: string;
   answer: string;
+  exampleUtterances: string[];
   evidence: FaqSuggestionEvidenceDto[];
   confidence: number;
   status: FaqSuggestionItemStatus;
@@ -74,10 +77,30 @@ export interface FaqSuggestionRunDto {
   items: FaqSuggestionItemDto[];
 }
 
+export interface FaqAliasSuggestionRunDto {
+  id: string;
+  workspaceId: string;
+  brandId: string;
+  status: FaqSuggestionRunStatus;
+  errorCode: string | null;
+  targetKnowledgeEntryId: string;
+  targetKnowledgeEntryUpdatedAt: string;
+  exampleUtterances: string[] | null;
+  createdAt: string;
+  updatedAt: string;
+  completedAt: string | null;
+}
+
+export interface FaqAliasSuggestionApply {
+  expectedUpdatedAt: string;
+  exampleUtterances?: string[];
+}
+
 export interface FaqSuggestionItemUpdate {
   category: FaqSuggestionCategory;
   question: string;
   answer: string;
+  exampleUtterances?: string[];
   expectedUpdatedAt: string;
 }
 
@@ -128,7 +151,13 @@ function expectedTimestamp(value: unknown): string {
 
 export function parseFaqSuggestionItemUpdate(value: unknown): FaqSuggestionItemUpdate {
   const input = record(value);
-  rejectUnknownFields(input, ["category", "question", "answer", "expectedUpdatedAt"]);
+  rejectUnknownFields(input, [
+    "category",
+    "question",
+    "answer",
+    "exampleUtterances",
+    "expectedUpdatedAt",
+  ]);
 
   if (typeof input.category !== "string"
     || !categorySet.has(input.category as FaqSuggestionCategory)) {
@@ -139,6 +168,9 @@ export function parseFaqSuggestionItemUpdate(value: unknown): FaqSuggestionItemU
     category: input.category as FaqSuggestionCategory,
     question: requiredText(input.question, "question", 500),
     answer: requiredText(input.answer, "answer", 2_000),
+    ...(input.exampleUtterances === undefined
+      ? {}
+      : { exampleUtterances: parseProposalFaqUtterances(input.exampleUtterances) }),
     expectedUpdatedAt: expectedTimestamp(input.expectedUpdatedAt),
   };
 }
@@ -147,4 +179,21 @@ export function parseFaqSuggestionReviewAction(value: unknown): FaqSuggestionRev
   const input = record(value);
   rejectUnknownFields(input, ["expectedUpdatedAt"]);
   return { expectedUpdatedAt: expectedTimestamp(input.expectedUpdatedAt) };
+}
+
+export function parseFaqAliasSuggestionApply(value: unknown): FaqAliasSuggestionApply {
+  const input = record(value);
+  rejectUnknownFields(input, ["expectedUpdatedAt", "exampleUtterances"]);
+  return {
+    expectedUpdatedAt: expectedTimestamp(input.expectedUpdatedAt),
+    ...(input.exampleUtterances === undefined
+      ? {}
+      : { exampleUtterances: parseProposalFaqUtterances(input.exampleUtterances) }),
+  };
+}
+
+function parseProposalFaqUtterances(value: unknown): string[] {
+  const utterances = parseFaqUtterances(value);
+  if (utterances.length < 3) throw new Error("faq_utterance_validation_failed:min");
+  return utterances;
 }

@@ -13,6 +13,7 @@ const item: FaqSuggestionItem = {
   category: "product",
   question: "제품은 어떻게 구매하나요?",
   answer: "공식 온라인 스토어에서 구매할 수 있습니다.",
+  exampleUtterances: ["제품 어디서 사요?", "구매 방법 알려줘", "어디서 구매해요?"],
   evidence: [{ sourceType: "brand_core", sourceId: "source-1", label: "브랜드 코어" }],
   confidence: 0.9,
   status: "review",
@@ -116,7 +117,9 @@ describe("FaqSuggestionPreviewPanel", () => {
     const answer = await screen.findByDisplayValue(item.answer);
     await userEvent.clear(answer);
     await userEvent.type(answer, "수정한 답변입니다.");
-    await userEvent.click(screen.getByRole("button", { name: "승인" }));
+    await userEvent.clear(screen.getByLabelText("표현 예시 1"));
+    await userEvent.type(screen.getByLabelText("표현 예시 1"), "제품 구매처 알려줘");
+    await userEvent.click(screen.getByRole("button", { name: "FAQ 승인" }));
 
     await waitFor(() => expect(api.updateFaqSuggestionItem).toHaveBeenCalledWith(
       "brand-1",
@@ -126,6 +129,7 @@ describe("FaqSuggestionPreviewPanel", () => {
         category: "product",
         question: item.question,
         answer: "수정한 답변입니다.",
+        exampleUtterances: ["제품 구매처 알려줘", "구매 방법 알려줘", "어디서 구매해요?"],
         expectedUpdatedAt: item.updatedAt,
       },
     ));
@@ -169,7 +173,7 @@ describe("FaqSuggestionPreviewPanel", () => {
 
     expect(await screen.findByText(/일부 정보가 없어/)).toBeVisible();
     expect(screen.getByText("중복됨")).toBeVisible();
-    expect(screen.getByRole("button", { name: "승인" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "FAQ 승인" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "제외" })).toBeDisabled();
   });
 

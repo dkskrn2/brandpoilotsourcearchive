@@ -203,6 +203,54 @@ describe("loadApiRuntimeConfig", () => {
       dmWorkersEnabled: false,
       contentProposalsEnabled: false,
     });
+    expect(config.faqMatching).toEqual({
+      suggestionsEnabled: false,
+      expandedExactEnabled: false,
+      shadowMatchingEnabled: false,
+      clarificationEnabled: false,
+      brandAllowlist: [],
+      clarifyThreshold: 0.78,
+      confirmationTtlSeconds: 300,
+    });
+  });
+
+  it("loads FAQ matching gates and brand allowlist", () => {
+    expect(loadApiRuntimeConfig({
+      FAQ_UTTERANCE_SUGGESTIONS_ENABLED: "true",
+      FAQ_EXPANDED_EXACT_ENABLED: "true",
+      FAQ_MATCH_SHADOW_ENABLED: "true",
+      FAQ_CLARIFICATION_ENABLED: "true",
+      FAQ_MATCH_BRAND_ALLOWLIST: "brand-a, brand-b,brand-a",
+      FAQ_CLARIFY_THRESHOLD: "0.82",
+      FAQ_CONFIRMATION_TTL_SECONDS: "120",
+    }).faqMatching).toEqual({
+      suggestionsEnabled: true,
+      expandedExactEnabled: true,
+      shadowMatchingEnabled: true,
+      clarificationEnabled: true,
+      brandAllowlist: ["brand-a", "brand-b"],
+      clarifyThreshold: 0.82,
+      confirmationTtlSeconds: 120,
+    });
+  });
+
+  it.each([
+    ["FAQ_CLARIFY_THRESHOLD", "-0.1"],
+    ["FAQ_CLARIFY_THRESHOLD", "1.1"],
+    ["FAQ_CLARIFY_THRESHOLD", "NaN"],
+    ["FAQ_CONFIRMATION_TTL_SECONDS", "29"],
+    ["FAQ_CONFIRMATION_TTL_SECONDS", "901"],
+  ])("rejects invalid %s=%s", (key, value) => {
+    expect(() => loadApiRuntimeConfig({ [key]: value })).toThrow(key);
+  });
+
+  it.each([
+    "FAQ_UTTERANCE_SUGGESTIONS_ENABLED",
+    "FAQ_EXPANDED_EXACT_ENABLED",
+    "FAQ_MATCH_SHADOW_ENABLED",
+    "FAQ_CLARIFICATION_ENABLED",
+  ])("requires literal booleans for %s", (key) => {
+    expect(() => loadApiRuntimeConfig({ [key]: "1" })).toThrow(key);
   });
 
   it("keeps manual proposal and scheduled automation gates independent", () => {

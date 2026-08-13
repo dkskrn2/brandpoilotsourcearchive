@@ -311,6 +311,34 @@ describe("DM worker", () => {
     });
   });
 
+  it("sends a clarification prompt without Wiki, history, or Codex", async () => {
+    const api = workerApi({
+      route: "faq_clarification",
+      policyReasonCode: "faq_clarification",
+      exactFaqId: knowledgeEntryId,
+      fixedReplyText: "“배송은 얼마나 걸리나요?”에 대해 문의하신 게 맞을까요?",
+      confirmationId: "00000000-0000-4000-8000-000000000020",
+    });
+    const db = { searchCompiledWiki: vi.fn(), conversationHistory: vi.fn() };
+    const runCodex = vi.fn();
+
+    await runDmWorkerOnce({ workerId: "worker-1", api, db, runtimeDirectory: "runtime", runCodex });
+
+    expect(db.searchCompiledWiki).not.toHaveBeenCalled();
+    expect(db.conversationHistory).not.toHaveBeenCalled();
+    expect(runCodex).not.toHaveBeenCalled();
+    expect(api.complete).toHaveBeenCalledWith("job-1", "worker-1", "lease-1", {
+      decision: "answer",
+      answer: "“배송은 얼마나 걸리나요?”에 대해 문의하신 게 맞을까요?",
+      wikiChunkIds: [],
+      knowledgeEntryId,
+      confidence: 1,
+      reasonCode: "faq_clarification",
+      needsAttention: false,
+      reason: "faq_clarification_prompt",
+    });
+  });
+
   it.each([
     ["missing operational fields", {
       decision: "fallback", answer: null, wikiChunkIds: [], knowledgeEntryId: null, confidence: null, reason: "근거 부족",

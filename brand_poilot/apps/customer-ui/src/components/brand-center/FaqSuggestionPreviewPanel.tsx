@@ -9,6 +9,7 @@ import {
   type WikiItem,
 } from "../../features/libraries/libraryGateway";
 import { Badge } from "../ui/Badge";
+import { FaqUtteranceEditor, faqUtteranceValidation } from "./FaqUtteranceEditor";
 
 const categoryOptions: Array<[FaqSuggestionCategory, string]> = [
   ["service", "서비스 문의"],
@@ -102,7 +103,7 @@ export function FaqSuggestionPreviewPanel({
     } : current);
   }
 
-  function editItem(id: string, patch: Partial<Pick<FaqSuggestionItem, "category" | "question" | "answer">>) {
+  function editItem(id: string, patch: Partial<Pick<FaqSuggestionItem, "category" | "question" | "answer" | "exampleUtterances">>) {
     setRun((current) => current ? {
       ...current,
       items: current.items.map((candidate) => candidate.id === id ? { ...candidate, ...patch } : candidate),
@@ -139,17 +140,15 @@ export function FaqSuggestionPreviewPanel({
     setError(null);
     setNotice(null);
     try {
-      let persisted = item;
-      if (dirtyIds.has(item.id)) {
-        const updated = await gateway.updateFaqSuggestionItem(brandId, run.id, item.id, {
-          category: item.category,
-          question: item.question,
-          answer: item.answer,
-          expectedUpdatedAt: item.updatedAt,
-        });
-        persisted = updated.item;
-        replaceItem(persisted);
-      }
+      const updated = await gateway.updateFaqSuggestionItem(brandId, run.id, item.id, {
+        category: item.category,
+        question: item.question,
+        answer: item.answer,
+        exampleUtterances: item.exampleUtterances,
+        expectedUpdatedAt: item.updatedAt,
+      });
+      const persisted = updated.item;
+      replaceItem(persisted);
       const result = await gateway.approveFaqSuggestionItem(brandId, run.id, item.id, {
         expectedUpdatedAt: persisted.updatedAt,
       });
@@ -286,14 +285,25 @@ export function FaqSuggestionPreviewPanel({
                       />
                     </label>
                   </div>
+                  <FaqUtteranceEditor
+                    values={item.exampleUtterances}
+                    minItems={3}
+                    disabled={!actionable}
+                    onChange={(exampleUtterances) => editItem(item.id, { exampleUtterances })}
+                  />
                   <footer>
                     <p><strong>근거</strong> {item.evidence.map((entry) => entry.label).join(", ") || "근거 없음"}</p>
                     <div className="actions">
                       <button className="button" type="button" disabled={!actionable} onClick={() => void dismiss(item)}>
                         <X size={15} /> 제외
                       </button>
-                      <button className="button primary" type="button" disabled={!actionable || !item.question.trim() || !item.answer.trim()} onClick={() => void approve(item)}>
-                        <Check size={15} /> 승인
+                      <button className="button primary" type="button" disabled={
+                        !actionable
+                        || !item.question.trim()
+                        || !item.answer.trim()
+                        || Object.values(faqUtteranceValidation(item.exampleUtterances, 3)).some(Boolean)
+                      } onClick={() => void approve(item)}>
+                        <Check size={15} /> FAQ 승인
                       </button>
                     </div>
                   </footer>

@@ -10,6 +10,7 @@ export type DmReasonCode =
   | "knowledge_gap"
   | "low_confidence"
   | "processing_error"
+  | "faq_clarification"
   | "system_event";
 
 export type DmWorkerResult = {
@@ -118,6 +119,7 @@ export function validateResult(value: unknown, packet?: CompiledWikiSearchPacket
     && reasonCode !== "knowledge_gap"
     && reasonCode !== "low_confidence"
     && reasonCode !== "processing_error"
+    && reasonCode !== "faq_clarification"
     && reasonCode !== "system_event"
   ) {
     throw new Error("dm_reason_code_invalid");
@@ -235,6 +237,28 @@ export async function runDmWorkerOnce({
   try {
     if (job.payload.route === "fixed_fallback") {
       const result = fixedFallbackResult(job.payload.policyReasonCode);
+      await api.complete(job.id, workerId, job.leaseToken, result);
+      return { status: "completed" as const, jobId: job.id, decision: result.decision };
+    }
+
+    if (job.payload.route === "faq_clarification") {
+      if (!job.payload.fixedReplyText?.trim()) throw new Error("dm_clarification_text_required");
+      if (!job.payload.confirmationId || !uuidPattern.test(job.payload.confirmationId)) {
+        throw new Error("dm_confirmation_id_invalid");
+      }
+      if (!job.payload.exactFaqId || !uuidPattern.test(job.payload.exactFaqId)) {
+        throw new Error("dm_exact_faq_id_invalid");
+      }
+      const result: DmWorkerResult = {
+        decision: "answer",
+        answer: job.payload.fixedReplyText.trim(),
+        wikiChunkIds: [],
+        knowledgeEntryId: job.payload.exactFaqId,
+        confidence: 1,
+        reasonCode: "faq_clarification",
+        needsAttention: false,
+        reason: "faq_clarification_prompt",
+      };
       await api.complete(job.id, workerId, job.leaseToken, result);
       return { status: "completed" as const, jobId: job.id, decision: result.decision };
     }

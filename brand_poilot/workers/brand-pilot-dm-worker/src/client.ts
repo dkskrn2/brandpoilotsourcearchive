@@ -8,10 +8,11 @@ export interface ClaimedDmJob {
   leaseToken: string;
   payload: {
     conversationId: string;
+    turnId: string;
     senderId: string;
     messageId: string;
     question: string;
-    route: "fixed_fallback" | "knowledge" | "ignore";
+    route: "fixed_fallback" | "knowledge" | "ignore" | "faq_clarification";
     policyReasonCode:
       | "direct_faq"
       | "wiki_answer"
@@ -20,8 +21,11 @@ export interface ClaimedDmJob {
       | "knowledge_gap"
       | "low_confidence"
       | "processing_error"
+      | "faq_clarification"
       | "system_event";
     exactFaqId?: string | null;
+    fixedReplyText?: string;
+    confirmationId?: string;
     forceAttentionType:
       | "restricted_action"
       | "complaint"
@@ -31,6 +35,43 @@ export interface ClaimedDmJob {
       | null;
   };
   attemptCount: number;
+}
+
+const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+export function parseClaimedDmJob(value: unknown): ClaimedDmJob {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("dm_claim_invalid");
+  const row = value as Record<string, unknown>;
+  const payload = row.payload;
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) throw new Error("dm_claim_payload_invalid");
+  const item = payload as Record<string, unknown>;
+  if (
+    typeof row.id !== "string"
+    || typeof row.workspaceId !== "string"
+    || typeof row.brandId !== "string"
+    || typeof row.leaseToken !== "string"
+    || typeof row.attemptCount !== "number"
+    || typeof item.conversationId !== "string"
+    || typeof item.turnId !== "string"
+    || typeof item.senderId !== "string"
+    || typeof item.messageId !== "string"
+    || typeof item.question !== "string"
+  ) throw new Error("dm_claim_payload_invalid");
+  if (
+    item.route !== "fixed_fallback"
+    && item.route !== "knowledge"
+    && item.route !== "ignore"
+    && item.route !== "faq_clarification"
+  ) throw new Error("dm_claim_route_invalid");
+  if (item.route === "faq_clarification" && (
+    typeof item.fixedReplyText !== "string"
+    || !item.fixedReplyText.trim()
+    || typeof item.confirmationId !== "string"
+    || !uuidPattern.test(item.confirmationId)
+    || typeof item.exactFaqId !== "string"
+    || !uuidPattern.test(item.exactFaqId)
+  )) throw new Error("dm_claim_clarification_invalid");
+  return value as ClaimedDmJob;
 }
 
 export interface ClaimedDmProfileJob {
@@ -60,7 +101,7 @@ export function createDmWorkerClient({ apiUrl, token, fetchImpl = fetch }: {
   return {
     async claim(workerId: string) {
       const response = await request("/worker/dm-jobs/claim", { workerId });
-      return response.status === 204 ? null : await response.json() as ClaimedDmJob;
+      return response.status === 204 ? null : parseClaimedDmJob(await response.json());
     },
     heartbeat(jobId: string, workerId: string, leaseToken: string) {
       return request(`/worker/dm-jobs/${jobId}/heartbeat`, { workerId, leaseToken });

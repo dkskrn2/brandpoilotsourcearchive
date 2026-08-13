@@ -1,12 +1,15 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
+import { Sparkles } from "lucide-react";
 import { Alert } from "../ui/Alert";
 import { InlineSpinner } from "../ui/LoadingState";
 import type {
   LibraryGateway,
+  FaqAliasSuggestionRun,
   ManualWikiItemType,
   WikiItem,
 } from "../../features/libraries/libraryGateway";
+import { FaqUtteranceEditor, faqUtteranceValidation } from "./FaqUtteranceEditor";
 
 const labels: Record<ManualWikiItemType | "product" | "service", string> = {
   faq: "FAQ",
@@ -48,6 +51,11 @@ export function WikiItemEditor({
   const [itemType, setItemType] = useState<ManualWikiItemType>("faq");
   const [title, setTitle] = useState("");
   const [content, setContent] = useState("");
+  const [manualAliases, setManualAliases] = useState<string[]>([]);
+  const [aliasRun, setAliasRun] = useState<FaqAliasSuggestionRun | null>(null);
+  const [aliasDraft, setAliasDraft] = useState<string[]>([]);
+  const [aliasBusy, setAliasBusy] = useState(false);
+  const [aliasSuggestionsEnabled, setAliasSuggestionsEnabled] = useState(false);
   const [mode, setMode] = useState<"view" | "edit" | "create">("view");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -60,22 +68,57 @@ export function WikiItemEditor({
       }
       setTitle(item.title);
       setContent(item.content);
+      setManualAliases(item.manualAliases ?? []);
     } else {
       setItemType(allowedItemType ?? "faq");
       setTitle("");
       setContent("");
+      setManualAliases([]);
     }
     setMode(creating ? "create" : "view");
     setError(null);
     setNotice(null);
+    setAliasRun(null);
+    setAliasDraft([]);
   }, [allowedItemType, item?.id, creating]);
+
+  useEffect(() => {
+    let active = true;
+    setAliasSuggestionsEnabled(false);
+    if (typeof gateway.getFaqCapabilities !== "function") return () => { active = false; };
+    void gateway.getFaqCapabilities(brandId)
+      .then((capabilities) => { if (active) setAliasSuggestionsEnabled(capabilities.suggestions); })
+      .catch(() => { if (active) setAliasSuggestionsEnabled(false); });
+    return () => { active = false; };
+  }, [brandId, gateway]);
+
+  useEffect(() => {
+    if (aliasRun?.status === "completed" && aliasRun.exampleUtterances) {
+      setAliasDraft(aliasRun.exampleUtterances);
+    }
+  }, [aliasRun?.id, aliasRun?.completedAt, aliasRun?.status]);
+
+  useEffect(() => {
+    if (!item || !aliasRun || !["queued", "running"].includes(aliasRun.status)) return;
+    let active = true;
+    const timer = window.setInterval(() => {
+      void gateway.getLatestFaqAliasSuggestionRun(brandId, item.id)
+        .then(({ run }) => { if (active && run) setAliasRun(run); })
+        .catch(() => { if (active) setError("표현 예시 제안 상태를 확인하지 못했습니다."); });
+    }, 2_000);
+    return () => { active = false; window.clearInterval(timer); };
+  }, [aliasRun?.id, aliasRun?.status, brandId, gateway, item?.id]);
 
   const readOnly = item?.origin === "product_service" || item?.status === "read_only";
   const editable = !readOnly && (mode === "edit" || mode === "create");
   const dirty = editable && (
     mode === "create"
       ? Boolean(title.trim() || content.trim())
-      : Boolean(item && (title !== item.title || content !== item.content))
+      : Boolean(item && (
+        title !== item.title
+        || content !== item.content
+        || JSON.stringify(manualAliases) !== JSON.stringify(item.manualAliases ?? [])
+      ))
   );
 
   useEffect(() => {
@@ -91,10 +134,16 @@ export function WikiItemEditor({
     setBusy(true);
     setError(null);
     try {
+      const aliasesChanged = item?.itemType === "faq"
+        && JSON.stringify(manualAliases) !== JSON.stringify(item.manualAliases ?? []);
       const saved = item
         ? await gateway.updateWikiItem(brandId, item.id, {
           title: title.trim(),
           content: content.trim(),
+          ...(aliasesChanged ? {
+            manualAliases,
+            expectedUpdatedAt: item.updatedAt,
+          } : {}),
         })
         : await gateway.createWikiItem(brandId, {
           contractVersion: "wiki-item.v1",
@@ -106,6 +155,7 @@ export function WikiItemEditor({
       onSaved(saved);
       setTitle(saved.title);
       setContent(saved.content);
+      setManualAliases(saved.manualAliases ?? []);
       setMode("view");
       setNotice(contextTitle
         ? `${contextTitle}를 저장했습니다.`
@@ -114,6 +164,52 @@ export function WikiItemEditor({
       setError("Wiki 항목을 저장하지 못했습니다. 입력 내용과 권한을 확인해 주세요.");
     } finally {
       setBusy(false);
+    }
+  }
+
+  async function suggestAliases() {
+    if (!item || item.itemType !== "faq") return;
+    setAliasBusy(true);
+    setError(null);
+    setNotice(null);
+    try {
+      const { run } = await gateway.createFaqAliasSuggestionRun(brandId, item.id);
+      setAliasRun(run);
+    } catch {
+      setError("표현 예시 제안을 시작하지 못했습니다. FAQ 상태를 확인해 주세요.");
+    } finally {
+      setAliasBusy(false);
+    }
+  }
+
+  async function applyAliasSuggestion() {
+    if (!item || !aliasRun?.exampleUtterances) return;
+    if (Object.values(faqUtteranceValidation(aliasDraft, 3)).some(Boolean)) {
+      setError("표현 예시를 3~8개로 중복 없이 입력해 주세요.");
+      return;
+    }
+    setAliasBusy(true);
+    setError(null);
+    try {
+      const saved = await gateway.applyFaqAliasSuggestionRun(
+        brandId,
+        item.id,
+        aliasRun.id,
+        item.updatedAt,
+        aliasDraft,
+      );
+      setManualAliases(saved.manualAliases ?? []);
+      onSaved(saved);
+      setAliasRun(null);
+      setNotice("제안된 표현 예시를 FAQ에 적용했습니다.");
+    } catch (cause) {
+      if (cause && typeof cause === "object" && "status" in cause && cause.status === 409) {
+        setError("FAQ가 먼저 변경되었습니다. 최신 내용을 불러온 뒤 다시 제안해 주세요.");
+      } else {
+        setError("표현 예시를 적용하지 못했습니다. 잠시 후 다시 시도해 주세요.");
+      }
+    } finally {
+      setAliasBusy(false);
     }
   }
 
@@ -141,6 +237,7 @@ export function WikiItemEditor({
     }
     setTitle(item?.title ?? "");
     setContent(item?.content ?? "");
+    setManualAliases(item?.manualAliases ?? []);
     setMode("view");
     setError(null);
   }
@@ -181,6 +278,45 @@ export function WikiItemEditor({
       <label>유형<select aria-label="Wiki 유형" disabled={Boolean(item) || readOnly || Boolean(allowedItemType)} value={allowedItemType ?? itemType} onChange={(event) => setItemType(event.target.value as ManualWikiItemType)}><option value="faq">FAQ</option><option value="policy">정책</option><option value="how_to">사용법</option><option value="guide">가이드</option></select></label>
       <label className="is-wide">제목<input aria-label="제목" disabled={!editable} value={title} onChange={(event) => setTitle(event.target.value)} /></label>
       <label className="is-wide">내용<textarea aria-label="내용" disabled={!editable} value={content} onChange={(event) => setContent(event.target.value)} /></label>
+      {item?.itemType === "faq" ? <section className="wiki-faq-aliases is-wide" aria-label="FAQ 표현 예시">
+        <div className="wiki-faq-alias-head">
+          <div><strong>고객 표현 예시</strong><p>질문이 조금 달라도 이 FAQ 후보를 찾는 데 사용합니다.</p></div>
+          {mode === "view" && aliasSuggestionsEnabled ? <button
+            className="button"
+            type="button"
+            disabled={aliasBusy || aliasRun?.status === "queued" || aliasRun?.status === "running"}
+            onClick={() => void suggestAliases()}
+          ><Sparkles size={15} /> {aliasBusy ? "제안 시작 중" : "표현 예시 제안받기"}</button> : null}
+        </div>
+        {item.sourceAliases?.length ? <div className="faq-alias-source">
+          <span>원본 표현 · 읽기 전용</span>
+          <div>{item.sourceAliases.map((alias) => <code key={alias}>{alias}</code>)}</div>
+        </div> : null}
+        <FaqUtteranceEditor
+          label="직접 관리하는 표현"
+          values={manualAliases}
+          disabled={!editable}
+          onChange={setManualAliases}
+        />
+        <div className="faq-alias-effective">
+          <span>최종 사용 표현</span>
+          <div>{(editable
+            ? [...(item.sourceAliases ?? []), ...manualAliases]
+            : (item.effectiveAliases ?? [])
+          ).map((alias) => <code key={alias}>{alias}</code>)}</div>
+        </div>
+        {aliasRun?.status === "failed" ? <Alert title="제안 실패" variant="warn">표현 예시를 만들지 못했습니다. 다시 시도해 주세요.</Alert> : null}
+        {aliasRun && ["queued", "running"].includes(aliasRun.status) ? <p className="muted">표현 예시를 만들고 있습니다.</p> : null}
+        {aliasRun?.status === "completed" && aliasRun.exampleUtterances ? <div className="faq-alias-proposal">
+          <FaqUtteranceEditor values={aliasDraft} minItems={3} onChange={setAliasDraft} label="제안된 표현" />
+          <button
+            className="button primary"
+            type="button"
+            disabled={aliasBusy || Object.values(faqUtteranceValidation(aliasDraft, 3)).some(Boolean)}
+            onClick={() => void applyAliasSuggestion()}
+          >제안 적용</button>
+        </div> : null}
+      </section> : null}
       {editable ? <div className="form-actions is-wide">
         <button className="button primary" type="submit" disabled={busy}>{busy ? <InlineSpinner label="Wiki 항목 저장 중" /> : null}{contextTitle ? "저장" : "초안 저장"}</button>
         <button className="button" type="button" disabled={busy} onClick={cancel}>취소</button>

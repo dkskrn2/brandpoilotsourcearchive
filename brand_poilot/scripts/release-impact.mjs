@@ -18,6 +18,7 @@ const COMPONENTS = Object.freeze(["customerUi", ...SERVER_COMPONENTS]);
 export const AI_CONTENT_THREE_FORMAT_CUTOVER_PROFILE = "ai-content-three-format-cutover";
 export const STRUCTURED_SOCIAL_RENDER_SEMANTICS_PROFILE = "structured-social-render-semantics";
 export const CARD_DECK_EDITORIAL_PIPELINE_PROFILE = "card-deck-editorial-pipeline";
+export const FAQ_UTTERANCE_MATCHING_PROFILE = "faq-utterance-matching";
 const AI_CONTENT_CUTOVER_SERVER_COMPONENTS = Object.freeze([
   "api",
   "contentProposalWorker",
@@ -190,6 +191,34 @@ const CARD_DECK_TOOLING_PATHS = new Set([
   "scripts/three-format-cutover-static-check.mjs",
   "scripts/three-format-cutover-static-check.test.mjs",
   ".github/workflows/publish-brand-pilot-server-images.yml",
+]);
+
+const FAQ_UTTERANCE_DEPLOY_PATHS = new Set([
+  "deploy/compose.production.yml",
+  "deploy/env/api.env.example",
+  "deploy/env/faq-worker.env.example",
+  "deploy/scripts/deploy.sh",
+  "deploy/scripts/lib.sh",
+  "deploy/scripts/preflight.sh",
+  "deploy/scripts/rollout-workers.sh",
+]);
+
+const FAQ_UTTERANCE_SCRIPT_PATHS = new Set([
+  "scripts/content-suggestion-schema-migration.test.mjs",
+  "scripts/deployment-contract.test.mjs",
+  "scripts/faq-matcher-evaluation-runner.ts",
+  "scripts/faq-matcher-evaluation.mjs",
+  "scripts/faq-matcher-evaluation.test.mjs",
+  "scripts/fixtures/faq-matcher-evaluation.json",
+  "scripts/fixtures/faq-utterance-policy.json",
+  "scripts/incremental-cicd-contract.test.mjs",
+  "scripts/migrate.test.mjs",
+  "scripts/migrationRunner.mjs",
+  "scripts/migrationRunner.test.mjs",
+  "scripts/post075DataMigration.postgres.integration.test.mjs",
+  "scripts/release-impact.mjs",
+  "scripts/release-impact.test.mjs",
+  "scripts/repository-contract.test.mjs",
 ]);
 
 const WORKER_PATHS = Object.freeze([
@@ -387,9 +416,43 @@ function classifyCardDeckEditorialPipelinePath(path, components) {
   return { known: false };
 }
 
+function classifyFaqUtteranceMatchingPath(path, components) {
+  if (path.startsWith("docs/") || path.endsWith(".md")) {
+    return { known: true, documentation: true };
+  }
+  if (path.startsWith("apps/api/")) {
+    components.api = true;
+    return { known: true };
+  }
+  if (path.startsWith("apps/customer-ui/")) {
+    components.customerUi = true;
+    return { known: true };
+  }
+  if (path.startsWith("workers/brand-pilot-dm-worker/")) {
+    components.dmWikiWorker = true;
+    return { known: true };
+  }
+  if (path === "db/migrations/078_faq_utterance_matching.sql") {
+    components.api = true;
+    return { known: true, migration: true };
+  }
+  if (FAQ_UTTERANCE_DEPLOY_PATHS.has(path)) {
+    return { known: true, deployBundle: true };
+  }
+  if (FAQ_UTTERANCE_SCRIPT_PATHS.has(path)) {
+    if (path === "scripts/migrationRunner.mjs") components.api = true;
+    return { known: true, deployBundle: path === "scripts/release-impact.mjs" };
+  }
+  if (path === ".github/workflows/publish-brand-pilot-server-images.yml"
+    || path === "../.github/workflows/publish-brand-pilot-server-images.yml") {
+    return { known: true, deployBundle: true };
+  }
+  return { known: false };
+}
+
 export function classifyChangedPaths(values, options = {}) {
   const profile = options.profile ?? "default";
-  if (!["default", AI_CONTENT_THREE_FORMAT_CUTOVER_PROFILE, STRUCTURED_SOCIAL_RENDER_SEMANTICS_PROFILE, CARD_DECK_EDITORIAL_PIPELINE_PROFILE].includes(profile)) {
+  if (!["default", AI_CONTENT_THREE_FORMAT_CUTOVER_PROFILE, STRUCTURED_SOCIAL_RENDER_SEMANTICS_PROFILE, CARD_DECK_EDITORIAL_PIPELINE_PROFILE, FAQ_UTTERANCE_MATCHING_PROFILE].includes(profile)) {
     throw new Error("release_impact_profile_invalid");
   }
   const originalPaths = [...new Set(values.map((value) => String(value ?? "").trim()).filter(Boolean))];
@@ -411,7 +474,8 @@ export function classifyChangedPaths(values, options = {}) {
 
   if (profile === AI_CONTENT_THREE_FORMAT_CUTOVER_PROFILE
     || profile === STRUCTURED_SOCIAL_RENDER_SEMANTICS_PROFILE
-    || profile === CARD_DECK_EDITORIAL_PIPELINE_PROFILE) {
+    || profile === CARD_DECK_EDITORIAL_PIPELINE_PROFILE
+    || profile === FAQ_UTTERANCE_MATCHING_PROFILE) {
     for (let index = 0; index < paths.length; index += 1) {
       const path = paths[index];
       const originalPath = originalPaths[index] ?? path;
@@ -419,7 +483,9 @@ export function classifyChangedPaths(values, options = {}) {
         ? classifyAiContentCutoverPath(path, components)
         : profile === STRUCTURED_SOCIAL_RENDER_SEMANTICS_PROFILE
           ? classifyStructuredSocialRenderPath(path, components)
-          : classifyCardDeckEditorialPipelinePath(path, components);
+          : profile === CARD_DECK_EDITORIAL_PIPELINE_PROFILE
+            ? classifyCardDeckEditorialPipelinePath(path, components)
+            : classifyFaqUtteranceMatchingPath(path, components);
       if (result.documentation) continue;
       nonDocumentationChange = true;
       if (result.migration) migrationChanged = true;

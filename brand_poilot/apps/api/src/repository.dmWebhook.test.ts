@@ -19,9 +19,15 @@ function isDmReplyJobInsert(sql: unknown) {
 }
 
 describe("Instagram DM webhook repository", () => {
-  function activeKnowledgeFixture(exactFaq: { knowledge_entry_id: string | null; conflict_marker: string | null }) {
+  function activeKnowledgeFixture(
+    exactFaq: { knowledge_entry_id: string | null; conflict_marker: string | null },
+    options: Parameters<typeof createRepository>[1] = {},
+    aggregatedQuestion = "배송은 얼마나 걸리나요?\n제주도도 같나요?",
+    pendingConfirmation: Record<string, unknown> | null = null,
+    clarificationSending = false,
+    limits = { participant_count: "1", brand_count: "1" },
+  ) {
     const statements: Array<{ sql: string; values: unknown[] }> = [];
-    const aggregatedQuestion = "배송은 얼마나 걸리나요?\n제주도도 같나요?";
     const query = vi.fn(async (sql: string, values: unknown[] = []) => {
       statements.push({ sql, values });
       if (["begin", "commit", "rollback"].includes(sql.trim())) return { rowCount: 0, rows: [] };
@@ -30,13 +36,45 @@ describe("Instagram DM webhook repository", () => {
       if (sql.includes("insert into instagram_dm_messages")) return { rowCount: 1, rows: [{ id: "message-1" }] };
       if (sql.includes("insert into dm_turns")) return { rowCount: 1, rows: [{ id: "turn-1", aggregated_text: aggregatedQuestion }] };
       if (sql.includes("from instagram_dm_settings")) return { rowCount: 1, rows: [{ enabled: true }] };
+      if (sql.includes("from dm_faq_confirmations confirmation") && sql.includes("for update")) {
+        return pendingConfirmation
+          ? { rowCount: 1, rows: [pendingConfirmation] }
+          : { rowCount: 0, rows: [] };
+      }
+      if (sql.includes("from dm_delivery_attempts attempt") && sql.includes("faq_clarification")) {
+        return clarificationSending ? { rowCount: 1, rows: [{ id: "attempt-clarification" }] } : { rowCount: 0, rows: [] };
+      }
       if (sql.includes("from wiki_versions version")) return { rowCount: 1, rows: [{ ready: true }] };
       if (sql.includes("find_direct_faq_exact")) return { rowCount: 1, rows: [exactFaq] };
-      if (sql.includes("count(*) filter")) return { rowCount: 1, rows: [{ participant_count: "1", brand_count: "1" }] };
+      if (sql.includes("from knowledge_entries") && sql.includes("manual_aliases")) return {
+        rowCount: 2,
+        rows: [
+          {
+            id: "00000000-0000-4000-8000-000000000010",
+            question: "배송은 얼마나 걸리나요?",
+            aliases: ["배송 기간"],
+            manual_aliases: ["택배 언제 와요"],
+          },
+          {
+            id: "00000000-0000-4000-8000-000000000011",
+            question: "운영시간이 어떻게 되나요?",
+            aliases: [],
+            manual_aliases: ["몇 시에 열어요"],
+          },
+        ],
+      };
+      if (sql.includes("insert into dm_faq_confirmations")) return {
+        rowCount: 1,
+        rows: [{ id: "00000000-0000-4000-8000-000000000012" }],
+      };
+      if (sql.includes("count(*) filter")) return { rowCount: 1, rows: [limits] };
       if (sql.includes("insert into jobs")) return { rowCount: 1, rows: [{ id: "dm-job-1" }] };
       return { rowCount: 0, rows: [] };
     });
-    const repository = createRepository({ query, connect: vi.fn(async () => ({ query, release: vi.fn() })) } as any);
+    const repository = createRepository(
+      { query, connect: vi.fn(async () => ({ query, release: vi.fn() })) } as any,
+      options,
+    );
     return { aggregatedQuestion, query, repository, statements };
   }
 
@@ -133,6 +171,266 @@ describe("Instagram DM webhook repository", () => {
       forceAttentionType: null,
     });
     expect(fixture.statements.some((statement) => statement.sql.includes("dm_attention_items"))).toBe(false);
+  });
+
+  it("uses a normalized manual alias as expanded exact only for an allowlisted brand", async () => {
+    const fixture = activeKnowledgeFixture(
+      { knowledge_entry_id: null, conflict_marker: null },
+      {
+        faqMatching: {
+          suggestionsEnabled: false,
+          expandedExactEnabled: true,
+          shadowMatchingEnabled: false,
+          clarificationEnabled: false,
+          brandAllowlist: ["brand-1"],
+          clarifyThreshold: 0.78,
+          confirmationTtlSeconds: 300,
+        },
+      },
+      "택배 언제 와요?!",
+    );
+    await fixture.repository.receiveInstagramWebhookMessage(webhookInput("mid-expanded", "택배 언제 와요?!"));
+    const job = fixture.statements.find((statement) => isDmReplyJobInsert(statement.sql));
+    expect(JSON.parse(String(job?.values[2]))).toMatchObject({
+      route: "knowledge",
+      exactFaqId: "00000000-0000-4000-8000-000000000010",
+    });
+    expect(fixture.statements.some((statement) => statement.sql.includes("from wiki_versions version"))).toBe(false);
+  });
+
+  it("records only identifiers and scores in shadow mode without changing the knowledge route", async () => {
+    const telemetry = vi.fn();
+    const privateQuestion = "배송은 얼마나 걸리나용";
+    const fixture = activeKnowledgeFixture(
+      { knowledge_entry_id: null, conflict_marker: null },
+      {
+        faqMatching: {
+          suggestionsEnabled: false,
+          expandedExactEnabled: false,
+          shadowMatchingEnabled: true,
+          clarificationEnabled: false,
+          brandAllowlist: ["brand-1"],
+          clarifyThreshold: 0.78,
+          confirmationTtlSeconds: 300,
+        },
+        faqMatchTelemetry: telemetry,
+      },
+      privateQuestion,
+    );
+
+    await fixture.repository.receiveInstagramWebhookMessage(webhookInput("mid-shadow", privateQuestion));
+
+    expect(telemetry).toHaveBeenCalledWith({
+      event: "faq_match_shadow",
+      messageId: "mid-shadow",
+      kind: "candidate",
+      knowledgeEntryId: "00000000-0000-4000-8000-000000000010",
+      score: expect.any(Number),
+    });
+    expect(JSON.stringify(telemetry.mock.calls)).not.toContain(privateQuestion);
+    const job = fixture.statements.find((statement) => isDmReplyJobInsert(statement.sql));
+    expect(JSON.parse(String(job?.values[2]))).toMatchObject({ route: "knowledge" });
+    expect(JSON.parse(String(job?.values[2]))).not.toHaveProperty("exactFaqId");
+  });
+
+  it("does not let shadow telemetry failure roll back DM routing", async () => {
+    const fixture = activeKnowledgeFixture(
+      { knowledge_entry_id: null, conflict_marker: null },
+      {
+        faqMatching: {
+          suggestionsEnabled: false,
+          expandedExactEnabled: false,
+          shadowMatchingEnabled: true,
+          clarificationEnabled: false,
+          brandAllowlist: ["brand-1"],
+          clarifyThreshold: 0.78,
+          confirmationTtlSeconds: 300,
+        },
+        faqMatchTelemetry: () => { throw new Error("telemetry_unavailable"); },
+      },
+      "배송은 얼마나 걸리나용",
+    );
+
+    await expect(fixture.repository.receiveInstagramWebhookMessage(
+      webhookInput("mid-shadow-failure", "배송은 얼마나 걸리나용"),
+    )).resolves.toBeDefined();
+    const job = fixture.statements.find((statement) => isDmReplyJobInsert(statement.sql));
+    expect(JSON.parse(String(job?.values[2]))).toMatchObject({ route: "knowledge" });
+  });
+
+  it("queues a fixed clarification prompt for a fuzzy candidate without direct answering", async () => {
+    const fixture = activeKnowledgeFixture(
+      { knowledge_entry_id: null, conflict_marker: null },
+      {
+        faqMatching: {
+          suggestionsEnabled: false,
+          expandedExactEnabled: false,
+          shadowMatchingEnabled: true,
+          clarificationEnabled: true,
+          brandAllowlist: ["brand-1"],
+          clarifyThreshold: 0.7,
+          confirmationTtlSeconds: 300,
+        },
+      },
+      "배송은 얼마나 걸리나용",
+    );
+    await fixture.repository.receiveInstagramWebhookMessage(webhookInput("mid-fuzzy", "배송은 얼마나 걸리나용"));
+    const job = fixture.statements.find((statement) => isDmReplyJobInsert(statement.sql));
+    expect(JSON.parse(String(job?.values[2]))).toMatchObject({
+      route: "faq_clarification",
+      policyReasonCode: "faq_clarification",
+      confirmationId: "00000000-0000-4000-8000-000000000012",
+      fixedReplyText: expect.stringContaining("배송은 얼마나 걸리나요?"),
+    });
+    expect(job?.values[4]).toBe(true);
+    expect(fixture.statements.some((statement) => statement.sql.includes("from wiki_versions version"))).toBe(false);
+  });
+
+  it("uses a fast affirmative reply to cancel the deferred prompt and queue the confirmed FAQ", async () => {
+    const knowledgeEntryId = "00000000-0000-4000-8000-000000000010";
+    const confirmationId = "00000000-0000-4000-8000-000000000012";
+    const fixture = activeKnowledgeFixture(
+      { knowledge_entry_id: null, conflict_marker: null },
+      {
+        faqMatching: {
+          suggestionsEnabled: false,
+          expandedExactEnabled: false,
+          shadowMatchingEnabled: false,
+          clarificationEnabled: true,
+          brandAllowlist: ["brand-1"],
+          clarifyThreshold: 0.78,
+          confirmationTtlSeconds: 300,
+        },
+      },
+      "네",
+      {
+        id: confirmationId,
+        knowledge_entry_id: knowledgeEntryId,
+        status: "awaiting_answer",
+        expires_at: "2099-01-01T00:00:00.000Z",
+      },
+    );
+
+    await fixture.repository.receiveInstagramWebhookMessage(webhookInput("mid-confirm", "네"));
+
+    const job = fixture.statements.find((statement) => isDmReplyJobInsert(statement.sql));
+    expect(JSON.parse(String(job?.values[2]))).toMatchObject({
+      route: "knowledge",
+      exactFaqId: knowledgeEntryId,
+      parentConfirmationId: confirmationId,
+    });
+    expect(job?.values[3]).toBe(`faq-confirmation:${confirmationId}`);
+    expect(fixture.statements.some(({ sql }) => sql.includes("status = 'confirmed'"))).toBe(true);
+    expect(fixture.statements.some(({ sql }) => (
+      sql.includes("update jobs set status = 'cancelled'") && sql.includes("confirmationId")
+    ))).toBe(true);
+    expect(fixture.statements.some(({ sql }) => sql.includes("find_direct_faq_exact"))).toBe(false);
+  });
+
+  it.each([
+    ["아니요", "rejected", "2099-01-01T00:00:00.000Z"],
+    ["다른 질문이에요", "cancelled", "2099-01-01T00:00:00.000Z"],
+    ["새 질문이에요", "expired", "2000-01-01T00:00:00.000Z"],
+  ])("resolves an active confirmation as %s -> %s and routes the message normally", async (
+    text,
+    expectedStatus,
+    expiresAt,
+  ) => {
+    const fixture = activeKnowledgeFixture(
+      { knowledge_entry_id: null, conflict_marker: null },
+      {
+        faqMatching: {
+          suggestionsEnabled: false,
+          expandedExactEnabled: false,
+          shadowMatchingEnabled: false,
+          clarificationEnabled: true,
+          brandAllowlist: ["brand-1"],
+          clarifyThreshold: 0.95,
+          confirmationTtlSeconds: 300,
+        },
+      },
+      text,
+      {
+        id: "00000000-0000-4000-8000-000000000012",
+        knowledge_entry_id: "00000000-0000-4000-8000-000000000010",
+        status: "awaiting_answer",
+        expires_at: expiresAt,
+      },
+    );
+
+    await fixture.repository.receiveInstagramWebhookMessage(webhookInput(`mid-${expectedStatus}`, text));
+
+    expect(fixture.statements.some(({ sql, values }) => (
+      sql.includes("update dm_faq_confirmations")
+      && (sql.includes(`status = '${expectedStatus}'`) || values.includes(expectedStatus))
+    ))).toBe(true);
+    expect(fixture.statements.some(({ sql }) => sql.includes("find_direct_faq_exact"))).toBe(true);
+  });
+
+  it("does not discard a fast affirmative reply while its clarification prompt is already sending", async () => {
+    const fixture = activeKnowledgeFixture(
+      { knowledge_entry_id: null, conflict_marker: null },
+      {
+        faqMatching: {
+          suggestionsEnabled: false,
+          expandedExactEnabled: false,
+          shadowMatchingEnabled: false,
+          clarificationEnabled: true,
+          brandAllowlist: ["brand-1"],
+          clarifyThreshold: 0.78,
+          confirmationTtlSeconds: 300,
+        },
+      },
+      "네",
+      {
+        id: "00000000-0000-4000-8000-000000000012",
+        knowledge_entry_id: "00000000-0000-4000-8000-000000000010",
+        status: "pending_prompt",
+        expires_at: "2099-01-01T00:00:00.000Z",
+      },
+      true,
+    );
+
+    await expect(fixture.repository.receiveInstagramWebhookMessage(
+      webhookInput("mid-fast-confirm", "네"),
+    )).resolves.toMatchObject({ status: "queued", jobId: "dm-job-1" });
+    const job = fixture.statements.find(({ sql }) => isDmReplyJobInsert(sql));
+    expect(JSON.parse(String(job?.values[2]))).toMatchObject({
+      exactFaqId: "00000000-0000-4000-8000-000000000010",
+      parentConfirmationId: "00000000-0000-4000-8000-000000000012",
+    });
+    expect(fixture.statements.some(({ sql }) => sql.includes("status = 'confirmed'"))).toBe(true);
+  });
+
+  it("checks the inbound rate limit before creating or resolving a FAQ confirmation", async () => {
+    const fixture = activeKnowledgeFixture(
+      { knowledge_entry_id: null, conflict_marker: null },
+      {
+        faqMatching: {
+          suggestionsEnabled: false,
+          expandedExactEnabled: false,
+          shadowMatchingEnabled: true,
+          clarificationEnabled: true,
+          brandAllowlist: ["brand-1"],
+          clarifyThreshold: 0.7,
+          confirmationTtlSeconds: 300,
+        },
+      },
+      "배송은 얼마나 걸리나용",
+      null,
+      false,
+      { participant_count: "21", brand_count: "1" },
+    );
+
+    await expect(fixture.repository.receiveInstagramWebhookMessage(
+      webhookInput("mid-rate-limited", "배송은 얼마나 걸리나용"),
+    )).resolves.toMatchObject({ status: "rate_limited", jobId: null });
+    const rateCheckIndex = fixture.statements.findIndex(({ sql }) => sql.includes("count(*) filter"));
+    const confirmationMutationIndex = fixture.statements.findIndex(({ sql }) => (
+      sql.includes("insert into dm_faq_confirmations") || sql.includes("update dm_faq_confirmations")
+    ));
+    expect(rateCheckIndex).toBeGreaterThanOrEqual(0);
+    expect(confirmationMutationIndex).toBe(-1);
   });
 
   it("aggregates three active messages into one turn and refreshes its queued job", async () => {

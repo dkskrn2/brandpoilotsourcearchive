@@ -112,6 +112,7 @@ describe("library gateway", () => {
       category: "product" as const,
       question: "제품은 어디에서 구매하나요?",
       answer: "공식 스토어에서 구매할 수 있습니다.",
+      exampleUtterances: ["제품 어디서 사요?", "구매 방법", "구매처 알려줘"],
       expectedUpdatedAt: "2026-08-02T00:00:00.000Z",
     };
     const review = { expectedUpdatedAt: "2026-08-02T00:01:00.000Z" };

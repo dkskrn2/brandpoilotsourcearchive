@@ -183,6 +183,7 @@ export type DmReasonCode =
   | "knowledge_gap"
   | "low_confidence"
   | "processing_error"
+  | "faq_clarification"
   | "system_event";
 export type DmAttentionType =
   | "restricted_action"
@@ -190,7 +191,7 @@ export type DmAttentionType =
   | "knowledge_gap"
   | "delivery_unknown"
   | "processing_error";
-export type DmJobRoute = "fixed_fallback" | "knowledge" | "ignore";
+export type DmJobRoute = "fixed_fallback" | "knowledge" | "ignore" | "faq_clarification";
 
 export interface BrandOnboardingStep {
   id: string;

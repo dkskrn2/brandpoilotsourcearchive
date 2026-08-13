@@ -100,6 +100,7 @@ test("cutover API image contains ordered migrations through content suggestion 0
   assert.equal(existsSync("db/migrations/075_ai_content_three_format_cutover.sql"), true);
   assert.equal(existsSync("db/migrations/076_manual_content_generation_brand_rules.sql"), true);
   assert.equal(existsSync("db/migrations/077_content_suggestion_batches.sql"), true);
+  assert.equal(existsSync("db/migrations/078_faq_utterance_matching.sql"), true);
   assert.match(migrate, /AI_CONTENT_074_AUTHORIZATION_PUBLIC_KEY_FILE/);
   assert.match(migrate, /AI_CONTENT_074_PROVIDER_ATTESTATION_PUBLIC_KEY_FILE/);
   assert.doesNotMatch(migrate, /readFile\([^\n]*(?:PRIVATE|SIGNING)|createPrivateKey|AI_CONTENT_074_(?:AUTHORIZATION|PROVIDER_ATTESTATION)_KEY_FILE/);
@@ -145,16 +146,48 @@ test("deployment applies or verifies the pinned post-075 data migration before c
   assert.ok(migrationGate >= 0 && migrationGate < transition && transition < canary);
 });
 
-test("deployment applies the sealed content suggestion schema after 076 and before canary mutation", () => {
+test("deployment applies the ordered content suggestion and FAQ schemas after 076 and before canary mutation", () => {
   const deploy = read("deploy/scripts/deploy.sh");
-  assert.match(deploy, /077_content_suggestion_batches\.sql/);
-  assert.match(deploy, /3b178464c5ae5c4e220428e0752ab3e79a2ca06b5b2b23f1e89c34e983e63f76/);
+  const runner = read("scripts/migrationRunner.mjs");
+  assert.match(runner, /077_content_suggestion_batches\.sql/);
+  assert.match(runner, /3b178464c5ae5c4e220428e0752ab3e79a2ca06b5b2b23f1e89c34e983e63f76/);
+  assert.match(deploy, /078_faq_utterance_matching\.sql/);
+  assert.match(deploy, /a2c481f4ea5aba0430668d8e87d236f0a301a695cbecb4874400de0896aecde5/);
   assert.match(deploy, /scripts\/migrate\.mjs --post-075-schema/);
   assert.match(deploy, /post-075-schema-migration-evidence\.v1/);
   const dataGate = deploy.lastIndexOf("run_post_075_data_migration_gate");
   const schemaGate = deploy.lastIndexOf("run_post_075_schema_migration_gate");
   const transition = deploy.indexOf("begin_transition");
-  assert.ok(dataGate >= 0 && dataGate < schemaGate && schemaGate < transition);
+  const canary = deploy.indexOf('"${compose[@]}" up -d --no-deps');
+  assert.ok(dataGate >= 0 && dataGate < schemaGate && schemaGate < transition && transition < canary);
+});
+
+test("FAQ schema migration fails fast instead of waiting indefinitely on live locks", () => {
+  const migration = read("db/migrations/078_faq_utterance_matching.sql");
+  assert.match(migration, /set local lock_timeout = '5s'/i);
+  assert.match(migration, /set local statement_timeout = '60s'/i);
+  assert.match(migration, /faq_suggestion_items_example_utterances_count_check[\s\S]*cardinality\(example_utterances\) = 0 or cardinality\(example_utterances\) between 3 and 8/i);
+  assert.match(migration, /faq_alias_suggestion_results_count_check[\s\S]*cardinality\(example_utterances\) between 3 and 8/i);
+});
+
+test("FAQ runbook excludes Wiki without permanently disabling generic Wiki rollouts", () => {
+  const rollout = read("deploy/scripts/rollout-workers.sh");
+  const runbook = read("docs/operations/faq-utterance-matching-rollout.md");
+  assert.match(rollout, /WORKER_ROLLOUT_EXCLUDED_SERVICES="\$\{WORKER_ROLLOUT_EXCLUDED_SERVICES:-\}"/);
+  assert.match(rollout, /case "\$WORKER_ROLLOUT_EXCLUDED_SERVICES"[\s\S]*""\) ;;[\s\S]*wiki-worker-1\) ;;[\s\S]*worker_rollout_exclusion_invalid/);
+  assert.match(runbook, /export WORKER_ROLLOUT_EXCLUDED_SERVICES=wiki-worker-1/);
+  assert.match(rollout, /WIKI_WORKER_IMAGE[\s\S]*continue/);
+});
+
+test("validated FAQ schema evidence avoids requiring provider credentials on every deployment", () => {
+  const deploy = read("deploy/scripts/deploy.sh");
+  const gate = deploy.slice(
+    deploy.indexOf("run_post_075_schema_migration_gate()"),
+    deploy.indexOf("run_cutover_preflight()"),
+  );
+  assert.match(gate, /validate_post_075_schema_migration_evidence/);
+  assert.match(gate, /scripts\/migrate\.mjs --post-075-schema/);
+  assert.match(gate, /validate_post_075_schema_migration_evidence "\$evidence_file"\s*\n\s*return/);
 });
 
 test("cutover API image contains both ordered migrations in an actual no-network container", {
@@ -169,7 +202,7 @@ test("cutover API image contains both ordered migrations in an actual no-network
   try {
     const script = [
       "const fs=require('node:fs');",
-      "const required=['/app/db/migrations/074_ai_content_maintenance_write_fence.sql','/app/db/migrations/075_ai_content_three_format_cutover.sql','/app/db/migrations/076_manual_content_generation_brand_rules.sql','/app/db/migrations/077_content_suggestion_batches.sql','/app/scripts/migrationRunner.mjs','/app/scripts/migrate.mjs','/app/scripts/databaseTls.mjs'];",
+      "const required=['/app/db/migrations/074_ai_content_maintenance_write_fence.sql','/app/db/migrations/075_ai_content_three_format_cutover.sql','/app/db/migrations/076_manual_content_generation_brand_rules.sql','/app/db/migrations/077_content_suggestion_batches.sql','/app/db/migrations/078_faq_utterance_matching.sql','/app/scripts/migrationRunner.mjs','/app/scripts/migrate.mjs','/app/scripts/databaseTls.mjs'];",
       "for(const path of required)if(!fs.existsSync(path))throw new Error('missing:'+path);",
     ].join("");
     const inspect = spawnSync("docker", ["run", "--rm", "--network", "none", "--entrypoint", "node", tag, "-e", script], {
@@ -2636,12 +2669,12 @@ function runDeployFixture({
   }, null, 2)}\n`, { mode: 0o600 });
   const post075SchemaState = join(root, "state", "post-075-schema-migrations");
   mkdirSync(post075SchemaState, { recursive: true, mode: 0o700 });
-  writeFileSync(join(post075SchemaState, "077_content_suggestion_batches.sql.json"), `${JSON.stringify({
+  writeFileSync(join(post075SchemaState, "078_faq_utterance_matching.sql.json"), `${JSON.stringify({
     post075SchemaMigration: {
       contractVersion: "post-075-schema-migration-evidence.v1",
       providerRoleName: "postgres",
-      migrationId: "077_content_suggestion_batches.sql",
-      migrationSha256: "3b178464c5ae5c4e220428e0752ab3e79a2ca06b5b2b23f1e89c34e983e63f76",
+      migrationId: "078_faq_utterance_matching.sql",
+      migrationSha256: "a2c481f4ea5aba0430668d8e87d236f0a301a695cbecb4874400de0896aecde5",
       status: "already_applied",
     },
   }, null, 2)}\n`, { mode: 0o600 });

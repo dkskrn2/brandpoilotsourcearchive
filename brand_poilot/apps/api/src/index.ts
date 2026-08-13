@@ -58,6 +58,8 @@ const repository = createRepository(pool, {
   instagramPublish: {
     enabled: runtimeConfig.instagramPublishEnabled,
   },
+  faqMatching: runtimeConfig.faqMatching,
+  faqMatchTelemetry: (event) => console.info(event.event, event),
 });
 const ownedBlobPath = (value: string) => {
   const normalized = value.trim();

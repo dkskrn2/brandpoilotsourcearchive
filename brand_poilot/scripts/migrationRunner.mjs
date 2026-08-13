@@ -94,6 +94,7 @@ export const fullSourceMigrationIds = Object.freeze([
   "075_ai_content_three_format_cutover.sql",
   "076_manual_content_generation_brand_rules.sql",
   "077_content_suggestion_batches.sql",
+  "078_faq_utterance_matching.sql",
 ]);
 const legacyTriggerSearchPathMigrationId = "073a_legacy_trigger_function_search_path.sql";
 export const legacyTriggerSearchPathMigrationChecksum =
@@ -108,9 +109,11 @@ export const post075DataMigrationChecksums = Object.freeze({
 });
 const post075SchemaMigrationIds = Object.freeze([
   "077_content_suggestion_batches.sql",
+  "078_faq_utterance_matching.sql",
 ]);
 export const post075SchemaMigrationChecksums = Object.freeze({
   "077_content_suggestion_batches.sql": "3b178464c5ae5c4e220428e0752ab3e79a2ca06b5b2b23f1e89c34e983e63f76",
+  "078_faq_utterance_matching.sql": "a2c481f4ea5aba0430668d8e87d236f0a301a695cbecb4874400de0896aecde5",
 });
 const post075DeferredMigrationIds = Object.freeze([
   ...post075DataMigrationIds,
@@ -159,6 +162,11 @@ export function isExactPost075DataMigrationPlan(migrations, history) {
   }
   const sourceIds = new Set(fullSourceMigrationIds);
   if (history.some(({ id }) => !sourceIds.has(id))) return false;
+  const historyIds = new Set(history.map(({ id }) => id));
+  for (let index = 1; index < post075SchemaMigrationIds.length; index += 1) {
+    if (historyIds.has(post075SchemaMigrationIds[index])
+      && !historyIds.has(post075SchemaMigrationIds[index - 1])) return false;
+  }
   let plan;
   try {
     plan = buildMigrationPlan(migrations, history);
@@ -184,6 +192,27 @@ export function validatePost075SchemaMigration(migration) {
     || checksum(migration.sql) !== migration.checksum) {
     throw new Error("post_075_schema_migration_invalid");
   }
+  if (migration.id === "078_faq_utterance_matching.sql") {
+    try {
+      const statements = topLevelStatements(unwrapFileTransaction(migration.sql))
+        .map((statement) => statement
+          .replace(/^(?:\s|--[^\r\n]*(?:\r?\n|$)|\/\*[\s\S]*?\*\/)+/u, "")
+          .trim())
+        .filter(Boolean);
+      const forbidden = /\b(?:create|alter|drop)\s+(?:role|database|schema|extension|event\s+trigger)\b|^(?:truncate|delete|merge|grant|revoke|copy|call|execute)\b/i;
+      if (statements.length === 0
+        || statements.filter((statement) => /^do\b/i.test(statement)).length !== 1
+        || !/^do\b/i.test(statements.at(-1) ?? "")
+        || statements.some((statement) => !/^(?:(?:set\s+local\s+(?:lock_timeout|statement_timeout)\s*=)|(?:alter\s+table|create\s+(?:table|unique\s+index|index|trigger)|drop\s+(?:index|trigger)|do)\b)/i.test(statement)
+          || forbidden.test(statement)
+          || /\bschema_migrations\b/i.test(statement))) {
+        throw new Error("post_075_schema_migration_invalid");
+      }
+    } catch (error) {
+      if (error instanceof Error && error.message === "post_075_schema_migration_invalid") throw error;
+      throw new Error("post_075_schema_migration_invalid");
+    }
+  }
   return true;
 }
 
@@ -196,6 +225,11 @@ export function isExactPost075SchemaMigrationPlan(migrations, history) {
   }
   const sourceIds = new Set(fullSourceMigrationIds);
   if (history.some(({ id }) => !sourceIds.has(id))) return false;
+  const historyIds = new Set(history.map(({ id }) => id));
+  for (let index = 1; index < post075SchemaMigrationIds.length; index += 1) {
+    if (historyIds.has(post075SchemaMigrationIds[index])
+      && !historyIds.has(post075SchemaMigrationIds[index - 1])) return false;
+  }
   let plan;
   try {
     plan = buildMigrationPlan(migrations, history);
@@ -3454,6 +3488,11 @@ async function readHistory(client) {
   return result.rows;
 }
 
+async function readPublicMigrationHistory(client) {
+  const result = await client.query("select id, checksum from public.schema_migrations order by id asc");
+  return result.rows;
+}
+
 async function baselineExistingSchema(client, migrations, baselineUpTo) {
   if (!baselineUpTo) throw new Error("migration_history_missing_baseline_required");
   const baselineIndex = migrations.findIndex((migration) => migration.id === baselineUpTo);
@@ -4120,6 +4159,248 @@ export async function runPost075DataMigrationsWithClient({
   }
 }
 
+async function verifyContentSuggestionSchemaCatalog(client, {
+  schemaOwnerRoleName,
+  applicationRoleName,
+}) {
+  const catalog = await client.query(
+    `/* post_075_schema_catalog_v1 */
+     select event_trigger.evtenabled::text as guard_enabled,
+            batch_owner.rolname::text as batch_owner,
+            suggestion_owner.rolname::text as suggestion_owner,
+            has_table_privilege($1,'public.content_suggestion_batches','SELECT') as app_batch_select,
+            has_table_privilege($1,'public.content_suggestion_batches','INSERT') as app_batch_insert,
+            has_table_privilege($1,'public.content_suggestion_batches','UPDATE') as app_batch_update,
+            has_table_privilege($1,'public.content_suggestion_batches','DELETE') as app_batch_delete,
+            has_table_privilege($1,'public.content_suggestions','SELECT') as app_suggestion_select,
+            has_table_privilege($1,'public.content_suggestions','INSERT') as app_suggestion_insert,
+            has_table_privilege($1,'public.content_suggestions','UPDATE') as app_suggestion_update,
+            has_table_privilege($1,'public.content_suggestions','DELETE') as app_suggestion_delete,
+            coalesce((select bool_or(acl.grantee=0) from aclexplode(batch.relacl) acl),false) as public_batch_privilege,
+            coalesce((select bool_or(acl.grantee=0) from aclexplode(suggestion.relacl) acl),false) as public_suggestion_privilege
+       from pg_event_trigger event_trigger
+       join pg_class batch on batch.oid='public.content_suggestion_batches'::regclass
+       join pg_roles batch_owner on batch_owner.oid=batch.relowner
+       join pg_class suggestion on suggestion.oid='public.content_suggestions'::regclass
+       join pg_roles suggestion_owner on suggestion_owner.oid=suggestion.relowner
+      where event_trigger.evtname='ai_content_ddl_guard_074'`,
+    [applicationRoleName],
+  );
+  const sealed = catalog.rows[0];
+  if (catalog.rows.length !== 1
+    || sealed.guard_enabled !== "O"
+    || sealed.batch_owner !== schemaOwnerRoleName
+    || sealed.suggestion_owner !== schemaOwnerRoleName
+    || sealed.app_batch_select !== true || sealed.app_batch_insert !== true
+    || sealed.app_batch_update !== true || sealed.app_batch_delete !== true
+    || sealed.app_suggestion_select !== true || sealed.app_suggestion_insert !== true
+    || sealed.app_suggestion_update !== true || sealed.app_suggestion_delete !== true
+    || sealed.public_batch_privilege !== false || sealed.public_suggestion_privilege !== false) {
+    throw new Error(`post_075_schema_catalog_invalid:${JSON.stringify(sealed ?? null)}`);
+  }
+}
+
+async function verifyFaqUtteranceSchemaCatalog(client, {
+  schemaOwnerRoleName,
+  applicationRoleName,
+}) {
+  const catalog = await client.query(
+    `/* faq_utterance_schema_catalog_v1 */
+     with expected_relation(relation_name) as (values
+       ('schema_migrations'),('knowledge_entries'),('faq_suggestion_items'),
+       ('faq_suggestion_runs'),('jobs'),('instagram_dm_conversations'),
+       ('dm_delivery_attempts'),('instagram_dm_messages'),
+       ('faq_alias_suggestion_results'),('dm_faq_confirmations')
+      ), expected_index(index_name, table_name, columns, predicate_fragments) as (values
+        ('faq_suggestion_runs_one_active_full_per_brand_uq','faq_suggestion_runs',
+          array['workspace_id','brand_id']::text[], array['run_kind','full_faq','status','queued','running']::text[]),
+        ('faq_suggestion_runs_one_active_alias_per_entry_uq','faq_suggestion_runs',
+          array['workspace_id','brand_id','target_knowledge_entry_id']::text[], array['run_kind','alias_only','status','queued','running']::text[]),
+        ('dm_faq_confirmations_one_active_per_conversation_uq','dm_faq_confirmations',
+          array['workspace_id','brand_id','conversation_id']::text[], array['status','pending_prompt','awaiting_answer']::text[]),
+        ('dm_faq_confirmations_expiry_idx','dm_faq_confirmations',
+          array['expires_at']::text[], array['status','pending_prompt','awaiting_answer']::text[])
+      ), valid_index as (
+        select expected.index_name
+          from expected_index expected
+          join pg_namespace namespace on namespace.nspname='public'
+          join pg_class table_relation on table_relation.relnamespace=namespace.oid
+            and table_relation.relname=expected.table_name
+          join pg_index index_row on index_row.indrelid=table_relation.oid
+          join pg_class index_relation on index_relation.oid=index_row.indexrelid
+            and index_relation.relnamespace=namespace.oid
+            and index_relation.relname=expected.index_name
+         where index_row.indisvalid and index_row.indisready
+           and (expected.index_name='dm_faq_confirmations_expiry_idx' or index_row.indisunique)
+           and (expected.index_name<>'dm_faq_confirmations_expiry_idx' or not index_row.indisunique)
+           and array(
+             select pg_get_indexdef(index_row.indexrelid, ordinal, true)
+               from generate_series(1, index_row.indnkeyatts) ordinal
+              order by ordinal
+           ) = expected.columns
+           and pg_get_indexdef(index_row.indexrelid) like ('CREATE %INDEX ' || expected.index_name || '%')
+           and not exists (
+             select 1 from unnest(expected.predicate_fragments) fragment
+              where coalesce(pg_get_expr(index_row.indpred,index_row.indrelid), '') not ilike ('%' || fragment || '%')
+           )
+      ), expected_named_constraint(constraint_name,table_name,constraint_type,referenced_table,definition_fragments) as (values
+        ('knowledge_entries_manual_aliases_count_check','knowledge_entries','c',null,array['cardinality(manual_aliases)','>= 0','<= 8']::text[]),
+        ('knowledge_entries_tenant_identity_unique','knowledge_entries','u',null,array['id','workspace_id','brand_id']::text[]),
+        ('faq_suggestion_items_example_utterances_count_check','faq_suggestion_items','c',null,array['cardinality(example_utterances)','= 0','>= 3','<= 8']::text[]),
+        ('faq_suggestion_runs_kind_check','faq_suggestion_runs','c',null,array['run_kind','full_faq','alias_only']::text[]),
+        ('faq_suggestion_runs_target_state_check','faq_suggestion_runs','c',null,array['run_kind','target_knowledge_entry_id','target_knowledge_entry_updated_at']::text[]),
+        ('faq_suggestion_runs_target_knowledge_entry_fk','faq_suggestion_runs','f','knowledge_entries',array['target_knowledge_entry_id','workspace_id','brand_id','on delete cascade']::text[]),
+        ('faq_alias_suggestion_results_run_unique','faq_alias_suggestion_results','u',null,array['run_id']::text[]),
+        ('faq_alias_suggestion_results_run_fk','faq_alias_suggestion_results','f','faq_suggestion_runs',array['run_id','workspace_id','brand_id','on delete cascade']::text[]),
+        ('faq_alias_suggestion_results_entry_fk','faq_alias_suggestion_results','f','knowledge_entries',array['knowledge_entry_id','workspace_id','brand_id','on delete cascade']::text[]),
+        ('faq_alias_suggestion_results_count_check','faq_alias_suggestion_results','c',null,array['cardinality(example_utterances)','>= 3','<= 8']::text[]),
+        ('dm_faq_confirmations_inbound_unique','dm_faq_confirmations','u',null,array['workspace_id','brand_id','inbound_message_id']::text[]),
+        ('dm_faq_confirmations_tenant_identity_unique','dm_faq_confirmations','u',null,array['id','workspace_id','brand_id','conversation_id']::text[]),
+        ('dm_faq_confirmations_conversation_fk','dm_faq_confirmations','f','instagram_dm_conversations',array['conversation_id','workspace_id','brand_id','on delete cascade']::text[]),
+        ('dm_faq_confirmations_entry_fk','dm_faq_confirmations','f','knowledge_entries',array['knowledge_entry_id','workspace_id','brand_id','on delete cascade']::text[]),
+        ('dm_faq_confirmations_prompt_job_fk','dm_faq_confirmations','f','jobs',array['prompt_job_id','workspace_id','brand_id','on delete set null']::text[]),
+        ('dm_faq_confirmations_status_check','dm_faq_confirmations','c',null,array['status','pending_prompt','awaiting_answer','confirmed','rejected','expired','cancelled']::text[]),
+        ('dm_faq_confirmations_confidence_check','dm_faq_confirmations','c',null,array['confidence','>= 0','<= 1']::text[]),
+        ('dm_faq_confirmations_inbound_message_check','dm_faq_confirmations','c',null,array['inbound_message_id','length','trim']::text[]),
+        ('dm_faq_confirmations_expiry_check','dm_faq_confirmations','c',null,array['expires_at','created_at']::text[]),
+        ('dm_faq_confirmations_resolution_check','dm_faq_confirmations','c',null,array['status','resolved_at','pending_prompt','awaiting_answer','confirmed','rejected','expired','cancelled']::text[])
+      ), valid_named_constraint as (
+        select expected.constraint_name
+          from expected_named_constraint expected
+          join pg_namespace namespace on namespace.nspname='public'
+          join pg_class relation on relation.relnamespace=namespace.oid and relation.relname=expected.table_name
+          join pg_constraint constraint_row on constraint_row.conrelid=relation.oid
+            and constraint_row.conname=expected.constraint_name
+            and constraint_row.contype=expected.constraint_type::"char"
+         where constraint_row.convalidated
+           and (expected.referenced_table is null
+             or constraint_row.confrelid=to_regclass('public.' || expected.referenced_table))
+           and not exists (
+             select 1 from unnest(expected.definition_fragments) fragment
+              where pg_get_constraintdef(constraint_row.oid,true) not ilike ('%' || fragment || '%')
+           )
+      ), expected_reason_code(code) as (values
+        ('direct_faq'),('wiki_answer'),('faq_clarification'),('restricted_action'),
+        ('complaint'),('knowledge_gap'),('low_confidence'),('processing_error'),('system_event')
+      ), reason_constraint as (
+        select constraint_row.conname, table_relation.relname as table_name,
+               pg_get_constraintdef(constraint_row.oid, true) as definition,
+               array(
+                 select distinct matched.captures[1]
+                   from regexp_matches(pg_get_constraintdef(constraint_row.oid, true), '''([^'']+)''', 'g') as matched(captures)
+                  order by matched.captures[1]
+               ) as codes
+          from pg_constraint constraint_row
+          join pg_class table_relation on table_relation.oid=constraint_row.conrelid
+          join pg_namespace namespace on namespace.oid=table_relation.relnamespace and namespace.nspname='public'
+         where constraint_row.contype='c' and constraint_row.convalidated
+           and ((constraint_row.conname='dm_delivery_attempts_reason_code_check' and table_relation.relname='dm_delivery_attempts')
+             or (constraint_row.conname='instagram_dm_messages_reason_code_check' and table_relation.relname='instagram_dm_messages'))
+      ), valid_reason_constraint as (
+        select constraint_row.conname
+          from reason_constraint constraint_row
+         where constraint_row.codes <@ array(select code from expected_reason_code)
+           and constraint_row.codes @> array(select code from expected_reason_code)
+           and ((constraint_row.table_name='dm_delivery_attempts' and constraint_row.definition not ilike '%is null%')
+             or (constraint_row.table_name='instagram_dm_messages' and constraint_row.definition ilike '%is null%'))
+      ), faq_count_constraint as (
+        select constraint_row.conname,
+               pg_get_constraintdef(constraint_row.oid, true) as definition
+          from pg_constraint constraint_row
+          join pg_class table_relation on table_relation.oid=constraint_row.conrelid
+          join pg_namespace namespace on namespace.oid=table_relation.relnamespace and namespace.nspname='public'
+         where constraint_row.contype='c' and constraint_row.convalidated
+           and constraint_row.conname in (
+             'knowledge_entries_manual_aliases_count_check',
+             'faq_suggestion_items_example_utterances_count_check',
+             'faq_alias_suggestion_results_count_check'
+           )
+      ), valid_faq_count_constraint as (
+        select conname from faq_count_constraint
+         where definition ilike '%cardinality(%'
+           and (
+             (conname='knowledge_entries_manual_aliases_count_check'
+               and definition ilike '%>= 0%'
+               and definition ilike '%<= 8%')
+             or (conname='faq_suggestion_items_example_utterances_count_check'
+               and definition ilike '%= 0%'
+               and definition ilike '%>= 3%'
+               and definition ilike '%<= 8%')
+             or (conname='faq_alias_suggestion_results_count_check'
+               and definition not ilike '%= 0%'
+               and definition ilike '%>= 3%'
+               and definition ilike '%<= 8%')
+           )
+      ), relation_owner as (
+       select relation.relowner from expected_relation expected
+       join pg_class relation on relation.oid=to_regclass('public.' || expected.relation_name)
+     ), new_relation(relation_name) as (values
+       ('faq_alias_suggestion_results'),('dm_faq_confirmations')
+     )
+     select exists (
+              select 1 from pg_attribute attribute
+               where attribute.attrelid='public.knowledge_entries'::regclass
+                 and attribute.attname='manual_aliases' and attribute.attnotnull
+                 and format_type(attribute.atttypid,attribute.atttypmod)='text[]'
+            ) as manual_aliases_valid,
+            exists (
+              select 1 from pg_attribute attribute
+               where attribute.attrelid='public.faq_suggestion_items'::regclass
+                 and attribute.attname='example_utterances' and attribute.attnotnull
+                 and format_type(attribute.atttypid,attribute.atttypmod)='text[]'
+            ) as example_utterances_valid,
+            (select count(*)=3 from pg_attribute attribute
+              where attribute.attrelid='public.faq_suggestion_runs'::regclass
+                and attribute.attname=any(array['run_kind','target_knowledge_entry_id','target_knowledge_entry_updated_at'])
+                and not attribute.attisdropped) as suggestion_run_columns_valid,
+            to_regclass('public.faq_alias_suggestion_results') is not null as alias_result_table_valid,
+            to_regclass('public.dm_faq_confirmations') is not null as confirmation_table_valid,
+            (select count(*)::integer from valid_index) as index_definition_count,
+            (select count(*)::integer from pg_trigger trigger
+              where trigger.tgname='dm_faq_confirmations_set_updated_at'
+                and trigger.tgrelid='public.dm_faq_confirmations'::regclass
+                and not trigger.tgisinternal) as trigger_count,
+             (select count(*)::integer from valid_reason_constraint)
+               as reason_constraint_definition_count,
+             (select count(*)::integer from valid_named_constraint)
+               as named_constraint_definition_count,
+             array(
+               select constraint_name from expected_named_constraint
+               except select constraint_name from valid_named_constraint
+               order by constraint_name
+             ) as missing_named_constraints,
+            (select count(*)::integer from valid_faq_count_constraint)
+              as faq_count_constraint_definition_count,
+            (select count(distinct relowner)::integer from relation_owner) as owner_count,
+            (select count(*)::integer from relation_owner
+              join pg_roles owner on owner.oid=relation_owner.relowner
+             where owner.rolname=$1) as owned_relation_count,
+            (select count(*)::integer from new_relation relation_name
+              cross join lateral aclexplode(coalesce(
+                (select relation.relacl from pg_class relation
+                  where relation.oid=to_regclass('public.' || relation_name.relation_name)),
+                acldefault('r',0)
+              )) acl where acl.grantee=0) as public_privilege_count,
+            (select count(*)::integer from new_relation relation_name
+              cross join (values ('SELECT'),('INSERT'),('UPDATE'),('DELETE')) privilege(privilege_name)
+             where has_table_privilege($2,'public.' || relation_name.relation_name,privilege.privilege_name))
+              as application_privilege_count`,
+    [schemaOwnerRoleName, applicationRoleName],
+  );
+  const verified = catalog.rows[0];
+  if (catalog.rows.length !== 1
+    || ["manual_aliases_valid", "example_utterances_valid", "suggestion_run_columns_valid",
+      "alias_result_table_valid", "confirmation_table_valid"].some((key) => verified[key] !== true)
+    || verified.index_definition_count !== 4 || verified.trigger_count !== 1
+    || verified.reason_constraint_definition_count !== 2
+    || verified.named_constraint_definition_count !== 20
+    || verified.faq_count_constraint_definition_count !== 3 || verified.owner_count !== 1
+    || verified.owned_relation_count !== 10
+    || verified.public_privilege_count !== 0 || verified.application_privilege_count !== 8) {
+    throw new Error(`post_075_schema_catalog_invalid:${JSON.stringify(verified ?? null)}`);
+  }
+}
+
 export async function runPost075SchemaMigrationsWithClient({
   client,
   migrations,
@@ -4130,12 +4411,15 @@ export async function runPost075SchemaMigrationsWithClient({
   }
   await client.query("select pg_advisory_lock(hashtext($1))", [migrationAdvisoryLockName]);
   try {
-    const history = await readHistory(client);
+    await client.query("select set_config('search_path','pg_catalog,public,pg_temp',false)");
+    const history = await readPublicMigrationHistory(client);
     if (!isExactPost075SchemaMigrationPlan(migrations, history)) {
       throw new Error("post_075_schema_migration_plan_invalid");
     }
     const plan = buildMigrationPlan(migrations, history);
-    const evidenceMigration = migrations.find(({ id }) => post075SchemaMigrationIds.includes(id));
+    const schemaMigrations = migrations.filter(({ id }) => post075SchemaMigrationIds.includes(id));
+    const pendingSchemaMigrations = plan.pending.filter(({ id }) => post075SchemaMigrationIds.includes(id));
+    const evidenceMigration = schemaMigrations.at(-1);
     if (!evidenceMigration) throw new Error("post_075_schema_migration_plan_invalid");
     const evidence = (status) => ({
       contractVersion: "post-075-schema-migration-evidence.v1",
@@ -4144,16 +4428,6 @@ export async function runPost075SchemaMigrationsWithClient({
       migrationSha256: evidenceMigration.checksum,
       status,
     });
-    if (plan.pending.length === 0) {
-      return {
-        migrations,
-        pending: [],
-        baselineRequired: false,
-        post075SchemaMigration: evidence("already_applied"),
-      };
-    }
-
-    await client.query("select set_config('search_path','pg_catalog,public,pg_temp',false)");
     const identity = await client.query(
       `/* post_075_schema_provider_session_v1 */
        select session_user::text as session_user_name,
@@ -4181,69 +4455,59 @@ export async function runPost075SchemaMigrationsWithClient({
       throw new Error("post_075_schema_provider_session_invalid");
     }
 
+    if (pendingSchemaMigrations.length === 0) {
+      await verifyContentSuggestionSchemaCatalog(client, {
+        schemaOwnerRoleName: provider.schema_owner_role_name,
+        applicationRoleName: provider.application_role_name,
+      });
+      await verifyFaqUtteranceSchemaCatalog(client, {
+        schemaOwnerRoleName: provider.schema_owner_role_name,
+        applicationRoleName: provider.application_role_name,
+      });
+      return {
+        migrations,
+        pending: [],
+        baselineRequired: false,
+        post075SchemaMigration: evidence("already_applied"),
+      };
+    }
+
     await client.query("begin");
     try {
       await client.query("alter event trigger ai_content_ddl_guard_074 disable");
       await client.query(`grant ${quoteIdentifier(provider.schema_owner_role_name)}
         to ${quoteIdentifier(expectedProviderRoleName)} with set true, inherit true, admin false`);
       await client.query("select set_config('search_path','public,pg_catalog,pg_temp',true)");
-      await client.query(unwrapFileTransaction(evidenceMigration.sql));
-      await client.query(
-        "insert into schema_migrations (id, checksum) values ($1, $2)",
-        [evidenceMigration.id, evidenceMigration.checksum],
-      );
+      for (const migration of pendingSchemaMigrations) {
+        validatePost075SchemaMigration(migration);
+        await client.query(unwrapFileTransaction(migration.sql));
+        await client.query(
+          "insert into schema_migrations (id, checksum) values ($1, $2)",
+          [migration.id, migration.checksum],
+        );
+      }
       await client.query(`revoke ${quoteIdentifier(provider.schema_owner_role_name)}
         from ${quoteIdentifier(expectedProviderRoleName)} granted by ${quoteIdentifier(expectedProviderRoleName)}`);
       await client.query("alter event trigger ai_content_ddl_guard_074 enable");
-      const catalog = await client.query(
-        `/* post_075_schema_catalog_v1 */
-         select event_trigger.evtenabled::text as guard_enabled,
-                batch_owner.rolname::text as batch_owner,
-                suggestion_owner.rolname::text as suggestion_owner,
-                has_table_privilege($1,'public.content_suggestion_batches','SELECT') as app_batch_select,
-                has_table_privilege($1,'public.content_suggestion_batches','INSERT') as app_batch_insert,
-                has_table_privilege($1,'public.content_suggestion_batches','UPDATE') as app_batch_update,
-                has_table_privilege($1,'public.content_suggestion_batches','DELETE') as app_batch_delete,
-                has_table_privilege($1,'public.content_suggestions','SELECT') as app_suggestion_select,
-                has_table_privilege($1,'public.content_suggestions','INSERT') as app_suggestion_insert,
-                has_table_privilege($1,'public.content_suggestions','UPDATE') as app_suggestion_update,
-                has_table_privilege($1,'public.content_suggestions','DELETE') as app_suggestion_delete,
-                coalesce((select bool_or(acl.grantee=0) from aclexplode(batch.relacl) acl),false) as public_batch_privilege,
-                coalesce((select bool_or(acl.grantee=0) from aclexplode(suggestion.relacl) acl),false) as public_suggestion_privilege
-           from pg_event_trigger event_trigger
-           join pg_class batch on batch.oid='public.content_suggestion_batches'::regclass
-           join pg_roles batch_owner on batch_owner.oid=batch.relowner
-           join pg_class suggestion on suggestion.oid='public.content_suggestions'::regclass
-           join pg_roles suggestion_owner on suggestion_owner.oid=suggestion.relowner
-          where event_trigger.evtname='ai_content_ddl_guard_074'`,
-        [provider.application_role_name],
-      );
-      const sealed = catalog.rows[0];
-      if (catalog.rows.length !== 1
-        || sealed.guard_enabled !== "O"
-        || sealed.batch_owner !== provider.schema_owner_role_name
-        || sealed.suggestion_owner !== provider.schema_owner_role_name
-        || sealed.app_batch_select !== true
-        || sealed.app_batch_insert !== true
-        || sealed.app_batch_update !== true
-        || sealed.app_batch_delete !== true
-        || sealed.app_suggestion_select !== true
-        || sealed.app_suggestion_insert !== true
-        || sealed.app_suggestion_update !== true
-        || sealed.app_suggestion_delete !== true
-        || sealed.public_batch_privilege !== false
-        || sealed.public_suggestion_privilege !== false) {
-        throw new Error("post_075_schema_catalog_invalid");
-      }
-      const marker = await client.query(
-        `/* post_075_schema_migration_marker_v1 */
-         select id,checksum from schema_migrations where id=$1`,
-        [evidenceMigration.id],
-      );
-      if (marker.rows.length !== 1
-        || marker.rows[0]?.id !== evidenceMigration.id
-        || marker.rows[0]?.checksum !== evidenceMigration.checksum) {
-        throw new Error("post_075_schema_migration_marker_invalid");
+      await verifyContentSuggestionSchemaCatalog(client, {
+        schemaOwnerRoleName: provider.schema_owner_role_name,
+        applicationRoleName: provider.application_role_name,
+      });
+      await verifyFaqUtteranceSchemaCatalog(client, {
+        schemaOwnerRoleName: provider.schema_owner_role_name,
+        applicationRoleName: provider.application_role_name,
+      });
+      for (const migration of pendingSchemaMigrations) {
+        const marker = await client.query(
+          `/* post_075_schema_migration_marker_v1 */
+           select id,checksum from schema_migrations where id=$1`,
+          [migration.id],
+        );
+        if (marker.rows.length !== 1
+          || marker.rows[0]?.id !== migration.id
+          || marker.rows[0]?.checksum !== migration.checksum) {
+          throw new Error("post_075_schema_migration_marker_invalid");
+        }
       }
       await client.query("commit");
     } catch (error) {
@@ -4252,7 +4516,7 @@ export async function runPost075SchemaMigrationsWithClient({
     }
     return {
       migrations,
-      pending: [evidenceMigration.id],
+      pending: pendingSchemaMigrations.map(({ id }) => id),
       baselineRequired: false,
       post075SchemaMigration: evidence("applied"),
     };

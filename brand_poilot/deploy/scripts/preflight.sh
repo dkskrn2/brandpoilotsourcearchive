@@ -199,6 +199,15 @@ CONTENT_SUGGESTION_OAUTH_RESOURCE_VALUE="$(grep -E '^CONTENT_SUGGESTION_OAUTH_RE
 [[ "$CONTENT_SUGGESTION_OAUTH_RESOURCE_VALUE" == "https://api.danbammsg.co.kr/plugins/content-suggestions/mcp" ]] ||
   fail "content_suggestion_oauth_resource_invalid"
 status_ok "content_suggestion_oauth"
+require_boolean "FAQ_UTTERANCE_SUGGESTIONS_ENABLED" "$API_ENV_FILE"
+require_boolean "FAQ_EXPANDED_EXACT_ENABLED" "$API_ENV_FILE"
+require_boolean "FAQ_MATCH_SHADOW_ENABLED" "$API_ENV_FILE"
+require_boolean "FAQ_CLARIFICATION_ENABLED" "$API_ENV_FILE"
+[[ "$(grep -Ec '^FAQ_MATCH_BRAND_ALLOWLIST=[^[:space:]]*$' "$API_ENV_FILE" || true)" == "1" ]] ||
+  fail "faq_match_allowlist_invalid"
+require_number_range "FAQ_CLARIFY_THRESHOLD" "0" "1" "$API_ENV_FILE"
+require_integer_range "FAQ_CONFIRMATION_TTL_SECONDS" "30" "900" "$API_ENV_FILE"
+status_ok "faq_matching_policy"
 require_matching_env_secret \
   "CONTENT_PROPOSAL_WORKER_API_TOKEN" \
   "$API_ENV_FILE" \

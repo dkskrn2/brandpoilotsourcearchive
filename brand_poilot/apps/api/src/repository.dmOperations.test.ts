@@ -31,6 +31,9 @@ function manualReplyFixture(sendInstagramDirectMessage: (input: InstagramDmSendI
         ? { rowCount: 1, rows: [{ id: "attempt-manual", status: "prepared" }] }
         : { rowCount: 0, rows: [] };
     }
+    if (sql.includes("from dm_delivery_attempts attempt") && sql.includes("attempt.origin = 'auto'")) {
+      return { rowCount: 0, rows: [] };
+    }
     if (sql.includes("from dm_delivery_attempts attempt") && sql.includes("left join instagram_dm_messages")) {
       return { rowCount: 1, rows: [{
         id: "attempt-manual", status: "sent", provider_message_id: "provider-message-1", error: null,
@@ -45,7 +48,10 @@ function manualReplyFixture(sendInstagramDirectMessage: (input: InstagramDmSendI
     }
     return { rowCount: 1, rows: [] };
   });
-  const repository = createRepository({ query, connect: vi.fn() } as any, { sendInstagramDirectMessage });
+  const repository = createRepository({
+    query,
+    connect: vi.fn(async () => ({ query, release: vi.fn() })),
+  } as any, { sendInstagramDirectMessage });
   return { repository, statements };
 }
 
@@ -119,6 +125,19 @@ describe("DM operations repository", () => {
     expect(statements[prepared].sql).toContain("origin");
     expect(statements[prepared].values).toContain(idempotencyKey);
     expect(statements.some(({ sql }) => sql.includes("delivery_attempt_id"))).toBe(true);
+    const confirmationCancellation = statements.find(({ sql }) => (
+      sql.includes("update dm_faq_confirmations") && sql.includes("status = 'cancelled'")
+    ));
+    expect(confirmationCancellation?.values).toEqual(["workspace-1", "brand-1", "conversation-1"]);
+    expect(confirmationCancellation?.sql).toContain("update jobs");
+    expect(confirmationCancellation?.sql).toContain("job.payload_json->>'conversationId' = $3::text");
+    const cancellation = statements.findIndex(({ sql }) => sql.includes("update dm_faq_confirmations"));
+    expect(cancellation).toBeGreaterThan(sent);
+    expect(statements.some(({ sql }) => (
+      sql.includes("from dm_delivery_attempts attempt")
+      && sql.includes("attempt.status = 'sending'")
+      && sql.includes("attempt.origin = 'auto'")
+    ))).toBe(true);
     expect(statements.some(({ sql }) => sql.includes("automation_status") && sql.includes("update instagram_dm_conversations"))).toBe(false);
     expect(statements.some(({ sql }) => sql.includes("attention_status") && sql.includes("update instagram_dm_conversations"))).toBe(false);
   });
@@ -171,9 +190,25 @@ describe("DM operations repository", () => {
     await expect(repository.sendManualDmReply("brand-1", "conversation-1", "직접 답변", idempotencyKey))
       .rejects.toThrow(`dm_manual_reply_${status}:${errorCode}`);
     expect(statements).toContainEqual(expect.objectContaining({
-      sql: expect.stringContaining("set status = $2"),
-      values: ["attempt-manual", status, errorCode],
+      sql: expect.stringContaining(`set status = '${status}'`),
+      values: ["attempt-manual", errorCode],
     }));
+    if (status === "failed") {
+      expect(statements.some(({ sql }) => sql.includes("update dm_faq_confirmations"))).toBe(false);
+    } else {
+      const lockIndex = statements.findIndex(({ sql }) => sql.includes("for update"));
+      const unknownIndex = statements.findIndex(({ sql }) => sql.includes("set status = 'unknown'"));
+      expect(lockIndex).toBeGreaterThanOrEqual(0);
+      expect(unknownIndex).toBeGreaterThan(lockIndex);
+      expect(statements.some(({ sql }) => (
+        sql.includes("update dm_faq_confirmations")
+        && sql.includes("update jobs")
+        && sql.includes("job.payload_json->>'conversationId' = $3::text")
+      ))).toBe(true);
+      expect(statements.some(({ sql }) => (
+        sql.includes("automation_status = 'paused'") && sql.includes("attention_status = 'open'")
+      ))).toBe(true);
+    }
   });
 
   it("returns a cursor page with participant and open attention metadata", async () => {

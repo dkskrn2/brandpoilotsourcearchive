@@ -27,15 +27,41 @@ export interface FaqSuggestionWorkerSource {
   contentHash: string;
 }
 
-export interface FaqSuggestionWorkerInput {
-  contractVersion: "faq-suggestion-input.v1";
+interface FaqSuggestionWorkerInputBase {
   runId: string;
   workspaceId: string;
   brandId: string;
   leaseToken: string;
+}
+
+export interface FaqSuggestionWorkerInputV1 extends FaqSuggestionWorkerInputBase {
+  contractVersion: "faq-suggestion-input.v1";
   sources: FaqSuggestionWorkerSource[];
   existingFaqs: Array<{ id: string; question: string; answer: string }>;
 }
+
+export interface FaqSuggestionWorkerInputV2Full extends FaqSuggestionWorkerInputBase {
+  contractVersion: "faq-suggestion-input.v2";
+  mode: "full_faq";
+  sources: FaqSuggestionWorkerSource[];
+  existingFaqs: Array<{ id: string; question: string; answer: string }>;
+}
+
+export interface FaqSuggestionWorkerInputV2Alias extends FaqSuggestionWorkerInputBase {
+  contractVersion: "faq-suggestion-input.v2";
+  mode: "alias_only";
+  targetFaq: {
+    id: string;
+    question: string;
+    answer: string;
+    updatedAt: string;
+  };
+}
+
+export type FaqSuggestionWorkerInput =
+  | FaqSuggestionWorkerInputV1
+  | FaqSuggestionWorkerInputV2Full
+  | FaqSuggestionWorkerInputV2Alias;
 
 export interface ValidFaqSuggestion {
   category: FaqSuggestionCategory;
@@ -47,12 +73,28 @@ export interface ValidFaqSuggestion {
     label: string;
   }>;
   confidence: number;
+  exampleUtterances?: string[];
 }
 
-export interface FaqSuggestionWorkerResult {
+export interface LegacyFaqSuggestionWorkerResult {
   suggestions: ValidFaqSuggestion[];
   rejections: Array<{ index: number; code: string }>;
 }
+
+export interface FullFaqSuggestionWorkerResult extends LegacyFaqSuggestionWorkerResult {
+  mode: "full_faq";
+  suggestions: Array<ValidFaqSuggestion & { exampleUtterances: string[] }>;
+}
+
+export interface AliasFaqSuggestionWorkerResult {
+  mode: "alias_only";
+  exampleUtterances: string[];
+}
+
+export type FaqSuggestionWorkerResult =
+  | LegacyFaqSuggestionWorkerResult
+  | FullFaqSuggestionWorkerResult
+  | AliasFaqSuggestionWorkerResult;
 
 const categorySet = new Set<string>(faqSuggestionCategories);
 const rawUrlPattern = /(?:https?:\/\/|www\.)\S+/iu;
@@ -70,11 +112,16 @@ function hasExactFields(value: Record<string, unknown>, allowed: readonly string
 function validateItem(
   value: unknown,
   sources: Map<string, FaqSuggestionWorkerSource>,
+  requireExampleUtterances: boolean,
 ): { suggestion?: ValidFaqSuggestion; code?: string } {
   const item = record(value);
-  if (!item || !hasExactFields(item, [
+  const allowedFields = [
     "category", "question", "answer", "evidence", "confidence",
-  ])) return { code: "faq_suggestion_item_contract_invalid" };
+    ...(requireExampleUtterances ? ["exampleUtterances"] : []),
+  ];
+  if (!item || !hasExactFields(item, allowedFields)) {
+    return { code: "faq_suggestion_item_contract_invalid" };
+  }
   if (typeof item.category !== "string" || !categorySet.has(item.category)) {
     return { code: "faq_suggestion_category_invalid" };
   }
@@ -117,6 +164,18 @@ function validateItem(
     });
   }
 
+  let exampleUtterances: string[] | undefined;
+  if (requireExampleUtterances) {
+    try {
+      exampleUtterances = parseFaqUtterances(item.exampleUtterances);
+    } catch {
+      return { code: "faq_suggestion_utterances_invalid" };
+    }
+    if (exampleUtterances.length < 3 || exampleUtterances.length > 8) {
+      return { code: "faq_suggestion_utterances_invalid" };
+    }
+  }
+
   return {
     suggestion: {
       category: item.category as FaqSuggestionCategory,
@@ -124,6 +183,7 @@ function validateItem(
       answer,
       evidence,
       confidence: item.confidence,
+      ...(exampleUtterances ? { exampleUtterances } : {}),
     },
   };
 }
@@ -133,9 +193,28 @@ export function validateFaqSuggestionResult(
   input: FaqSuggestionWorkerInput,
 ): FaqSuggestionWorkerResult {
   const result = record(value);
+  if (input.contractVersion === "faq-suggestion-input.v2" && input.mode === "alias_only") {
+    if (!result
+      || !hasExactFields(result, ["contractVersion", "exampleUtterances"])
+      || result.contractVersion !== "faq-alias-suggestion-result.v1") {
+      throw new Error("faq_alias_suggestion_result_contract_invalid");
+    }
+    let exampleUtterances: string[];
+    try {
+      exampleUtterances = parseFaqUtterances(result.exampleUtterances);
+    } catch {
+      throw new Error("faq_alias_suggestion_utterances_invalid");
+    }
+    if (exampleUtterances.length < 3 || exampleUtterances.length > 8) {
+      throw new Error("faq_alias_suggestion_utterances_invalid");
+    }
+    return { mode: "alias_only", exampleUtterances };
+  }
+
+  const v2 = input.contractVersion === "faq-suggestion-input.v2";
   if (!result
     || !hasExactFields(result, ["contractVersion", "suggestions"])
-    || result.contractVersion !== "faq-suggestion-result.v1"
+    || result.contractVersion !== (v2 ? "faq-suggestion-result.v2" : "faq-suggestion-result.v1")
     || !Array.isArray(result.suggestions)) {
     throw new Error("faq_suggestion_result_contract_invalid");
   }
@@ -146,14 +225,21 @@ export function validateFaqSuggestionResult(
     source,
   ]));
   const suggestions: ValidFaqSuggestion[] = [];
-  const rejections: FaqSuggestionWorkerResult["rejections"] = [];
+  const rejections: LegacyFaqSuggestionWorkerResult["rejections"] = [];
   for (const [index, rawSuggestion] of result.suggestions.entries()) {
-    const validated = validateItem(rawSuggestion, sources);
+    const validated = validateItem(rawSuggestion, sources, v2);
     if (validated.suggestion) suggestions.push(validated.suggestion);
     else rejections.push({ index, code: validated.code ?? "faq_suggestion_item_contract_invalid" });
   }
   if (!suggestions.length) {
     throw new Error(rejections[0]?.code ?? "faq_suggestion_result_empty");
   }
-  return { suggestions, rejections };
+  return v2
+    ? {
+        mode: "full_faq",
+        suggestions: suggestions as FullFaqSuggestionWorkerResult["suggestions"],
+        rejections,
+      }
+    : { suggestions, rejections };
 }
+import { parseFaqUtterances } from "./faqUtterancePolicy.js";

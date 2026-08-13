@@ -34,7 +34,7 @@ load_required_state_sha "$ROOT/state/current" CURRENT_SHA
 [[ "$CURRENT_SHA" == "$RELEASE_SHA" ]] || fail "worker_rollout_current_release_mismatch"
 
 declare -A SERVICES_BY_IMAGE=(
-  [DM_WORKER_IMAGE]="dm-worker-1 dm-worker-2"
+  [DM_WORKER_IMAGE]="dm-worker-1 dm-worker-2 faq-worker-1"
   [WIKI_WORKER_IMAGE]="wiki-worker-1"
   [CONTENT_PROPOSAL_WORKER_IMAGE]="content-proposal-worker-1"
   [BRAND_INTELLIGENCE_WORKER_IMAGE]="brand-intelligence-worker-1"
@@ -47,6 +47,7 @@ declare -A SERVICES_BY_IMAGE=(
 declare -A IMAGE_BY_SERVICE=(
   [dm-worker-1]="DM_WORKER_IMAGE"
   [dm-worker-2]="DM_WORKER_IMAGE"
+  [faq-worker-1]="DM_WORKER_IMAGE"
   [wiki-worker-1]="WIKI_WORKER_IMAGE"
   [content-proposal-worker-1]="CONTENT_PROPOSAL_WORKER_IMAGE"
   [brand-intelligence-worker-1]="BRAND_INTELLIGENCE_WORKER_IMAGE"
@@ -59,10 +60,19 @@ declare -A IMAGE_BY_SERVICE=(
 declare -A CANDIDATE_IMAGES=()
 declare -a CHANGED_IMAGE_KEYS=()
 declare -a CHANGED_SERVICES=()
+WORKER_ROLLOUT_EXCLUDED_SERVICES="${WORKER_ROLLOUT_EXCLUDED_SERVICES:-}"
+case "$WORKER_ROLLOUT_EXCLUDED_SERVICES" in
+  "") ;;
+  wiki-worker-1) ;;
+  *) fail "worker_rollout_exclusion_invalid" ;;
+esac
 
 for image_key in "${WORKER_IMAGE_KEYS[@]}"; do
   CANDIDATE_IMAGES["$image_key"]="${RELEASE_MANIFEST[$image_key]}"
   if release_image_changed "$image_key"; then
+    if [[ "$image_key" == "WIKI_WORKER_IMAGE" && "$WORKER_ROLLOUT_EXCLUDED_SERVICES" == "wiki-worker-1" ]]; then
+      continue
+    fi
     CHANGED_IMAGE_KEYS+=("$image_key")
     read -r -a mapped_services <<<"${SERVICES_BY_IMAGE[$image_key]}"
     CHANGED_SERVICES+=("${mapped_services[@]}")
@@ -113,18 +123,9 @@ export_release_images() {
   export REEL_WORKER_IMAGE="${source_images[REEL_WORKER_IMAGE]}"
 }
 
-declare -a ALL_CHANGED_PROFILE_ARGS=()
-for service in "${CHANGED_SERVICES[@]}"; do
-  if [[ "$MARKETING_CUTOVER" == "true" && "$service" == "reel-worker-1" ]]; then
-    continue
-  fi
-  ALL_CHANGED_PROFILE_ARGS+=(--profile "$service")
-done
-
-previous_compose_all=(docker compose -p brand-pilot -f "$PREVIOUS_DIR/compose.production.yml" --env-file "$PREVIOUS_DIR/release.env" "${ALL_CHANGED_PROFILE_ARGS[@]}")
-export_release_images PREVIOUS_IMAGES
-"${previous_compose_all[@]}" config --quiet >/dev/null
-running_before="$("${previous_compose_all[@]}" ps --status running --services)"
+running_before="$(docker ps \
+  --filter label=com.docker.compose.project=brand-pilot \
+  --format '{{.Label "com.docker.compose.service"}}')"
 
 declare -a ROLLOUT_SERVICES=()
 declare -a ROLLOUT_IMAGE_KEYS=()
@@ -152,20 +153,22 @@ if [[ ${#ROLLOUT_SERVICES[@]} -eq 0 ]]; then
   exit 0
 fi
 
-# A manifest can be promoted even when its worker rollout is deferred. Refuse
-# to use that manifest as a recovery target unless it matches the actual
-# pre-rollout containers exactly.
+declare -A PREVIOUS_SERVICE_IMAGES=()
+# A manifest can be promoted while a worker rollout is deferred or after a
+# scoped hotfix. Capture the actual immutable image for each running service;
+# this is the only safe per-service recovery target.
 for service in "${ROLLOUT_SERVICES[@]}"; do
   if [[ "$MARKETING_CUTOVER" == "true" && "$service" == "reel-worker-1" ]]; then
     continue
   fi
-  container_id="$("${previous_compose_all[@]}" ps -q "$service")"
+  container_id="$(docker ps -q \
+    --filter label=com.docker.compose.project=brand-pilot \
+    --filter "label=com.docker.compose.service=$service")"
   [[ "$container_id" =~ ^[0-9a-f]{12,64}$ ]] || fail "worker_previous_runtime_mismatch"
   running_image="$(docker inspect --format '{{.Config.Image}}' "$container_id")" ||
     fail "worker_previous_runtime_mismatch"
-  image_key="${IMAGE_BY_SERVICE[$service]}"
-  [[ "$running_image" == "${PREVIOUS_IMAGES[$image_key]}" ]] ||
-    fail "worker_previous_runtime_mismatch"
+  require_digest_image "$running_image"
+  PREVIOUS_SERVICE_IMAGES["$service"]="$running_image"
 done
 
 HEARTBEAT_VERIFIER="${WORKER_HEARTBEAT_VERIFY_SCRIPT:-}"
@@ -187,14 +190,15 @@ done
 previous_compose=(docker compose -p brand-pilot -f "$PREVIOUS_DIR/compose.production.yml" --env-file "$PREVIOUS_DIR/release.env" "${PREVIOUS_PROFILE_ARGS[@]}")
 candidate_compose=(docker compose -p brand-pilot -f "$RELEASE_DIR/compose.production.yml" --env-file "$RELEASE_DIR/release.env" "${PROFILE_ARGS[@]}")
 
-# Pull and inspect the previous immutable images before mutation so recovery does
-# not depend on a registry request after a failed rollout.
-for image_key in "${ROLLOUT_IMAGE_KEYS[@]}"; do
-  if [[ "$MARKETING_CUTOVER" == "true" && "$image_key" == "REEL_WORKER_IMAGE" ]]; then
+# Pull the actual immutable per-service recovery images before mutation so
+# recovery never depends on the potentially stale previous manifest.
+for service in "${RECOVERY_SERVICES[@]}"; do
+  if [[ "$MARKETING_CUTOVER" == "true" && "$service" == "reel-worker-1" ]]; then
     continue
   fi
-  docker pull --quiet "${PREVIOUS_IMAGES[$image_key]}" >/dev/null || fail "worker_previous_image_pull_failed"
+  docker pull --quiet "${PREVIOUS_SERVICE_IMAGES[$service]}" >/dev/null || fail "worker_previous_image_pull_failed"
 done
+export_release_images PREVIOUS_IMAGES
 "${previous_compose[@]}" config --quiet >/dev/null
 
 export_release_images CANDIDATE_IMAGES
@@ -217,9 +221,16 @@ recover_previous_workers() {
       "${candidate_compose[@]}" rm -f reel-worker-1 >/dev/null 2>&1 || true
     fi
     if [[ "${#RECOVERY_SERVICES[@]}" -gt 0 ]]; then
-      export_release_images PREVIOUS_IMAGES
-      "${previous_compose[@]}" up -d --no-deps --pull never --force-recreate "${RECOVERY_SERVICES[@]}" ||
-        printf '%s\n' "error=worker_previous_release_recovery_failed" >&2
+      for service in "${RECOVERY_SERVICES[@]}"; do
+        declare -A recovery_images=()
+        for image_key in "${WORKER_IMAGE_KEYS[@]}"; do
+          recovery_images["$image_key"]="${PREVIOUS_IMAGES[$image_key]}"
+        done
+        recovery_images["${IMAGE_BY_SERVICE[$service]}"]="${PREVIOUS_SERVICE_IMAGES[$service]}"
+        export_release_images recovery_images
+        "${previous_compose[@]}" up -d --no-deps --pull never --force-recreate "$service" ||
+          printf 'error=worker_previous_release_recovery_failed service=%s\n' "$service" >&2
+      done
     fi
   fi
   exit "$exit_code"

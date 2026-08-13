@@ -33,10 +33,15 @@ beforeAll(async () => {
   database = await PGlite.create({ extensions: { pgcrypto } });
   const directory = resolve(process.cwd(), "../../db/migrations");
   for (const file of (await readdir(directory)).filter((name) => name.endsWith(".sql")).sort()) {
+    if (file >= "075_") continue;
     const sql = await readFile(resolve(directory, file), "utf8");
     if (sql.startsWith("-- requires: pgvector") || file === "027_wiki_search_v2.sql") continue;
     await database.exec(sql);
   }
+  const faqMigration = await readFile(resolve(directory, "078_faq_utterance_matching.sql"), "utf8");
+  const ownershipBoundary = faqMigration.lastIndexOf("\ndo $$\ndeclare\n  schema_owner_role_name");
+  if (ownershipBoundary < 0) throw new Error("faq_pglite_ownership_boundary_missing");
+  await database.exec(`${faqMigration.slice(0, ownershipBoundary)}\ncommit;`);
   await database.exec(`
     insert into app_users(id,email) values ('${memberId}','wiki-member@example.com');
     insert into workspaces(id,name,slug,created_by_user_id)
@@ -118,5 +123,100 @@ describe("DM Wiki repository PostgreSQL behavior", () => {
     listed = await repository.listWikiItems!({ workspaceId, brandId });
     expect(listed.find((entry) => entry.id === created.id))
       .toMatchObject({ status: "inactive", buildStatus: "inactive" });
+  });
+
+  it("lists and updates FAQ expression examples without changing source aliases", async () => {
+    const repository = createRepository(pglitePool(database));
+    const created = await repository.createWikiItem!(
+      { workspaceId, brandId, actorUserId: memberId },
+      {
+        contractVersion: "wiki-item.v1",
+        itemType: "faq",
+        title: "운영시간 안내",
+        content: "평일 오전 9시부터 운영합니다.",
+        provenance: {},
+      },
+    );
+    await database.query(
+      "update knowledge_entries set aliases = $2 where id = $1",
+      [created.id, ["몇 시에 열어요?", "영업 시간"]],
+    );
+
+    const listed = (await repository.listWikiItems!({ workspaceId, brandId }))
+      .find((entry) => entry.id === created.id)!;
+    expect(listed).toMatchObject({
+      sourceAliases: ["몇 시에 열어요?", "영업 시간"],
+      manualAliases: [],
+      effectiveAliases: ["몇 시에 열어요?", "영업 시간"],
+    });
+
+    const updated = await repository.updateWikiItem!(
+      { workspaceId, brandId, actorUserId: memberId, itemId: created.id },
+      {
+        manualAliases: ["언제 문 열어요?", "영업 시간"],
+        expectedUpdatedAt: listed.updatedAt,
+      },
+    );
+    expect(updated).toMatchObject({
+      status: "draft",
+      sourceAliases: ["몇 시에 열어요?", "영업 시간"],
+      manualAliases: ["언제 문 열어요?", "영업 시간"],
+      effectiveAliases: ["몇 시에 열어요?", "영업 시간", "언제 문 열어요?"],
+    });
+
+    await expect(repository.updateWikiItem!(
+      { workspaceId, brandId, actorUserId: memberId, itemId: created.id },
+      { manualAliases: ["오래된 수정"], expectedUpdatedAt: listed.updatedAt },
+    )).rejects.toThrow("wiki_item_conflict");
+  });
+
+  it("preserves an active FAQ status when editing its question, answer, and expressions", async () => {
+    const repository = createRepository(pglitePool(database));
+    await database.query("delete from wiki_build_requests where brand_id = $1", [brandId]);
+    const created = await repository.createWikiItem!(
+      { workspaceId, brandId, actorUserId: memberId },
+      {
+        contractVersion: "wiki-item.v1",
+        itemType: "faq",
+        title: "반품 안내",
+        content: "수령 후 7일 안에 반품할 수 있습니다.",
+        provenance: {},
+      },
+    );
+    await database.query(
+      `update knowledge_entries
+          set status = 'active', enabled = true, approved_by_user_id = $2, approved_at = now()
+        where id = $1`,
+      [created.id, memberId],
+    );
+    const active = (await repository.listWikiItems!({ workspaceId, brandId }))
+      .find((entry) => entry.id === created.id)!;
+
+    const updated = await repository.updateWikiItem!(
+      { workspaceId, brandId, actorUserId: memberId, itemId: created.id },
+      {
+        title: "교환·반품 안내",
+        content: "수령 후 7일 안에 교환 또는 반품할 수 있습니다.",
+        manualAliases: ["반품 어떻게 해요?", "교환 가능한가요?"],
+        expectedUpdatedAt: active.updatedAt,
+      },
+    );
+
+    expect(updated).toMatchObject({
+      status: "active",
+      title: "교환·반품 안내",
+      content: "수령 후 7일 안에 교환 또는 반품할 수 있습니다.",
+      manualAliases: ["반품 어떻게 해요?", "교환 가능한가요?"],
+    });
+    const stored = await database.query(
+      "select status, enabled, approved_by_user_id is not null as approved from knowledge_entries where id = $1",
+      [created.id],
+    );
+    expect(stored.rows[0]).toEqual({ status: "active", enabled: true, approved: true });
+    const rebuild = await database.query(
+      "select count(*)::integer as count from wiki_build_requests where brand_id = $1 and status = 'pending'",
+      [brandId],
+    );
+    expect(rebuild.rows[0]).toEqual({ count: 1 });
   });
 });

@@ -70,6 +70,13 @@ afterEach(() => {
 function createRepository(): ApiRepository {
   return {
     health: vi.fn(async () => ({ database: "ok" as const })),
+    getFaqCapabilities: vi.fn(async () => ({
+      suggestions: false,
+      expandedExact: false,
+      shadowMatching: false,
+      clarification: false,
+      clarifyThreshold: 0.78,
+    })),
     getAiContentBrandContext: vi.fn(async () => ({ ready: true, brandName: "Growthline", ownedUrl: "https://example.com", sourceStatus: "crawled", lastCrawledAt: null, wikiVersionId: "wiki-1", wikiUpdatedAt: null, summary: "자사 분석", pageCount: 1, context: {} })),
     updateAiContentFinalizationDraft: vi.fn(async () => { throw new Error("not_implemented"); }),
     startAiContentGenerationV3: vi.fn(async () => { throw new Error("not_implemented"); }),

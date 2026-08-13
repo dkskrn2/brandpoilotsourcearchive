@@ -2879,3 +2879,103 @@ select:not([multiple]) {
   background-color: #f2f4f7;
   cursor: not-allowed;
 }
+.faq-utterance-editor {
+  border: 0;
+  margin: 0;
+  min-width: 0;
+  padding: 0;
+}
+
+.faq-utterance-editor legend,
+.wiki-faq-alias-head strong {
+  color: var(--text-strong, #172033);
+  font-size: 0.9rem;
+  font-weight: 700;
+}
+
+.faq-utterance-help,
+.wiki-faq-alias-head p {
+  color: var(--text-muted, #687386);
+  font-size: 0.78rem;
+  margin: 0.25rem 0 0.65rem;
+}
+
+.faq-utterance-rows {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.faq-utterance-row {
+  align-items: center;
+  display: grid;
+  gap: 0.5rem;
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.faq-utterance-row input {
+  width: 100%;
+}
+
+.faq-utterance-add {
+  margin-top: 0.65rem;
+}
+
+.faq-utterance-error {
+  color: #b42318;
+  font-size: 0.76rem;
+  margin: 0.35rem 0 0;
+}
+
+.wiki-faq-aliases {
+  background: #f8fafc;
+  border: 1px solid #e3e8ef;
+  border-radius: 12px;
+  display: grid;
+  gap: 1rem;
+  padding: 1rem;
+}
+
+.wiki-faq-alias-head {
+  align-items: flex-start;
+  display: flex;
+  gap: 1rem;
+  justify-content: space-between;
+}
+
+.faq-alias-source > span,
+.faq-alias-effective > span {
+  color: var(--text-muted, #687386);
+  display: block;
+  font-size: 0.75rem;
+  margin-bottom: 0.45rem;
+}
+
+.faq-alias-source > div,
+.faq-alias-effective > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.faq-alias-source code,
+.faq-alias-effective code {
+  background: #fff;
+  border: 1px solid #d9e1eb;
+  border-radius: 999px;
+  font-family: inherit;
+  font-size: 0.76rem;
+  padding: 0.3rem 0.6rem;
+}
+
+.faq-alias-proposal {
+  background: #fff;
+  border: 1px solid #cfd8e6;
+  border-radius: 10px;
+  display: grid;
+  gap: 0.75rem;
+  padding: 0.85rem;
+}
+
+.faq-alias-proposal > .button {
+  justify-self: end;
+}

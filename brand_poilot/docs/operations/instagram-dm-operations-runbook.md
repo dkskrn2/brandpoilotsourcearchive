@@ -64,3 +64,12 @@ DM_PROFILE_REFRESH_AFTER_HOURS=24
 ```
 
 실제 비밀값은 배포 플랫폼의 비밀 저장소에만 둔다.
+
+## FAQ 표현 예시와 확인 질문
+
+- FAQ 제안의 표현 예시는 질문·답변과 같은 검토 카드에서 수정하며 `FAQ 승인` 한 번으로 함께 저장한다. 표현 예시만 별도로 승인하지 않는다.
+- 기존 FAQ는 `표현 예시 제안` 실행 후 결과를 적용할 수 있다. 이때 source alias는 보존하고 manual alias만 교체한다.
+- fuzzy 후보는 FAQ 답변을 바로 보내지 않는다. 고정 확인 질문을 한 번 보내고 고객이 `네`라고 확인한 경우에만 해당 FAQ 답변을 보낸다.
+- 확인 질문 대기 중 수동응답을 보내면 대기 상태와 아직 전송되지 않은 확인 질문 작업을 취소한다.
+- matcher shadow 로그에는 Meta message ID, FAQ ID, kind, score만 남기고 고객 원문과 이름을 남기지 않는다.
+- 활성화·중지·복구 절차와 평가 gate는 `docs/operations/faq-utterance-matching-rollout.md`를 따른다.

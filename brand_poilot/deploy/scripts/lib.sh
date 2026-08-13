@@ -52,6 +52,44 @@ require_exact_boolean() {
   status_ok "$key"
 }
 
+require_boolean() {
+  local key="$1"
+  local file="$2"
+  local valid_count
+  local key_count
+  valid_count="$(grep -Ec "^${key}=(true|false)$" "$file" || true)"
+  key_count="$(grep -Ec "^${key}=" "$file" || true)"
+  [[ "$valid_count" == "1" && "$key_count" == "1" ]] || fail "safe_runtime_flag_invalid"
+  status_ok "$key"
+}
+
+require_number_range() {
+  local key="$1"
+  local minimum="$2"
+  local maximum="$3"
+  local file="$4"
+  local value
+  [[ "$(grep -Ec "^${key}=" "$file" || true)" == "1" ]] || fail "safe_runtime_number_invalid"
+  value="$(grep -E "^${key}=" "$file" | sed 's/^[^=]*=//')"
+  awk -v value="$value" -v minimum="$minimum" -v maximum="$maximum" \
+    'BEGIN { if (value !~ /^[0-9]+([.][0-9]+)?$/ || value < minimum || value > maximum) exit 1 }' ||
+    fail "safe_runtime_number_invalid"
+  status_ok "$key"
+}
+
+require_integer_range() {
+  local key="$1"
+  local minimum="$2"
+  local maximum="$3"
+  local file="$4"
+  local value
+  [[ "$(grep -Ec "^${key}=" "$file" || true)" == "1" ]] || fail "safe_runtime_number_invalid"
+  value="$(grep -E "^${key}=" "$file" | sed 's/^[^=]*=//')"
+  [[ "$value" =~ ^[0-9]+$ ]] || fail "safe_runtime_number_invalid"
+  (( value >= minimum && value <= maximum )) || fail "safe_runtime_number_invalid"
+  status_ok "$key"
+}
+
 env_secret_value_digest() {
   local key="$1"
   local file="$2"

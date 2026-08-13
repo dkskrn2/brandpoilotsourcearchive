@@ -157,6 +157,16 @@ describe("DM Wiki repository", () => {
       statements.push({ sql, values });
       if (["begin", "commit", "rollback"].includes(sql.trim())) return { rowCount: 0, rows: [] };
       if (sql.includes("from workspace_members")) return { rowCount: 1, rows: [{ role: "member" }] };
+      if (sql.includes("from knowledge_entries") && sql.includes("for update")) return {
+        rowCount: 1,
+        rows: [{
+          entry_type: "faq",
+          origin: "manual",
+          status: "draft",
+          enabled: false,
+          updated_at: "2026-08-01T00:00:00.000Z",
+        }],
+      };
       if (sql.includes("update knowledge_entries")) return {
         rowCount: 1,
         rows: [{
@@ -326,6 +336,16 @@ describe("DM Wiki repository", () => {
       statements.push({ sql, values });
       if (["begin", "commit", "rollback"].includes(sql.trim())) return { rowCount: 0, rows: [] };
       if (sql.includes("from workspace_members")) return { rowCount: 1, rows: [{ role: "owner" }] };
+      if (sql.includes("from knowledge_entries") && sql.includes("for update")) return {
+        rowCount: 1,
+        rows: [{
+          entry_type: "faq",
+          origin: "manual",
+          status: "active",
+          enabled: true,
+          updated_at: "2026-08-01T00:00:00.000Z",
+        }],
+      };
       if (sql.includes("update knowledge_entries")) return {
         rowCount: 1,
         rows: [{

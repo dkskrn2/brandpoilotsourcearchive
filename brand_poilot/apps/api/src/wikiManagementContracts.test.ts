@@ -53,6 +53,25 @@ describe("Wiki management contracts", () => {
     expect(parseUpdateWikiItem({ status: "inactive" })).toEqual({ status: "inactive" });
   });
 
+  it("accepts FAQ expression edits with one concurrency token", () => {
+    expect(parseUpdateWikiItem({
+      manualAliases: [" 배송 언제 와요? ", "언제 발송해요?", "배송 언제 와요?"],
+      expectedUpdatedAt: "2026-08-12T00:00:00.000Z",
+    })).toEqual({
+      manualAliases: ["배송 언제 와요?", "언제 발송해요?"],
+      expectedUpdatedAt: "2026-08-12T00:00:00.000Z",
+    });
+  });
+
+  it("requires concurrency and limits FAQ expression edits", () => {
+    expect(() => parseUpdateWikiItem({ manualAliases: ["배송 언제 와요?"] }))
+      .toThrow("wiki_item_validation_failed:expectedUpdatedAt");
+    expect(() => parseUpdateWikiItem({
+      manualAliases: Array.from({ length: 9 }, (_, index) => `표현 ${index}`),
+      expectedUpdatedAt: "2026-08-12T00:00:00.000Z",
+    })).toThrow("faq_utterance_validation_failed:limit");
+  });
+
   it("requires a supported supplemental source when resolving an issue", () => {
     expect(parseResolveWikiIssue({
       sourceKind: "product_service",

@@ -78,6 +78,12 @@ function json<T>(value: unknown): T {
   return (typeof value === "string" ? JSON.parse(value) : value) as T;
 }
 
+function isoTimestamp(value: unknown): string {
+  const date = value instanceof Date ? value : new Date(String(value));
+  if (Number.isNaN(date.getTime())) throw new Error("faq_suggestion_timestamp_invalid");
+  return date.toISOString();
+}
+
 function removeSslQueryOverrides(url: URL) {
   for (const key of [...url.searchParams.keys()]) {
     const normalizedKey = key.toLowerCase();
@@ -187,7 +193,9 @@ export function createDmWorkerDbFromPool(pool: DmWorkerPool) {
                   error_code = null, updated_at = now()
              from candidate where run.id = candidate.id
            returning run.id, run.workspace_id, run.brand_id,
-                     run.lease_token, run.source_snapshot_json`,
+                     run.lease_token, run.source_snapshot_json, run.run_kind,
+                     run.target_knowledge_entry_id,
+                     run.target_knowledge_entry_updated_at`,
           [workerId],
         );
         if (!claimed.rowCount) {
@@ -279,7 +287,47 @@ export function createDmWorkerDbFromPool(pool: DmWorkerPool) {
           }
           sources.push({ ...descriptor, content: source.content });
         }
-        if (!postCommitError) {
+        if (!postCommitError && row.run_kind === "alias_only") {
+          const target = await client.query(
+            `select id,question,answer,updated_at
+               from knowledge_entries
+              where id=$1::uuid and workspace_id=$2::uuid and brand_id=$3::uuid
+                and entry_type='faq' and status='active' and enabled=true
+                and updated_at=$4::timestamptz`,
+            [
+              row.target_knowledge_entry_id,
+              row.workspace_id,
+              row.brand_id,
+              row.target_knowledge_entry_updated_at,
+            ],
+          );
+          if (!target.rowCount) {
+            await client.query(
+              `update faq_suggestion_runs
+                  set status='failed',error_code='faq_suggestion_source_changed',
+                      lease_owner=null,lease_token=null,lease_expires_at=null,
+                      completed_at=now(),updated_at=now()
+                where id=$1::uuid`,
+              [row.id],
+            );
+            postCommitError = new Error("faq_suggestion_source_changed");
+          } else {
+            output = {
+              contractVersion: "faq-suggestion-input.v2",
+              mode: "alias_only",
+              runId: String(row.id),
+              workspaceId: String(row.workspace_id),
+              brandId: String(row.brand_id),
+              leaseToken: String(row.lease_token),
+              targetFaq: {
+                id: String(target.rows[0].id),
+                question: String(target.rows[0].question),
+                answer: String(target.rows[0].answer),
+                updatedAt: isoTimestamp(target.rows[0].updated_at),
+              },
+            };
+          }
+        } else if (!postCommitError) {
           const faqs = await client.query(
             `select id,question,answer from knowledge_entries
               where workspace_id=$1::uuid and brand_id=$2::uuid
@@ -287,7 +335,8 @@ export function createDmWorkerDbFromPool(pool: DmWorkerPool) {
             [row.workspace_id, row.brand_id],
           );
           output = {
-            contractVersion: "faq-suggestion-input.v1",
+            contractVersion: "faq-suggestion-input.v2",
+            mode: "full_faq",
             runId: String(row.id),
             workspaceId: String(row.workspace_id),
             brandId: String(row.brand_id),
@@ -325,37 +374,98 @@ export function createDmWorkerDbFromPool(pool: DmWorkerPool) {
       result: FaqSuggestionWorkerResult,
     ) {
       const client = await pool.connect();
+      let transactionClosed = false;
+      let postCommitError: Error | null = null;
       try {
         await client.query("begin");
         const locked = await client.query(
-          `select workspace_id,brand_id from faq_suggestion_runs
+          `select workspace_id,brand_id,run_kind,target_knowledge_entry_id,
+                  target_knowledge_entry_updated_at
+             from faq_suggestion_runs
             where id=$1::uuid and status='running' and lease_owner=$2 and lease_token=$3::uuid
             for update`,
           [runId, workerId, leaseToken],
         );
         if (!locked.rowCount) throw new Error("faq_suggestion_lease_lost");
-        for (const [position, suggestion] of result.suggestions.entries()) {
-          await client.query(
-            `insert into faq_suggestion_items(
-               workspace_id,brand_id,run_id,position,category,question,answer,evidence_json,confidence
-             ) values($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9)`,
-            [locked.rows[0].workspace_id, locked.rows[0].brand_id, runId, position,
-              suggestion.category, suggestion.question, suggestion.answer,
-              JSON.stringify(suggestion.evidence), suggestion.confidence],
+        const run = locked.rows[0];
+        let completionStatus: "completed" | "partial" | "review_ready" | null = null;
+        if (run.run_kind === "alias_only") {
+          if (!("mode" in result) || result.mode !== "alias_only") {
+            throw new Error("faq_alias_suggestion_result_mode_invalid");
+          }
+          const target = await client.query(
+            `select id from knowledge_entries
+              where id=$1::uuid and workspace_id=$2::uuid and brand_id=$3::uuid
+                and entry_type='faq' and status='active' and enabled=true
+                and updated_at=$4::timestamptz
+              for update`,
+            [
+              run.target_knowledge_entry_id,
+              run.workspace_id,
+              run.brand_id,
+              run.target_knowledge_entry_updated_at,
+            ],
           );
+          if (!target.rowCount) {
+            await client.query(
+              `update faq_suggestion_runs
+                  set status='failed',error_code='faq_suggestion_source_changed',
+                      lease_owner=null,lease_token=null,lease_expires_at=null,
+                      completed_at=now(),updated_at=now()
+                where id=$1::uuid and lease_owner=$2 and lease_token=$3::uuid`,
+              [runId, workerId, leaseToken],
+            );
+            postCommitError = new Error("faq_suggestion_source_changed");
+          } else {
+            await client.query(
+              `insert into faq_alias_suggestion_results(
+                 workspace_id,brand_id,run_id,knowledge_entry_id,example_utterances
+               ) values($1,$2,$3,$4,$5)`,
+              [
+                run.workspace_id,
+                run.brand_id,
+                runId,
+                run.target_knowledge_entry_id,
+                result.exampleUtterances,
+              ],
+            );
+            completionStatus = "completed";
+          }
+        } else {
+          if (!("suggestions" in result)) {
+            throw new Error("faq_suggestion_result_mode_invalid");
+          }
+          for (const [position, suggestion] of result.suggestions.entries()) {
+            await client.query(
+              `insert into faq_suggestion_items(
+                 workspace_id,brand_id,run_id,position,category,question,answer,
+                 evidence_json,confidence,example_utterances
+               ) values($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9,$10)`,
+              [run.workspace_id, run.brand_id, runId, position,
+                suggestion.category, suggestion.question, suggestion.answer,
+                JSON.stringify(suggestion.evidence), suggestion.confidence,
+                suggestion.exampleUtterances ?? []],
+            );
+          }
+          completionStatus = result.rejections.length ? "partial" : "review_ready";
         }
-        const completed = await client.query(
-          `update faq_suggestion_runs set status=$4,error_code=null,lease_owner=null,lease_token=null,
-             lease_expires_at=null,completed_at=now(),updated_at=now()
-           where id=$1::uuid and lease_owner=$2 and lease_token=$3::uuid`,
-          [runId, workerId, leaseToken, result.rejections.length ? "partial" : "review_ready"],
-        );
-        if (completed.rowCount !== 1) throw new Error("faq_suggestion_lease_lost");
+        if (!postCommitError) {
+          if (!completionStatus) throw new Error("faq_suggestion_result_mode_invalid");
+          const completed = await client.query(
+            `update faq_suggestion_runs set status=$4,error_code=null,lease_owner=null,lease_token=null,
+               lease_expires_at=null,completed_at=now(),updated_at=now()
+             where id=$1::uuid and lease_owner=$2 and lease_token=$3::uuid`,
+            [runId, workerId, leaseToken, completionStatus],
+          );
+          if (completed.rowCount !== 1) throw new Error("faq_suggestion_lease_lost");
+        }
         await client.query("commit");
+        transactionClosed = true;
       } catch (error) {
-        await client.query("rollback");
+        if (!transactionClosed) await client.query("rollback");
         throw error;
       } finally { client.release(); }
+      if (postCommitError) throw postCommitError;
     },
 
     async failFaqSuggestionRun(

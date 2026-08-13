@@ -71,6 +71,18 @@ export interface WikiItem {
   activeVersionId: string | null;
   lastBuiltAt: string | null;
   buildStatus: WikiBuildStatus;
+  sourceAliases: string[];
+  manualAliases: string[];
+  effectiveAliases: string[];
+  updatedAt: string;
+}
+
+export interface FaqCapabilities {
+  suggestions: boolean;
+  expandedExact: boolean;
+  shadowMatching: boolean;
+  clarification: boolean;
+  clarifyThreshold: number;
 }
 
 export interface WikiIssue {
@@ -133,6 +145,7 @@ export interface FaqSuggestionItem {
   category: FaqSuggestionCategory;
   question: string;
   answer: string;
+  exampleUtterances: string[];
   evidence: FaqSuggestionEvidence[];
   confidence: number;
   status: FaqSuggestionItemStatus;
@@ -162,7 +175,22 @@ export interface FaqSuggestionItemUpdate {
   category: FaqSuggestionCategory;
   question: string;
   answer: string;
+  exampleUtterances: string[];
   expectedUpdatedAt: string;
+}
+
+export interface FaqAliasSuggestionRun {
+  id: string;
+  workspaceId: string;
+  brandId: string;
+  status: FaqSuggestionRunStatus;
+  errorCode: string | null;
+  targetKnowledgeEntryId: string;
+  targetKnowledgeEntryUpdatedAt: string;
+  exampleUtterances: string[] | null;
+  createdAt: string;
+  updatedAt: string;
+  completedAt: string | null;
 }
 
 export interface FaqSuggestionReviewAction {
@@ -214,6 +242,8 @@ export interface UpdateWikiItemInput {
   title?: string;
   content?: string;
   status?: "draft" | "active" | "inactive";
+  manualAliases?: string[];
+  expectedUpdatedAt?: string;
 }
 
 export interface ResolveWikiIssueInput {
@@ -351,6 +381,9 @@ export function createLibraryGateway(client: Client = apiClient(), blobPut: type
     listWikiItems(brandId: string) {
       return client.requestJson<WikiItem[]>(`/brands/${brandId}/wiki/items`, { method: "GET" });
     },
+    getFaqCapabilities(brandId: string) {
+      return client.requestJson<FaqCapabilities>(`/brands/${brandId}/faq-capabilities`, { method: "GET" });
+    },
     createWikiItem(brandId: string, input: CreateWikiItemInput) {
       return client.requestJson<WikiItem>(`/brands/${brandId}/wiki/items`, {
         method: "POST",
@@ -421,6 +454,30 @@ export function createLibraryGateway(client: Client = apiClient(), blobPut: type
       return client.requestJson<{ item: FaqSuggestionItem }>(
         `/brands/${brandId}/faq-suggestions/${runId}/items/${itemId}/dismiss`,
         { method: "POST", body: JSON.stringify(input) },
+      );
+    },
+    createFaqAliasSuggestionRun(brandId: string, itemId: string) {
+      return client.requestJson<{ run: FaqAliasSuggestionRun }>(
+        `/brands/${brandId}/wiki/items/${itemId}/alias-suggestions`,
+        { method: "POST" },
+      );
+    },
+    getLatestFaqAliasSuggestionRun(brandId: string, itemId: string) {
+      return client.requestJson<{ run: FaqAliasSuggestionRun | null }>(
+        `/brands/${brandId}/wiki/items/${itemId}/alias-suggestions/latest`,
+        { method: "GET" },
+      );
+    },
+    applyFaqAliasSuggestionRun(
+      brandId: string,
+      itemId: string,
+      runId: string,
+      expectedUpdatedAt: string,
+      exampleUtterances: string[],
+    ) {
+      return client.requestJson<WikiItem>(
+        `/brands/${brandId}/wiki/items/${itemId}/alias-suggestions/${runId}/apply`,
+        { method: "POST", body: JSON.stringify({ expectedUpdatedAt, exampleUtterances }) },
       );
     },
     listAvatars(brandId: string) {

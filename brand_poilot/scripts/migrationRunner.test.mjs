@@ -4604,6 +4604,7 @@ test("an installation applied through 064 has every later migration pending", as
       "075_ai_content_three_format_cutover.sql",
       "076_manual_content_generation_brand_rules.sql",
       "077_content_suggestion_batches.sql",
+      "078_faq_utterance_matching.sql",
     ],
   );
 });
@@ -4615,7 +4616,7 @@ test("post-075 data migrations are a closed DML-only contract", async () => {
   assert.equal(migrationRunner.validatePost075DataMigration(migration076), true);
   assert.equal(migrationRunner.isExactPost075DataMigrationPlan(
     loaded,
-    loaded.filter(({ id }) => ![migration076.id, "077_content_suggestion_batches.sql"].includes(id))
+    loaded.filter(({ id }) => ![migration076.id, "077_content_suggestion_batches.sql", "078_faq_utterance_matching.sql"].includes(id))
       .map(({ id, checksum }) => ({ id, checksum })),
   ), true);
   const alteredSql = `${migration076.sql}\n-- altered but still DML-only\n`;
@@ -4626,7 +4627,7 @@ test("post-075 data migrations are a closed DML-only contract", async () => {
   } : migration);
   assert.equal(migrationRunner.isExactPost075DataMigrationPlan(
     altered,
-    loaded.filter(({ id }) => ![migration076.id, "077_content_suggestion_batches.sql"].includes(id))
+    loaded.filter(({ id }) => ![migration076.id, "077_content_suggestion_batches.sql", "078_faq_utterance_matching.sql"].includes(id))
       .map(({ id, checksum }) => ({ id, checksum })),
   ), false);
   assert.equal(migrationRunner.isExactPost075DataMigrationPlan(
@@ -4663,7 +4664,7 @@ test("post-075 data migrations are a closed DML-only contract", async () => {
 test("post-075 data migration runs as the exact provider administrator and records SQL atomically", async () => {
   const loaded = await migrationRunner.loadMigrations();
   const migration076 = loaded.find(({ id }) => id === "076_manual_content_generation_brand_rules.sql");
-  const history = loaded.filter(({ id }) => ![migration076.id, "077_content_suggestion_batches.sql"].includes(id))
+  const history = loaded.filter(({ id }) => ![migration076.id, "077_content_suggestion_batches.sql", "078_faq_utterance_matching.sql"].includes(id))
     .map(({ id, checksum }) => ({ id, checksum }));
   const calls = [];
   const client = {
@@ -4709,7 +4710,7 @@ test("post-075 data migration runs as the exact provider administrator and recor
 test("post-075 data migration rejects a non-provider session before writes", async () => {
   const loaded = await migrationRunner.loadMigrations();
   const migration076 = loaded.find(({ id }) => id === "076_manual_content_generation_brand_rules.sql");
-  const history = loaded.filter(({ id }) => ![migration076.id, "077_content_suggestion_batches.sql"].includes(id))
+  const history = loaded.filter(({ id }) => ![migration076.id, "077_content_suggestion_batches.sql", "078_faq_utterance_matching.sql"].includes(id))
     .map(({ id, checksum }) => ({ id, checksum }));
   const calls = [];
   const client = { async query(sql) {
@@ -4736,7 +4737,7 @@ test("post-075 data migration rejects a non-provider session before writes", asy
 test("post-075 data migration rolls back SQL and marker together and replays as a no-op", async () => {
   const loaded = await migrationRunner.loadMigrations();
   const migration076 = loaded.find(({ id }) => id === "076_manual_content_generation_brand_rules.sql");
-  const historyThrough075 = loaded.filter(({ id }) => ![migration076.id, "077_content_suggestion_batches.sql"].includes(id))
+  const historyThrough075 = loaded.filter(({ id }) => ![migration076.id, "077_content_suggestion_batches.sql", "078_faq_utterance_matching.sql"].includes(id))
     .map(({ id, checksum }) => ({ id, checksum }));
   const rollbackCalls = [];
   const failingClient = { async query(sql) {

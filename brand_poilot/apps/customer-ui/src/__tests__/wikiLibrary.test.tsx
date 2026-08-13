@@ -33,6 +33,10 @@ const items = [
     activeVersionId: "wiki-v4",
     lastBuiltAt: "2026-07-27T01:00:00.000Z",
     buildStatus: "active" as const,
+    sourceAliases: ["배송 언제 와요?"],
+    manualAliases: ["택배 언제 와요?"],
+    effectiveAliases: ["배송 언제 와요?", "택배 언제 와요?"],
+    updatedAt: "2026-08-12T00:00:00.000Z",
   },
   {
     id: howToId,
@@ -52,6 +56,7 @@ const items = [
     activeVersionId: "wiki-v4",
     lastBuiltAt: "2026-07-27T01:00:00.000Z",
     buildStatus: "draft" as const,
+    sourceAliases: [], manualAliases: [], effectiveAliases: [], updatedAt: "2026-08-12T00:00:00.000Z",
   },
   {
     id: guideId,
@@ -71,6 +76,7 @@ const items = [
     activeVersionId: "wiki-v4",
     lastBuiltAt: "2026-07-27T01:00:00.000Z",
     buildStatus: "pending" as const,
+    sourceAliases: [], manualAliases: [], effectiveAliases: [], updatedAt: "2026-08-12T00:00:00.000Z",
   },
   {
     id: policyId,
@@ -90,6 +96,7 @@ const items = [
     activeVersionId: "wiki-v4",
     lastBuiltAt: "2026-07-27T01:00:00.000Z",
     buildStatus: "active" as const,
+    sourceAliases: [], manualAliases: [], effectiveAliases: [], updatedAt: "2026-08-12T00:00:00.000Z",
   },
   {
     id: productId,
@@ -109,6 +116,7 @@ const items = [
     activeVersionId: "wiki-v3",
     lastBuiltAt: "2026-07-26T01:00:00.000Z",
     buildStatus: "stale" as const,
+    sourceAliases: [], manualAliases: [], effectiveAliases: [], updatedAt: "2026-08-12T00:00:00.000Z",
   },
 ];
 
@@ -138,6 +146,13 @@ function renderPanel(ui: React.ReactNode) {
 function gateway(overrides: Record<string, unknown> = {}) {
   return {
     listWikiItems: vi.fn(async () => items),
+    getFaqCapabilities: vi.fn(async () => ({
+      suggestions: true,
+      expandedExact: false,
+      shadowMatching: false,
+      clarification: false,
+      clarifyThreshold: 0.8,
+    })),
     createWikiItem: vi.fn(async () => items[0]),
     updateWikiItem: vi.fn(async () => items[0]),
     listWikiIssues: vi.fn(async () => [resolvedIssue]),
@@ -145,9 +160,30 @@ function gateway(overrides: Record<string, unknown> = {}) {
     getLatestFaqSuggestionRun: vi.fn(async () => ({ run: null })),
     getFaqSuggestionRun: vi.fn(),
     createFaqSuggestionRun: vi.fn(),
-    updateFaqSuggestionItem: vi.fn(),
+    updateFaqSuggestionItem: vi.fn(async (_brandId, _runId, _itemId, input) => ({
+      item: {
+        id: _itemId,
+        workspaceId: "workspace-1",
+        brandId: "brand-1",
+        runId: _runId,
+        position: 0,
+        evidence: [],
+        confidence: 0.9,
+        status: "review",
+        duplicateOfKnowledgeEntryId: null,
+        approvedKnowledgeEntryId: null,
+        reviewedByUserId: null,
+        reviewedAt: null,
+        createdAt: input.expectedUpdatedAt,
+        updatedAt: "2026-08-02T00:02:00.000Z",
+        ...input,
+      },
+    })),
     approveFaqSuggestionItem: vi.fn(),
     dismissFaqSuggestionItem: vi.fn(),
+    createFaqAliasSuggestionRun: vi.fn(),
+    getLatestFaqAliasSuggestionRun: vi.fn(async () => ({ run: null })),
+    applyFaqAliasSuggestionRun: vi.fn(),
     ...overrides,
   };
 }
@@ -190,6 +226,73 @@ function IssueRouteHarness({ onCloseIssue }: { onCloseIssue(): void }) {
 }
 
 describe("WikiLibraryPanel", () => {
+  it("shows source expressions and applies a separate suggestion to an existing FAQ", async () => {
+    const aliasRun = {
+      id: "alias-run-1",
+      workspaceId: "workspace-1",
+      brandId: "brand-1",
+      status: "completed" as const,
+      errorCode: null,
+      targetKnowledgeEntryId: faqId,
+      targetKnowledgeEntryUpdatedAt: items[0].updatedAt,
+      exampleUtterances: ["배송 며칠 걸려요?", "언제 도착해요?", "택배 얼마나 걸려요?"],
+      createdAt: items[0].updatedAt,
+      updatedAt: items[0].updatedAt,
+      completedAt: items[0].updatedAt,
+    };
+    const applied = {
+      ...items[0],
+      manualAliases: aliasRun.exampleUtterances,
+      effectiveAliases: [...items[0].sourceAliases, ...aliasRun.exampleUtterances],
+      updatedAt: "2026-08-12T00:01:00.000Z",
+    };
+    const api = gateway({
+      createFaqAliasSuggestionRun: vi.fn(async () => ({ run: aliasRun })),
+      applyFaqAliasSuggestionRun: vi.fn(async () => applied),
+    });
+    renderPanel(<WikiLibraryPanel
+      brandId="brand-1"
+      gateway={api as never}
+      knowledgeApi={legacyApi as never}
+    />);
+
+    await userEvent.click(await screen.findByRole("button", { name: /배송 기간/ }));
+    expect(screen.getAllByText("배송 언제 와요?")[0]).toBeVisible();
+    await userEvent.click(await screen.findByRole("button", { name: "표현 예시 제안받기" }));
+    const proposed = await screen.findByDisplayValue("배송 며칠 걸려요?");
+    expect(proposed).toBeEnabled();
+    await userEvent.clear(proposed);
+    await userEvent.type(proposed, "배송 보통 며칠 걸려요?");
+    await userEvent.click(screen.getByRole("button", { name: "제안 적용" }));
+    expect(api.applyFaqAliasSuggestionRun).toHaveBeenCalledWith(
+      "brand-1",
+      faqId,
+      aliasRun.id,
+      items[0].updatedAt,
+      ["배송 보통 며칠 걸려요?", "언제 도착해요?", "택배 얼마나 걸려요?"],
+    );
+  });
+
+  it("does not expose alias suggestions when the brand rollout capability is disabled", async () => {
+    renderPanel(<WikiLibraryPanel
+      brandId="brand-1"
+      gateway={gateway({
+        getFaqCapabilities: vi.fn(async () => ({
+          suggestions: false,
+          expandedExact: false,
+          shadowMatching: false,
+          clarification: false,
+          clarifyThreshold: 0.8,
+        })),
+      }) as never}
+      knowledgeApi={legacyApi as never}
+      category="faq"
+    />);
+
+    await screen.findByText(items[0].title);
+    expect(screen.queryByRole("button", { name: "표현 예시 제안받기" })).not.toBeInTheDocument();
+  });
+
   it("refreshes the FAQ list after approval without losing a manual edit", async () => {
     const suggestion = {
       id: "suggestion-1",
@@ -200,6 +303,7 @@ describe("WikiLibraryPanel", () => {
       category: "shipping" as const,
       question: "택배사는 어디인가요?",
       answer: "계약된 택배사로 발송합니다.",
+      exampleUtterances: ["택배 어디예요?", "어느 택배사예요?", "배송 업체 알려줘"],
       evidence: [{ sourceType: "brand_core" as const, sourceId: "source-1", label: "브랜드 코어" }],
       confidence: 0.9,
       status: "review" as const,
@@ -251,7 +355,7 @@ describe("WikiLibraryPanel", () => {
     await userEvent.click(await screen.findByRole("button", { name: /배송 기간/ }));
     await userEvent.click(screen.getByRole("button", { name: "수정" }));
     await userEvent.type(screen.getByRole("textbox", { name: "내용" }), " 저장 전 수정");
-    await userEvent.click(screen.getByRole("button", { name: "승인" }));
+    await userEvent.click(screen.getByRole("button", { name: "FAQ 승인" }));
 
     await waitFor(() => expect(listWikiItems).toHaveBeenCalledTimes(2));
     expect(await screen.findByRole("button", { name: /택배사는 어디인가요/ })).toBeVisible();

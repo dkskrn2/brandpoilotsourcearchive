@@ -28,10 +28,12 @@ test("workflow detects production impact and builds an affected image matrix", (
   const prImpactBranch = workflow.match(/if \[\[ "\$GITHUB_EVENT_NAME" == "pull_request" \]\]; then([\s\S]*?)elif/)?.[1] ?? "";
   assert.match(prImpactBranch, /base_sha="\$\(git merge-base "origin\/\$GITHUB_BASE_REF" "\$GITHUB_SHA"\)"/);
   assert.doesNotMatch(prImpactBranch, /base_sha="\$PRODUCTION_RELEASE_SHA"/);
+  assert.match(prImpactBranch, /--profile faq-utterance-matching/);
   assert.match(prImpactBranch, /--profile card-deck-editorial-pipeline/);
   assert.match(prImpactBranch, /impact\.verifiedScope && impact\.productionDeployAllowed/);
   assert.match(prImpactBranch, /else[\s\S]*release-impact\.mjs --base "\$base_sha" --head "\$GITHUB_SHA"/);
   const productionImpactBranch = workflow.match(/else\n([\s\S]*?)bootstrap=false\n\s*fi/)?.[1] ?? "";
+  assert.match(productionImpactBranch, /release-impact\.mjs --base "\$PRODUCTION_RELEASE_SHA" --head "\$GITHUB_SHA" --profile faq-utterance-matching/);
   assert.match(productionImpactBranch, /release-impact\.mjs --base "\$PRODUCTION_RELEASE_SHA" --head "\$GITHUB_SHA" --profile card-deck-editorial-pipeline/);
   assert.match(productionImpactBranch, /impact\.verifiedScope && impact\.productionDeployAllowed/);
   assert.match(productionImpactBranch, /else[\s\S]*release-impact\.mjs --base "\$PRODUCTION_RELEASE_SHA" --head "\$GITHUB_SHA"/);
@@ -163,10 +165,13 @@ test("worker rollout is locked, digest-pinned, selective, and fails closed befor
   assert.match(rollout, /verify_release_image_revision/);
   assert.match(rollout, /--no-deps --pull never --force-recreate/);
   assert.match(rollout, /worker_heartbeat_evidence_required/);
-  assert.match(rollout, /ps --status running --services/);
+  assert.match(rollout, /label=com\.docker\.compose\.project=brand-pilot/);
+  assert.match(rollout, /label=com\.docker\.compose\.service/);
   assert.match(rollout, /worker_rollout=skipped_inactive/);
   assert.match(rollout, /worker_previous_runtime_mismatch/);
   assert.match(rollout, /docker inspect --format '\{\{\.Config\.Image\}\}'/);
+  assert.match(rollout, /PREVIOUS_SERVICE_IMAGES/);
+  assert.doesNotMatch(rollout, /\[\[ "\$running_image" == "\$\{PREVIOUS_IMAGES\[\$image_key\]\}" \]\]/);
   assert.match(rollout, /previous/);
 
   for (const service of [

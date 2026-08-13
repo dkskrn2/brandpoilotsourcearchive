@@ -43,10 +43,15 @@ beforeAll(async () => {
   database = await PGlite.create({ extensions: { pgcrypto } });
   const directory = resolve(process.cwd(), "../../db/migrations");
   for (const file of (await readdir(directory)).filter((name) => name.endsWith(".sql")).sort()) {
-    const sql = await readFile(resolve(directory, file), "utf8");
+    let sql = await readFile(resolve(directory, file), "utf8");
     if (sql.startsWith("-- requires: pgvector")
       || file === "027_wiki_search_v2.sql"
-      || file >= "075_") continue;
+      || (file >= "075_" && file !== "078_faq_utterance_matching.sql")) continue;
+    if (file === "078_faq_utterance_matching.sql") {
+      const ownershipBlock = sql.lastIndexOf("\ndo $$\ndeclare\n  schema_owner_role_name");
+      if (ownershipBlock < 0) throw new Error("faq_utterance_migration_fixture_invalid");
+      sql = `${sql.slice(0, ownershipBlock)}\ncommit;\n`;
+    }
     await database.exec(sql);
   }
   db = createDmWorkerDbFromPool(pool(database));
@@ -92,12 +97,46 @@ async function seedRun() {
   return { workspaceId, brandId, actorUserId, sourceId, runId, contentHash };
 }
 
+async function seedAliasRun() {
+  const seeded = await seedRun();
+  const entryId = randomUUID();
+  const question = "배송은 언제 시작하나요?";
+  const answer = "결제 후 안내된 일정에 발송합니다.";
+  const inserted = await database.query<{ updated_at: string }>(
+    `insert into knowledge_entries (
+       id,workspace_id,brand_id,normalized_question,question,answer,
+       entry_type,title,content,origin,status,enabled,direct_reply_enabled
+     ) values($1,$2,$3,'배송은 언제 시작하나요', $4,$5,
+       'faq',$4,$5,'manual','active',true,true)
+     returning updated_at`,
+    [entryId, seeded.workspaceId, seeded.brandId, question, answer],
+  );
+  const updatedAt = new Date(inserted.rows[0]!.updated_at).toISOString();
+  await database.query(
+    `update faq_suggestion_runs
+        set run_kind='alias_only',target_knowledge_entry_id=$1,
+            target_knowledge_entry_updated_at=$2,source_snapshot_json=$3::jsonb
+      where id=$4`,
+    [entryId, updatedAt, JSON.stringify({
+      contractVersion: "faq-suggestion-sources.v1",
+      sources: [{
+        sourceType: "faq",
+        sourceId: entryId,
+        contentHash: hash({ question, answer }),
+        label: question,
+      }],
+    }), seeded.runId],
+  );
+  return { ...seeded, entryId, question, answer, updatedAt };
+}
+
 describe("FAQ suggestion DB leases", () => {
   it("claims with a token, reloads tenant sources, and requires the token for heartbeat", async () => {
     const seeded = await seedRun();
     const claimed = await db.claimFaqSuggestionRun("faq-worker-1");
     expect(claimed).toMatchObject({
-      contractVersion: "faq-suggestion-input.v1",
+      contractVersion: "faq-suggestion-input.v2",
+      mode: "full_faq",
       runId: seeded.runId,
       workspaceId: seeded.workspaceId,
       brandId: seeded.brandId,
@@ -126,6 +165,7 @@ describe("FAQ suggestion DB leases", () => {
           answer: "결제 후 안내된 일정에 발송합니다.",
           evidence: [{ sourceType: "brand_core", sourceId: seeded.sourceId, label: "FAQ 브랜드" }],
           confidence: 0.9,
+          exampleUtterances: ["배송 언제 와요?", "언제 발송돼요?", "배송 일정 알려줘"],
         }],
         rejections: [],
       },
@@ -135,11 +175,75 @@ describe("FAQ suggestion DB leases", () => {
       [seeded.runId],
     );
     expect(run.rows[0]).toEqual({ status: "review_ready", lease_owner: null });
-    const items = await database.query<{ question: string }>(
-      "select question from faq_suggestion_items where run_id=$1",
+    const items = await database.query<{ question: string; example_utterances: string[] }>(
+      "select question,example_utterances from faq_suggestion_items where run_id=$1",
       [seeded.runId],
     );
-    expect(items.rows).toEqual([{ question: "배송은 언제 시작하나요?" }]);
+    expect(items.rows).toEqual([{
+      question: "배송은 언제 시작하나요?",
+      example_utterances: ["배송 언제 와요?", "언제 발송돼요?", "배송 일정 알려줘"],
+    }]);
+  });
+
+  it("claims and completes an alias-only run without regenerating FAQ content", async () => {
+    const seeded = await seedAliasRun();
+
+    const claimed = await db.claimFaqSuggestionRun("faq-worker-alias");
+    expect(claimed).toEqual(expect.objectContaining({
+      contractVersion: "faq-suggestion-input.v2",
+      mode: "alias_only",
+      runId: seeded.runId,
+      targetFaq: {
+        id: seeded.entryId,
+        question: seeded.question,
+        answer: seeded.answer,
+        updatedAt: seeded.updatedAt,
+      },
+    }));
+
+    await db.completeFaqSuggestionRun(
+      seeded.runId,
+      "faq-worker-alias",
+      claimed!.leaseToken,
+      {
+        mode: "alias_only",
+        exampleUtterances: ["배송 언제 와요?", "언제 발송돼요?", "배송 일정 알려줘"],
+      },
+    );
+    const stored = await database.query(
+      `select knowledge_entry_id,example_utterances
+         from faq_alias_suggestion_results where run_id=$1`,
+      [seeded.runId],
+    );
+    expect(stored.rows).toEqual([{
+      knowledge_entry_id: seeded.entryId,
+      example_utterances: ["배송 언제 와요?", "언제 발송돼요?", "배송 일정 알려줘"],
+    }]);
+  });
+
+  it("fails an alias-only completion when the target FAQ changed after claim", async () => {
+    const seeded = await seedAliasRun();
+    const claimed = await db.claimFaqSuggestionRun("faq-worker-stale-alias");
+    await database.query(
+      `update knowledge_entries set manual_aliases=array['새 표현'] where id=$1`,
+      [seeded.entryId],
+    );
+
+    await expect(db.completeFaqSuggestionRun(
+      seeded.runId,
+      "faq-worker-stale-alias",
+      claimed!.leaseToken,
+      {
+        mode: "alias_only",
+        exampleUtterances: ["배송 언제 와요?", "언제 발송돼요?", "배송 일정 알려줘"],
+      },
+    )).rejects.toThrow("faq_suggestion_source_changed");
+
+    const run = await database.query<{ status: string; lease_owner: string | null }>(
+      "select status,lease_owner from faq_suggestion_runs where id=$1",
+      [seeded.runId],
+    );
+    expect(run.rows).toEqual([{ status: "failed", lease_owner: null }]);
   });
 
   it("retries at 5 seconds and records an FAQ worker heartbeat", async () => {

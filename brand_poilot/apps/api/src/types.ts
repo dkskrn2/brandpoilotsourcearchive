@@ -934,6 +934,16 @@ export interface DmReplyJobPayload {
   forceAttentionType: DmAttentionType | null;
   question: string;
   exactFaqId?: string | null;
+  fixedReplyText?: string;
+  confirmationId?: string;
+}
+
+export interface FaqCapabilitiesDto {
+  suggestions: boolean;
+  expandedExact: boolean;
+  shadowMatching: boolean;
+  clarification: boolean;
+  clarifyThreshold: number;
 }
 
 export interface DmReplyJobDto {
@@ -1209,6 +1219,7 @@ export interface ApiRepository
     state: "already_active" | "already_pending" | "enqueued";
   }>;
   receiveInstagramWebhookMessage(input: InstagramWebhookMessageInput): Promise<InstagramWebhookReceiveResult>;
+  getFaqCapabilities(brandId: string): Promise<FaqCapabilitiesDto>;
   getInstagramDmSettings(brandId: string): Promise<InstagramDmSettingsDto>;
   updateInstagramDmSettings(brandId: string, input: Partial<Pick<InstagramDmSettingsDto, "enabled" | "fallbackMessage" | "errorMessage">>): Promise<InstagramDmSettingsDto>;
   listInstagramDmHistory(brandId: string): Promise<InstagramDmHistoryDto[]>;

@@ -1,4 +1,5 @@
 import { parseWikiSourceKind, type WikiSourceKind } from "./wiki.js";
+import { parseFaqUtterances } from "./faqUtterancePolicy.js";
 
 export type ManualWikiItemType = "faq" | "policy" | "how_to" | "guide";
 export type WikiItemStatusChange = "draft" | "active" | "inactive";
@@ -15,6 +16,8 @@ export interface UpdateWikiItemInput {
   title?: string;
   content?: string;
   status?: WikiItemStatusChange;
+  manualAliases?: string[];
+  expectedUpdatedAt?: string;
 }
 
 export type ResolvableWikiSourceKind =
@@ -57,6 +60,10 @@ export interface WikiManagementItem {
   activeVersionId: string | null;
   lastBuiltAt: string | null;
   buildStatus: WikiManagementBuildStatus;
+  sourceAliases: string[];
+  manualAliases: string[];
+  effectiveAliases: string[];
+  updatedAt: string;
 }
 
 export interface WikiManagementIssue {
@@ -161,6 +168,17 @@ export function parseUpdateWikiItem(value: unknown): UpdateWikiItemInput {
       throw new Error("wiki_item_validation_failed:status");
     }
     output.status = input.status as WikiItemStatusChange;
+  }
+  if (input.manualAliases !== undefined) {
+    output.manualAliases = parseFaqUtterances(input.manualAliases);
+    if (typeof input.expectedUpdatedAt !== "string") {
+      throw new Error("wiki_item_validation_failed:expectedUpdatedAt");
+    }
+    const timestamp = new Date(input.expectedUpdatedAt);
+    if (Number.isNaN(timestamp.getTime()) || timestamp.toISOString() !== input.expectedUpdatedAt) {
+      throw new Error("wiki_item_validation_failed:expectedUpdatedAt");
+    }
+    output.expectedUpdatedAt = input.expectedUpdatedAt;
   }
   if (!Object.keys(output).length) throw new Error("wiki_item_validation_failed:root");
   return output;

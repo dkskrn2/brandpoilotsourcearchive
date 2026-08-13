@@ -234,6 +234,22 @@ describe("DmAutomationPage", () => {
     expect(screen.getByRole("textbox", { name: "수동 답변" })).toBeInTheDocument();
   });
 
+  it("labels a FAQ clarification message in the conversation", async () => {
+    await renderPage({
+      getDmConversation: vi.fn(async () => ({
+        ...detail,
+        messages: [{
+          ...detail.messages[1],
+          id: "clarification-message",
+          body: "배송 문의가 맞을까요?",
+          reasonCode: "faq_clarification" as const,
+        }],
+      })),
+    });
+    await userEvent.click(await screen.findByRole("button", { name: "홍길동 대화 열기" }));
+    expect(await screen.findByText("FAQ 확인 질문")).toBeVisible();
+  });
+
   it("opens the exact Wiki issue deep link for a knowledge gap", async () => {
     const knowledgeGap = { ...attention, id: "11111111-1111-4111-8111-111111111111", type: "knowledge_gap" as const };
     await renderPage({

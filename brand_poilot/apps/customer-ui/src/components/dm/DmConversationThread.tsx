@@ -13,6 +13,7 @@ const reasonLabels: Record<DmReasonCode, string> = {
   knowledge_gap: "지식 부족",
   low_confidence: "낮은 신뢰도",
   processing_error: "처리 오류",
+  faq_clarification: "FAQ 확인 질문",
   system_event: "시스템 처리"
 };
 

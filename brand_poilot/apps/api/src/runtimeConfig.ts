@@ -27,12 +27,23 @@ export interface ApiRuntimeConfig {
   automatedContentEnabled: boolean;
   contentProposalsEnabled: boolean;
   dmWorkersEnabled: boolean;
+  faqMatching: FaqMatchingRuntimePolicy;
   readiness: {
     schedulerEnabled: boolean;
     publishingEnabled: boolean;
     contentProposalsEnabled: boolean;
     dmWorkersEnabled: boolean;
   };
+}
+
+export interface FaqMatchingRuntimePolicy {
+  suggestionsEnabled: boolean;
+  expandedExactEnabled: boolean;
+  shadowMatchingEnabled: boolean;
+  clarificationEnabled: boolean;
+  brandAllowlist: readonly string[];
+  clarifyThreshold: number;
+  confirmationTtlSeconds: number;
 }
 
 const productionRequiredKeys = [
@@ -101,6 +112,23 @@ function parsePositiveInteger(
   const parsed = Number(value);
   if (!Number.isSafeInteger(parsed) || parsed < 1 || parsed > maximum) return invalid(key);
   return parsed;
+}
+
+function parseNumberRange(
+  value: string | undefined,
+  key: string,
+  fallback: number,
+  minimum: number,
+  maximum: number,
+) {
+  if (value === undefined) return fallback;
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed < minimum || parsed > maximum) return invalid(key);
+  return parsed;
+}
+
+function parseBrandAllowlist(value: string | undefined) {
+  return [...new Set((value ?? "").split(",").map((item) => item.trim()).filter(Boolean))];
 }
 
 function parseOrigin(value: string, key: string, production: boolean) {
@@ -206,6 +234,39 @@ export function loadApiRuntimeConfig(
     "CONTENT_PROPOSALS_ENABLED",
   );
   const dmWorkersEnabled = parseBoolean(env.DM_WORKERS_ENABLED, "DM_WORKERS_ENABLED");
+  const faqMatching: FaqMatchingRuntimePolicy = {
+    suggestionsEnabled: parseBoolean(
+      env.FAQ_UTTERANCE_SUGGESTIONS_ENABLED,
+      "FAQ_UTTERANCE_SUGGESTIONS_ENABLED",
+    ),
+    expandedExactEnabled: parseBoolean(
+      env.FAQ_EXPANDED_EXACT_ENABLED,
+      "FAQ_EXPANDED_EXACT_ENABLED",
+    ),
+    shadowMatchingEnabled: parseBoolean(
+      env.FAQ_MATCH_SHADOW_ENABLED,
+      "FAQ_MATCH_SHADOW_ENABLED",
+    ),
+    clarificationEnabled: parseBoolean(
+      env.FAQ_CLARIFICATION_ENABLED,
+      "FAQ_CLARIFICATION_ENABLED",
+    ),
+    brandAllowlist: parseBrandAllowlist(env.FAQ_MATCH_BRAND_ALLOWLIST),
+    clarifyThreshold: parseNumberRange(
+      env.FAQ_CLARIFY_THRESHOLD,
+      "FAQ_CLARIFY_THRESHOLD",
+      0.78,
+      0,
+      1,
+    ),
+    confirmationTtlSeconds: parsePositiveInteger(
+      env.FAQ_CONFIRMATION_TTL_SECONDS,
+      "FAQ_CONFIRMATION_TTL_SECONDS",
+      300,
+      900,
+    ),
+  };
+  if (faqMatching.confirmationTtlSeconds < 30) invalid("FAQ_CONFIRMATION_TTL_SECONDS");
   const aiContentAttachmentUploadSessionsEnabled = parseBoolean(
     env.AI_CONTENT_ATTACHMENT_UPLOAD_SESSIONS_ENABLED,
     "AI_CONTENT_ATTACHMENT_UPLOAD_SESSIONS_ENABLED",
@@ -301,6 +362,7 @@ export function loadApiRuntimeConfig(
     automatedContentEnabled,
     contentProposalsEnabled,
     dmWorkersEnabled,
+    faqMatching,
     readiness: {
       schedulerEnabled,
       publishingEnabled: instagramPublishEnabled,

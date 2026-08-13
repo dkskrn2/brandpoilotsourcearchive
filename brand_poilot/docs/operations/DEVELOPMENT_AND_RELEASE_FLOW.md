@@ -83,7 +83,7 @@ brand-pilot-release-<RELEASE_SHA>/
 
 GitHub `Production` 환경의 `BRAND_PILOT_CD_ENABLED=true`와 전용 SSH·authenticated canary 자격 증명이 모두 준비되기 전에는 workflow가 운영 서버를 변경하지 않습니다. 현재 activation gate는 provider DB backup과 암호화된 Caddy backup의 외부 승인이 필요한 지점에서 의도적으로 중단됩니다. 이 gate를 제거하거나 변수를 켜는 것은 코드 merge와 별개의 운영 승인 작업입니다.
 
-worker 배포 시 `rollout-workers.sh`는 schema-2 manifest에서 `*_CHANGED=true`이면서 직전 릴리스에서 이미 실행 중이던 worker service만 digest로 pull하고 `--no-deps`로 재생성합니다. 변경되지 않은 worker는 재기동하지 않고, 비활성 profile을 새로 시작하지도 않습니다. 실제 실행 전에는 실행 중인 container image가 직전 manifest의 digest와 정확히 같은지 확인하고, 직전 image를 로컬에 확보하고, 운영 lock을 획득합니다. 일치하지 않거나 별도 heartbeat 검증 실행 파일이 없으면 mutation 전에 실패합니다. 실행 후 service 상태나 heartbeat 검증이 실패하면 영향받은 worker만 검증된 직전 manifest로 복원합니다. API/Caddy와 다른 worker를 함께 내리는 `docker compose down`은 사용하지 않습니다.
+worker 배포 시 `rollout-workers.sh`는 schema-2 manifest에서 `*_CHANGED=true`이면서 현재 실제로 실행 중인 worker service만 digest로 pull하고 `--no-deps`로 재생성합니다. 변경되지 않은 worker는 재기동하지 않고, 비활성 profile을 새로 시작하지도 않습니다. 실행 직전 각 container의 실제 immutable image digest를 서비스별로 기록하고 로컬에 확보하며 운영 lock을 획득합니다. 별도 heartbeat 검증 실행 파일이 없거나 실제 image가 digest로 고정되지 않았으면 mutation 전에 실패합니다. 실행 후 service 상태나 heartbeat 검증이 실패하면 영향받은 worker만 기록한 실제 digest로 서비스별 복원합니다. 특정 릴리스에서 Wiki worker 등을 제외할 때만 `WORKER_ROLLOUT_EXCLUDED_SERVICES`를 명시하며 기본값은 제외 없음입니다. API/Caddy와 다른 worker를 함께 내리는 `docker compose down`은 사용하지 않습니다.
 
 ### Ubuntu와 Tailscale
 

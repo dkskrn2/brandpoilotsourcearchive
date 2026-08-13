@@ -31,7 +31,78 @@ const suggestion = {
   confidence: 0.92,
 };
 
+const v2FullInput = {
+  ...input,
+  contractVersion: "faq-suggestion-input.v2" as const,
+  mode: "full_faq" as const,
+};
+
+const v2AliasInput = {
+  contractVersion: "faq-suggestion-input.v2" as const,
+  mode: "alias_only" as const,
+  runId: input.runId,
+  workspaceId: input.workspaceId,
+  brandId: input.brandId,
+  leaseToken: input.leaseToken,
+  targetFaq: {
+    id: "50000000-0000-4000-8000-000000000005",
+    question: "배송은 언제 시작하나요?",
+    answer: "결제 후 안내된 일정에 발송합니다.",
+    updatedAt: "2026-08-12T00:00:00.000Z",
+  },
+};
+
 describe("FAQ suggestion worker result contract", () => {
+  it("accepts v2 full FAQ suggestions with three to eight example utterances", () => {
+    expect(validateFaqSuggestionResult({
+      contractVersion: "faq-suggestion-result.v2",
+      suggestions: [{
+        ...suggestion,
+        exampleUtterances: ["제품 어디서 사요?", "구매 방법", "제품 구매처 알려줘"],
+      }],
+    }, v2FullInput)).toEqual({
+      mode: "full_faq",
+      suggestions: [{
+        ...suggestion,
+        exampleUtterances: ["제품 어디서 사요?", "구매 방법", "제품 구매처 알려줘"],
+        evidence: [{ ...suggestion.evidence[0], label: "브랜드 코어" }],
+      }],
+      rejections: [],
+    });
+  });
+
+  it("accepts alias-only output and rejects a full result for an alias-only run", () => {
+    expect(validateFaqSuggestionResult({
+      contractVersion: "faq-alias-suggestion-result.v1",
+      exampleUtterances: ["배송 언제 와요?", "언제 발송돼요?", "배송 일정 알려줘"],
+    }, v2AliasInput)).toEqual({
+      mode: "alias_only",
+      exampleUtterances: ["배송 언제 와요?", "언제 발송돼요?", "배송 일정 알려줘"],
+    });
+    expect(() => validateFaqSuggestionResult({
+      contractVersion: "faq-suggestion-result.v2",
+      suggestions: [{ ...suggestion, exampleUtterances: ["하나", "둘", "셋"] }],
+    }, v2AliasInput)).toThrow("faq_alias_suggestion_result_contract_invalid");
+  });
+
+  it("rejects too few, too many, duplicate, and unknown alias fields", () => {
+    for (const exampleUtterances of [
+      ["하나", "둘"],
+      Array.from({ length: 9 }, (_, index) => `표현 ${index}`),
+      ["배송 언제?", "배송 언제", "배송 일정"],
+    ]) {
+      expect(() => validateFaqSuggestionResult({
+        contractVersion: "faq-alias-suggestion-result.v1",
+        exampleUtterances,
+      }, v2AliasInput)).toThrow("faq_alias_suggestion_utterances_invalid");
+    }
+    expect(() => validateFaqSuggestionResult({
+      contractVersion: "faq-alias-suggestion-result.v1",
+      exampleUtterances: ["하나", "둘", "셋"],
+      commentary: "done",
+    }, v2AliasInput)).toThrow("faq_alias_suggestion_result_contract_invalid");
+  });
+
   it("accepts grounded suggestions and attaches evidence labels", () => {
     expect(validateFaqSuggestionResult({
       contractVersion: "faq-suggestion-result.v1",

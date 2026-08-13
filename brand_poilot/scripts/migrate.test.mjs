@@ -272,13 +272,13 @@ test("post-075 schema migration CLI routes the protected provider file to the se
     runMigrationsImpl: async (options) => {
       receivedOptions = options;
       return {
-        pending: ["077_content_suggestion_batches.sql"],
+        pending: ["077_content_suggestion_batches.sql", "078_faq_utterance_matching.sql"],
         migrations: [{}],
         baselineRequired: false,
         post075SchemaMigration: {
           contractVersion: "post-075-schema-migration-evidence.v1",
           providerRoleName: "postgres",
-          migrationId: "077_content_suggestion_batches.sql",
+          migrationId: "078_faq_utterance_matching.sql",
           migrationSha256: "b".repeat(64),
           status: "applied",
         },

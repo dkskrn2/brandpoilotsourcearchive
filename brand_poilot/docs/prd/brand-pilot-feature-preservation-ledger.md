@@ -187,6 +187,8 @@
 | A11Y-FOCUS-001 | 접근성 | 키보드 탭·화살표 이동, 모달 focus trap, Escape 닫기, 원래 포커스 복원, reduced-motion | 마우스 없이 핵심 흐름을 완료할 수 있고 모달 종료 후 작업 위치로 돌아가며 모션 감소 설정을 준수 |
 | AUTH-ROUTING-001 | 로그인·라우팅 | 비로그인 기존 홈 이동, 인증 API 일시 장애 시 세션을 즉시 삭제하지 않고 재확인, legacy URL 리디렉션, 브랜드 준비 전 고객센터 접근 | 인증 장애와 로그아웃을 구분하고 `/onboarding`·`/content` 호환 경로와 고객센터 예외가 유지 |
 | ADMIN-OPERATIONS-001 | 관리자 운영 | 브랜드 pause·resume 사유와 감사, 오늘의 생성·다운로드 사용량, 게시 retry·cancel 허용 상태와 사유, 워커 `online / stale / offline` | 관리자 조작 권한·허용 상태·사유·감사 이력이 보존되고 워커 상태 기준을 잘못 과장하지 않음 |
+| FAQ-UTTERANCE-001 | FAQ 제안 | FAQ 제안에 표현 예시 3~8개를 함께 생성·수정하고 FAQ 승인 한 번으로 질문·답변·표현 예시를 원자적으로 저장 | 표현 예시 전용 승인 상태가 없고 기존 source alias를 덮지 않으며 기존 FAQ는 alias-only 제안을 별도로 적용 가능 |
+| FAQ-MATCH-001 | DM FAQ 매칭 | exact 우선, allowlist 기반 expanded exact, PII 없는 shadow, fuzzy 후보의 확인 질문, conflict·none의 기존 Wiki/fallback 유지 | flags-off가 기존 SQL·payload를 유지하고 fuzzy가 직접 답변하지 않으며 빠른 후속·수동응답과 확인 질문이 중복 전송되지 않음 |
 
 ## 구현 전 필수 회귀 묶음
 

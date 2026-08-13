@@ -7,6 +7,7 @@ export type DmReasonCode =
   | "knowledge_gap"
   | "low_confidence"
   | "processing_error"
+  | "faq_clarification"
   | "system_event";
 export type DmAttentionType =
   | "restricted_action"
@@ -14,7 +15,7 @@ export type DmAttentionType =
   | "knowledge_gap"
   | "delivery_unknown"
   | "processing_error";
-export type DmJobRoute = "fixed_fallback" | "knowledge" | "ignore";
+export type DmJobRoute = "fixed_fallback" | "knowledge" | "ignore" | "faq_clarification";
 
 export interface DmKnowledgeReadiness {
   brandCoreReady: boolean;
@@ -93,6 +94,7 @@ export function parseDmWorkerResult(value: unknown): DmWorkerResult {
     && reasonCode !== "knowledge_gap"
     && reasonCode !== "low_confidence"
     && reasonCode !== "processing_error"
+    && reasonCode !== "faq_clarification"
     && reasonCode !== "system_event"
   ) {
     throw new Error("dm_reason_code_invalid");

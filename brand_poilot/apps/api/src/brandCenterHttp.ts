@@ -16,6 +16,7 @@ import {
   parseUpdateWikiItem,
 } from "./wikiManagementContracts.js";
 import {
+  parseFaqAliasSuggestionApply,
   parseFaqSuggestionItemUpdate,
   parseFaqSuggestionReviewAction,
 } from "./faqSuggestionContracts.js";
@@ -95,6 +96,15 @@ export function registerBrandCenterRoutes(
   options: BrandCenterRouteOptions,
 ): void {
   const repository = options.repository;
+
+  app.get<{ Params: { brandId: string } }>(
+    "/brands/:brandId/faq-capabilities",
+    async (request) => {
+      if (!repository.getFaqCapabilities) throw new Error("faq_suggestion_not_configured");
+      const scope = options.scope(request, request.params.brandId);
+      return repository.getFaqCapabilities(scope.brandId);
+    },
+  );
 
   app.get<{ Params: { brandId: string } }>("/brands/:brandId/brand-center", async (request) => {
     if (!repository.getActive || !repository.listVersions || !repository.getActiveRules) {
@@ -342,6 +352,56 @@ export function registerBrandCenterRoutes(
   );
 
   app.post<{ Params: { brandId: string; itemId: string } }>(
+    "/brands/:brandId/wiki/items/:itemId/alias-suggestions",
+    async (request, reply) => {
+      if (!repository.createFaqAliasSuggestionRun) throw new Error("faq_suggestion_not_configured");
+      const scope = options.scope(request, request.params.brandId);
+      const capabilities = await repository.getFaqCapabilities(scope.brandId);
+      if (!capabilities.suggestions) throw new Error("faq_utterance_suggestions_disabled");
+      const result = await repository.createFaqAliasSuggestionRun({
+        ...scope,
+        actorUserId: requireActor(options, request),
+        itemId: request.params.itemId,
+      });
+      reply.code(result.created ? 202 : 200);
+      return { run: result.run };
+    },
+  );
+
+  app.get<{ Params: { brandId: string; itemId: string } }>(
+    "/brands/:brandId/wiki/items/:itemId/alias-suggestions/latest",
+    async (request) => {
+      if (!repository.getLatestFaqAliasSuggestionRun) throw new Error("faq_suggestion_not_configured");
+      return {
+        run: await repository.getLatestFaqAliasSuggestionRun({
+          ...options.scope(request, request.params.brandId),
+          itemId: request.params.itemId,
+        }),
+      };
+    },
+  );
+
+  app.post<{
+    Params: { brandId: string; itemId: string; runId: string };
+    Body: unknown;
+  }>(
+    "/brands/:brandId/wiki/items/:itemId/alias-suggestions/:runId/apply",
+    async (request) => {
+      if (!repository.applyFaqAliasSuggestionRun) throw new Error("faq_suggestion_not_configured");
+      const scope = options.scope(request, request.params.brandId);
+      const capabilities = await repository.getFaqCapabilities(scope.brandId);
+      if (!capabilities.suggestions) throw new Error("faq_utterance_suggestions_disabled");
+      return repository.applyFaqAliasSuggestionRun({
+        ...scope,
+        actorUserId: requireActor(options, request),
+        itemId: request.params.itemId,
+        runId: request.params.runId,
+        ...parseFaqAliasSuggestionApply(request.body),
+      });
+    },
+  );
+
+  app.post<{ Params: { brandId: string; itemId: string } }>(
     "/brands/:brandId/product-services/:itemId/approve",
     async (request) => {
       if (!repository.approveProductService) throw new Error("product_library_not_configured");
@@ -433,8 +493,9 @@ export function registerBrandCenterRoutes(
     "/brands/:brandId/faq-suggestions",
     async (request, reply) => {
       if (!repository.createFaqSuggestionRun) throw new Error("faq_suggestion_not_configured");
+      const scope = options.scope(request, request.params.brandId);
       const result = await repository.createFaqSuggestionRun({
-        ...options.scope(request, request.params.brandId),
+        ...scope,
         actorUserId: requireActor(options, request),
       });
       reply.code(result.created ? 202 : 200);

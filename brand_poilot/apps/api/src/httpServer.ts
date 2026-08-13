@@ -1116,6 +1116,11 @@ export function createServer(
       "wiki_issue_source_ineligible",
       "faq_suggestion_sources_missing",
       "faq_suggestion_item_conflict",
+      "faq_alias_suggestion_not_supported",
+      "faq_alias_suggestion_conflict",
+      "faq_utterance_suggestions_disabled",
+      "wiki_item_aliases_not_supported",
+      "wiki_item_conflict",
     ].includes(message)) {
       reply.code(409).send({ error: message });
       return;
@@ -1130,7 +1135,8 @@ export function createServer(
       reply.code(400).send({ error: message.slice(0, separator), field: message.slice(separator + 1) });
       return;
     }
-    if (message.startsWith("faq_suggestion_validation_failed:")) {
+    if (message.startsWith("faq_suggestion_validation_failed:")
+      || message.startsWith("faq_utterance_validation_failed:")) {
       const separator = message.indexOf(":");
       reply.code(400).send({ error: message.slice(0, separator), field: message.slice(separator + 1) });
       return;
