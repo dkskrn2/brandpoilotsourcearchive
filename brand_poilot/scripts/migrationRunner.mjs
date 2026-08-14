@@ -95,6 +95,7 @@ export const fullSourceMigrationIds = Object.freeze([
   "076_manual_content_generation_brand_rules.sql",
   "077_content_suggestion_batches.sql",
   "078_faq_utterance_matching.sql",
+  "079_publish_calendar_runtime.sql",
 ]);
 const legacyTriggerSearchPathMigrationId = "073a_legacy_trigger_function_search_path.sql";
 export const legacyTriggerSearchPathMigrationChecksum =
@@ -110,10 +111,12 @@ export const post075DataMigrationChecksums = Object.freeze({
 const post075SchemaMigrationIds = Object.freeze([
   "077_content_suggestion_batches.sql",
   "078_faq_utterance_matching.sql",
+  "079_publish_calendar_runtime.sql",
 ]);
 export const post075SchemaMigrationChecksums = Object.freeze({
   "077_content_suggestion_batches.sql": "3b178464c5ae5c4e220428e0752ab3e79a2ca06b5b2b23f1e89c34e983e63f76",
   "078_faq_utterance_matching.sql": "a2c481f4ea5aba0430668d8e87d236f0a301a695cbecb4874400de0896aecde5",
+  "079_publish_calendar_runtime.sql": "c46ffafa578f6c1f8bb353f4e7bc94d16033416dd5a6aa730cf81119e6e6ef61",
 });
 const post075DeferredMigrationIds = Object.freeze([
   ...post075DataMigrationIds,
@@ -212,6 +215,15 @@ export function validatePost075SchemaMigration(migration) {
       if (error instanceof Error && error.message === "post_075_schema_migration_invalid") throw error;
       throw new Error("post_075_schema_migration_invalid");
     }
+  }
+  if (migration.id === "079_publish_calendar_runtime.sql"
+    && (!/create\s+table\s+billing_plan_catalog/iu.test(migration.sql)
+      || !/create\s+table\s+brand_subscriptions/iu.test(migration.sql)
+      || !/create\s+table\s+publish_calendar_settings/iu.test(migration.sql)
+      || !/create\s+table\s+publish_calendar_slots/iu.test(migration.sql)
+      || !/enabled\s+boolean\s+not\s+null\s+default\s+false/iu.test(migration.sql)
+      || /insert\s+into\s+(?:public\.)?billing_plan_catalog\b/iu.test(migration.sql))) {
+    throw new Error("post_075_schema_migration_invalid");
   }
   return true;
 }
@@ -4396,6 +4408,239 @@ async function verifyFaqUtteranceSchemaCatalog(client, {
   }
 }
 
+async function verifyPublishCalendarSchemaCatalog(client, {
+  schemaOwnerRoleName,
+  applicationRoleName,
+  requireEmptyPlanCatalog = false,
+}) {
+  const catalog = await client.query(
+    `/* publish_calendar_schema_catalog_v1 */
+     with expected_column(relation_name,column_name) as (values
+       ('billing_plan_catalog','code'),('billing_plan_catalog','name'),
+       ('billing_plan_catalog','weekly_generation_limit'),('billing_plan_catalog','weekly_publish_limit'),
+       ('billing_plan_catalog','active'),
+       ('brand_subscriptions','brand_id'),('brand_subscriptions','plan_code'),
+       ('brand_subscriptions','status'),('brand_subscriptions','started_at'),
+       ('brand_subscriptions','current_period_start'),('brand_subscriptions','current_period_end'),
+       ('brand_subscriptions','pending_plan_code'),
+       ('publish_calendar_settings','enabled'),('publish_calendar_settings','channels'),
+       ('publish_calendar_settings','informational_format'),('publish_calendar_settings','trend_format'),
+       ('publish_calendar_settings','slot_times'),
+       ('publish_calendar_slots','scheduled_for'),('publish_calendar_slots','assignment_mode'),
+       ('publish_calendar_slots','status'),('publish_calendar_slots','content_suggestion_id'),
+       ('publish_calendar_slots','proposal_id'),('publish_calendar_slots','generation_id'),
+       ('publish_calendar_slots','generation_output_id'),('publish_calendar_slots','topic_publish_group_id')
+     ), expected_constraint(relation_name,constraint_name,constraint_type,definition_fragments) as (values
+       ('billing_plan_catalog','billing_plan_catalog_code_check','c',array['check','code','^[a-z][a-z0-9_]{1,31}$']::text[]),
+       ('billing_plan_catalog','billing_plan_catalog_name_check','c',array['check','length','trim','>= 1','<= 100']::text[]),
+       ('billing_plan_catalog','billing_plan_catalog_generation_limit_check','c',array['check','weekly_generation_limit','>= 0']::text[]),
+       ('billing_plan_catalog','billing_plan_catalog_publish_limit_check','c',array['check','weekly_publish_limit','>= 0']::text[]),
+       ('brand_subscriptions','brand_subscriptions_status_check','c',array['check','pending_payment','active','cancel_scheduled','suspended','cancelled']::text[]),
+       ('brand_subscriptions','brand_subscriptions_period_check','c',array['check','started_at','current_period_start','current_period_end']::text[]),
+       ('brand_subscriptions','brand_subscriptions_pending_plan_check','c',array['check','pending_plan_code','plan_code']::text[]),
+       ('publish_calendar_settings','publish_calendar_settings_channels_check','c',array['check','channels','instagram','linkedin']::text[]),
+       ('publish_calendar_settings','publish_calendar_settings_informational_format_check','c',array['check','informational_format','card_news','reel']::text[]),
+       ('publish_calendar_settings','publish_calendar_settings_trend_format_check','c',array['check','trend_format','card_news','reel']::text[]),
+       ('publish_calendar_settings','publish_calendar_settings_slot_times_check','c',array['check','cardinality','slot_times','>= 1','<= 24']::text[]),
+       ('topic_publish_groups','topic_publish_groups_tenant_identity_unique','u',array['unique','id','workspace_id','brand_id']::text[]),
+       ('publish_calendar_slots','publish_calendar_slots_assignment_mode_check','c',array['check','assignment_mode','automatic','manual']::text[]),
+       ('publish_calendar_slots','publish_calendar_slots_status_check','c',array['check','status','open','published','cancelled']::text[]),
+       ('publish_calendar_slots','publish_calendar_slots_recommendation_kind_check','c',array['check','recommendation_kind','informational','trend']::text[]),
+       ('publish_calendar_slots','publish_calendar_slots_content_format_check','c',array['check','content_format','card_news','reel']::text[]),
+       ('publish_calendar_slots','publish_calendar_slots_channels_check','c',array['check','channels','instagram','linkedin']::text[]),
+       ('publish_calendar_slots','publish_calendar_slots_title_check','c',array['check','title','length','trim','>= 1','<= 500']::text[]),
+       ('publish_calendar_slots','publish_calendar_slots_open_assignment_check','c',array['check','status','open','content_suggestion_id','topic_publish_group_id']::text[]),
+       ('publish_calendar_slots','publish_calendar_slots_proposal_assignment_check','c',array['check','proposal_assigned','content_suggestion_id','proposal_id']::text[]),
+       ('publish_calendar_slots','publish_calendar_slots_manual_recommendation_check','c',array['check','assignment_mode','manual','recommendation_kind']::text[]),
+       ('publish_calendar_slots','publish_calendar_slots_topic_publish_group_scope_fk','f',array['foreign key','topic_publish_group_id','workspace_id','brand_id','references topic_publish_groups','on delete restrict']::text[])
+     ), expected_index(relation_name,index_name,is_unique,key_columns,predicate_fragments) as (values
+       ('brand_subscriptions','brand_subscriptions_due_renewal_idx',false,array['current_period_end']::text[],array['status','active','cancel_scheduled']::text[]),
+       ('publish_calendar_slots','publish_calendar_slots_brand_period_idx',false,array['brand_id','scheduled_for','id']::text[],array[]::text[]),
+       ('publish_calendar_slots','publish_calendar_slots_active_brand_time_unique',true,array['brand_id','scheduled_for']::text[],array['status','cancelled']::text[]),
+       ('publish_calendar_slots','publish_calendar_slots_auto_open_idx',false,array['brand_id','recommendation_kind','scheduled_for','id']::text[],array['assignment_mode','automatic','status','open']::text[]),
+       ('publish_calendar_slots','publish_calendar_slots_proposal_unique',true,array['proposal_id']::text[],array['proposal_id is not null','status','cancelled']::text[]),
+       ('publish_calendar_slots','publish_calendar_slots_content_suggestion_unique',true,array['brand_id','content_suggestion_id']::text[],array['content_suggestion_id is not null','status','cancelled']::text[]),
+       ('publish_calendar_slots','publish_calendar_slots_generation_unique',true,array['brand_id','generation_id']::text[],array['generation_id is not null','status','cancelled']::text[]),
+       ('publish_calendar_slots','publish_calendar_slots_publish_group_unique',true,array['brand_id','topic_publish_group_id']::text[],array['topic_publish_group_id is not null','status','cancelled']::text[]),
+       ('publish_calendar_slots','publish_calendar_slots_active_reservation_idx',false,array['brand_id','scheduled_for']::text[],array['status','proposal_assigned','quota_blocked']::text[])
+     ), expected_trigger(relation_name,trigger_name,definition_fragments) as (values
+       ('billing_plan_catalog','billing_plan_catalog_set_updated_at',array['before update','execute function set_updated_at()']::text[]),
+       ('brand_subscriptions','brand_subscriptions_set_updated_at',array['before update','execute function set_updated_at()']::text[]),
+       ('publish_calendar_settings','publish_calendar_settings_set_updated_at',array['before update','execute function set_updated_at()']::text[]),
+       ('publish_calendar_slots','publish_calendar_slots_set_updated_at',array['before update','execute function set_updated_at()']::text[]),
+       ('publish_calendar_settings','publish_calendar_settings_brand_scope',array['before insert or update of workspace_id, brand_id','execute function enforce_publish_calendar_brand_scope()']::text[]),
+       ('publish_calendar_slots','publish_calendar_slots_brand_scope',array['before insert or update of workspace_id, brand_id','execute function enforce_publish_calendar_brand_scope()']::text[]),
+       ('publish_calendar_slots','publish_calendar_slots_link_scope',array['before insert or update of workspace_id, brand_id, proposal_id, generation_id, generation_output_id','execute function enforce_publish_calendar_slot_scope()']::text[]),
+       ('brand_subscriptions','publish_calendar_brand_subscriptions_write_fence',array['before insert or delete or update','execute function enforce_ai_content_write_fence()']::text[]),
+       ('billing_plan_catalog','publish_calendar_billing_plan_catalog_write_fence',array['before insert or delete or update','execute function enforce_ai_content_write_fence()']::text[]),
+       ('publish_calendar_settings','publish_calendar_settings_write_fence',array['before insert or delete or update','execute function enforce_ai_content_write_fence()']::text[]),
+       ('publish_calendar_slots','publish_calendar_slots_write_fence',array['before insert or delete or update','execute function enforce_ai_content_write_fence()']::text[])
+     ), expected_function(function_name) as (values
+       ('enforce_publish_calendar_brand_scope'),('enforce_publish_calendar_slot_scope')
+     ), calendar_function as (
+       select function.oid,function.proowner,function.proacl
+         from expected_function expected
+         join pg_proc function on function.proname=expected.function_name
+         join pg_namespace namespace on namespace.oid=function.pronamespace and namespace.nspname='public'
+        where function.pronargs=0
+     )
+     select billing_plan_owner.rolname::text as billing_plan_owner,
+            brand_subscription_owner.rolname::text as brand_subscription_owner,
+            calendar_settings_owner.rolname::text as calendar_settings_owner,
+            calendar_slot_owner.rolname::text as calendar_slot_owner,
+            has_table_privilege($1,'public.billing_plan_catalog','SELECT') as app_billing_plan_select,
+            has_table_privilege($1,'public.billing_plan_catalog','INSERT') as app_billing_plan_insert,
+            has_table_privilege($1,'public.billing_plan_catalog','UPDATE') as app_billing_plan_update,
+            has_table_privilege($1,'public.billing_plan_catalog','DELETE') as app_billing_plan_delete,
+            has_table_privilege($1,'public.brand_subscriptions','SELECT') as app_brand_subscription_select,
+            has_table_privilege($1,'public.brand_subscriptions','INSERT') as app_brand_subscription_insert,
+            has_table_privilege($1,'public.brand_subscriptions','UPDATE') as app_brand_subscription_update,
+            has_table_privilege($1,'public.brand_subscriptions','DELETE') as app_brand_subscription_delete,
+            has_table_privilege($1,'public.publish_calendar_settings','SELECT') as app_calendar_settings_select,
+            has_table_privilege($1,'public.publish_calendar_settings','INSERT') as app_calendar_settings_insert,
+            has_table_privilege($1,'public.publish_calendar_settings','UPDATE') as app_calendar_settings_update,
+            has_table_privilege($1,'public.publish_calendar_settings','DELETE') as app_calendar_settings_delete,
+            has_table_privilege($1,'public.publish_calendar_slots','SELECT') as app_calendar_slot_select,
+            has_table_privilege($1,'public.publish_calendar_slots','INSERT') as app_calendar_slot_insert,
+            has_table_privilege($1,'public.publish_calendar_slots','UPDATE') as app_calendar_slot_update,
+            has_table_privilege($1,'public.publish_calendar_slots','DELETE') as app_calendar_slot_delete,
+            coalesce((select bool_or(acl.grantee=0) from aclexplode(billing_plan.relacl) acl),false)
+              as public_billing_plan_privilege,
+            coalesce((select bool_or(acl.grantee=0) from aclexplode(brand_subscription.relacl) acl),false)
+              as public_brand_subscription_privilege,
+            coalesce((select bool_or(acl.grantee=0) from aclexplode(calendar_settings.relacl) acl),false)
+              as public_calendar_settings_privilege,
+            coalesce((select bool_or(acl.grantee=0) from aclexplode(calendar_slot.relacl) acl),false)
+              as public_calendar_slot_privilege,
+            not exists (
+              select 1 from expected_column expected
+               left join information_schema.columns column_row
+                 on column_row.table_schema='public' and column_row.table_name=expected.relation_name
+                and column_row.column_name=expected.column_name
+              where column_row.column_name is null
+            ) as runtime_columns_valid,
+            exists (
+              select 1 from information_schema.columns column_row
+               where column_row.table_schema='public'
+                 and column_row.table_name='publish_calendar_settings'
+                 and column_row.column_name='enabled' and column_row.is_nullable='NO'
+                 and lower(column_row.column_default)='false'
+            ) as enabled_default_false,
+            not exists (
+              select 1 from expected_constraint expected
+               where not exists (
+                 select 1 from pg_constraint constraint_row
+                 join pg_class relation on relation.oid=constraint_row.conrelid
+                 join pg_namespace namespace on namespace.oid=relation.relnamespace
+                  and namespace.nspname='public'
+                where relation.relname=expected.relation_name
+                  and constraint_row.conname=expected.constraint_name
+                  and constraint_row.contype=expected.constraint_type::"char"
+                  and constraint_row.convalidated
+                  and not exists (
+                    select 1 from unnest(expected.definition_fragments) fragment
+                     where regexp_replace(lower(pg_get_constraintdef(constraint_row.oid,true)),'\\s+',' ','g')
+                       not like ('%' || lower(fragment) || '%')
+                  )
+               )
+            ) as constraint_catalog_valid,
+            not exists (
+              select 1 from expected_index expected
+               where not exists (
+                 select 1 from pg_index index_row
+                 join pg_class index_relation on index_relation.oid=index_row.indexrelid
+                 join pg_class relation on relation.oid=index_row.indrelid
+                 join pg_namespace namespace on namespace.oid=relation.relnamespace
+                  and namespace.nspname='public'
+                where relation.relname=expected.relation_name
+                  and index_relation.relname=expected.index_name
+                  and index_row.indisvalid and index_row.indisready
+                  and index_row.indisunique=expected.is_unique
+                  and array(
+                    select lower(pg_get_indexdef(index_row.indexrelid,ordinal,true))
+                      from generate_series(1,index_row.indnkeyatts) ordinal order by ordinal
+                  )=expected.key_columns
+                  and ((cardinality(expected.predicate_fragments)=0 and index_row.indpred is null)
+                    or (cardinality(expected.predicate_fragments)>0 and index_row.indpred is not null
+                      and not exists (
+                        select 1 from unnest(expected.predicate_fragments) fragment
+                         where regexp_replace(lower(pg_get_indexdef(index_row.indexrelid)),'\\s+',' ','g')
+                           not like ('%' || lower(fragment) || '%')
+                      )))
+               )
+            ) as index_catalog_valid,
+            not exists (
+              select 1 from expected_trigger expected
+               where not exists (
+                 select 1 from pg_trigger trigger_row
+                 join pg_class relation on relation.oid=trigger_row.tgrelid
+                 join pg_namespace namespace on namespace.oid=relation.relnamespace
+                  and namespace.nspname='public'
+                where relation.relname=expected.relation_name
+                  and trigger_row.tgname=expected.trigger_name
+                  and not trigger_row.tgisinternal and trigger_row.tgenabled='O'
+                  and not exists (
+                    select 1 from unnest(expected.definition_fragments) fragment
+                     where regexp_replace(lower(pg_get_triggerdef(trigger_row.oid,true)),'\\s+',' ','g')
+                       not like ('%' || lower(fragment) || '%')
+                  )
+               )
+            ) as trigger_catalog_valid,
+            (select count(*)::integer from ai_content_write_fence_catalog fence
+              where (fence.relation_name,fence.relation_class,fence.row_classifier) in (
+                ('billing_plan_catalog','customer_execution','whole_relation'),
+                ('brand_subscriptions','customer_execution','whole_relation'),
+                ('publish_calendar_settings','customer_execution','whole_relation'),
+                ('publish_calendar_slots','customer_execution','whole_relation')
+              )) as write_fence_row_count,
+            (select count(*)::integer from calendar_function function
+              where function.proowner=(select oid from pg_roles where rolname=$2)) as function_owner_count,
+            (select count(*)::integer from calendar_function function
+              where has_function_privilege($1,function.oid,'EXECUTE')) as application_function_execute_count,
+            (select count(*)::integer from calendar_function function
+              cross join lateral aclexplode(coalesce(
+                function.proacl,acldefault('f',function.proowner)
+              )) acl where acl.grantee=0 and acl.privilege_type='EXECUTE') as public_function_execute_count,
+            (select count(*)::integer from billing_plan_catalog) as billing_plan_count
+       from pg_class billing_plan
+       join pg_roles billing_plan_owner on billing_plan_owner.oid=billing_plan.relowner
+       join pg_class brand_subscription on brand_subscription.oid='public.brand_subscriptions'::regclass
+       join pg_roles brand_subscription_owner on brand_subscription_owner.oid=brand_subscription.relowner
+       join pg_class calendar_settings on calendar_settings.oid='public.publish_calendar_settings'::regclass
+       join pg_roles calendar_settings_owner on calendar_settings_owner.oid=calendar_settings.relowner
+       join pg_class calendar_slot on calendar_slot.oid='public.publish_calendar_slots'::regclass
+       join pg_roles calendar_slot_owner on calendar_slot_owner.oid=calendar_slot.relowner
+      where billing_plan.oid='public.billing_plan_catalog'::regclass`,
+    [applicationRoleName, schemaOwnerRoleName],
+  );
+  const sealed = catalog.rows[0];
+  if (catalog.rows.length !== 1
+    || sealed.billing_plan_owner !== schemaOwnerRoleName
+    || sealed.brand_subscription_owner !== schemaOwnerRoleName
+    || sealed.calendar_settings_owner !== schemaOwnerRoleName
+    || sealed.calendar_slot_owner !== schemaOwnerRoleName
+    || sealed.app_billing_plan_select !== true || sealed.app_billing_plan_insert !== true
+    || sealed.app_billing_plan_update !== true || sealed.app_billing_plan_delete !== false
+    || sealed.app_brand_subscription_select !== true || sealed.app_brand_subscription_insert !== true
+    || sealed.app_brand_subscription_update !== true || sealed.app_brand_subscription_delete !== false
+    || sealed.app_calendar_settings_select !== true || sealed.app_calendar_settings_insert !== true
+    || sealed.app_calendar_settings_update !== true || sealed.app_calendar_settings_delete !== false
+    || sealed.app_calendar_slot_select !== true || sealed.app_calendar_slot_insert !== true
+    || sealed.app_calendar_slot_update !== true || sealed.app_calendar_slot_delete !== false
+    || sealed.public_billing_plan_privilege !== false
+    || sealed.public_brand_subscription_privilege !== false
+    || sealed.public_calendar_settings_privilege !== false
+    || sealed.public_calendar_slot_privilege !== false
+    || sealed.runtime_columns_valid !== true || sealed.enabled_default_false !== true
+    || sealed.constraint_catalog_valid !== true || sealed.index_catalog_valid !== true
+    || sealed.trigger_catalog_valid !== true || sealed.write_fence_row_count !== 4
+    || sealed.function_owner_count !== 2 || sealed.application_function_execute_count !== 2
+    || sealed.public_function_execute_count !== 0
+    || (requireEmptyPlanCatalog && sealed.billing_plan_count !== 0)) {
+    throw new Error(`post_075_schema_catalog_invalid:${JSON.stringify(sealed ?? null)}`);
+  }
+}
+
 export async function runPost075SchemaMigrationsWithClient({
   client,
   migrations,
@@ -4459,6 +4704,10 @@ export async function runPost075SchemaMigrationsWithClient({
         schemaOwnerRoleName: provider.schema_owner_role_name,
         applicationRoleName: provider.application_role_name,
       });
+      await verifyPublishCalendarSchemaCatalog(client, {
+        schemaOwnerRoleName: provider.schema_owner_role_name,
+        applicationRoleName: provider.application_role_name,
+      });
       return {
         migrations,
         pending: [],
@@ -4491,6 +4740,13 @@ export async function runPost075SchemaMigrationsWithClient({
       await verifyFaqUtteranceSchemaCatalog(client, {
         schemaOwnerRoleName: provider.schema_owner_role_name,
         applicationRoleName: provider.application_role_name,
+      });
+      await verifyPublishCalendarSchemaCatalog(client, {
+        schemaOwnerRoleName: provider.schema_owner_role_name,
+        applicationRoleName: provider.application_role_name,
+        requireEmptyPlanCatalog: pendingSchemaMigrations.some(
+          ({ id }) => id === "079_publish_calendar_runtime.sql",
+        ),
       });
       for (const migration of pendingSchemaMigrations) {
         const marker = await client.query(
