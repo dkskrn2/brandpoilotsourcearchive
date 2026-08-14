@@ -31,7 +31,8 @@ export interface AiContentPublishTargetResult {
   deliveryFormat: AiContentPublishDeliveryFormat;
   channelOutputId: string;
   queueId: string | null;
-  status: "scheduled" | "publishing" | "published" | "failed";
+  status: "queued" | "scheduled" | "publishing" | "published" | "failed";
+  dispatchAllowed: boolean;
   publishedUrl: string | null;
   errorCode: string | null;
   recovery?: {
@@ -51,11 +52,14 @@ export interface PreparedAiContentPublishResult {
 export interface AiContentPublishRepository {
   prepareAiContentPublish(input: BrandOutputScope & AiContentPublishRequest): Promise<PreparedAiContentPublishResult>;
   getAiContentPublishQueueResult(input: QueueScope): Promise<AiContentPublishTargetResult>;
-  sendAiContentToPublish(input: BrandOutputScope): Promise<{ publishGroupId: string; channelOutputId: string }>;
+  prepareCompletedCalendarPublish(
+    input: BrandOutputScope & { preparationEnabled?: boolean },
+  ): Promise<PreparedAiContentPublishResult | null>;
 }
 
 interface OutputRow {
   id: string;
+  generation_id: string;
   status: string;
   artifact_manifest_json: unknown;
   manifest_url: unknown;
@@ -63,6 +67,15 @@ interface OutputRow {
   purpose: ContentPurpose;
   title: string;
   draft_json: unknown;
+}
+
+interface CalendarSlotRow {
+  id: string;
+  scheduled_for: Date | string;
+  assignment_mode: "automatic" | "manual";
+  status: string;
+  content_format: ContentStudioOutputFormat;
+  channels: Channel[];
 }
 
 interface PublishContext {
@@ -91,6 +104,7 @@ function vercelBlobUrl(value: unknown) {
 }
 
 function normalizeQueueStatus(value: unknown): AiContentPublishTargetResult["status"] {
+  if (value === "queued") return value;
   if (value === "publishing" || value === "published" || value === "failed") return value;
   return "scheduled";
 }
@@ -99,7 +113,7 @@ function publishRecovery(status: AiContentPublishTargetResult["status"], errorCo
   const resultUnknown = status === "failed" && errorCode === "publish_delivery_unknown";
   const retryAllowed = status === "failed"
     && (errorCode === "oauth_required" || errorCode === "provider_not_implemented");
-  const cancelAllowed = status === "scheduled";
+  const cancelAllowed = status === "queued" || status === "scheduled";
   return {
     action: resultUnknown ? "reconcile" as const : retryAllowed ? "retry" as const : "none" as const,
     retryAllowed,
@@ -184,11 +198,10 @@ function manifestAssets(manifest: AiContentManifestV3, target: AiContentPublishT
   }));
 }
 
-async function getOrCreatePublishContext(
+async function findPublishContext(
   client: PoolClient,
   input: BrandOutputScope,
-  manifest: AiContentManifestV3,
-): Promise<PublishContext> {
+): Promise<PublishContext | null> {
   const existing = await client.query(
     `select topic.id as content_topic_id, master.id as master_draft_id, topic_group.id as publish_group_id
        from content_topics topic
@@ -207,6 +220,27 @@ async function getOrCreatePublishContext(
       publishGroupId: String(row.publish_group_id),
     };
   }
+  return null;
+}
+
+async function getOrCreatePublishContext(
+  client: PoolClient,
+  input: BrandOutputScope,
+  manifest: AiContentManifestV3,
+  existing: PublishContext | null,
+  calendarLinked: boolean,
+): Promise<PublishContext> {
+  if (existing) {
+    if (calendarLinked) {
+      await client.query(
+        `update topic_publish_groups
+            set status='waiting', scheduled_for=null
+          where id=$1 and workspace_id=$2 and brand_id=$3`,
+        [existing.publishGroupId, input.workspaceId, input.brandId],
+      );
+    }
+    return existing;
+  }
 
   const copy = outputCopy(manifest);
   const topic = await client.query(
@@ -222,14 +256,163 @@ async function getOrCreatePublishContext(
   );
   const group = await client.query(
     `insert into topic_publish_groups (workspace_id, brand_id, content_topic_id, status, scheduled_for)
-     values ($1, $2, $3, 'scheduled', now()) returning id`,
-    [input.workspaceId, input.brandId, topicId],
+     values ($1, $2, $3, $4, case when $4='waiting' then null else now() end) returning id`,
+    [input.workspaceId, input.brandId, topicId, calendarLinked ? "waiting" : "scheduled"],
   );
   return {
     topicId,
     masterDraftId: String(master.rows[0].id),
     publishGroupId: String(group.rows[0].id),
   };
+}
+
+async function findActiveCalendarSlot(
+  client: PoolClient,
+  input: BrandOutputScope,
+  output: OutputRow,
+  context: PublishContext | null,
+): Promise<CalendarSlotRow | null> {
+  const result = await client.query(
+    `select id,scheduled_for,assignment_mode,status,content_format,channels
+       from publish_calendar_slots
+      where workspace_id=$1 and brand_id=$2 and status<>'cancelled'
+        and (
+          generation_output_id=$3
+          or (
+            generation_id=$4
+            and generation_output_id is null
+            and $3::uuid=(
+              select candidate.id
+                from ai_content_generation_outputs candidate
+               where candidate.generation_id=$4
+                 and candidate.workspace_id=$1 and candidate.brand_id=$2
+               order by candidate.output_index,candidate.id
+               limit 1
+            )
+          )
+          or ($5::uuid is not null and topic_publish_group_id=$5::uuid)
+        )
+      order by id
+      for update`,
+    [input.workspaceId, input.brandId, input.outputId, output.generation_id, context?.publishGroupId ?? null],
+  );
+  if (result.rows.length > 1) throw new Error("publish_calendar_slot_ambiguous");
+  return result.rows[0] as CalendarSlotRow | undefined ?? null;
+}
+
+function calendarTargets(slot: CalendarSlotRow, manifest: AiContentManifestV3): AiContentPublishTarget[] {
+  if (slot.content_format !== manifest.outputFormat) throw new Error("publish_calendar_content_format_mismatch");
+  const deliveryFormat: AiContentPublishDeliveryFormat = manifest.outputFormat === "card_news"
+    ? "instagram_feed_carousel"
+    : manifest.outputFormat === "reel"
+      ? "instagram_reel"
+      : (() => { throw new Error("ai_content_publish_type_not_supported"); })();
+  return slot.channels.map((channel) => {
+    if (channel !== "instagram") throw new Error("ai_content_publish_target_unsupported");
+    return { channel, deliveryFormat };
+  });
+}
+
+function assertCalendarRequestTargets(
+  requested: readonly AiContentPublishTarget[],
+  derived: readonly AiContentPublishTarget[],
+): void {
+  const requestedChannels = [...new Set(requested.map(({ channel }) => channel))].sort();
+  const slotChannels = [...new Set(derived.map(({ channel }) => channel))].sort();
+  if (
+    requested.length !== derived.length
+    || requestedChannels.length !== slotChannels.length
+    || requestedChannels.some((channel, index) => channel !== slotChannels[index])
+    || requested.some((target) => !derived.some((candidate) => (
+      candidate.channel === target.channel && candidate.deliveryFormat === target.deliveryFormat
+    )))
+  ) {
+    throw new Error("publish_calendar_targets_mismatch");
+  }
+}
+
+function stableCalendarPreparationError(error: unknown): string {
+  const raw = error instanceof Error ? error.message.trim() : "unknown";
+  const allowed = new Set([
+    "channel_oauth_not_connected",
+    "ai_content_publish_target_unsupported",
+    "publish_calendar_content_format_mismatch",
+    "publish_calendar_targets_mismatch",
+    "publish_calendar_slot_ambiguous",
+    "publish_calendar_queue_already_attempted",
+    "publish_calendar_advanced_slot_link_invalid",
+    "publish_calendar_slot_conflict",
+    "publishing_disabled",
+  ]);
+  const code = allowed.has(raw) ? raw : "publish_calendar_prepare_failed";
+  return `calendar_publish_prepare_failed:${code}`;
+}
+
+async function recordCalendarPreparationDelay(pool: Pool, input: BrandOutputScope, error: unknown): Promise<void> {
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const candidates = await client.query(
+      `select slot.id
+         from publish_calendar_slots slot
+        where slot.workspace_id=$1 and slot.brand_id=$2
+          and slot.status in ('proposal_assigned','generation_pending','content_assigned','publish_delayed','quota_blocked')
+          and (
+            slot.generation_output_id=$3
+            or (
+              slot.generation_output_id is null
+              and slot.generation_id=(
+                select output.generation_id from ai_content_generation_outputs output
+                 where output.id=$3 and output.workspace_id=$1 and output.brand_id=$2
+              )
+              and $3::uuid=(
+                select candidate.id
+                  from ai_content_generation_outputs current_output
+                  join ai_content_generation_outputs candidate
+                    on candidate.generation_id=current_output.generation_id
+                   and candidate.workspace_id=current_output.workspace_id
+                   and candidate.brand_id=current_output.brand_id
+                 where current_output.id=$3
+                   and current_output.workspace_id=$1 and current_output.brand_id=$2
+                 order by candidate.output_index,candidate.id
+                 limit 1
+              )
+            )
+            or slot.topic_publish_group_id in (
+              select topic_group.id
+                from topic_publish_groups topic_group
+                join content_topics topic on topic.id=topic_group.content_topic_id
+               where topic.workspace_id=$1 and topic.brand_id=$2
+                  and topic.source_context->>'aiContentOutputId'=$3::text
+            )
+          )
+        order by slot.id
+        for update of slot`,
+      [input.workspaceId, input.brandId, input.outputId],
+    );
+    const candidateIds = candidates.rows.map((row) => String(row.id));
+    if (candidateIds.length) {
+      await client.query(
+        `update publish_calendar_slots slot
+            set status='publish_delayed',last_error=$2,updated_at=now()
+          where slot.id=any($1::uuid[])
+            and slot.status in ('proposal_assigned','generation_pending','content_assigned','publish_delayed','quota_blocked')
+            and not exists (
+              select 1
+                from publish_queue queue
+               where queue.topic_publish_group_id=slot.topic_publish_group_id
+                 and queue.status in ('queued','scheduled','publishing','published','deferred')
+            )`,
+        [candidateIds, stableCalendarPreparationError(error)],
+      );
+    }
+    await client.query("COMMIT");
+  } catch (recordError) {
+    await client.query("ROLLBACK").catch(() => undefined);
+    throw recordError;
+  } finally {
+    client.release();
+  }
 }
 
 export async function storeManifestArtifact(client: PoolClient, input: BrandOutputScope, manifestUrlValue: unknown) {
@@ -267,12 +450,14 @@ async function findExistingTarget(
   channelOutputId: string;
   queueId: string | null;
   queueStatus: string | null;
+  hasAttempt: boolean;
   result: AiContentPublishTargetResult | null;
 } | null> {
   const targetIdempotencyKey = `ai-content:${outputId}:${target.channel}:${target.deliveryFormat}:${requestIdempotencyKey}`;
   const result = await client.query(
     `select channel_output.id as channel_output_id, pq.id as queue_id, pq.status as queue_status,
-            pq.idempotency_key, pq.last_error, latest_attempt.external_url as published_url
+            pq.idempotency_key, pq.last_error, latest_attempt.external_url as published_url,
+            exists(select 1 from publish_attempts attempt where attempt.publish_queue_id=pq.id) as has_attempt
        from channel_outputs channel_output
        left join lateral (
          select queue.*
@@ -302,19 +487,22 @@ async function findExistingTarget(
   const row = result.rows[0];
   const channelOutputId = String(row.channel_output_id);
   const queueMatchesRequest = text(row.idempotency_key) === targetIdempotencyKey;
-  const queueIsActiveOrPublished = row.queue_status === "scheduled"
+  const queueIsActiveOrPublished = row.queue_status === "queued"
+    || row.queue_status === "scheduled"
     || row.queue_status === "publishing"
     || row.queue_status === "published";
   return {
     channelOutputId,
     queueId: row.queue_id ? String(row.queue_id) : null,
     queueStatus: text(row.queue_status) || null,
+    hasAttempt: row.has_attempt === true,
     result: row.queue_id && (queueMatchesRequest || queueIsActiveOrPublished) ? {
       channel: target.channel,
       deliveryFormat: target.deliveryFormat,
       channelOutputId,
       queueId: String(row.queue_id),
       status: normalizeQueueStatus(row.queue_status),
+      dispatchAllowed: !requestIdempotencyKey.startsWith("calendar-ai-content:"),
       publishedUrl: text(row.published_url) || null,
       errorCode: text(row.last_error) || null,
     } : null,
@@ -322,14 +510,15 @@ async function findExistingTarget(
 }
 
 export function createAiContentPublishRepository(pool: Pool): AiContentPublishRepository {
-  async function prepareAiContentPublish(
-    input: BrandOutputScope & AiContentPublishRequest,
-  ): Promise<PreparedAiContentPublishResult> {
+  async function prepareAiContentPublishInternal(
+    input: BrandOutputScope & Partial<AiContentPublishRequest>,
+    requireCalendarSlot: boolean,
+  ): Promise<PreparedAiContentPublishResult | null> {
     const client = await pool.connect();
     try {
       await client.query("BEGIN");
       const outputResult = await client.query(
-        `select output.id, output.status, output.artifact_manifest_json, output.manifest_url,
+        `select output.id, output.generation_id, output.status, output.artifact_manifest_json, output.manifest_url,
                 generation.output_format, generation.purpose, generation.title, generation.draft_json
            from ai_content_generation_outputs output
            join ai_content_generations generation on generation.id = output.generation_id
@@ -358,12 +547,40 @@ export function createAiContentPublishRepository(pool: Pool): AiContentPublishRe
         throw new Error("ai_content_publish_manifest_mismatch");
       }
       assertPublishableManifest(manifest);
-      const normalizedTargets = input.targets.map((target) => {
+      const existingContext = await findPublishContext(client, input);
+      const calendarSlot = await findActiveCalendarSlot(client, input, output, existingContext);
+      if (requireCalendarSlot && !calendarSlot) {
+        await client.query("COMMIT");
+        return null;
+      }
+      const derivedCalendarTargets = calendarSlot ? calendarTargets(calendarSlot, manifest) : null;
+      if (calendarSlot && input.targets) assertCalendarRequestTargets(input.targets, derivedCalendarTargets!);
+      const calendarSlotAlreadyAdvanced = calendarSlot
+        ? ["ready", "scheduled", "published"].includes(calendarSlot.status)
+        : false;
+      if (calendarSlotAlreadyAdvanced && !existingContext) {
+        throw new Error("publish_calendar_advanced_slot_link_invalid");
+      }
+      const requestedTargets = derivedCalendarTargets ?? input.targets ?? [];
+      const normalizedTargets = requestedTargets.map((target) => {
         const resolution = resolveAiContentPublishTarget({ outputFormat: manifest.outputFormat, assetCount: manifest.assets.length }, target);
         if (!resolution.supported) throw new Error(resolution.reason);
         return resolution.target;
       });
+      const requestIdempotencyKey = calendarSlot
+        ? `calendar-ai-content:${calendarSlot.id}:${input.outputId}`
+        : String(input.idempotencyKey);
       vercelBlobUrl(output.manifest_url);
+      if (calendarSlotAlreadyAdvanced) {
+        const targets: AiContentPublishTargetResult[] = [];
+        for (const target of normalizedTargets) {
+          const existing = await findExistingTarget(client, input.outputId, target, requestIdempotencyKey);
+          if (!existing?.result) throw new Error("publish_calendar_advanced_slot_link_invalid");
+          targets.push({ ...existing.result, dispatchAllowed: false });
+        }
+        await client.query("COMMIT");
+        return { publishGroupId: existingContext!.publishGroupId, targets };
+      }
 
       const requestedChannels = [...new Set(normalizedTargets.map((target) => target.channel))];
       const channelResult = await client.query(
@@ -387,13 +604,50 @@ export function createAiContentPublishRepository(pool: Pool): AiContentPublishRe
         throw new Error("channel_oauth_not_connected");
       }
 
-      const context = await getOrCreatePublishContext(client, input, manifest);
+      const context = await getOrCreatePublishContext(
+        client,
+        input,
+        manifest,
+        existingContext,
+        Boolean(calendarSlot) && !calendarSlotAlreadyAdvanced,
+      );
       const artifactId = await storeManifestArtifact(client, input, output.manifest_url);
       const copy = outputCopy(manifest);
       const targets: AiContentPublishTargetResult[] = [];
 
       for (const target of normalizedTargets) {
-        const existing = await findExistingTarget(client, input.outputId, target, input.idempotencyKey);
+        const existing = await findExistingTarget(client, input.outputId, target, requestIdempotencyKey);
+        if (calendarSlot && existing?.queueId && existing.queueStatus === "scheduled") {
+          if (existing.hasAttempt) throw new Error("publish_calendar_queue_already_attempted");
+          const converted = await client.query(
+            `update publish_queue
+                set status='queued',approval_type=$2,scheduled_for=null,
+                    idempotency_key=$3,last_error=null,updated_at=now()
+              where id=$1 and status='scheduled'
+                and not exists(select 1 from publish_attempts attempt where attempt.publish_queue_id=publish_queue.id)
+              returning id,status`,
+            [
+              existing.queueId,
+              calendarSlot.assignment_mode === "automatic" ? "auto" : "manual",
+              `ai-content:${input.outputId}:${target.channel}:${target.deliveryFormat}:${requestIdempotencyKey}`,
+            ],
+          );
+          if (!converted.rowCount) throw new Error("publish_calendar_queue_already_attempted");
+          targets.push({
+            channel: target.channel,
+            deliveryFormat: target.deliveryFormat,
+            channelOutputId: existing.channelOutputId,
+            queueId: existing.queueId,
+            status: "queued",
+            dispatchAllowed: false,
+            publishedUrl: null,
+            errorCode: null,
+          });
+          continue;
+        }
+        if (calendarSlot && existing?.queueId && existing.queueStatus !== "queued") {
+          throw new Error("publish_calendar_queue_already_attempted");
+        }
         if (existing?.result) {
           targets.push(existing.result);
           continue;
@@ -409,7 +663,7 @@ export function createAiContentPublishRepository(pool: Pool): AiContentPublishRe
           cards: assets,
           story: target.deliveryFormat === "instagram_story" ? assets[0] : undefined,
           video,
-          publishRequestIdempotencyKey: input.idempotencyKey,
+          publishRequestIdempotencyKey: requestIdempotencyKey,
         };
         const channelOutput = existing ? null : await client.query(
           `insert into channel_outputs (
@@ -434,8 +688,8 @@ export function createAiContentPublishRepository(pool: Pool): AiContentPublishRe
           ],
         );
         const channelOutputId = existing?.channelOutputId ?? String(channelOutput?.rows[0].id);
-        const queueIdempotencyKey = `ai-content:${input.outputId}:${target.channel}:${target.deliveryFormat}:${input.idempotencyKey}`;
-        const queue = existing?.queueId && (existing.queueStatus === "failed" || existing.queueStatus === "cancelled")
+        const queueIdempotencyKey = `ai-content:${input.outputId}:${target.channel}:${target.deliveryFormat}:${requestIdempotencyKey}`;
+        const queue = !calendarSlot && existing?.queueId && (existing.queueStatus === "failed" || existing.queueStatus === "cancelled")
           ? await client.query(
             `update publish_queue
                 set status = 'scheduled', scheduled_for = now(), queued_at = now(),
@@ -449,7 +703,7 @@ export function createAiContentPublishRepository(pool: Pool): AiContentPublishRe
             `insert into publish_queue (
                workspace_id, brand_id, channel_output_id, brand_channel_id, channel,
                topic_publish_group_id, status, approval_type, scheduled_for, idempotency_key
-             ) values ($1, $2, $3, $4, $5, $6, 'scheduled', 'manual', now(), $7)
+             ) values ($1, $2, $3, $4, $5, $6, $7, $8, case when $7='queued' then null else now() end, $9)
              returning id, status`,
             [
               input.workspaceId,
@@ -458,6 +712,8 @@ export function createAiContentPublishRepository(pool: Pool): AiContentPublishRe
               connectedChannels.get(target.channel),
               target.channel,
               context.publishGroupId,
+              calendarSlot ? "queued" : "scheduled",
+              calendarSlot?.assignment_mode === "automatic" ? "auto" : "manual",
               queueIdempotencyKey,
             ],
           );
@@ -468,9 +724,22 @@ export function createAiContentPublishRepository(pool: Pool): AiContentPublishRe
           channelOutputId,
           queueId: String(queue.rows[0].id),
           status: normalizeQueueStatus(queue.rows[0].status),
+          dispatchAllowed: !calendarSlot,
           publishedUrl: null,
           errorCode: null,
         });
+      }
+
+      if (calendarSlot && !calendarSlotAlreadyAdvanced) {
+        const linked = await client.query(
+          `update publish_calendar_slots
+              set generation_id=$2,generation_output_id=$3,topic_publish_group_id=$4,
+                  status='content_assigned',last_error=null,updated_at=now()
+            where id=$1 and workspace_id=$5 and brand_id=$6 and status<>'cancelled'
+            returning id`,
+          [calendarSlot.id, output.generation_id, input.outputId, context.publishGroupId, input.workspaceId, input.brandId],
+        );
+        if (!linked.rowCount) throw new Error("publish_calendar_slot_conflict");
       }
 
       await client.query("COMMIT");
@@ -481,6 +750,14 @@ export function createAiContentPublishRepository(pool: Pool): AiContentPublishRe
     } finally {
       client.release();
     }
+  }
+
+  async function prepareAiContentPublish(
+    input: BrandOutputScope & AiContentPublishRequest,
+  ): Promise<PreparedAiContentPublishResult> {
+    const result = await prepareAiContentPublishInternal(input, false);
+    if (!result) throw new Error("ai_content_publish_calendar_slot_required");
+    return result;
   }
 
   async function getAiContentPublishQueueResult(input: QueueScope): Promise<AiContentPublishTargetResult> {
@@ -509,6 +786,7 @@ export function createAiContentPublishRepository(pool: Pool): AiContentPublishRe
       channelOutputId: String(row.channel_output_id),
       queueId: String(row.queue_id),
       status,
+      dispatchAllowed: false,
       publishedUrl: text(row.published_url) || null,
       errorCode,
       recovery: publishRecovery(status, errorCode),
@@ -518,29 +796,17 @@ export function createAiContentPublishRepository(pool: Pool): AiContentPublishRe
   return {
     prepareAiContentPublish,
     getAiContentPublishQueueResult,
-    async sendAiContentToPublish(input) {
-      const output = await pool.query(
-        `select generation.output_format, jsonb_array_length(output.artifact_manifest_json -> 'assets') as asset_count
-           from ai_content_generation_outputs output
-           join ai_content_generations generation on generation.id = output.generation_id
-          where output.id = $1 and output.workspace_id = $2 and output.brand_id = $3`,
-        [input.outputId, input.workspaceId, input.brandId],
-      );
-      if (!output.rowCount) throw new Error("ai_content_output_not_found");
-      const deliveryFormat: AiContentPublishDeliveryFormat = output.rows[0].output_format === "reel"
-        ? "instagram_reel"
-        : output.rows[0].output_format === "card_news"
-          ? "instagram_feed_carousel"
-          : (() => { throw new Error("ai_content_publish_type_not_supported"); })();
-      const prepared = await prepareAiContentPublish({
-        ...input,
-        idempotencyKey: crypto.randomUUID(),
-        targets: [{ channel: "instagram", deliveryFormat }],
-      });
-      return {
-        publishGroupId: prepared.publishGroupId,
-        channelOutputId: prepared.targets[0].channelOutputId,
-      };
+    async prepareCompletedCalendarPublish(input) {
+      if (input.preparationEnabled === false) {
+        await recordCalendarPreparationDelay(pool, input, new Error("publishing_disabled")).catch(() => undefined);
+        return null;
+      }
+      try {
+        return await prepareAiContentPublishInternal(input, true);
+      } catch (error) {
+        await recordCalendarPreparationDelay(pool, input, error).catch(() => undefined);
+        return null;
+      }
     },
   };
 }

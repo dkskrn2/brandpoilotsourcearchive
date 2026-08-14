@@ -4,17 +4,20 @@ import test from "node:test";
 import { Client } from "pg";
 import * as migrationRunner from "./migrationRunner.mjs";
 
-test("content suggestion 077 and FAQ utterance 078 are an ordered sealed post-cutover schema plan", async () => {
+test("content suggestion 077, FAQ utterance 078, and publish calendar 079 are an ordered sealed post-cutover schema plan", async () => {
   const migrations = await migrationRunner.loadMigrations();
   const migration077 = migrations.find(({ id }) => id === "077_content_suggestion_batches.sql");
   const migration078 = migrations.find(({ id }) => id === "078_faq_utterance_matching.sql");
+  const migration079 = migrations.find(({ id }) => id === "079_publish_calendar_runtime.sql");
   assert.ok(migration077);
   assert.ok(migration078);
+  assert.ok(migration079);
   assert.equal(migrationRunner.validatePost075SchemaMigration(migration077), true);
   assert.equal(migrationRunner.validatePost075SchemaMigration(migration078), true);
+  assert.equal(migrationRunner.validatePost075SchemaMigration(migration079), true);
 
   const history = migrations
-    .filter(({ id }) => ![migration077.id, migration078.id].includes(id))
+    .filter(({ id }) => ![migration077.id, migration078.id, migration079.id].includes(id))
     .map(({ id, checksum }) => ({ id, checksum }));
   assert.equal(
     migrationRunner.isExactPost075SchemaMigrationPlan(migrations, history),
@@ -27,6 +30,16 @@ test("content suggestion 077 and FAQ utterance 078 are an ordered sealed post-cu
     ),
     false,
     "078 cannot be accepted as applied while its 077 ancestor is absent",
+  );
+  assert.equal(
+    migrationRunner.isExactPost075SchemaMigrationPlan(
+      migrations,
+      [...history,
+        { id: migration077.id, checksum: migration077.checksum },
+        { id: migration079.id, checksum: migration079.checksum }],
+    ),
+    false,
+    "079 cannot be accepted as applied while its 078 ancestor is absent",
   );
   assert.equal(
     migrationRunner.isExactPost075SchemaMigrationPlan(
@@ -58,6 +71,13 @@ test("content suggestion 077 and FAQ utterance 078 are an ordered sealed post-cu
     }),
     /post_075_schema_migration_invalid/,
   );
+  assert.throws(
+    () => migrationRunner.validatePost075SchemaMigration({
+      ...migration079,
+      checksum: "0".repeat(64),
+    }),
+    /post_075_schema_migration_invalid/,
+  );
 });
 
 test("FAQ utterance schema seals new tables under the schema owner and grants only the application role", async () => {
@@ -70,14 +90,30 @@ test("FAQ utterance schema seals new tables under the schema owner and grants on
   assert.match(sql, /grant select, insert, update, delete on table public\.dm_faq_confirmations to %I/i);
 });
 
+test("publish calendar tenant guards are schema-owned and executable only by the application role", async () => {
+  const sql = await readFile("db/migrations/079_publish_calendar_runtime.sql", "utf8");
+  for (const functionName of [
+    "enforce_publish_calendar_brand_scope",
+    "enforce_publish_calendar_slot_scope",
+  ]) {
+    assert.match(sql, new RegExp(`alter function public\\.${functionName}\\(\\) owner to %I`, "i"));
+    assert.match(sql, new RegExp(`revoke all on function public\\.${functionName}\\(\\) from public`, "i"));
+    assert.match(sql, new RegExp(`grant execute on function public\\.${functionName}\\(\\) to %I`, "i"));
+  }
+  assert.match(sql, /create trigger publish_calendar_slots_link_scope[\s\S]*execute function enforce_publish_calendar_slot_scope\(\)/i);
+  assert.match(sql, /content_suggestions and its batch\/category ancestry have no workspace or brand/i);
+});
+
 test("content suggestion schema runner accepts the exact managed provider session and restores the DDL guard", async () => {
   const migrations = await migrationRunner.loadMigrations();
   const migration077 = migrations.find(({ id }) => id === "077_content_suggestion_batches.sql");
   const migration078 = migrations.find(({ id }) => id === "078_faq_utterance_matching.sql");
+  const migration079 = migrations.find(({ id }) => id === "079_publish_calendar_runtime.sql");
   assert.ok(migration077);
   assert.ok(migration078);
+  assert.ok(migration079);
   const history = migrations
-    .filter(({ id }) => ![migration077.id, migration078.id].includes(id))
+    .filter(({ id }) => ![migration077.id, migration078.id, migration079.id].includes(id))
     .map(({ id, checksum }) => ({ id, checksum }));
   const calls = [];
   const client = {
@@ -135,8 +171,46 @@ test("content suggestion schema runner accepts the exact managed provider sessio
           application_privilege_count: 8,
         }] };
       }
+      if (normalized.includes("publish_calendar_schema_catalog_v1")) {
+        return { rows: [{
+          billing_plan_owner: "content_schema_owner",
+          brand_subscription_owner: "content_schema_owner",
+          calendar_settings_owner: "content_schema_owner",
+          calendar_slot_owner: "content_schema_owner",
+          app_billing_plan_select: true,
+          app_billing_plan_insert: true,
+          app_billing_plan_update: true,
+          app_billing_plan_delete: false,
+          app_brand_subscription_select: true,
+          app_brand_subscription_insert: true,
+          app_brand_subscription_update: true,
+          app_brand_subscription_delete: false,
+          app_calendar_settings_select: true,
+          app_calendar_settings_insert: true,
+          app_calendar_settings_update: true,
+          app_calendar_settings_delete: false,
+          app_calendar_slot_select: true,
+          app_calendar_slot_insert: true,
+          app_calendar_slot_update: true,
+          app_calendar_slot_delete: false,
+          public_billing_plan_privilege: false,
+          public_brand_subscription_privilege: false,
+          public_calendar_settings_privilege: false,
+          public_calendar_slot_privilege: false,
+          runtime_columns_valid: true,
+          enabled_default_false: true,
+          constraint_catalog_valid: true,
+          index_catalog_valid: true,
+          trigger_catalog_valid: true,
+          write_fence_row_count: 4,
+          function_owner_count: 2,
+          application_function_execute_count: 2,
+          public_function_execute_count: 0,
+          billing_plan_count: 0,
+        }] };
+      }
       if (normalized.includes("post_075_schema_migration_marker_v1")) {
-        const migration = [migration077, migration078].find(({ id }) => id === parameters[0]);
+        const migration = [migration077, migration078, migration079].find(({ id }) => id === parameters[0]);
         return { rows: migration ? [{ id: migration.id, checksum: migration.checksum }] : [] };
       }
       return { rows: [] };
@@ -149,7 +223,7 @@ test("content suggestion schema runner accepts the exact managed provider sessio
     expectedProviderRoleName: "postgres",
   });
 
-  assert.deepEqual(result.pending, [migration077.id, migration078.id]);
+  assert.deepEqual(result.pending, [migration077.id, migration078.id, migration079.id]);
   assert.equal(calls.some(({ sql }) => sql === "alter event trigger ai_content_ddl_guard_074 disable"), true);
   assert.equal(calls.some(({ sql }) => sql === "alter event trigger ai_content_ddl_guard_074 enable"), true);
   const disableIndex = calls.findIndex(({ sql }) => sql === "alter event trigger ai_content_ddl_guard_074 disable");
@@ -157,11 +231,13 @@ test("content suggestion schema runner accepts the exact managed provider sessio
   const searchPathIndex = calls.findIndex(({ sql }) => sql === "select set_config('search_path','public,pg_catalog,pg_temp',true)");
   const migrationIndex = calls.findIndex(({ sql }) => sql.includes("create table content_suggestion_batches"));
   const faqMigrationIndex = calls.findIndex(({ sql }) => sql.includes("create table faq_alias_suggestion_results"));
+  const calendarMigrationIndex = calls.findIndex(({ sql }) => sql.includes("create table billing_plan_catalog"));
   const revokeIndex = calls.findIndex(({ sql }) => sql === "revoke \"content_schema_owner\" from \"postgres\" granted by \"postgres\"");
   const enableIndex = calls.findIndex(({ sql }) => sql === "alter event trigger ai_content_ddl_guard_074 enable");
   const commitIndex = calls.findIndex(({ sql }) => sql === "commit");
   assert.ok(disableIndex < grantIndex && grantIndex < searchPathIndex && searchPathIndex < migrationIndex
-    && migrationIndex < faqMigrationIndex && faqMigrationIndex < revokeIndex
+    && migrationIndex < faqMigrationIndex && faqMigrationIndex < calendarMigrationIndex
+    && calendarMigrationIndex < revokeIndex
     && revokeIndex < enableIndex && enableIndex < commitIndex);
   const catalogSql = calls.find(({ sql }) => sql.includes("post_075_schema_catalog_v1"))?.sql ?? "";
   for (const privilege of ["SELECT", "INSERT", "UPDATE", "DELETE"]) {
@@ -174,16 +250,28 @@ test("content suggestion schema runner accepts the exact managed provider sessio
       new RegExp(`has_table_privilege\\(\\$1,'public\\.content_suggestions','${privilege}'\\)`),
     );
   }
+  const calendarCatalogSql = calls.find(({ sql }) => sql.includes("publish_calendar_schema_catalog_v1"))?.sql ?? "";
+  for (const marker of [
+    "publish_calendar_settings", "publish_calendar_slots", "enabled_default_false",
+    "expected_constraint", "constraint_catalog_valid", "pg_get_constraintdef",
+    "expected_index", "index_catalog_valid", "pg_get_indexdef",
+    "expected_trigger", "trigger_catalog_valid", "pg_get_triggerdef",
+    "write_fence_row_count", "function_owner_count", "public_function_execute_count",
+    "billing_plan_count",
+  ]) assert.match(calendarCatalogSql, new RegExp(marker));
+  assert.doesNotMatch(calendarCatalogSql, /required_(?:constraint|index|trigger)_count/);
 });
 
 test("content suggestion schema runner rejects a non-normal DDL guard before mutation", async () => {
   const migrations = await migrationRunner.loadMigrations();
   const migration077 = migrations.find(({ id }) => id === "077_content_suggestion_batches.sql");
   const migration078 = migrations.find(({ id }) => id === "078_faq_utterance_matching.sql");
+  const migration079 = migrations.find(({ id }) => id === "079_publish_calendar_runtime.sql");
   assert.ok(migration077);
   assert.ok(migration078);
+  assert.ok(migration079);
   const history = migrations
-    .filter(({ id }) => ![migration077.id, migration078.id].includes(id))
+    .filter(({ id }) => ![migration077.id, migration078.id, migration079.id].includes(id))
     .map(({ id, checksum }) => ({ id, checksum }));
   const calls = [];
   const client = {
@@ -220,7 +308,7 @@ test("content suggestion schema runner rejects a non-normal DDL guard before mut
   assert.equal(calls.includes("begin"), false);
 });
 
-test("ordered 077 and 078 schemas apply and replay against PostgreSQL 16", {
+test("ordered 077, 078, and 079 schemas apply and replay against PostgreSQL 16", {
   skip: process.env.RUN_FAQ_SCHEMA_POSTGRES_INTEGRATION !== "1",
   timeout: 300_000,
 }, async () => {
@@ -267,7 +355,33 @@ test("ordered 077 and 078 schemas apply and replay against PostgreSQL 16", {
       migrations,
       expectedProviderRoleName: "postgres",
     });
-    assert.deepEqual(applied.pending, ["077_content_suggestion_batches.sql", "078_faq_utterance_matching.sql"]);
+    assert.deepEqual(applied.pending, [
+      "077_content_suggestion_batches.sql",
+      "078_faq_utterance_matching.sql",
+      "079_publish_calendar_runtime.sql",
+    ]);
+    const topicScope = await client.query(
+      `select relation.relname as relation_name,constraint_row.conname,
+              pg_get_constraintdef(constraint_row.oid,true) as definition
+         from pg_constraint constraint_row
+         join pg_class relation on relation.oid=constraint_row.conrelid
+        where constraint_row.conname in (
+          'topic_publish_groups_tenant_identity_unique',
+          'publish_calendar_slots_topic_publish_group_scope_fk'
+        ) order by constraint_row.conname`,
+    );
+    assert.deepEqual(topicScope.rows.map(({ relation_name, conname }) => ({ relation_name, conname })), [
+      {
+        relation_name: "publish_calendar_slots",
+        conname: "publish_calendar_slots_topic_publish_group_scope_fk",
+      },
+      {
+        relation_name: "topic_publish_groups",
+        conname: "topic_publish_groups_tenant_identity_unique",
+      },
+    ]);
+    assert.match(topicScope.rows[0].definition, /foreign key \(topic_publish_group_id, workspace_id, brand_id\).*references topic_publish_groups\(id, workspace_id, brand_id\)/i);
+    assert.match(topicScope.rows[1].definition, /unique \(id, workspace_id, brand_id\)/i);
     const replayed = await migrationRunner.runPost075SchemaMigrationsWithClient({
       client,
       migrations,

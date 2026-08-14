@@ -1145,6 +1145,7 @@ describe("AI content customer routes", () => {
         channelOutputId: "channel-output-feed",
         queueId: "queue-feed",
         status: "scheduled",
+        dispatchAllowed: true,
         publishedUrl: null,
         errorCode: null,
       }],
@@ -1181,6 +1182,7 @@ describe("AI content customer routes", () => {
           channelOutputId: "channel-output-feed",
           queueId: "queue-feed",
           status: "scheduled",
+          dispatchAllowed: true,
           publishedUrl: null,
           errorCode: null,
         },
@@ -1190,6 +1192,7 @@ describe("AI content customer routes", () => {
           channelOutputId: "channel-output-story",
           queueId: "queue-story",
           status: "scheduled",
+          dispatchAllowed: true,
           publishedUrl: null,
           errorCode: null,
         },
@@ -1223,6 +1226,74 @@ describe("AI content customer routes", () => {
     await app.close();
   });
 
+  it("returns a calendar-prepared queued target without dispatching it immediately", async () => {
+    const { app, repository } = setup();
+    vi.mocked(repository.prepareAiContentPublish).mockResolvedValueOnce({
+      publishGroupId: "publish-group-calendar",
+      targets: [{
+        channel: "instagram",
+        deliveryFormat: "instagram_feed_carousel",
+        channelOutputId: "channel-output-calendar",
+        queueId: "queue-calendar",
+        status: "queued",
+        dispatchAllowed: false,
+        publishedUrl: null,
+        errorCode: null,
+      }],
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: `/brands/${brandId}/ai-content/outputs/${outputId}/publish`,
+      headers: auth,
+      payload: {
+        idempotencyKey: "b4b74082-8a44-46d6-91b6-3e3bd7e26be0",
+        targets: [{ channel: "instagram", deliveryFormat: "instagram_feed_carousel" }],
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({ targets: [{ queueId: "queue-calendar", status: "queued" }] });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(repository.publishQueueItem).not.toHaveBeenCalled();
+    await app.close();
+  });
+
+  it("returns an advanced scheduled calendar target without dispatching it immediately", async () => {
+    const { app, repository } = setup();
+    vi.mocked(repository.prepareAiContentPublish).mockResolvedValueOnce({
+      publishGroupId: "publish-group-calendar",
+      targets: [{
+        channel: "instagram",
+        deliveryFormat: "instagram_feed_carousel",
+        channelOutputId: "channel-output-calendar",
+        queueId: "queue-calendar",
+        status: "scheduled",
+        dispatchAllowed: false,
+        publishedUrl: null,
+        errorCode: null,
+      }],
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: `/brands/${brandId}/ai-content/outputs/${outputId}/publish`,
+      headers: auth,
+      payload: {
+        idempotencyKey: "b4b74082-8a44-46d6-91b6-3e3bd7e26be0",
+        targets: [{ channel: "instagram", deliveryFormat: "instagram_feed_carousel" }],
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      targets: [{ queueId: "queue-calendar", status: "scheduled", dispatchAllowed: false }],
+    });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(repository.publishQueueItem).not.toHaveBeenCalled();
+    await app.close();
+  });
+
   it("reads the stored publish result through the brand-scoped status route", async () => {
     const { app, repository } = setup();
     vi.mocked(repository.getAiContentPublishQueueResult).mockResolvedValueOnce({
@@ -1231,6 +1302,7 @@ describe("AI content customer routes", () => {
       channelOutputId: "channel-output-reel",
       queueId: "queue-reel",
       status: "published",
+      dispatchAllowed: false,
       publishedUrl: "https://instagram.example/reel",
       errorCode: null,
     });
@@ -1261,6 +1333,7 @@ describe("AI content customer routes", () => {
         channelOutputId: "channel-output-reel",
         queueId: "queue-reel",
         status: "scheduled",
+        dispatchAllowed: true,
         publishedUrl: null,
         errorCode: null,
       }],

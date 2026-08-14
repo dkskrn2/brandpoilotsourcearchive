@@ -124,6 +124,21 @@ const dmAttentionTypes = new Set<DmAttentionType>(["restricted_action", "complai
 const instagramFormatSet = new Set<string>(instagramFormats);
 const instagramTrendMediaTypes = new Set<InstagramTrendMediaTypeFilter>(["all", "reel", "video", "image", "carousel"]);
 const instagramTrendSorts = new Set<InstagramTrendSort>(["meta", "likes", "comments"]);
+const publishCalendarFormats = new Set(["card_news", "reel"]);
+const publishCalendarChannels = new Set(["instagram"]);
+
+function hasExactKeys(value: unknown, keys: string[]): value is Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const actual = Object.keys(value as Record<string, unknown>).sort();
+  return actual.join("\0") === [...keys].sort().join("\0");
+}
+
+function publishCalendarDate(value: unknown): Date {
+  if (typeof value !== "string" || !value) throw new Error("publish_calendar_date_invalid");
+  const parsed = new Date(value);
+  if (!Number.isFinite(parsed.getTime())) throw new Error("publish_calendar_date_invalid");
+  return parsed;
+}
 
 function aiContentWorkerJob(job: AiContentJobRecord | null) {
   if (!job) return null;
@@ -920,11 +935,14 @@ export function createServer(
     targets: Array<{
       queueId: string | null;
       status: string;
+      dispatchAllowed: boolean;
       channel: string;
       deliveryFormat: string;
     }>,
   ) {
-    const scheduledTargets = targets.filter((target) => target.queueId && target.status === "scheduled");
+    const scheduledTargets = targets.filter((target) => (
+      target.queueId && target.status === "scheduled" && target.dispatchAllowed
+    ));
     if (!scheduledTargets.length) return;
     let task: Promise<void>;
     task = new Promise<void>((resolve) => setImmediate(resolve))
@@ -994,6 +1012,10 @@ export function createServer(
     }
     if (message === "publishing_disabled") {
       reply.code(503).send({ error: "publishing_disabled" });
+      return;
+    }
+    if (message === "publish_queue_not_publishable") {
+      reply.code(409).send({ error: message });
       return;
     }
     if (message === "RESOURCE_NOT_AVAILABLE") {
@@ -1143,6 +1165,17 @@ export function createServer(
     }
     if (message.endsWith("_not_found")) {
       reply.code(404).send({ error: message });
+      return;
+    }
+    if (message.startsWith("publish_calendar_") || message === "publish_weekly_quota_exceeded") {
+      const unavailable = message === "publish_calendar_not_configured";
+      const conflict = [
+        "publish_calendar_subscription_inactive",
+        "publish_calendar_channel_not_connected",
+        "publish_calendar_slot_not_assignable",
+        "publish_weekly_quota_exceeded",
+      ].includes(message);
+      reply.code(unavailable ? 503 : conflict ? 409 : 400).send({ error: message });
       return;
     }
     if (message === "topic_upload_invalid_csv" || message === "faq_upload_invalid_file" || message === "knowledge_upload_invalid_file") {
@@ -1354,6 +1387,8 @@ export function createServer(
       (["POST", "PUT", "PATCH", "DELETE"].includes(method) && route.includes("/ai-content"))
       || (method === "POST" && route === "/brands/:brandId/content-generation/run")
       || (method === "GET" && route === "/internal/cron/daily-generation")
+      || (method === "POST" && route === "/internal/cron/publish-calendar-allocate")
+      || (["POST", "PUT", "PATCH", "DELETE"].includes(method) && route.includes("/publish-calendar"))
       || (method === "POST" && route === "/internal/cron/ai-content-attachment-gc")
       || (method === "GET" && (
         route === "/brands/:brandId/ai-content/outputs/:outputId/download"
@@ -1511,6 +1546,15 @@ export function createServer(
       return { error: "cron_unauthorized" };
     }
     return repository.runDuePublishing(new Date());
+  });
+
+  app.post("/internal/cron/publish-calendar-allocate", async (request, reply) => {
+    if (!matchesBearerSecret(request.headers.authorization, cronSecret)) {
+      reply.code(401);
+      return { error: "cron_unauthorized" };
+    }
+    if (!repository.allocatePublishCalendar) throw new Error("publish_calendar_not_configured");
+    return repository.allocatePublishCalendar(new Date());
   });
 
   app.get("/internal/cron/avatar-upload-cleanup", async (request, reply) => {
@@ -3706,6 +3750,110 @@ export function createServer(
 
   app.get<{ Params: { brandId: string } }>("/brands/:brandId/publish-queue", async (request) => {
     return repository.listPublishQueue(request.params.brandId);
+  });
+
+  app.get<{ Params: { brandId: string } }>("/brands/:brandId/publish-calendar/settings", async (request) => {
+    if (!repository.getSettings) throw new Error("publish_calendar_not_configured");
+    return repository.getSettings(aiContentScope(request, request.params.brandId));
+  });
+
+  app.put<{ Params: { brandId: string }; Body: unknown }>("/brands/:brandId/publish-calendar/settings", async (request) => {
+    if (!repository.saveSettings) throw new Error("publish_calendar_not_configured");
+    if (!hasExactKeys(request.body, ["enabled", "channels", "informationalFormat", "trendFormat", "slotTimes"])) {
+      throw new Error("publish_calendar_settings_invalid");
+    }
+    const { enabled, channels: selectedChannels, informationalFormat, trendFormat, slotTimes } = request.body;
+    if (typeof enabled !== "boolean" || !Array.isArray(selectedChannels)
+      || selectedChannels.some((channel) => typeof channel !== "string" || !publishCalendarChannels.has(channel))
+      || !publishCalendarFormats.has(String(informationalFormat))
+      || !publishCalendarFormats.has(String(trendFormat))
+      || !Array.isArray(slotTimes) || slotTimes.some((value) => typeof value !== "string")) {
+      throw new Error("publish_calendar_settings_invalid");
+    }
+    return repository.saveSettings({
+      ...aiContentScope(request, request.params.brandId),
+      enabled,
+      channels: selectedChannels as Channel[],
+      informationalFormat: informationalFormat as "card_news" | "reel",
+      trendFormat: trendFormat as "card_news" | "reel",
+      slotTimes: slotTimes as string[],
+    });
+  });
+
+  app.get<{
+    Params: { brandId: string };
+    Querystring: { from?: string; to?: string };
+  }>("/brands/:brandId/publish-calendar/slots", async (request) => {
+    if (!repository.listSlots) throw new Error("publish_calendar_not_configured");
+    return repository.listSlots({
+      ...aiContentScope(request, request.params.brandId),
+      startsAt: publishCalendarDate(request.query.from),
+      endsAt: publishCalendarDate(request.query.to),
+    });
+  });
+
+  app.post<{ Params: { brandId: string }; Body: unknown }>("/brands/:brandId/publish-calendar/slots", async (request) => {
+    if (!repository.createSlot) throw new Error("publish_calendar_not_configured");
+    if (!hasExactKeys(request.body, ["scheduledFor", "contentFormat", "channels"])) {
+      throw new Error("publish_calendar_slot_invalid");
+    }
+    const { scheduledFor, contentFormat, channels: selectedChannels } = request.body;
+    if (!publishCalendarFormats.has(String(contentFormat)) || !Array.isArray(selectedChannels)
+      || selectedChannels.some((channel) => typeof channel !== "string" || !publishCalendarChannels.has(channel))) {
+      throw new Error("publish_calendar_slot_invalid");
+    }
+    return repository.createSlot({
+      ...aiContentScope(request, request.params.brandId),
+      scheduledFor: publishCalendarDate(scheduledFor),
+      assignmentMode: "manual",
+      recommendationKind: null,
+      contentFormat: contentFormat as "card_news" | "reel",
+      channels: selectedChannels as Channel[],
+      createdByUserId: aiContentActorUserId(request),
+    });
+  });
+
+  app.put<{
+    Params: { brandId: string; slotId: string };
+    Body: unknown;
+  }>("/brands/:brandId/publish-calendar/slots/:slotId/assignment", async (request) => {
+    if (!repository.assignSlot) throw new Error("publish_calendar_not_configured");
+    const allowed = ["contentSuggestionId", "proposalId", "generationId", "generationOutputId", "topicPublishGroupId", "title"];
+    if (!request.body || typeof request.body !== "object" || Array.isArray(request.body)
+      || Object.keys(request.body).some((key) => !allowed.includes(key))) {
+      throw new Error("publish_calendar_assignment_invalid");
+    }
+    const body = request.body as Record<string, unknown>;
+    const idKeys = allowed.slice(0, 5);
+    if (!idKeys.some((key) => uuidPattern.test(String(body[key] ?? "")))
+      || idKeys.some((key) => body[key] !== undefined && body[key] !== null && !uuidPattern.test(String(body[key])))
+      || (body.title !== undefined && (typeof body.title !== "string" || !body.title.trim() || body.title.trim().length > 500))) {
+      throw new Error("publish_calendar_assignment_invalid");
+    }
+    return repository.assignSlot({
+      ...aiContentScope(request, request.params.brandId),
+      slotId: request.params.slotId,
+      assignmentMode: "manual",
+      contentSuggestionId: body.contentSuggestionId ? String(body.contentSuggestionId) : null,
+      proposalId: body.proposalId ? String(body.proposalId) : null,
+      generationId: body.generationId ? String(body.generationId) : null,
+      generationOutputId: body.generationOutputId ? String(body.generationOutputId) : null,
+      topicPublishGroupId: body.topicPublishGroupId ? String(body.topicPublishGroupId) : null,
+      title: typeof body.title === "string" ? body.title.trim() : null,
+    });
+  });
+
+  app.post<{ Params: { brandId: string; slotId: string } }>("/brands/:brandId/publish-calendar/slots/:slotId/cancel", async (request) => {
+    if (!repository.cancelSlot) throw new Error("publish_calendar_not_configured");
+    return repository.cancelSlot({
+      ...aiContentScope(request, request.params.brandId),
+      slotId: request.params.slotId,
+    });
+  });
+
+  app.get<{ Params: { brandId: string } }>("/brands/:brandId/publish-calendar/usage", async (request) => {
+    if (!repository.getWeeklyUsage) throw new Error("publish_calendar_not_configured");
+    return repository.getWeeklyUsage(aiContentScope(request, request.params.brandId));
   });
 
   app.get<{ Params: { brandId: string } }>("/brands/:brandId/publish-results", async (request) => {

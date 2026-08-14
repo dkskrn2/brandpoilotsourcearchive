@@ -98,7 +98,6 @@ function createRepository(): ApiRepository {
     retryAiContentOutput: vi.fn(async () => { throw new Error("not_implemented"); }),
     downloadAiContentOutput: vi.fn(async () => ({ fileName: "result.zip", mimeType: "application/zip" as const, buffer: Buffer.from("PK"), itemCount: 1 })),
     downloadAiContentGeneration: vi.fn(async () => ({ fileName: "results.zip", mimeType: "application/zip" as const, buffer: Buffer.from("PK"), itemCount: 1 })),
-    sendAiContentToPublish: vi.fn(async () => ({ publishGroupId: "publish-group-1", channelOutputId: "channel-output-1" })),
     prepareAiContentPublish: vi.fn(async () => ({ publishGroupId: "publish-group-1", targets: [] })),
     getAiContentPublishQueueResult: vi.fn(async (input) => ({
       channel: "instagram" as const,
@@ -106,9 +105,57 @@ function createRepository(): ApiRepository {
       channelOutputId: "channel-output-1",
       queueId: input.queueId,
       status: "scheduled" as const,
+      dispatchAllowed: false,
       publishedUrl: null,
       errorCode: null,
     })),
+    getSettings: vi.fn(async (input) => ({
+      brandId: input.brandId,
+      enabled: false,
+      channels: [],
+      informationalFormat: "card_news" as const,
+      trendFormat: "reel" as const,
+      slotTimes: ["11:30"],
+      updatedAt: null,
+    })),
+    saveSettings: vi.fn(async (input) => ({
+      brandId: input.brandId,
+      enabled: input.enabled,
+      channels: input.channels,
+      informationalFormat: input.informationalFormat,
+      trendFormat: input.trendFormat,
+      slotTimes: input.slotTimes,
+      updatedAt: "2026-08-14T00:00:00.000Z",
+    })),
+    listSlots: vi.fn(async () => []),
+    createSlot: vi.fn(async (input) => ({
+      id: "30000000-0000-4000-8000-000000000001",
+      workspaceId: input.workspaceId,
+      brandId: input.brandId,
+      scheduledFor: input.scheduledFor.toISOString(),
+      assignmentMode: input.assignmentMode,
+      status: "open" as const,
+      recommendationKind: input.recommendationKind,
+      contentFormat: input.contentFormat,
+      channels: input.channels,
+      contentSuggestionId: null,
+      proposalId: null,
+      generationId: null,
+      generationOutputId: null,
+      topicPublishGroupId: null,
+      title: null,
+      lastError: null,
+      updatedAt: "2026-08-14T00:00:00.000Z",
+    })),
+    assignSlot: vi.fn(async () => { throw new Error("not_implemented"); }),
+    cancelSlot: vi.fn(async () => { throw new Error("not_implemented"); }),
+    getWeeklyUsage: vi.fn(async () => ({
+      startsAt: "2026-08-09T00:00:00.000Z",
+      endsAt: "2026-08-16T00:00:00.000Z",
+      generation: { limit: 10, succeeded: 0, reserved: 0, remaining: 10, additionalAvailable: 10 },
+      publishing: { limit: 3, succeeded: 0, reserved: 0, remaining: 3, additionalAvailable: 3 },
+    })),
+    applyDueSubscriptionRenewals: vi.fn(async () => []),
     getDashboard: vi.fn(async () => ({
       period: "30d" as const,
       generatedAt: "2026-07-16T03:00:00.000Z",
@@ -952,6 +999,38 @@ describe("API server", () => {
     expect(repository.runDuePublishing).toHaveBeenCalledTimes(1);
   });
 
+  it("runs calendar allocation only through the authenticated POST cron route", async () => {
+    const repository = createRepository();
+    const allocatePublishCalendar = vi.fn(async () => ({
+      brandsSelected: 1,
+      openSlotsCreated: 7,
+      proposalsAssigned: 2,
+      quotaBlocked: 0,
+      brandsFailed: 0,
+    }));
+    (repository as ApiRepository & { allocatePublishCalendar: typeof allocatePublishCalendar })
+      .allocatePublishCalendar = allocatePublishCalendar;
+    const app = createServer({ repository, cronSecret: "cron-secret", logger: false });
+
+    expect((await app.inject({ method: "POST", url: "/internal/cron/publish-calendar-allocate" })).statusCode)
+      .toBe(401);
+    expect((await app.inject({
+      method: "GET",
+      url: "/internal/cron/publish-calendar-allocate",
+      headers: { authorization: "Bearer cron-secret" },
+    })).statusCode).toBe(404);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/internal/cron/publish-calendar-allocate",
+      headers: { authorization: "Bearer cron-secret" },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({ brandsSelected: 1, proposalsAssigned: 2, brandsFailed: 0 });
+    expect(allocatePublishCalendar).toHaveBeenCalledTimes(1);
+  });
+
   it("maps disabled publication mutation endpoints to service unavailable while due publishing remains a zero-result no-op", async () => {
     const repository = createRepository();
     vi.mocked(repository.publishQueueItem).mockRejectedValue(new Error("publishing_disabled"));
@@ -988,6 +1067,17 @@ describe("API server", () => {
     expect(duePublish.json()).toEqual({ processed: 0, created: 0, updated: 0, failed: 0 });
   });
 
+  it("returns conflict instead of forcing a future scheduled queue to publish", async () => {
+    const repository = createRepository();
+    vi.mocked(repository.publishQueueItem).mockRejectedValue(new Error("publish_queue_not_publishable"));
+    const app = createServer({ repository, logger: false });
+
+    const response = await app.inject({ method: "POST", url: "/publish-queue/queue-future/publish" });
+
+    expect(response.statusCode).toBe(409);
+    expect(response.json()).toEqual({ error: "publish_queue_not_publishable" });
+  });
+
   it("returns the durable scheduled result before disabled background publication settles", async () => {
     vi.stubEnv("BRAND_PILOT_DEV_WORKSPACE_ID", "workspace-1");
     const repository = createRepository();
@@ -999,6 +1089,7 @@ describe("API server", () => {
         channelOutputId: "channel-output-1",
         queueId: "queue-1",
         status: "scheduled",
+        dispatchAllowed: true,
         publishedUrl: null,
         errorCode: null
       }]
@@ -2903,6 +2994,57 @@ describe("API server", () => {
     expect(repository.cancelPublishQueueItem).toHaveBeenCalledWith("queue-1");
   });
 
+  it("scopes calendar routes and rejects non-Instagram settings and manual slots before repository access", async () => {
+    vi.stubEnv("BRAND_PILOT_DEV_WORKSPACE_ID", "22222222-2222-4222-8222-222222222222");
+    vi.stubEnv("BRAND_PILOT_DEV_USER_ID", "33333333-3333-4333-8333-333333333333");
+    const repository = createRepository();
+    const app = createServer({ repository, logger: false });
+
+    const settings = await app.inject({
+      method: "PUT",
+      url: `/brands/${brandId}/publish-calendar/settings`,
+      payload: {
+        enabled: true,
+        channels: ["instagram"],
+        informationalFormat: "card_news",
+        trendFormat: "reel",
+        slotTimes: ["11:30", "20:30"],
+      },
+    });
+    expect(settings.statusCode).toBe(200);
+    expect(repository.saveSettings).toHaveBeenCalledWith(expect.objectContaining({
+      workspaceId: "22222222-2222-4222-8222-222222222222",
+      brandId,
+      channels: ["instagram"],
+    }));
+
+    const unsupportedSettings = await app.inject({
+      method: "PUT",
+      url: `/brands/${brandId}/publish-calendar/settings`,
+      payload: {
+        enabled: false,
+        channels: ["threads"],
+        informationalFormat: "card_news",
+        trendFormat: "reel",
+        slotTimes: ["11:30"],
+      },
+    });
+    const unsupportedSlot = await app.inject({
+      method: "POST",
+      url: `/brands/${brandId}/publish-calendar/slots`,
+      payload: {
+        scheduledFor: "2099-08-15T02:30:00.000Z",
+        contentFormat: "reel",
+        channels: ["threads"],
+      },
+    });
+
+    expect(unsupportedSettings.statusCode).toBe(400);
+    expect(unsupportedSlot.statusCode).toBe(400);
+    expect(repository.saveSettings).toHaveBeenCalledTimes(1);
+    expect(repository.createSlot).not.toHaveBeenCalled();
+  });
+
   it("lists publish results grouped by content for the completed tab", async () => {
     const repository = createRepository();
     const app = createServer({ repository });
@@ -3023,6 +3165,29 @@ describe("API server", () => {
     expect(kakaoAuth.canAccessResource).toHaveBeenNthCalledWith(2, "user-1", "publish_queue", "queue-foreign");
     expect(repository.getPublishArtifact).not.toHaveBeenCalled();
     expect(repository.downloadPublishResult).not.toHaveBeenCalled();
+  });
+
+  it("denies cross-workspace publish, retry, and cancel mutations before repository access", async () => {
+    const repository = createRepository();
+    const kakaoAuth = {
+      getSession: vi.fn(async () => ({ userId: "user-1" })),
+      canAccessBrand: vi.fn(async () => true),
+      canAccessResource: vi.fn(async () => false),
+    } as any;
+    const app = createServer({ repository, kakaoAuth, logger: false });
+    const request = { method: "POST" as const, headers: { cookie: "bp_session=session-token" } };
+
+    const responses = await Promise.all([
+      app.inject({ ...request, url: "/publish-queue/queue-foreign/publish" }),
+      app.inject({ ...request, url: "/publish-queue/queue-foreign/retry" }),
+      app.inject({ ...request, url: "/publish-queue/queue-foreign/cancel" }),
+    ]);
+
+    expect(responses.map(({ statusCode }) => statusCode)).toEqual([403, 403, 403]);
+    expect(kakaoAuth.canAccessResource).toHaveBeenCalledTimes(3);
+    expect(repository.publishQueueItem).not.toHaveBeenCalled();
+    expect(repository.retryPublishQueueItem).not.toHaveBeenCalled();
+    expect(repository.cancelPublishQueueItem).not.toHaveBeenCalled();
   });
 
   it("lists content categories for an authenticated user without requiring brand access", async () => {

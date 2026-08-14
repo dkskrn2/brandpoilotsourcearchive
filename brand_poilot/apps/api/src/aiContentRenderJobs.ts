@@ -1008,7 +1008,23 @@ function validateBlogImageBindings(manifest: AiContentManifestV3, expectedUrls: 
 export function createAiContentRenderJobsRepository(
   pool: Pool,
   loadGeneration: (client: Queryable, generationId: string) => Promise<AiContentGenerationRecord>,
+  afterPackageCompleted?: (input: {
+    workspaceId: string;
+    brandId: string;
+    generationId: string;
+    outputId: string;
+  }) => Promise<void>,
 ): AiContentRenderJobsRepository {
+  async function notifyPackageCompleted(row: Record<string, unknown>, outputFormat: string): Promise<void> {
+    if (!afterPackageCompleted || (outputFormat !== "card_news" && outputFormat !== "reel")) return;
+    await afterPackageCompleted({
+      workspaceId: String(row.workspace_id),
+      brandId: String(row.brand_id),
+      generationId: String(row.generation_id),
+      outputId: String(row.output_id),
+    }).catch(() => undefined);
+  }
+
   return {
     async claim(input) {
       if (!input.workerId?.trim() || !Number.isSafeInteger(input.leaseSeconds) || input.leaseSeconds < 30 || input.leaseSeconds > 300) {
@@ -1239,6 +1255,7 @@ export function createAiContentRenderJobsRepository(
           await completeGenerationOperationIfTerminal(client, String(row.generation_id));
           const generation = await loadGeneration(client, String(row.generation_id));
           await client.query("COMMIT");
+          await notifyPackageCompleted(row, manifest.outputFormat);
           return generation;
         }
         await client.query(
@@ -1273,6 +1290,7 @@ export function createAiContentRenderJobsRepository(
         await completeGenerationOperationIfTerminal(client, String(row.generation_id));
         const generation = await loadGeneration(client, String(row.generation_id));
         await client.query("COMMIT");
+        await notifyPackageCompleted(row, manifest.outputFormat);
         return generation;
       } catch (error) {
         await client.query("ROLLBACK");

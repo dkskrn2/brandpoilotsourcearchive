@@ -49,11 +49,16 @@ test("AI 콘텐츠 저장소 계약은 중앙 ApiRepository에 모두 노출된�
     "retryAiContentOutput",
     "downloadAiContentOutput",
     "downloadAiContentGeneration",
-    "sendAiContentToPublish",
+    "prepareAiContentPublish",
   ];
 
   for (const method of requiredMethods) {
     assert.match(types, new RegExp(`\\b${method}\\s*\\(`), `ApiRepository에 필수 ${method} 메서드가 있어야 합니다`);
+  }
+  const repository = await readFile("apps/api/src/repository.ts", "utf8");
+  const publisher = await readFile("apps/api/src/aiContentPublish.ts", "utf8");
+  for (const source of [types, repository, publisher]) {
+    assert.doesNotMatch(source, /\bsendAiContentToPublish\s*\(/, "사용하지 않는 중복 publish 진입점은 제거되어야 합니다");
   }
 });
 
@@ -294,7 +299,7 @@ test("API 패키지는 타입 검사와 tsup 빌드 및 배포 시작 명령을 
   assert.equal(packageJson.scripts.start, "node dist/index.js");
 });
 
-test("데이터베이스 마이그레이션 registry는 콘텐츠 자동제안 077과 FAQ 표현 매칭 078을 순서대로 포함한다", async () => {
+test("데이터베이스 마이그레이션 registry는 077, 078, 게시 캘린더 079를 순서대로 포함한다", async () => {
   const migrationFiles = (await readdir("db/migrations"))
     .filter((file) => file.endsWith(".sql"))
     .sort();
@@ -380,6 +385,7 @@ test("데이터베이스 마이그레이션 registry는 콘텐츠 자동제안 0
     "076_manual_content_generation_brand_rules.sql",
     "077_content_suggestion_batches.sql",
     "078_faq_utterance_matching.sql",
+    "079_publish_calendar_runtime.sql",
   ]);
   assert.ok(reservedProgramMigrations.filter((file) => file.startsWith("059_")).length <= 1);
   assert.ok(reservedProgramMigrations.filter((file) => file.startsWith("060_")).length <= 1);
@@ -1016,6 +1022,52 @@ test("자동 크롤링은 지원하지 않는 Vercel Cron 대신 외부 또는 �
   assert.match(envExample, /^SOURCE_CRAWL_DISCOVERY_LIMIT=20$/m);
   assert.match(envExample, /^SOURCE_CRAWL_TIME_BUDGET_MS=45000$/m);
   assert.match(envExample, /^LOCAL_SCHEDULER_ENABLED=false$/m);
+});
+
+test("게시 실행은 인증된 GET cron 경로를 유지하고 로컬 runner로 대체되지 않는다", async () => {
+  const [httpServer, index, envExample] = await Promise.all([
+    readFile("apps/api/src/httpServer.ts", "utf8"),
+    readFile("apps/api/src/index.ts", "utf8"),
+    readFile("deploy/env/api.env.example", "utf8"),
+  ]);
+
+  assert.match(envExample, /^LOCAL_SCHEDULER_ENABLED=false$/m);
+  assert.match(
+    index,
+    /if\s*\(runtimeConfig\.schedulerEnabled\)\s*\{\s*startLocalScheduler\(repository\);/s,
+    "the existing local scheduler must remain explicitly opt-in",
+  );
+  assert.equal(
+    [...index.matchAll(/\bstartLocalScheduler\s*\(\s*repository\s*\)/g)].length,
+    1,
+    "no additional local publishing runner may replace the managed cron caller",
+  );
+  const routeStart = httpServer.search(/app\.get\(\s*["']\/internal\/cron\/publish-due["']/);
+  assert.notEqual(routeStart, -1, "GET /internal/cron/publish-due must remain registered");
+  const sourceAfterRouteStart = httpServer.slice(routeStart + 1);
+  const nextRouteOffset = sourceAfterRouteStart.search(
+    /\n\s*app\.(?:get|post|put|patch|delete)\b/,
+  );
+  assert.notEqual(nextRouteOffset, -1, "publish-due handler must be bounded by the next route");
+  const routeHandler = httpServer.slice(routeStart, routeStart + 1 + nextRouteOffset);
+  const authenticationIndex = routeHandler.indexOf("matchesBearerSecret(");
+  const unauthorizedIndex = routeHandler.indexOf("reply.code(401)");
+  const publishingIndex = routeHandler.indexOf("repository.runDuePublishing(");
+
+  assert.notEqual(authenticationIndex, -1, "publish-due must check the cron bearer secret");
+  assert.ok(
+    unauthorizedIndex > authenticationIndex && unauthorizedIndex < publishingIndex,
+    "publish-due must return 401 on failed authentication before publishing",
+  );
+  assert.ok(
+    publishingIndex > authenticationIndex,
+    "publish-due must authenticate before running due publishing",
+  );
+  assert.equal(
+    /app\.post\(\s*["']\/internal\/cron\/publish-due["']/.test(httpServer),
+    false,
+    "publish-due must not be replaced with a POST trigger",
+  );
 });
 
 test("legacy 콘텐츠 smoke는 제거된 V1 경로를 호출하지 않고 fail-closed 한다", async () => {

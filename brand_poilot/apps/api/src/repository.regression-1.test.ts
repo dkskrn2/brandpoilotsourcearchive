@@ -650,7 +650,45 @@ describe("repository regressions", () => {
 
     expect(failureUpdates[0]?.sql).toContain("error_code = $3");
     expect(failureUpdates[0]?.sql).toContain("then 'scheduled'");
+    expect(failureUpdates[0]?.sql).toContain("failed_slot");
+    expect(failureUpdates[0]?.sql).toContain("when $4::boolean then 'scheduled' else 'publish_delayed'");
     expect(failureUpdates[0]?.values).toEqual(expect.arrayContaining(["meta_rate_limited", true]));
+  });
+
+  it("stops automatic transient retries after the fifth publish attempt", async () => {
+    const failureUpdates: Array<{ sql: string; values?: unknown[] }> = [];
+    const query = vi.fn(async (sql: string, values?: unknown[]) => {
+      if (sql.includes("from publish_queue pq") && sql.includes("join channel_outputs")) {
+        return { rowCount: 1, rows: [{
+          id: "queue-1",
+          workspace_id: "workspace-1",
+          brand_id: "brand-1",
+          channel: "instagram",
+          channel_output_id: "output-1",
+          delivery_format: "instagram_reel",
+          output_json: {},
+          rendered_manifest_url: "https://cdn.example.com/manifest.json",
+          ...readyInstagramPublishContext(),
+          external_account_id: "account-1",
+          encrypted_payload: encryptCredential("meta-token"),
+          credential_id: "credential-1",
+          attempt_id: "attempt-5",
+          attempt_number: 5,
+        }] };
+      }
+      if (sql.includes("failed_attempt")) failureUpdates.push({ sql, values });
+      return { rowCount: 1, rows: [] };
+    });
+    const repository = createRepository({ query } as any, {
+      instagramPublish: { enabled: true },
+      fetchInstagramImageManifest: async () => ({ video: { url: "https://cdn.example.com/reel.mp4" } }),
+      publishInstagramOutput: async () => { throw new MetaGraphRequestError({ status: 429 }); },
+    } as any);
+
+    await expect(repository.publishQueueItem("queue-1")).rejects.toThrow("meta_graph_request_failed:429");
+
+    expect(failureUpdates[0]?.values?.[2]).toBe("meta_rate_limited");
+    expect(failureUpdates[0]?.values?.[3]).toBe(false);
   });
 
   it("stores non-sensitive Instagram publish stage metadata", async () => {

@@ -64,6 +64,7 @@ function setup(options: {
     if (["BEGIN", "COMMIT", "ROLLBACK"].includes(sql)) return { rowCount: 0, rows: [] };
     if (sql.includes("from ai_content_generation_outputs output")) return { rowCount: 1, rows: [{
       id: "output-1",
+      generation_id: "generation-1",
       status: options.status ?? "completed",
       artifact_manifest_json: options.outputManifest ?? manifest,
       manifest_url: options.manifestUrl ?? manifestUrl,
@@ -72,6 +73,7 @@ function setup(options: {
       title: manifest.title,
       draft_json: {},
     }] };
+    if (sql.includes("from publish_calendar_slots")) return { rowCount: 0, rows: [] };
     if (sql.includes("from brand_channels channel")) return options.connected === false
       ? { rowCount: 0, rows: [] }
       : { rowCount: 1, rows: [{ id: "channel-instagram", channel: "instagram" }] };
@@ -115,6 +117,7 @@ function setup(options: {
           idempotency_key: options.existingIdempotencyKey ?? `ai-content:output-1:instagram:${format}:older-request`,
           published_url: `https://instagram.example/${format}`,
           last_error: null,
+          has_attempt: false,
         }] }
         : { rowCount: 0, rows: [] };
     }
@@ -123,7 +126,7 @@ function setup(options: {
       return { rowCount: 1, rows: [{ id: `channel-output-${outputInsert}` }] };
     }
     if (sql.includes("insert into publish_queue")) {
-      const format = String(params[6]).split(":").at(-2);
+      const format = String(params[8]).split(":").at(-2);
       return { rowCount: 1, rows: [{ id: `queue-${format}`, status: "scheduled" }] };
     }
     if (sql.includes("update publish_queue") && sql.includes("status = 'scheduled'")) {
@@ -221,6 +224,12 @@ describe("AI content direct publishing", () => {
     });
     const outputLookup = statements.find((sql) => sql.includes("from ai_content_generation_outputs output"));
     expect(outputLookup).toMatch(/\bfor\s+update\s+of\s+output\b/i);
+    const slotLookup = statements.find((sql) => sql.includes("from publish_calendar_slots"));
+    expect(slotLookup).toContain("generation_output_id=$3");
+    expect(slotLookup).toContain("generation_id=$4");
+    expect(slotLookup).toContain("topic_publish_group_id=$5::uuid");
+    expect(slotLookup).toContain("status<>'cancelled'");
+    expect(slotLookup).toMatch(/\bfor\s+update\b/i);
     const topicLookup = statements.find((sql) => sql.includes("from content_topics topic") && sql.includes("aiContentOutputId"));
     expect(topicLookup).not.toMatch(/\bfor\s+update\s+of\s+topic\b/i);
   });
@@ -358,6 +367,7 @@ describe("AI content direct publishing", () => {
       deliveryFormat: "instagram_story",
       queueId: "queue-story",
       status: "scheduled",
+      dispatchAllowed: false,
       publishedUrl: null,
       errorCode: null,
       recovery: {
@@ -428,6 +438,34 @@ describe("AI content direct publishing", () => {
     expect(staticPublishActionFixture.targets.map(({ deliveryFormat }) => deliveryFormat))
       .not.toContain("instagram_reel");
     expect(statements.filter((sql) => sql.includes("insert into jobs"))).toHaveLength(0);
+  });
+
+  it("locks delay candidates before a separate fresh-snapshot update", async () => {
+    const statements: string[] = [];
+    const query = vi.fn(async (sql: string) => {
+      statements.push(sql);
+      if (sql.includes("select slot.id") && sql.includes("for update")) {
+        return { rowCount: 1, rows: [{ id: "11111111-1111-4111-8111-111111111111" }] };
+      }
+      return { rowCount: 0, rows: [] };
+    });
+    const repository = createAiContentPublishRepository({
+      connect: async () => ({ query, release() {} }),
+    } as never);
+
+    await expect(repository.prepareCompletedCalendarPublish({
+      workspaceId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      brandId: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+      outputId: "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+      preparationEnabled: false,
+    })).resolves.toBeNull();
+
+    const lockIndex = statements.findIndex((sql) => sql.includes("select slot.id") && sql.includes("for update"));
+    const updateIndex = statements.findIndex((sql) => sql.includes("update publish_calendar_slots slot"));
+    expect(lockIndex).toBeGreaterThan(statements.indexOf("BEGIN"));
+    expect(updateIndex).toBeGreaterThan(lockIndex);
+    expect(statements[updateIndex]).toContain("slot.id=any($1::uuid[])");
+    expect(statements[updateIndex]).toContain("from publish_queue queue");
   });
 
   it("lets the Instagram publisher read ai-content.v3 image assets", () => {

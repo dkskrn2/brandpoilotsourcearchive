@@ -83,6 +83,7 @@ test("post-075 provider migration rejects lower roles and succeeds with provider
       migration076.id,
       "077_content_suggestion_batches.sql",
       "078_faq_utterance_matching.sql",
+      "079_publish_calendar_runtime.sql",
     ].includes(id))) {
       await provider.query(
         "insert into public.schema_migrations(id,checksum) values($1,$2)",

@@ -2281,6 +2281,15 @@ describe("repository", () => {
 
   it("schedules queued publish items", async () => {
     const query = vi.fn(async (sql: string, values?: unknown[]) => {
+      if (sql.includes("from brand_subscriptions subscription")) {
+        return {
+          rowCount: 1,
+          rows: [{ started_at: new Date("2026-01-01T00:00:00.000Z"), weekly_publish_limit: 10 }],
+        };
+      }
+      if (sql.includes("allowed_group_ids")) {
+        return { rowCount: 1, rows: [{ allowed_group_ids: ["publish-group-1"] }] };
+      }
       if (sql.includes("from topic_publish_groups") && sql.includes("status = 'ready'") && sql.includes("for update")) {
         return { rowCount: 1, rows: [{ id: "publish-group-1" }] };
       }
@@ -2327,20 +2336,6 @@ describe("repository", () => {
     expect(query).not.toHaveBeenCalled();
   });
 
-  it("rejects legacy AI content publication without querying when publication is disabled", async () => {
-    const query = vi.fn();
-    const connect = vi.fn();
-    const repository = createRepository({ query, connect } as any, { instagramPublish: { enabled: false } });
-
-    await expect(repository.sendAiContentToPublish({
-      workspaceId: "workspace-1",
-      brandId: "brand-1",
-      outputId: "output-1"
-    })).rejects.toThrow("publishing_disabled");
-    expect(connect).not.toHaveBeenCalled();
-    expect(query).not.toHaveBeenCalled();
-  });
-
   it("rejects publication scheduling without connecting or querying when publication is disabled", async () => {
     const query = vi.fn();
     const connect = vi.fn();
@@ -2349,6 +2344,24 @@ describe("repository", () => {
     await expect(repository.schedulePublishQueue("brand-1")).rejects.toThrow("publishing_disabled");
     expect(connect).not.toHaveBeenCalled();
     expect(query).not.toHaveBeenCalled();
+  });
+
+  it("composes the publish calendar repository and allocator into the operating repository", () => {
+    const repository = createRepository({ query: vi.fn(), connect: vi.fn() } as any);
+
+    for (const method of [
+      "getSettings",
+      "saveSettings",
+      "listSlots",
+      "createSlot",
+      "assignSlot",
+      "cancelSlot",
+      "getWeeklyUsage",
+      "applyDueSubscriptionRenewals",
+      "allocatePublishCalendar",
+    ]) {
+      expect(repository[method as keyof typeof repository], method).toBeTypeOf("function");
+    }
   });
 
   it("rejects explicit publishing without querying when publication is disabled", async () => {
@@ -2523,12 +2536,58 @@ describe("repository", () => {
       return { rowCount: 0, rows: [] };
     });
     const repository = createRepository({ query } as any, { instagramPublish: { enabled: true } });
+    repository.applyDueSubscriptionRenewals = vi.fn(async () => []);
 
     await expect(repository.runDuePublishing()).resolves.toEqual({ processed: 0, created: 0, updated: 0, failed: 0 });
 
     expect(statements[0]).toContain("pa.status = 'succeeded'");
     expect(statements[0]).toContain("publish_delivery_unknown");
     expect(statements[0]).toContain("interval '30 minutes'");
+    expect(statements[0]).toContain("recovered_slots");
+    expect(statements[0]).toContain("abandoned_slots");
+    expect(statements[0]).toContain("pending.id not in (select recovered_queue.id from recovered recovered_queue)");
+  });
+
+  it("renews subscriptions, isolates calendar scheduling failures, and still selects legacy direct queues", async () => {
+    const statements: Array<{ sql: string; values: unknown[] }> = [];
+    const query = vi.fn(async (sql: string, values?: unknown[]) => {
+      statements.push({ sql: sql.replace(/\s+/g, " "), values: values ?? [] });
+      if (sql.includes("select id from brands")) {
+        return { rowCount: 2, rows: [{ id: "brand-failed" }, { id: "brand-ready" }] };
+      }
+      if (sql.includes("row_number() over") && sql.includes("from publish_queue")) {
+        return { rowCount: 0, rows: [] };
+      }
+      return { rowCount: 0, rows: [] };
+    });
+    const repository = createRepository({ query } as any, { instagramPublish: { enabled: true } });
+    const events: string[] = [];
+    repository.applyDueSubscriptionRenewals = vi.fn(async () => {
+      events.push("renewed");
+      return [];
+    });
+    repository.schedulePublishQueue = vi.fn(async (candidate) => {
+      events.push(`scheduled:${candidate}`);
+      if (candidate === "brand-failed") throw new Error("subscription_unavailable");
+      return { processed: 0, created: 0, updated: 0, failed: 0 };
+    });
+
+    await expect(repository.runDuePublishing(new Date("2026-08-14T00:00:00.000Z")))
+      .resolves.toEqual({ processed: 0, created: 0, updated: 0, failed: 1 });
+
+    expect(events).toEqual(["renewed", "scheduled:brand-failed", "scheduled:brand-ready"]);
+    const candidateBrands = statements.find(({ sql }) => sql.includes("select id from brands"));
+    expect(candidateBrands?.sql).toContain("from publish_calendar_settings settings");
+    expect(candidateBrands?.sql).toContain("settings.enabled");
+    expect(candidateBrands?.sql).toContain("from publish_calendar_slots slot");
+    expect(candidateBrands?.sql).toContain("slot.status in ('proposal_assigned','generation_pending','content_assigned','ready','publish_delayed','quota_blocked','scheduled')");
+    const due = statements.find(({ sql }) => sql.includes("row_number() over"));
+    expect(due?.sql).toContain("partition by queue.brand_id");
+    expect(due?.sql).toContain("order by brand_rank");
+    expect(due?.sql).toContain("limit 50");
+    expect(due?.sql).toContain("left join publish_calendar_slots linked_slot");
+    expect(due?.sql).toContain("linked_slot.id is null or queue.brand_id=any($2::uuid[])");
+    expect(due?.values[1]).toEqual(["brand-ready"]);
   });
 
   it("recovers only persisted AI content publish rows without scheduling unrelated content", async () => {
@@ -2550,6 +2609,10 @@ describe("repository", () => {
     expect(statements[0]).toContain("output.ai_content_generation_output_id is not null");
     expect(statements[0]).toContain("publish_delivery_unknown");
     expect(statements[0]).toContain("interval '30 minutes'");
+    expect(statements[0]).toContain("recovered_groups");
+    expect(statements[0]).toContain("recovered_slots");
+    expect(statements[0]).toContain("abandoned_slots");
+    expect(statements[0]).toContain("pending.id not in (select recovered_queue.id from recovered recovered_queue)");
     expect(statements[1]).toContain("output.ai_content_generation_output_id is not null");
     expect(statements.join("\n")).not.toContain("select id from brands");
   });
@@ -2584,8 +2647,10 @@ describe("repository", () => {
   });
 
   it("returns deferred provider failures to the queue on explicit retry", async () => {
+    let retrySql = "";
     const query = vi.fn(async (sql: string) => {
       if (sql.includes("update publish_queue") && sql.includes("provider_not_implemented")) {
+        retrySql = sql.replace(/\s+/g, " ");
         return { rowCount: 1, rows: [{ id: "queue-x-1", status: "queued" }] };
       }
       return { rowCount: 0, rows: [] };
@@ -2600,6 +2665,8 @@ describe("repository", () => {
       expect.stringContaining("update topic_publish_groups"),
       ["queue-x-1"]
     );
+    expect(retrySql).toContain("max(attempt_number)");
+    expect(retrySql).toContain("< 5");
   });
 
   it("does not report deferred providers healthy from stored credentials alone", async () => {
@@ -2640,6 +2707,19 @@ describe("repository", () => {
         if (["begin", "commit", "rollback"].includes(sql.trim())) return { rowCount: 0, rows: [] };
         if (sql.includes("select id from brands") && sql.includes("for update")) {
           return { rowCount: 1, rows: [{ id: "brand-1" }] };
+        }
+        if (sql.includes("pg_advisory_xact_lock")) return { rowCount: 0, rows: [] };
+        if (sql.includes("from brand_subscriptions subscription")) {
+          return {
+            rowCount: 1,
+            rows: [{ started_at: "2026-07-01T00:00:00.000Z", weekly_publish_limit: 100 }],
+          };
+        }
+        if (sql.includes("publication_units") && sql.includes("allowed_group_ids")) {
+          return { rowCount: 1, rows: [{ allowed_group_ids: groupIds }] };
+        }
+        if (sql.includes("from publish_calendar_slots slot") && sql.includes("for update of slot")) {
+          return { rowCount: 0, rows: [] };
         }
         if (sql.includes("from topic_publish_groups") && sql.includes("status = 'ready'") && sql.includes("for update")) {
           return { rowCount: groupIds.length, rows: groupIds.map((id) => ({ id })) };
@@ -2733,6 +2813,61 @@ describe("repository", () => {
       expect(fixture.statements[claimIndex]?.sql).toContain("where id = $1 and status = 'ready'");
       expect(fixture.statements.at(-1)?.sql).toBe("commit");
     });
+
+    it("revalidates direct-inclusive weekly quota and schedules a calendar group at its exact reserved time", async () => {
+      const statements: Array<{ sql: string; values: unknown[] }> = [];
+      const scheduledFor = new Date("2026-07-15T11:30:00+09:00");
+      const query = vi.fn(async (sql: string, values?: unknown[]) => {
+        statements.push({ sql, values: values ?? [] });
+        if (["begin", "commit", "rollback"].includes(sql.trim()) || sql.includes("pg_advisory_xact_lock")) {
+          return { rowCount: 0, rows: [] };
+        }
+        if (sql.includes("select id from brands") && sql.includes("for update")) {
+          return { rowCount: 1, rows: [{ id: "brand-1" }] };
+        }
+        if (sql.includes("from brand_subscriptions subscription")) {
+          return { rowCount: 1, rows: [{ started_at: "2026-07-01T00:00:00.000Z", weekly_publish_limit: 2 }] };
+        }
+        if (sql.includes("publication_units") && sql.includes("allowed_group_ids")) {
+          return { rowCount: 1, rows: [{ allowed_group_ids: ["calendar-group-1"] }] };
+        }
+        if (sql.includes("from publish_calendar_slots slot") && sql.includes("for update of slot")) {
+          return {
+            rowCount: 1,
+            rows: [{ slot_id: "slot-1", group_id: "calendar-group-1", scheduled_for: scheduledFor }],
+          };
+        }
+        if (sql.includes("update topic_publish_groups") && sql.includes("slot_number=null")) {
+          return { rowCount: 1, rows: [{ id: "calendar-group-1" }] };
+        }
+        if (sql.includes("update publish_queue") && sql.includes("topic_publish_group_id=$1")) {
+          return { rowCount: 1, rows: [] };
+        }
+        if (sql.includes("update publish_calendar_slots") && sql.includes("status='scheduled'")) {
+          return { rowCount: 1, rows: [] };
+        }
+        if (sql.includes("from topic_publish_groups") && sql.includes("slot_date >=")) {
+          return { rowCount: 0, rows: [] };
+        }
+        if (sql.includes("from topic_publish_groups") && sql.includes("status = 'ready'") && sql.includes("for update")) {
+          return { rowCount: 0, rows: [] };
+        }
+        return { rowCount: 0, rows: [] };
+      });
+      const repository = createRepository(fakePoolWithClient(query) as any, { instagramPublish: { enabled: true } });
+
+      await expect(repository.schedulePublishQueue("brand-1", new Date("2026-07-14T00:00:00.000Z")))
+        .resolves.toEqual({ processed: 1, created: 0, updated: 1, failed: 0 });
+
+      const quotaSql = statements.find(({ sql }) => sql.includes("publication_units"))?.sql ?? "";
+      expect(quotaSql).toContain("direct_publish_groups");
+      expect(quotaSql).toContain("linked_slot.status<>'cancelled'");
+      const groupUpdate = statements.find(({ sql }) => sql.includes("slot_number=null"));
+      const queueUpdate = statements.find(({ sql }) => sql.includes("topic_publish_group_id=$1"));
+      expect(groupUpdate?.values).toEqual(["calendar-group-1", "2026-07-15", scheduledFor]);
+      expect(queueUpdate?.values).toEqual(["calendar-group-1", "2026-07-15", scheduledFor]);
+      expect(statements.some(({ sql }) => sql.includes("set status='scheduled',last_error=null"))).toBe(true);
+    });
   });
 
   it("publishes Instagram queue items through Meta when generated image manifest is available", async () => {
@@ -2821,6 +2956,64 @@ describe("repository", () => {
     expect(publishAttempts.some((values) => values.includes("ig-post-1"))).toBe(true);
     expect(queueUpdates.length).toBe(1);
     expect(query.mock.calls.some(([sql]) => String(sql).includes("update brand_channels"))).toBe(true);
+    const finalized = query.mock.calls.find(([sql]) => String(sql).includes("completed_queue"))?.[0] as string;
+    expect(finalized).toContain("updated_group");
+    expect(finalized).toContain("updated_slot");
+    expect(finalized).toContain("set status='published'");
+  });
+
+  it("recovers the calendar group and slot when provider delivery succeeds but finalization must be replayed", async () => {
+    const completionSql: string[] = [];
+    const query = vi.fn(async (sql: string) => {
+      if (sql.includes("from publish_queue pq") && sql.includes("join channel_outputs")) {
+        return {
+          rowCount: 1,
+          rows: [{
+            id: "queue-recovery-1",
+            workspace_id: "workspace-1",
+            brand_id: "brand-1",
+            channel: "instagram",
+            channel_output_id: "output-1",
+            output_json: { caption: "복구 테스트", hashtags: [] },
+            rendered_manifest_url: "https://cdn.example.com/manifest.json",
+            channel_status: "connected",
+            channel_last_error: null,
+            external_account_id: "17890000000000000",
+            credential_id: "credential-1",
+            credential_provider: "meta",
+            credential_status: "active",
+            credential_expires_at: new Date("2099-01-01T00:00:00.000Z"),
+            credential_scopes: ["instagram_business_basic", "instagram_business_content_publish"],
+            encrypted_payload: encryptCredential("meta-token"),
+            auth_mode: "instagram_login",
+            delivery_format: "instagram_feed_carousel",
+            attempt_id: "attempt-1",
+            attempt_number: 1,
+          }],
+        };
+      }
+      if (sql.includes("update publish_attempts") && sql.includes("external_post_id = $5")) {
+        return { rowCount: 1, rows: [{ id: "attempt-1" }] };
+      }
+      if (sql.includes("with completed_queue")) {
+        completionSql.push(sql);
+        if (sql.includes("select id, status from completed_queue")) return { rowCount: 0, rows: [] };
+        return { rowCount: 1, rows: [] };
+      }
+      return { rowCount: 1, rows: [] };
+    });
+    const repository = createRepository({ query } as any, {
+      instagramPublish: { enabled: true },
+      fetchInstagramImageManifest: async () => ({
+        images: [{ publicUrl: "https://cdn.example.com/slide.png" }],
+      }),
+      publishInstagramCarousel: async () => ({ externalPostId: "ig-post-recovery", publishedUrl: null }),
+    } as any);
+
+    await expect(repository.publishQueueItem("queue-recovery-1")).rejects.toThrow("publish_queue_finalize_failed");
+    expect(completionSql).toHaveLength(2);
+    expect(completionSql[1]).toContain("updated_group");
+    expect(completionSql[1]).toContain("updated_slot");
   });
 
   it("lists publish queue rows with topic and source context in one table model", async () => {
@@ -3231,9 +3424,11 @@ describe("repository", () => {
     }]);
   });
 
-  it("does not publish queue items before they are scheduled", async () => {
+  it("claims only due queues that pass the current brand, channel, subscription, slot, format, and quota policy", async () => {
+    let claimSql = "";
     const query = vi.fn(async (sql: string) => {
       if (sql.includes("from publish_queue pq") && sql.includes("join channel_outputs")) {
+        claimSql = sql.replace(/\s+/g, " ");
         return { rowCount: 0, rows: [] };
       }
       throw new Error(`unexpected query: ${sql}`);
@@ -3242,6 +3437,26 @@ describe("repository", () => {
 
     await expect(repository.publishQueueItem("queue-1")).rejects.toThrow("publish_queue_not_publishable");
     expect(query).toHaveBeenCalledWith(expect.stringContaining("pq.status = 'scheduled'"), ["queue-1"]);
+    expect(claimSql).toContain("pq.scheduled_for <= clock_timestamp()");
+    expect(claimSql).toContain("join brands brand");
+    expect(claimSql).toContain("brand.status = 'active'");
+    expect(claimSql).toContain("join brand_channels policy_channel");
+    expect(claimSql).toContain("policy_channel.enabled");
+    expect(claimSql).toContain("policy_channel.status = 'connected'");
+    expect(claimSql).toContain("left join brand_subscriptions subscription");
+    expect(claimSql).toContain("left join billing_plan_catalog plan");
+    expect(claimSql).toContain("slot.id is null or (");
+    expect(claimSql).toContain("subscription.status in ('active','cancel_scheduled')");
+    expect(claimSql).toContain("slot.status='scheduled'");
+    expect(claimSql).toContain("pq.channel=any(slot.channels)");
+    expect(claimSql).toContain("slot.content_format='card_news'");
+    expect(claimSql).toContain("co.delivery_format='instagram_feed_carousel'");
+    expect(claimSql).toContain("slot.content_format='reel'");
+    expect(claimSql).toContain("co.delivery_format='instagram_reel'");
+    expect(claimSql).toContain("weekly_publish_limit");
+    expect(claimSql).toContain("linked_slot.status<>'cancelled'");
+    expect(claimSql).toContain("(subscription.started_at at time zone 'Asia/Seoul')::date");
+    expect(claimSql).not.toContain("clock_timestamp(),subscription.started_at");
   });
 
   it("ensures and lists the three default Instagram formats for a brand created after migration", async () => {

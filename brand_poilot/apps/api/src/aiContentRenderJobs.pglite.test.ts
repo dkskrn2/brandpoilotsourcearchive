@@ -1,6 +1,6 @@
 import { PGlite } from "@electric-sql/pglite";
 import { pgcrypto } from "@electric-sql/pglite/contrib/pgcrypto";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ImageGenerationPackageV1 } from "@brand-pilot/content-contracts";
 import { compileCardDeckPlanDraftV1 } from "@brand-pilot/content-contracts/card-deck-editorial-plan";
 import { cardDeckEditorialPlanSha256 } from "@brand-pilot/content-contracts/card-deck-editorial-plan/node";
@@ -106,8 +106,10 @@ function finalBlogHtml(imageUrls: string[] = []): string {
 }
 
 describe("AiContentRenderJobsRepository with postgres semantics", () => {
+  type CompletedScope = { workspaceId: string; brandId: string; generationId: string; outputId: string };
   let db: PGlite;
   let repository: ReturnType<typeof createAiContentRenderJobsRepository>;
+  let completedHook = vi.fn(async (_input: CompletedScope): Promise<void> => undefined);
 
   beforeEach(async () => {
     db = await PGlite.create({ extensions: { pgcrypto } });
@@ -135,7 +137,12 @@ describe("AiContentRenderJobsRepository with postgres semantics", () => {
     await db.query("insert into ai_content_generations(id,workspace_id,brand_id,output_format,purpose,title,status,current_stage,retryable_until) values($1,$2,$3,'card_news','informational','Tea','generating','generation',now()+interval '15 days')", [ids.generation, ids.workspace, ids.brand]);
     await db.query("insert into ai_content_generation_outputs(id,generation_id,workspace_id,brand_id,status) values($1,$2,$3,$4,'generating')", [ids.output, ids.generation, ids.workspace, ids.brand]);
     const pool = { query: db.query.bind(db), connect: async () => ({ query: db.query.bind(db), release() {} }) };
-    repository = createAiContentRenderJobsRepository(pool as never, async () => ({ id: ids.generation, status: "generating" } as never));
+    completedHook = vi.fn(async (_input: CompletedScope): Promise<void> => undefined);
+    repository = createAiContentRenderJobsRepository(
+      pool as never,
+      async () => ({ id: ids.generation, status: "generating" } as never),
+      completedHook,
+    );
   }, 30_000);
 
   afterEach(async () => db?.close(), 30_000);
@@ -537,7 +544,18 @@ describe("AiContentRenderJobsRepository with postgres semantics", () => {
     await expect(complete([{ ...manifest.assets[0], url: rendered[1].url }, { ...manifest.assets[1], url: rendered[0].url }, manifest.assets[2]])).rejects.toThrow("ai_content_render_manifest_invalid");
     await expect(complete([{ ...manifest.assets[0] }, { ...manifest.assets[1], url: rendered[0].url }, manifest.assets[2]])).rejects.toThrow("ai_content_render_manifest_invalid");
     await expect(complete([{ ...manifest.assets[0], width: 2160, height: 2160 }, manifest.assets[1], manifest.assets[2]])).rejects.toThrow("ai_content_render_manifest_invalid");
+    completedHook.mockRejectedValue(new Error("calendar preparation unavailable"));
     await expect(complete(manifest.assets)).resolves.toMatchObject({ id: ids.generation });
+    expect(completedHook).toHaveBeenCalledWith({
+      workspaceId: ids.workspace,
+      brandId: ids.brand,
+      generationId: ids.generation,
+      outputId: ids.output,
+    });
+    await expect(complete(manifest.assets)).resolves.toMatchObject({ id: ids.generation });
+    expect(completedHook).toHaveBeenCalledTimes(2);
+    expect((await db.query<{ status: string }>("select status from ai_content_generation_outputs where id=$1", [ids.output])).rows)
+      .toEqual([{ status: "completed" }]);
   });
 
   it("requires every blog evidence link href to equal its frozen original or supplemental URL", async () => {

@@ -86,7 +86,7 @@ const deploymentScripts = [
   ubuntuBootstrapPath,
 ];
 
-test("cutover API image contains ordered migrations through content suggestion 077", () => {
+test("cutover API image contains ordered migrations through publish calendar 079", () => {
   const dockerfile = read("apps/api/Dockerfile");
   const migrate = read("scripts/migrate.mjs");
   const runner = read("scripts/migrationRunner.mjs");
@@ -101,6 +101,7 @@ test("cutover API image contains ordered migrations through content suggestion 0
   assert.equal(existsSync("db/migrations/076_manual_content_generation_brand_rules.sql"), true);
   assert.equal(existsSync("db/migrations/077_content_suggestion_batches.sql"), true);
   assert.equal(existsSync("db/migrations/078_faq_utterance_matching.sql"), true);
+  assert.equal(existsSync("db/migrations/079_publish_calendar_runtime.sql"), true);
   assert.match(migrate, /AI_CONTENT_074_AUTHORIZATION_PUBLIC_KEY_FILE/);
   assert.match(migrate, /AI_CONTENT_074_PROVIDER_ATTESTATION_PUBLIC_KEY_FILE/);
   assert.doesNotMatch(migrate, /readFile\([^\n]*(?:PRIVATE|SIGNING)|createPrivateKey|AI_CONTENT_074_(?:AUTHORIZATION|PROVIDER_ATTESTATION)_KEY_FILE/);
@@ -146,13 +147,15 @@ test("deployment applies or verifies the pinned post-075 data migration before c
   assert.ok(migrationGate >= 0 && migrationGate < transition && transition < canary);
 });
 
-test("deployment applies the ordered content suggestion and FAQ schemas after 076 and before canary mutation", () => {
+test("deployment applies the ordered content suggestion, FAQ, and publish calendar schemas after 076 and before canary mutation", () => {
   const deploy = read("deploy/scripts/deploy.sh");
   const runner = read("scripts/migrationRunner.mjs");
   assert.match(runner, /077_content_suggestion_batches\.sql/);
   assert.match(runner, /3b178464c5ae5c4e220428e0752ab3e79a2ca06b5b2b23f1e89c34e983e63f76/);
-  assert.match(deploy, /078_faq_utterance_matching\.sql/);
-  assert.match(deploy, /a2c481f4ea5aba0430668d8e87d236f0a301a695cbecb4874400de0896aecde5/);
+  assert.match(runner, /078_faq_utterance_matching\.sql/);
+  assert.match(runner, /a2c481f4ea5aba0430668d8e87d236f0a301a695cbecb4874400de0896aecde5/);
+  assert.match(deploy, /079_publish_calendar_runtime\.sql/);
+  assert.match(deploy, /c46ffafa578f6c1f8bb353f4e7bc94d16033416dd5a6aa730cf81119e6e6ef61/);
   assert.match(deploy, /scripts\/migrate\.mjs --post-075-schema/);
   assert.match(deploy, /post-075-schema-migration-evidence\.v1/);
   const dataGate = deploy.lastIndexOf("run_post_075_data_migration_gate");
@@ -170,6 +173,12 @@ test("FAQ schema migration fails fast instead of waiting indefinitely on live lo
   assert.match(migration, /faq_alias_suggestion_results_count_check[\s\S]*cardinality\(example_utterances\) between 3 and 8/i);
 });
 
+test("publish calendar schema fails fast while adding the existing topic group tenant key", () => {
+  const migration = read("db/migrations/079_publish_calendar_runtime.sql");
+  assert.match(migration, /begin;\s*set local lock_timeout = '5s';\s*set local statement_timeout = '60s';/i);
+  assert.match(migration, /alter table topic_publish_groups[\s\S]*topic_publish_groups_tenant_identity_unique/i);
+});
+
 test("FAQ runbook excludes Wiki without permanently disabling generic Wiki rollouts", () => {
   const rollout = read("deploy/scripts/rollout-workers.sh");
   const runbook = read("docs/operations/faq-utterance-matching-rollout.md");
@@ -179,7 +188,7 @@ test("FAQ runbook excludes Wiki without permanently disabling generic Wiki rollo
   assert.match(rollout, /WIKI_WORKER_IMAGE[\s\S]*continue/);
 });
 
-test("validated FAQ schema evidence avoids requiring provider credentials on every deployment", () => {
+test("stored schema evidence never replaces a fresh live database verification", () => {
   const deploy = read("deploy/scripts/deploy.sh");
   const gate = deploy.slice(
     deploy.indexOf("run_post_075_schema_migration_gate()"),
@@ -187,7 +196,12 @@ test("validated FAQ schema evidence avoids requiring provider credentials on eve
   );
   assert.match(gate, /validate_post_075_schema_migration_evidence/);
   assert.match(gate, /scripts\/migrate\.mjs --post-075-schema/);
-  assert.match(gate, /validate_post_075_schema_migration_evidence "\$evidence_file"\s*\n\s*return/);
+  assert.doesNotMatch(gate, /validate_post_075_schema_migration_evidence "\$evidence_file"\s*\n\s*return/);
+  assert.match(gate, /output="\$\(docker run[\s\S]*scripts\/migrate\.mjs --post-075-schema\)"/);
+  assert.match(gate, /atomic_write "\$evidence_file" "\$\{output\}"/);
+  assert.equal((gate.match(/validate_post_075_schema_migration_evidence "\$evidence_file"/g) ?? []).length, 1);
+  assert.ok(gate.indexOf("/app/scripts/migrate.mjs --post-075-schema")
+    < gate.indexOf('validate_post_075_schema_migration_evidence "$evidence_file"'));
 });
 
 test("cutover API image contains both ordered migrations in an actual no-network container", {
@@ -202,7 +216,7 @@ test("cutover API image contains both ordered migrations in an actual no-network
   try {
     const script = [
       "const fs=require('node:fs');",
-      "const required=['/app/db/migrations/074_ai_content_maintenance_write_fence.sql','/app/db/migrations/075_ai_content_three_format_cutover.sql','/app/db/migrations/076_manual_content_generation_brand_rules.sql','/app/db/migrations/077_content_suggestion_batches.sql','/app/db/migrations/078_faq_utterance_matching.sql','/app/scripts/migrationRunner.mjs','/app/scripts/migrate.mjs','/app/scripts/databaseTls.mjs'];",
+      "const required=['/app/db/migrations/074_ai_content_maintenance_write_fence.sql','/app/db/migrations/075_ai_content_three_format_cutover.sql','/app/db/migrations/076_manual_content_generation_brand_rules.sql','/app/db/migrations/077_content_suggestion_batches.sql','/app/db/migrations/078_faq_utterance_matching.sql','/app/db/migrations/079_publish_calendar_runtime.sql','/app/scripts/migrationRunner.mjs','/app/scripts/migrate.mjs','/app/scripts/databaseTls.mjs'];",
       "for(const path of required)if(!fs.existsSync(path))throw new Error('missing:'+path);",
     ].join("");
     const inspect = spawnSync("docker", ["run", "--rm", "--network", "none", "--entrypoint", "node", tag, "-e", script], {
@@ -856,6 +870,42 @@ test("only Caddy publishes host ports", () => {
   );
   assert.match(caddyBlock, /"80:80"/);
   assert.match(caddyBlock, /"443:443"/);
+});
+
+test("production keeps publish scheduling external and every API local scheduler disabled", () => {
+  const compose = read("deploy/compose.production.yml");
+  const services = assertComposeTopology(compose);
+
+  for (const serviceName of ["api-primary", "api-canary"]) {
+    assert.equal(
+      services.get(serviceName).text.match(/LOCAL_SCHEDULER_ENABLED:\s*"false"/g)?.length,
+      1,
+      `${serviceName} must explicitly disable its local scheduler`,
+    );
+  }
+  for (const [serviceName, service] of services) {
+    assert.doesNotMatch(
+      service.text,
+      /^\s+LOCAL_SCHEDULER_ENABLED:\s*"?true"?\s*$/m,
+      `${serviceName} must not enable the local scheduler`,
+    );
+    const lines = service.text.split(/\r?\n/);
+    const commandStart = lines.findIndex((line) => (
+      indentation(line) === service.indent + 2 && line.trimStart().startsWith("command:")
+    ));
+    if (commandStart === -1) continue;
+    const nextPropertyOffset = lines.slice(commandStart + 1).findIndex((line) => (
+      line.trim() && indentation(line) <= service.indent + 2
+    ));
+    const commandEnd = nextPropertyOffset === -1
+      ? lines.length : commandStart + 1 + nextPropertyOffset;
+    const commandBlock = lines.slice(commandStart, commandEnd).join("\n");
+    assert.doesNotMatch(
+      commandBlock,
+      /publish|calendar/i,
+      `${serviceName} must not define a local publish/calendar runner command`,
+    );
+  }
 });
 
 test("Instagram publication is enabled from shared API env with exact safe contracts", () => {
@@ -2572,6 +2622,10 @@ if [[ "$*" == *"/app/scripts/ai-content-cutover-floor-probe.mjs"* ]]; then
   printf '%s\\n' "\${AI_CONTENT_FLOOR_MARKER_FOR_TEST:-false}"
   exit 0
 fi
+if [[ "$*" == *"/app/scripts/migrate.mjs --post-075-schema"* ]]; then
+  printf '{\n  "post075SchemaMigration": {\n    "contractVersion": "post-075-schema-migration-evidence.v1",\n    "providerRoleName": "postgres",\n    "migrationId": "079_publish_calendar_runtime.sql",\n    "migrationSha256": "%s",\n    "status": "already_applied"\n  }\n}\n' "$POST_075_SCHEMA_SHA_FOR_TEST"
+  exit 0
+fi
 if [[ "$1 $2" == "image inspect" ]]; then
   case "\${@: -1}" in
     *@sha256:a*) printf '%s\\n' "$(printf '1%.0s' {1..40})" ;;
@@ -2674,18 +2728,21 @@ function runDeployFixture({
   }, null, 2)}\n`, { mode: 0o600 });
   const post075SchemaState = join(root, "state", "post-075-schema-migrations");
   mkdirSync(post075SchemaState, { recursive: true, mode: 0o700 });
-  writeFileSync(join(post075SchemaState, "078_faq_utterance_matching.sql.json"), `${JSON.stringify({
+  writeFileSync(join(post075SchemaState, "079_publish_calendar_runtime.sql.json"), `${JSON.stringify({
     post075SchemaMigration: {
       contractVersion: "post-075-schema-migration-evidence.v1",
       providerRoleName: "postgres",
-      migrationId: "078_faq_utterance_matching.sql",
-      migrationSha256: "a2c481f4ea5aba0430668d8e87d236f0a301a695cbecb4874400de0896aecde5",
+      migrationId: "079_publish_calendar_runtime.sql",
+      migrationSha256: "c46ffafa578f6c1f8bb353f4e7bc94d16033416dd5a6aa730cf81119e6e6ef61",
       status: "already_applied",
     },
   }, null, 2)}\n`, { mode: 0o600 });
   mkdirSync(join(root, "shared", "env"), { recursive: true });
   writeFileSync(join(root, "shared", "env", "api.env"), "TEST_ONLY=true\nDB_SSL_CA_BASE64=dGVzdA==\n", { mode: 0o600 });
   chmodSync(join(root, "shared", "env", "api.env"), 0o600);
+  const providerDatabaseUrlFile = join(root, "shared", "provider-admin-database-url");
+  writeFileSync(providerDatabaseUrlFile, "postgresql://postgres:test@database.example/postgres\n", { mode: 0o600 });
+  chmodSync(providerDatabaseUrlFile, 0o600);
   mkdirSync(mocks, { recursive: true });
   const manifest = writeReleaseManifest(incoming, {
     API_ENV_FILE: `${bashPath(root)}/shared/env/api.env`,
@@ -2757,6 +2814,8 @@ function runDeployFixture({
       DOCKER_FAIL_UP_SERVICE: dockerFailUpService,
       DOCKER_FAIL_UP_TIMES: "1",
       RELEASE_SHA_FOR_TEST: "1".repeat(40),
+      AI_CONTENT_POST_075_PROVIDER_DATABASE_URL_FILE: bashPath(providerDatabaseUrlFile),
+      POST_075_SCHEMA_SHA_FOR_TEST: "c46ffafa578f6c1f8bb353f4e7bc94d16033416dd5a6aa730cf81119e6e6ef61",
     },
   });
   return { fixture, root, dockerLog, preflightLog, result, candidateSha: "1".repeat(40) };
@@ -3048,6 +3107,7 @@ test("a failed canary stops the candidate and leaves current unchanged", () => {
     assert.equal(readFileSync(join(fixture.root, "state", "current"), "utf8"), `${"2".repeat(40)}\n`);
     assert.equal(existsSync(join(fixture.root, "state", "candidate")), false);
     const dockerLog = readFileSync(fixture.dockerLog, "utf8");
+    assert.match(dockerLog, /\/app\/scripts\/migrate\.mjs --post-075-schema/);
     assert.match(dockerLog, /\bcompose\b.*\bconfig --quiet\b/);
     assert.match(dockerLog, /\bcompose\b.*\bpull\b/);
     assert.match(dockerLog, /\bcompose\b.*\bup\b/);
