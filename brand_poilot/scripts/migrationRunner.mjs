@@ -4206,12 +4206,7 @@ async function verifyFaqUtteranceSchemaCatalog(client, {
 }) {
   const catalog = await client.query(
     `/* faq_utterance_schema_catalog_v1 */
-     with expected_relation(relation_name) as (values
-       ('schema_migrations'),('knowledge_entries'),('faq_suggestion_items'),
-       ('faq_suggestion_runs'),('jobs'),('instagram_dm_conversations'),
-       ('dm_delivery_attempts'),('instagram_dm_messages'),
-       ('faq_alias_suggestion_results'),('dm_faq_confirmations')
-      ), expected_index(index_name, table_name, columns, predicate_fragments) as (values
+     with expected_index(index_name, table_name, columns, predicate_fragments) as (values
         ('faq_suggestion_runs_one_active_full_per_brand_uq','faq_suggestion_runs',
           array['workspace_id','brand_id']::text[], array['run_kind','full_faq','status','queued','running']::text[]),
         ('faq_suggestion_runs_one_active_alias_per_entry_uq','faq_suggestion_runs',
@@ -4331,11 +4326,11 @@ async function verifyFaqUtteranceSchemaCatalog(client, {
                and definition ilike '%>= 3%'
                and definition ilike '%<= 8%')
            )
-      ), relation_owner as (
-       select relation.relowner from expected_relation expected
-       join pg_class relation on relation.oid=to_regclass('public.' || expected.relation_name)
-     ), new_relation(relation_name) as (values
+      ), new_relation(relation_name) as (values
        ('faq_alias_suggestion_results'),('dm_faq_confirmations')
+     ), relation_owner as (
+       select relation.relowner from new_relation expected
+       join pg_class relation on relation.oid=to_regclass('public.' || expected.relation_name)
      )
      select exists (
               select 1 from pg_attribute attribute
@@ -4395,7 +4390,7 @@ async function verifyFaqUtteranceSchemaCatalog(client, {
     || verified.reason_constraint_definition_count !== 2
     || verified.named_constraint_definition_count !== 20
     || verified.faq_count_constraint_definition_count !== 3 || verified.owner_count !== 1
-    || verified.owned_relation_count !== 10
+    || verified.owned_relation_count !== 2
     || verified.public_privilege_count !== 0 || verified.application_privilege_count !== 8) {
     throw new Error(`post_075_schema_catalog_invalid:${JSON.stringify(verified ?? null)}`);
   }

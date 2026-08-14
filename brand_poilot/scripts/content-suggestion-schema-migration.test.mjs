@@ -130,7 +130,7 @@ test("content suggestion schema runner accepts the exact managed provider sessio
           missing_named_constraints: [],
           faq_count_constraint_definition_count: 3,
           owner_count: 1,
-          owned_relation_count: 10,
+          owned_relation_count: 2,
           public_privilege_count: 0,
           application_privilege_count: 8,
         }] };
@@ -249,12 +249,8 @@ test("ordered 077 and 078 schemas apply and replay against PostgreSQL 16", {
       create function faq_schema_harness_guard() returns event_trigger language plpgsql as $$ begin end $$;
       create event trigger ai_content_ddl_guard_074 on ddl_command_end execute function faq_schema_harness_guard();
     `);
-    for (const relation of [
-      "schema_migrations", "knowledge_entries", "faq_suggestion_items", "faq_suggestion_runs",
-      "jobs", "instagram_dm_conversations", "dm_delivery_attempts", "instagram_dm_messages",
-    ]) {
-      await client.query(`alter table public.${relation} owner to content_schema_owner`);
-    }
+    // Production retains the provider owner on pre-existing relations. Migration 078
+    // changes ownership only for its two newly created relations.
     for (const id of [
       "073a_legacy_trigger_function_search_path.sql",
       "074_ai_content_maintenance_write_fence.sql",
