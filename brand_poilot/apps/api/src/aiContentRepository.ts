@@ -403,6 +403,12 @@ interface AiContentRepositoryOptions {
   brandIntelligenceProvider?: {
     getConfirmed(input: BrandScope): Promise<ConfirmedBrandIntelligence | null>;
   };
+  afterRenderPackageCompleted?: (input: {
+    workspaceId: string;
+    brandId: string;
+    generationId: string;
+    outputId: string;
+  }) => Promise<void>;
 }
 
 type Queryable = Pick<PoolClient, "query">;
@@ -2353,7 +2359,11 @@ export function createAiContentRepository(pool: Pool, options: AiContentReposito
   const subjectRepository = createAiContentSubjectRepository(fencedPool);
   const attachmentLifecycle = createAiContentAttachmentRepository(fencedPool);
   const proposalJobs = createContentProposalJobsRepository(fencedPool);
-  const renderJobs = createAiContentRenderJobsRepository(fencedPool, generationById);
+  const renderJobs = createAiContentRenderJobsRepository(
+    fencedPool,
+    generationById,
+    options.afterRenderPackageCompleted,
+  );
   return {
     assertAiContentWritable: () => assertAiContentWritable(pool),
     ...attachmentLifecycle,
