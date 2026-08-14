@@ -36,6 +36,9 @@ import type {
   KnowledgeImportInput,
   PipelineRunResult,
   PublishArtifact,
+  PublishCalendarSettings,
+  PublishCalendarSlot,
+  PublishCalendarWeeklyUsage,
   PublishSlot,
   PublishResult,
   ReferenceBrand,
@@ -657,6 +660,27 @@ export function apiClient(options: ApiClientOptions = {}) {
     },
     listPublishQueue(brandId: string) {
       return request<ApiPublishQueueItem[]>(fetcher, `${baseUrl}/brands/${brandId}/publish-queue`, { method: "GET" }).then((items) => items.map(mapPublishQueueItem));
+    },
+    getPublishCalendarSettings(brandId: string) {
+      return request<PublishCalendarSettings>(fetcher, `${baseUrl}/brands/${brandId}/publish-calendar/settings`, { method: "GET" });
+    },
+    savePublishCalendarSettings(brandId: string, payload: Omit<PublishCalendarSettings, "brandId" | "updatedAt">) {
+      return request<PublishCalendarSettings>(fetcher, `${baseUrl}/brands/${brandId}/publish-calendar/settings`, { method: "PUT", body: JSON.stringify(payload) });
+    },
+    listPublishCalendarSlots(brandId: string, period: { from: string; to: string }) {
+      return request<PublishCalendarSlot[]>(fetcher, `${baseUrl}/brands/${brandId}/publish-calendar/slots?${new URLSearchParams(period)}`, { method: "GET" });
+    },
+    createPublishCalendarSlot(brandId: string, payload: { scheduledFor: string; contentFormat: "card_news" | "reel"; channels: ChannelType[] }) {
+      return request<PublishCalendarSlot>(fetcher, `${baseUrl}/brands/${brandId}/publish-calendar/slots`, { method: "POST", body: JSON.stringify(payload) });
+    },
+    assignPublishCalendarSlot(brandId: string, slotId: string, payload: { topicPublishGroupId: string; title: string }) {
+      return request<PublishCalendarSlot>(fetcher, `${baseUrl}/brands/${brandId}/publish-calendar/slots/${slotId}/assignment`, { method: "PUT", body: JSON.stringify(payload) });
+    },
+    cancelPublishCalendarSlot(brandId: string, slotId: string) {
+      return request<PublishCalendarSlot>(fetcher, `${baseUrl}/brands/${brandId}/publish-calendar/slots/${slotId}/cancel`, { method: "POST" });
+    },
+    getPublishCalendarUsage(brandId: string) {
+      return request<PublishCalendarWeeklyUsage>(fetcher, `${baseUrl}/brands/${brandId}/publish-calendar/usage`, { method: "GET" });
     },
     listPublishResults(brandId: string) {
       return request<PublishResult[]>(fetcher, `${baseUrl}/brands/${brandId}/publish-results`, { method: "GET" });

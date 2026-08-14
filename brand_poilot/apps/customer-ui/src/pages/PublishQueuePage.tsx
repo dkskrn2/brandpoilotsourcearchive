@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Download, ExternalLink, RotateCcw, X } from "lucide-react";
+import { CalendarDays, Download, ExternalLink, List, RotateCcw, X } from "lucide-react";
 import { PageHeader } from "../components/layout/PageHeader";
 import { PublishArtifactPreview } from "../components/publish/PublishArtifactPreview";
 import { ContentArtifactDialog } from "../components/publish/ContentArtifactDialog";
@@ -10,6 +10,7 @@ import { Alert } from "../components/ui/Alert";
 import { Badge } from "../components/ui/Badge";
 import { EmptyState } from "../components/ui/EmptyState";
 import { TopicPublishGroup, type TopicPublishGroupModel } from "../components/publish/TopicPublishGroup";
+import { PublishCalendar } from "../components/publish/PublishCalendar";
 import {
   countPublishManagementFilters,
   matchesPublishManagementFilter,
@@ -18,7 +19,8 @@ import {
   type PublishManagementStatus
 } from "../components/publish/publishManagementFilters";
 import { api, DEMO_BRAND_ID } from "../lib/apiClient";
-import type { BadgeVariant, ChannelType, ContentOutput, PublishArtifact, PublishResult, PublishResultChannel, PublishSlot, ReviewStatus } from "../types";
+import { entryFromSlot, monthPeriod, PUBLISH_CALENDAR_USAGE_CHANGED_EVENT, type CalendarEntry } from "../features/publishing/publishCalendar";
+import type { BadgeVariant, ChannelType, ContentOutput, PublishArtifact, PublishCalendarSettings, PublishCalendarSlot, PublishResult, PublishResultChannel, PublishSlot, ReviewStatus } from "../types";
 
 const channelLabels: Record<ChannelType, string> = {
   instagram: "Instagram",
@@ -63,6 +65,7 @@ const unknownReviewMeta: { label: string; variant: BadgeVariant } = {
 
 type ManagementFilterId = PublishManagementFilterId;
 type ManagementStatus = PublishManagementStatus;
+type PublishView = "list" | "calendar";
 
 interface ReviewManagementRow {
   kind: "review";
@@ -844,10 +847,17 @@ function PublishResultDialog({
 }
 
 export function PublishQueuePage() {
-  const highlightedQueueId = useMemo(
-    () => new URLSearchParams(window.location.search).get("queueId"),
-    []
-  );
+  const initialQuery = useMemo(() => new URLSearchParams(window.location.search), []);
+  const highlightedQueueId = useMemo(() => initialQuery.get("queueId"), [initialQuery]);
+  const [view, setView] = useState<PublishView>(() => initialQuery.get("view") === "calendar" ? "calendar" : "list");
+  const [calendarMonth, setCalendarMonth] = useState(() => new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Seoul", year: "numeric", month: "2-digit" }).format(new Date()).replace("/", "-"));
+  const [calendarSettings, setCalendarSettings] = useState<PublishCalendarSettings | null>(null);
+  const [calendarSlots, setCalendarSlots] = useState<PublishCalendarSlot[]>([]);
+  const [calendarSlotsLoading, setCalendarSlotsLoading] = useState(false);
+  const [calendarChannels, setCalendarChannels] = useState<ChannelType[]>([]);
+  const [calendarSaving, setCalendarSaving] = useState(false);
+  const [calendarSettingsError, setCalendarSettingsError] = useState<string | null>(null);
+  const [calendarSlotsError, setCalendarSlotsError] = useState<string | null>(null);
   const [queueRows, setQueueRows] = useState<PublishSlot[]>([]);
   const [contentOutputs, setContentOutputs] = useState<ContentOutput[]>([]);
   const [publishResults, setPublishResults] = useState<PublishResult[]>([]);
@@ -868,14 +878,33 @@ export function PublishQueuePage() {
     return [...buildTopicGroupRows(queueRows, publishResults), ...buildReviewRows(contentOutputs), ...buildPublishRows(legacyResults)]
       .sort((a, b) => Date.parse(b.generatedAt) - Date.parse(a.generatedAt));
   }, [queueRows, contentOutputs, publishResults]);
+  const calendarEntries = useMemo<CalendarEntry[]>(() => calendarSlots.map(entryFromSlot), [calendarSlots]);
+  const assignableCalendarContents = useMemo(() => managementRows.flatMap((row) => row.kind === "topic_group" && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(row.group.id) && (row.status === "queued" || row.status === "publish_queued")
+    ? [{ id: row.group.id, title: row.title }]
+    : []), [managementRows]);
 
   useEffect(() => {
-    if (initialLoading || !highlightedQueueId) return;
+    if (initialLoading || view !== "list" || !highlightedQueueId) return;
     const highlighted = document.querySelector<HTMLElement>('[data-publish-deep-link="true"]');
     if (!highlighted) return;
     highlighted.scrollIntoView?.({ behavior: "smooth", block: "center" });
     highlighted.focus();
-  }, [highlightedQueueId, initialLoading, managementRows]);
+  }, [highlightedQueueId, initialLoading, managementRows, view]);
+
+  function changeView(nextView: PublishView) {
+    setView(nextView);
+    const query = new URLSearchParams(window.location.search);
+    query.set("view", nextView);
+    window.history.replaceState(window.history.state, "", `${window.location.pathname}?${query}`);
+  }
+
+  function onViewTabKeyDown(event: React.KeyboardEvent<HTMLButtonElement>, current: PublishView) {
+    if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+    event.preventDefault();
+    const next = current === "list" ? "calendar" : "list";
+    changeView(next);
+    document.getElementById(`publish-view-tab-${next}`)?.focus();
+  }
 
   async function refreshQueue() {
     const apiRows = await api.listPublishQueue(DEMO_BRAND_ID);
@@ -905,6 +934,7 @@ export function PublishQueuePage() {
     try {
       await api.retryPublishQueueItem(queueId);
       await refreshRecoveryState();
+      window.dispatchEvent(new Event(PUBLISH_CALENDAR_USAGE_CHANGED_EVENT));
     } catch (error) {
       const reason = error instanceof Error && error.message ? error.message : "publish_queue_not_retryable";
       setNotice(`재시도할 수 없습니다: ${reason}`);
@@ -915,6 +945,7 @@ export function PublishQueuePage() {
     try {
       await api.cancelPublishQueueItem(queueId);
       await refreshRecoveryState();
+      window.dispatchEvent(new Event(PUBLISH_CALENDAR_USAGE_CHANGED_EVENT));
     } catch (error) {
       const reason = error instanceof Error && error.message ? error.message : "publish_queue_not_cancellable";
       setNotice(`취소할 수 없습니다: ${reason}`);
@@ -959,10 +990,78 @@ export function PublishQueuePage() {
     };
   }, []);
 
+  useEffect(() => {
+    let ignore = false;
+    if (view !== "calendar") return () => { ignore = true; };
+    if (typeof api.listChannels === "function") {
+      void api.listChannels(DEMO_BRAND_ID)
+        .then((channels) => { if (!ignore) setCalendarChannels(channels.filter((channel) => channel.type === "instagram" && channel.enabled && channel.status === "connected").map((channel) => channel.type)); })
+        .catch(() => { if (!ignore) setCalendarChannels([]); });
+    }
+    const period = monthPeriod(calendarMonth);
+    if (typeof api.getPublishCalendarSettings === "function") {
+      void api.getPublishCalendarSettings(DEMO_BRAND_ID)
+        .then((settings) => { if (!ignore) { setCalendarSettings(settings); setCalendarSettingsError(null); } })
+        .catch(() => { if (!ignore) { setCalendarSettings(null); setCalendarSettingsError("자동 게시 설정을 불러오지 못했습니다."); } });
+    }
+    if (typeof api.listPublishCalendarSlots === "function") {
+      setCalendarSlotsLoading(true);
+      setCalendarSlots([]);
+      setCalendarSlotsError(null);
+      void api.listPublishCalendarSlots(DEMO_BRAND_ID, period)
+        .then((slots) => { if (!ignore) { setCalendarSlots(slots); setCalendarSlotsError(null); setCalendarSlotsLoading(false); } })
+        .catch(() => { if (!ignore) { setCalendarSlots([]); setCalendarSlotsError("캘린더 슬롯을 불러오지 못했습니다."); setCalendarSlotsLoading(false); } });
+    } else {
+      setCalendarSlots([]);
+      setCalendarSlotsLoading(false);
+    }
+    return () => { ignore = true; };
+  }, [calendarMonth, view]);
+
+  async function createCalendarSlot(input: { dateKey: string; time: string; contentFormat: "card_news" | "reel"; channels: ChannelType[] }) {
+    try {
+      const slot = await api.createPublishCalendarSlot(DEMO_BRAND_ID, { ...input, scheduledFor: new Date(`${input.dateKey}T${input.time}:00+09:00`).toISOString() });
+      setCalendarSlots((current) => [...current.filter((item) => item.id !== slot.id), slot]);
+      window.dispatchEvent(new Event(PUBLISH_CALENDAR_USAGE_CHANGED_EVENT));
+      setNotice("수동 게시 슬롯을 추가했습니다.");
+    } catch { setNotice("수동 게시 슬롯을 추가하지 못했습니다."); }
+  }
+
+  async function cancelCalendarSlot(slotId: string) {
+    try {
+      const slot = await api.cancelPublishCalendarSlot(DEMO_BRAND_ID, slotId);
+      setCalendarSlots((current) => current.map((item) => item.id === slot.id ? slot : item));
+      window.dispatchEvent(new Event(PUBLISH_CALENDAR_USAGE_CHANGED_EVENT));
+      const refreshed = await Promise.allSettled([refreshQueue(), refreshPublishResults()]);
+      setNotice(refreshed.some((result) => result.status === "rejected") ? "게시 슬롯을 취소했습니다. 운영 목록 새로고침은 일부 실패했습니다." : "게시 슬롯을 취소했습니다.");
+    } catch { setNotice("게시 슬롯을 취소하지 못했습니다."); }
+  }
+
+  async function assignCalendarSlot(slotId: string, content: { id: string; title: string }) {
+    try {
+      const slot = await api.assignPublishCalendarSlot(DEMO_BRAND_ID, slotId, { topicPublishGroupId: content.id, title: content.title });
+      setCalendarSlots((current) => current.map((item) => item.id === slot.id ? slot : item));
+      window.dispatchEvent(new Event(PUBLISH_CALENDAR_USAGE_CHANGED_EVENT));
+      setNotice("선택한 콘텐츠를 슬롯에 배정했습니다.");
+      return true;
+    } catch { setNotice("콘텐츠를 슬롯에 배정하지 못했습니다."); return false; }
+  }
+
+  async function saveCalendarSettings(input: Omit<PublishCalendarSettings, "brandId" | "updatedAt">) {
+    setCalendarSaving(true);
+    try {
+      const settings = await api.savePublishCalendarSettings(DEMO_BRAND_ID, input);
+      setCalendarSettings(settings);
+      setNotice(settings.enabled ? "자동 게시 설정을 저장했습니다." : "자동 게시를 껐습니다. 기존 예약은 유지됩니다.");
+      return { ok: true as const };
+    } catch { return { ok: false as const, message: "자동 게시 설정을 저장하지 못했습니다." }; } finally { setCalendarSaving(false); }
+  }
+
   async function scheduleQueue() {
     try {
       const result = await api.schedulePublishQueue(DEMO_BRAND_ID);
       await Promise.all([refreshQueue(), refreshPublishResults()]);
+      window.dispatchEvent(new Event(PUBLISH_CALENDAR_USAGE_CHANGED_EVENT));
       setNotice(`큐 배정 완료: 처리 ${result.processed}개, 배정 ${result.updated}개`);
     } catch {
       setNotice("큐 배정에 실패했습니다. API 서버와 게시 관리 상태를 확인하세요.");
@@ -979,6 +1078,7 @@ export function PublishQueuePage() {
     try {
       const result = await api.publishQueueItem(target.id);
       await Promise.all([refreshQueue(), refreshPublishResults()]);
+      window.dispatchEvent(new Event(PUBLISH_CALENDAR_USAGE_CHANGED_EVENT));
       setNotice(`게시 완료: ${result.publishedUrl ?? result.status}`);
     } catch {
       setNotice("게시 실행에 실패했습니다. 큐 항목 상태를 확인하세요.");
@@ -1052,14 +1152,39 @@ export function PublishQueuePage() {
         )}
       />
 
+      <div className="publish-view-toolbar">
+        <div className="publish-view-tabs" role="tablist" aria-label="게시 관리 보기">
+          <button id="publish-view-tab-list" className={view === "list" ? "is-active" : ""} type="button" role="tab" aria-controls="publish-view-panel" aria-selected={view === "list"} tabIndex={view === "list" ? 0 : -1} onKeyDown={(event) => onViewTabKeyDown(event, "list")} onClick={() => changeView("list")}><List size={17} aria-hidden="true" /> 목록</button>
+          <button id="publish-view-tab-calendar" className={view === "calendar" ? "is-active" : ""} type="button" role="tab" aria-controls="publish-view-panel" aria-selected={view === "calendar"} tabIndex={view === "calendar" ? 0 : -1} onKeyDown={(event) => onViewTabKeyDown(event, "calendar")} onClick={() => changeView("calendar")}><CalendarDays size={17} aria-hidden="true" /> 캘린더</button>
+        </div>
+      </div>
+
       {notice ? (
         <Alert title="API 상태" variant={notice.includes("실패") || notice.includes("응답하지") ? "warn" : "ok"}>
           {notice}
         </Alert>
       ) : null}
 
+      <div id="publish-view-panel" role="tabpanel" aria-labelledby={`publish-view-tab-${view}`}>
       {initialLoading ? (
         <section className="panel"><div className="panel-body"><CardSkeleton count={6} label="게시 관리 목록을 불러오는 중입니다." /></div></section>
+      ) : view === "calendar" ? (
+        <PublishCalendar
+          monthKey={calendarMonth}
+          entries={calendarEntries}
+          connectedChannels={calendarChannels}
+          settings={calendarSettings}
+          settingsError={calendarSettingsError}
+          slotsError={calendarSlotsError}
+          slotsLoading={calendarSlotsLoading}
+          assignableContents={assignableCalendarContents}
+          saving={calendarSaving}
+          onMonthChange={setCalendarMonth}
+          onCreate={(input) => void createCalendarSlot(input)}
+          onAssign={assignCalendarSlot}
+          onCancel={(slotId) => void cancelCalendarSlot(slotId)}
+          onSaveSettings={saveCalendarSettings}
+        />
       ) : (
         <ManagementCardGrid
           rows={managementRows}
@@ -1075,6 +1200,7 @@ export function PublishQueuePage() {
           onCancelPublish={(queueId) => void cancelPublish(queueId)}
         />
       )}
+      </div>
 
       {selectedResult ? (
         <PublishResultDialog

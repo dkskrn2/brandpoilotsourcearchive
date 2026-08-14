@@ -1,10 +1,47 @@
+import { Send, Sparkles } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
 import { useAiContentUsage } from "../../features/ai-content/AiContentUsageContext";
-import { AiContentUsageSummary } from "../ai-content/AiContentUsageSummary";
+import { api, DEMO_BRAND_ID } from "../../lib/apiClient";
+import type { PublishCalendarWeeklyUsage } from "../../types";
+import { PUBLISH_CALENDAR_USAGE_CHANGED_EVENT } from "../../features/publishing/publishCalendar";
+
+function generationRemaining(used: number, limit: number) {
+  return Math.max(limit - used, 0);
+}
 
 export function SidebarUsageSummary() {
   const { usage, loading } = useAiContentUsage();
+  const [publishUsage, setPublishUsage] = useState<PublishCalendarWeeklyUsage | null>(null);
+  const [publishUnavailable, setPublishUnavailable] = useState(false);
+  const latestRequestId = useRef(0);
+
+  useEffect(() => {
+    let ignore = false;
+    const refresh = () => {
+      const requestId = ++latestRequestId.current;
+      api.getPublishCalendarUsage(DEMO_BRAND_ID)
+        .then((nextUsage) => { if (!ignore && requestId === latestRequestId.current) { setPublishUsage(nextUsage); setPublishUnavailable(false); } })
+        .catch(() => { if (!ignore && requestId === latestRequestId.current) { setPublishUsage(null); setPublishUnavailable(true); } });
+    };
+    refresh();
+    window.addEventListener(PUBLISH_CALENDAR_USAGE_CHANGED_EVENT, refresh);
+    return () => { ignore = true; latestRequestId.current += 1; window.removeEventListener(PUBLISH_CALENDAR_USAGE_CHANGED_EVENT, refresh); };
+  }, []);
 
   if (loading || !usage) return null;
 
-  return <AiContentUsageSummary usage={usage} />;
+  return (
+    <div className="ai-content-header-usage sidebar-usage-summary" aria-label="게시 운영 잔여 사용량">
+      <span>
+        <Sparkles size={15} aria-hidden="true" />
+        생성 <strong>{publishUsage?.generation.remaining ?? generationRemaining(usage.generationUsed, usage.generationLimit)}건</strong> 남음
+      </span>
+      {publishUsage ? (
+        <>
+          <span><Send size={15} aria-hidden="true" /> 게시 <strong>{publishUsage.publishing.remaining}건</strong> 남음</span>
+          <small>예약 {publishUsage.publishing.reserved}건은 게시 성공 차감이 아닙니다{publishUsage.publishing.additionalAvailable > 0 ? ` · 추가 ${publishUsage.publishing.additionalAvailable}건 가능` : ""}.</small>
+        </>
+      ) : publishUnavailable ? <small>게시 사용량을 불러올 수 없습니다.</small> : null}
+    </div>
+  );
 }

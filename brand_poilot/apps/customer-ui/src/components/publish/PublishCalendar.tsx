@@ -1,0 +1,100 @@
+import { CalendarDays, ChevronLeft, ChevronRight, Clock3, Settings2, X } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import type { ChannelType, PublishCalendarSettings } from "../../types";
+import { dateKey, monthCells, timeLabel, type CalendarEntry } from "../../features/publishing/publishCalendar";
+import { ChannelLogo } from "../channels/ChannelLogo";
+import { Badge } from "../ui/Badge";
+import { FocusTrap } from "../ui/FocusTrap";
+
+type Props = {
+  monthKey: string;
+  entries: CalendarEntry[];
+  connectedChannels: ChannelType[];
+  settings: PublishCalendarSettings | null;
+  settingsError: string | null;
+  slotsError: string | null;
+  slotsLoading: boolean;
+  assignableContents: Array<{ id: string; title: string }>;
+  onMonthChange(value: string): void;
+  onCreate(input: { dateKey: string; time: string; contentFormat: "card_news" | "reel"; channels: ChannelType[] }): void;
+  onAssign(slotId: string, content: { id: string; title: string }): Promise<boolean>;
+  onCancel(id: string): void;
+  onSaveSettings(input: Omit<PublishCalendarSettings, "brandId" | "updatedAt">): Promise<{ ok: boolean; message?: string }>;
+  saving?: boolean;
+};
+
+const label: Record<string, string> = { open: "추천 대기", proposal_assigned: "추천 배정", generation_pending: "생성 대기", content_assigned: "콘텐츠 배정", ready: "게시 준비", scheduled: "예약", publish_delayed: "게시 지연", quota_blocked: "한도 대기", published: "완료", cancelled: "취소" };
+const variant = (status: string) => status === "published" || status === "ready" ? "ok" : status === "publish_delayed" || status === "quota_blocked" ? "warn" : status === "cancelled" ? "neutral" : "info" as const;
+const channelLabel: Record<ChannelType, string> = { instagram: "Instagram", threads: "Threads", tiktok: "TikTok", youtube: "YouTube", linkedin: "LinkedIn", x: "X" };
+
+function shiftMonth(value: string, amount: number) {
+  const [year, month] = value.split("-").map(Number);
+  const next = new Date(Date.UTC(year, month - 1 + amount, 1));
+  return `${next.getUTCFullYear()}-${String(next.getUTCMonth() + 1).padStart(2, "0")}`;
+}
+function fullDate(key: string) { const [, month, day] = key.split("-"); return `${Number(month)}월 ${Number(day)}일`; }
+
+function SettingsDialog({ settings, channels, onClose, onSave, saving }: { settings: PublishCalendarSettings; channels: ChannelType[]; onClose(): void; onSave: Props["onSaveSettings"]; saving?: boolean }) {
+  const [enabled, setEnabled] = useState(settings.enabled);
+  const [informationalFormat, setInformationalFormat] = useState(settings.informationalFormat);
+  const [trendFormat, setTrendFormat] = useState(settings.trendFormat);
+  const [slotTimes, setSlotTimes] = useState(settings.slotTimes.join(", "));
+  const [error, setError] = useState<string | null>(null);
+  const instagramAvailable = channels.includes("instagram");
+  useEffect(() => { setEnabled(settings.enabled); setInformationalFormat(settings.informationalFormat); setTrendFormat(settings.trendFormat); setSlotTimes(settings.slotTimes.join(", ")); }, [settings]);
+  async function save() {
+    if (enabled && !instagramAvailable) { setError("연결·활성화된 Instagram 채널이 필요합니다."); return; }
+    const times = slotTimes.split(",").map((time) => time.trim()).filter(Boolean);
+    if (times.length === 0 || times.some((time) => !/^([01]\d|2[0-3]):[0-5]\d$/.test(time))) { setError("게시 시간은 HH:mm 형식으로 입력해 주세요."); return; }
+    setError(null);
+    const result = await onSave({ enabled, channels: enabled ? ["instagram"] : [], informationalFormat, trendFormat, slotTimes: times });
+    if (result.ok) onClose(); else setError(result.message ?? "자동 게시 설정을 저장하지 못했습니다.");
+  }
+  return <div className="modal-backdrop"><FocusTrap active initialFocusSelector=".auto-publish-settings__close" className="modal-panel auto-publish-settings" role="dialog" aria-modal="true" aria-label="자동 게시 설정" onKeyDown={(event) => event.key === "Escape" && onClose()}>
+    <header className="auto-publish-settings__header"><div><span className="publish-calendar-eyebrow"><Settings2 size={15} aria-hidden="true" /> 자동 게시</span><h2>자동 게시 설정</h2><p>기존 일일 추천의 정보성·트렌드 주제와 형식을 미리 선택합니다.</p></div><button className="button icon-button auto-publish-settings__close" type="button" aria-label="닫기" onClick={onClose}><X size={18} /></button></header>
+    <div className="auto-publish-settings__body">
+      <label className="auto-publish-channel"><input type="checkbox" role="switch" checked={enabled} onChange={(event) => setEnabled(event.target.checked)} disabled={!instagramAvailable} /><span><strong>{enabled ? "사용 중" : "사용 안 함"}</strong><small>{instagramAvailable ? "연결·활성화된 Instagram 채널에서만 자동 배정합니다." : "연결·활성화된 Instagram 채널이 없어 자동 배정을 켤 수 없습니다."}</small></span></label>
+      <fieldset className="auto-publish-settings__section"><legend>게시 채널</legend><p>{instagramAvailable ? "Instagram 연결됨" : "Instagram 연결 없음"}</p></fieldset>
+      <label className="auto-publish-settings__section"><span>게시 시간 (쉼표로 구분)</span><input aria-label="게시 시간" value={slotTimes} onChange={(event) => setSlotTimes(event.target.value)} /></label>
+      <fieldset className="auto-publish-settings__section"><legend>정보성 추천 형식</legend><div className="auto-publish-format-grid" role="radiogroup" aria-label="정보성 콘텐츠 형식">{(["card_news", "reel"] as const).map((format) => <label key={format}><input type="radio" name="informational" checked={informationalFormat === format} onChange={() => setInformationalFormat(format)} />{format === "card_news" ? "카드뉴스" : "릴스"}</label>)}</div></fieldset>
+      <fieldset className="auto-publish-settings__section"><legend>트렌드성 추천 형식</legend><div className="auto-publish-format-grid" role="radiogroup" aria-label="트렌드성 콘텐츠 형식">{(["card_news", "reel"] as const).map((format) => <label key={format}><input type="radio" name="trend" checked={trendFormat === format} onChange={() => setTrendFormat(format)} />{format === "card_news" ? "카드뉴스" : "릴스"}</label>)}</div></fieldset>
+      {error ? <p role="alert">{error}</p> : null}
+    </div>
+    <footer className="auto-publish-settings__footer"><small>형식을 고르지 않으면 백엔드 기본값이 적용됩니다.</small><div className="actions"><button className="button" type="button" onClick={onClose}>취소</button><button className="button primary" type="button" disabled={saving || slotTimes.trim().length === 0} onClick={save}>설정 저장</button></div></footer>
+  </FocusTrap></div>;
+}
+
+function SettingsUnavailableDialog({ message, onClose }: { message: string; onClose(): void }) {
+  return <div className="modal-backdrop"><FocusTrap active initialFocusSelector=".auto-publish-settings__close" className="modal-panel auto-publish-settings" role="dialog" aria-modal="true" aria-label="자동 게시 설정" onKeyDown={(event) => event.key === "Escape" && onClose()}><header className="auto-publish-settings__header"><div><h2>자동 게시 설정</h2><p>{message}</p></div><button className="button icon-button auto-publish-settings__close" type="button" aria-label="닫기" onClick={onClose}><X size={18} /></button></header><div className="auto-publish-settings__body"><p role="alert">설정을 불러온 뒤에만 변경할 수 있습니다.</p></div></FocusTrap></div>;
+}
+
+export function PublishCalendar({ monthKey, entries, connectedChannels, settings, settingsError, slotsError, slotsLoading, assignableContents, onMonthChange, onCreate, onAssign, onCancel, onSaveSettings, saving }: Props) {
+  const cells = useMemo(() => monthCells(monthKey), [monthKey]);
+  const byDate = useMemo(() => entries.reduce((map, entry) => { const key = dateKey(entry.scheduledFor); map.set(key, [...(map.get(key) ?? []), entry]); return map; }, new Map<string, CalendarEntry[]>()), [entries]);
+  const [selectedDate, setSelectedDate] = useState(`${monthKey}-01`);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [time, setTime] = useState("11:30");
+  const [format, setFormat] = useState<"card_news" | "reel">("card_news");
+  const [manualSlotError, setManualSlotError] = useState<string | null>(null);
+  const [assignedContentId, setAssignedContentId] = useState("");
+  const detailHeadingRef = useRef<HTMLHeadingElement>(null);
+  const settingsTriggerRef = useRef<HTMLButtonElement>(null);
+  const settingsWasOpenRef = useRef(false);
+  useEffect(() => { if (!selectedDate.startsWith(monthKey)) { setSelectedDate(`${monthKey}-01`); setSelectedId(null); } }, [monthKey, selectedDate]);
+  useEffect(() => { setManualSlotError(null); }, [selectedDate]);
+  useEffect(() => { setAssignedContentId(""); }, [selectedDate, selectedId]);
+  useEffect(() => { if (settingsWasOpenRef.current && !settingsOpen) settingsTriggerRef.current?.focus(); settingsWasOpenRef.current = settingsOpen; }, [settingsOpen]);
+  const dateEntries = (byDate.get(selectedDate) ?? []).sort((a, b) => Date.parse(a.scheduledFor) - Date.parse(b.scheduledFor));
+  const selected = dateEntries.find((entry) => entry.id === selectedId) ?? null;
+  const manualSlotIsPast = Date.parse(`${selectedDate}T${time}:00+09:00`) <= Date.now();
+  useEffect(() => { if (selected) { const stacked = window.matchMedia?.("(max-width: 980px)").matches; detailHeadingRef.current?.focus(stacked ? undefined : { preventScroll: true }); if (stacked) detailHeadingRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }); } }, [selected]);
+  return <section className="publish-calendar-layout" aria-label="월간 게시 일정">
+    <div className="publish-calendar-card"><header className="publish-calendar-toolbar"><div><span className="publish-calendar-eyebrow"><CalendarDays size={15} /> 월간 게시 계획</span><h2>{monthKey.replace("-", "년 ")}월</h2></div><div className="actions"><button ref={settingsTriggerRef} className="button" type="button" onClick={() => setSettingsOpen(true)}>자동 게시 설정</button><button className="button icon-button" type="button" aria-label="이전 달" onClick={() => onMonthChange(shiftMonth(monthKey, -1))}><ChevronLeft size={18} /></button><button className="button icon-button" type="button" aria-label="다음 달" onClick={() => onMonthChange(shiftMonth(monthKey, 1))}><ChevronRight size={18} /></button></div></header>
+      <div className="publish-calendar-scroll" role="region" aria-label="게시 캘린더 스크롤"><div className="publish-calendar-weekdays" aria-hidden="true">{["월", "화", "수", "목", "금", "토", "일"].map((day) => <span key={day}>{day}</span>)}</div>
+      <div className="publish-calendar-grid" role="grid" aria-label="게시 캘린더">{Array.from({ length: 6 }, (_, week) => <div role="row" className="publish-calendar-row" key={week}>{cells.slice(week * 7, week * 7 + 7).map((cell) => { const slots = byDate.get(cell.key) ?? []; return <div role="gridcell" aria-label={fullDate(cell.key)} className={`publish-calendar-cell${cell.current ? "" : " is-outside"}`} key={cell.key}><button className="publish-calendar-cell__button" type="button" aria-label={`${fullDate(cell.key)} 일정 보기`} onClick={() => { setSelectedDate(cell.key); setSelectedId(null); }}><span>{cell.day}</span></button>{slots.slice(0, 3).map((entry) => <button className="publish-calendar-cell__entry" type="button" aria-label={`${entry.title} 슬롯 상세 보기`} onClick={() => { setSelectedDate(cell.key); setSelectedId(entry.id); }} key={entry.id}><span>{timeLabel(entry)}</span><strong>{entry.title}</strong></button>)}{slots.length > 3 ? <span>+{slots.length - 3}</span> : null}</div>; })}</div>)}</div></div>
+    </div>
+    <aside className="publish-calendar-detail" aria-label={selected ? `${selected.title} 슬롯 상세` : `${fullDate(selectedDate)} 게시 일정`}><header className="publish-calendar-detail__header"><div><span>{selected ? "슬롯 상세" : "선택한 날짜"}</span><h2 ref={detailHeadingRef} tabIndex={-1}>{selected ? selected.title : fullDate(selectedDate)}</h2></div><Badge variant={selected ? variant(selected.status) : "neutral"}>{selected ? label[selected.status] ?? selected.status : `${dateEntries.length}개 일정`}</Badge></header>{slotsLoading ? <p role="status" aria-label="캘린더 슬롯을 불러오는 중입니다.">캘린더 슬롯을 불러오는 중입니다.</p> : slotsError ? <p role="alert">{slotsError}</p> : selected ? <div className="publish-calendar-slot-detail"><div className="publish-calendar-slot-detail__time"><Clock3 size={18} /><span><small>게시 예정 시각</small><strong>{timeLabel(selected)}</strong></span></div><dl><div><dt>게시 방식</dt><dd>{selected.mode === "automatic" ? "자동" : "수동"} 게시</dd></div>{selected.recommendationKind ? <div><dt>추천 종류</dt><dd>{selected.recommendationKind === "trend" ? "트렌드성 추천" : "정보성 추천"}</dd></div> : null}<div><dt>콘텐츠 형식</dt><dd>{selected.contentFormat === "reel" ? "릴스" : "카드뉴스"}</dd></div><div><dt>게시 채널</dt><dd>{selected.channels.map((channel) => channelLabel[channel]).join(", ") || "채널 설정 전"}</dd></div>{selected.lastError ? <div><dt>상태·오류</dt><dd>{selected.lastError}</dd></div> : null}</dl>{selected.status === "open" ? <div className="publish-calendar-manual-form"><label>배정할 콘텐츠<select aria-label="배정할 콘텐츠" value={assignedContentId} onChange={(event) => setAssignedContentId(event.target.value)}><option value="">콘텐츠 선택</option>{assignableContents.map((content) => <option value={content.id} key={content.id}>{content.title}</option>)}</select></label><button className="button primary" type="button" disabled={!assignedContentId} onClick={() => { const content = assignableContents.find((item) => item.id === assignedContentId); if (content) void onAssign(selected.id, content).then((assigned) => { if (assigned) setAssignedContentId(""); }); }}>선택 콘텐츠 배정</button></div> : null}{!["published", "cancelled"].includes(selected.status) ? <button className="button" type="button" onClick={() => onCancel(selected.id)}>슬롯 취소</button> : null}<button className="button" type="button" onClick={() => setSelectedId(null)}>전체 일정 보기</button></div> : <div className="publish-calendar-detail__list">{dateEntries.map((entry) => <button className="publish-calendar-entry" type="button" onClick={() => setSelectedId(entry.id)} key={entry.id}><span>{timeLabel(entry)}</span><strong>{entry.title}</strong><Badge variant={variant(entry.status)}>{label[entry.status] ?? entry.status}</Badge></button>)}<div className="publish-calendar-manual-form" aria-label={`${fullDate(selectedDate)} 수동 슬롯 추가`}><strong>수동 슬롯 추가</strong><label>게시 시간<input type="time" aria-label="수동 게시 시간" value={time} onChange={(event) => { setTime(event.target.value); setManualSlotError(null); }} /></label><label>콘텐츠 형식<select aria-label="수동 콘텐츠 형식" value={format} onChange={(event) => setFormat(event.target.value as typeof format)}><option value="card_news">카드뉴스</option><option value="reel">릴스</option></select></label><small role={manualSlotError ? "alert" : undefined}>{manualSlotError ?? (manualSlotIsPast ? "과거 시각에는 수동 슬롯을 추가할 수 없습니다." : connectedChannels.includes("instagram") ? "Instagram 연결됨" : "연결·활성화된 Instagram 채널이 없습니다.")}</small><button className="button primary" type="button" disabled={!time || manualSlotIsPast || !connectedChannels.includes("instagram")} onClick={() => { const scheduledAt = Date.parse(`${selectedDate}T${time}:00+09:00`); if (!Number.isFinite(scheduledAt) || scheduledAt <= Date.now()) { setManualSlotError("선택한 게시 시각이 이미 지났습니다. 미래 시각을 선택해 주세요."); return; } setManualSlotError(null); onCreate({ dateKey: selectedDate, time, contentFormat: format, channels: ["instagram"] }); }}>수동 슬롯 추가</button></div></div>}</aside>
+    {settingsOpen ? settings ? <SettingsDialog settings={settings} channels={connectedChannels} saving={saving} onClose={() => setSettingsOpen(false)} onSave={onSaveSettings} /> : <SettingsUnavailableDialog message={settingsError ?? "자동 게시 설정을 불러오는 중입니다."} onClose={() => setSettingsOpen(false)} /> : null}
+  </section>;
+}

@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -300,6 +300,11 @@ describe("AppShell navigation", () => {
   });
 
   it("shows existing AI usage inside the scrollable sidebar navigation", async () => {
+    vi.spyOn(api, "getPublishCalendarUsage").mockResolvedValue({
+      startsAt: "2026-07-27T00:00:00.000Z", endsAt: "2026-08-03T00:00:00.000Z",
+      generation: { limit: 10, succeeded: 1, reserved: 2, remaining: 7, additionalAvailable: 0 },
+      publishing: { limit: 20, succeeded: 3, reserved: 4, remaining: 17, additionalAvailable: 0 }
+    });
     const gateway = {
       getUsage: vi.fn(async () => ({
         generationUsed: 1,
@@ -321,9 +326,41 @@ describe("AppShell navigation", () => {
     );
 
     const navigation = screen.getByRole("navigation", { name: "고객 메뉴" });
-    const usage = await within(navigation).findByLabelText("오늘 AI 콘텐츠 잔여 사용량");
-    expect(usage).toHaveTextContent("생성 9회 남음");
-    expect(usage).toHaveTextContent("다운로드 18회 남음");
+    const usage = await within(navigation).findByLabelText("게시 운영 잔여 사용량");
+    expect(usage).toHaveTextContent("생성 7건 남음");
+    expect(usage).toHaveTextContent("게시 17건 남음");
+    expect(usage).toHaveTextContent("예약 4건은 게시 성공 차감이 아닙니다");
+    expect(usage).not.toHaveTextContent("다운로드");
+  });
+
+  it("drops stale publish usage when a refresh fails while keeping legacy generation", async () => {
+    vi.spyOn(api, "getPublishCalendarUsage")
+      .mockResolvedValueOnce({ startsAt: "2026-07-27T00:00:00.000Z", endsAt: "2026-08-03T00:00:00.000Z", generation: { limit: 10, succeeded: 1, reserved: 0, remaining: 7, additionalAvailable: 0 }, publishing: { limit: 20, succeeded: 3, reserved: 0, remaining: 17, additionalAvailable: 0 } })
+      .mockRejectedValueOnce(new Error("usage_down"));
+    const gateway = { getUsage: vi.fn(async () => ({ generationUsed: 1, generationLimit: 10, newDownloadUsed: 0, newDownloadLimit: 20, resetsAt: "2026-07-31T00:00:00+09:00" })) } as unknown as AiContentGateway;
+    render(<MemoryRouter><BrandStatusProvider initialStatus={completeStatus}><AiContentUsageProvider gateway={gateway}><Sidebar /></AiContentUsageProvider></BrandStatusProvider></MemoryRouter>);
+    const usage = await screen.findByLabelText("게시 운영 잔여 사용량");
+    window.dispatchEvent(new Event("brand-pilot:publish-calendar-usage-changed"));
+    expect(await within(usage).findByText("게시 사용량을 불러올 수 없습니다.")).toBeVisible();
+    expect(usage).toHaveTextContent("생성 9건 남음");
+    expect(usage).not.toHaveTextContent("게시 17건 남음");
+  });
+
+  it("does not let an older publish usage success overwrite a newer failure", async () => {
+    let resolveOlderUsage: (value: Awaited<ReturnType<typeof api.getPublishCalendarUsage>>) => void;
+    const olderUsage = new Promise<Awaited<ReturnType<typeof api.getPublishCalendarUsage>>>((resolve) => { resolveOlderUsage = resolve; });
+    vi.spyOn(api, "getPublishCalendarUsage")
+      .mockImplementationOnce(() => olderUsage)
+      .mockRejectedValueOnce(new Error("usage_down"));
+    const gateway = { getUsage: vi.fn(async () => ({ generationUsed: 1, generationLimit: 10, newDownloadUsed: 0, newDownloadLimit: 20, resetsAt: "2026-07-31T00:00:00+09:00" })) } as unknown as AiContentGateway;
+    render(<MemoryRouter><BrandStatusProvider initialStatus={completeStatus}><AiContentUsageProvider gateway={gateway}><Sidebar /></AiContentUsageProvider></BrandStatusProvider></MemoryRouter>);
+    const usage = await screen.findByLabelText("게시 운영 잔여 사용량");
+    window.dispatchEvent(new Event("brand-pilot:publish-calendar-usage-changed"));
+    expect(await within(usage).findByText("게시 사용량을 불러올 수 없습니다.")).toBeVisible();
+
+    await act(async () => { resolveOlderUsage!({ startsAt: "2026-07-27T00:00:00.000Z", endsAt: "2026-08-03T00:00:00.000Z", generation: { limit: 10, succeeded: 1, reserved: 0, remaining: 7, additionalAvailable: 0 }, publishing: { limit: 20, succeeded: 3, reserved: 0, remaining: 17, additionalAvailable: 0 } }); });
+    await waitFor(() => expect(within(usage).getByText("게시 사용량을 불러올 수 없습니다.")).toBeVisible());
+    expect(usage).not.toHaveTextContent("게시 17건 남음");
   });
 
   it("shows a global scroll-to-top button after scrolling and returns smoothly to the top", () => {

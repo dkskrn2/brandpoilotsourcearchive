@@ -788,6 +788,51 @@ export interface PublishSlot {
   scheduledFor?: string | null;
 }
 
+export interface PublishCalendarSettings {
+  brandId: string;
+  enabled: boolean;
+  channels: ChannelType[];
+  informationalFormat: "card_news" | "reel";
+  trendFormat: "card_news" | "reel";
+  slotTimes: string[];
+  updatedAt: string | null;
+}
+
+export interface PublishCalendarSlot {
+  id: string;
+  workspaceId: string;
+  brandId: string;
+  scheduledFor: string;
+  assignmentMode: "automatic" | "manual";
+  status: "open" | "proposal_assigned" | "generation_pending" | "content_assigned" | "ready" | "scheduled" | "publish_delayed" | "quota_blocked" | "published" | "cancelled";
+  recommendationKind: "informational" | "trend" | null;
+  contentFormat: "card_news" | "reel";
+  channels: ChannelType[];
+  contentSuggestionId: string | null;
+  proposalId: string | null;
+  generationId: string | null;
+  generationOutputId: string | null;
+  topicPublishGroupId: string | null;
+  title: string | null;
+  lastError: string | null;
+  updatedAt: string;
+}
+
+export interface PublishCalendarUsageCounter {
+  limit: number;
+  succeeded: number;
+  reserved: number;
+  remaining: number;
+  additionalAvailable: number;
+}
+
+export interface PublishCalendarWeeklyUsage {
+  startsAt: string;
+  endsAt: string;
+  generation: PublishCalendarUsageCounter;
+  publishing: PublishCalendarUsageCounter;
+}
+
 export interface PublishResultChannel {
   queueId: string;
   channelOutputId: string;
