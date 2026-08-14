@@ -579,6 +579,61 @@ export interface BillingSummaryDto {
   }>;
 }
 
+export type AppliedSubscriptionRenewal =
+  | {
+      status: "applied";
+      brandId: string;
+      previousPlanCode: string;
+      planCode: string;
+      currentPeriodStart: Date;
+      currentPeriodEnd: Date;
+      cancelled: boolean;
+    }
+  | {
+      status: "failed";
+      brandId: string;
+      previousPlanCode: string;
+      errorCode: string;
+    };
+
+export interface PublishCalendarSettingsDto {
+  brandId: string;
+  enabled: boolean;
+  channels: Channel[];
+  informationalFormat: "card_news" | "reel";
+  trendFormat: "card_news" | "reel";
+  slotTimes: string[];
+  updatedAt: string | null;
+}
+
+export interface PublishCalendarSlotDto {
+  id: string;
+  workspaceId: string;
+  brandId: string;
+  scheduledFor: string;
+  assignmentMode: "automatic" | "manual";
+  status: "open" | "proposal_assigned" | "generation_pending" | "content_assigned" | "ready"
+    | "scheduled" | "publish_delayed" | "quota_blocked" | "published" | "cancelled";
+  recommendationKind: "informational" | "trend" | null;
+  contentFormat: "card_news" | "reel";
+  channels: Channel[];
+  contentSuggestionId: string | null;
+  proposalId: string | null;
+  generationId: string | null;
+  generationOutputId: string | null;
+  topicPublishGroupId: string | null;
+  title: string | null;
+  lastError: string | null;
+  updatedAt: string;
+}
+
+export interface PublishCalendarWeeklyUsageDto {
+  startsAt: string;
+  endsAt: string;
+  generation: import("./publishCalendarQuota.js").UsageAvailability;
+  publishing: import("./publishCalendarQuota.js").UsageAvailability;
+}
+
 export interface CredentialInput {
   accountLabel?: string;
   connectionStatus?: ChannelStatus;
@@ -1083,6 +1138,7 @@ export interface ApiRepository
     Partial<import("./assetLibraryRepository.js").AssetLibraryRepository>,
     Partial<import("./aiContentAttachmentRepository.js").AiContentAttachmentLifecycleRepository>,
     Partial<import("./aiContentAttachmentGcRepository.js").AiContentAttachmentGcRepository>,
+    Partial<import("./publishCalendarRepository.js").PublishCalendarRepository>,
     Partial<ContentProposalJobsRepository> {
   health(): Promise<{
     database: "ok";
@@ -1158,7 +1214,6 @@ export interface ApiRepository
   }): Promise<AiContentDraftReferenceRecord[]>;
   downloadAiContentOutput(input: BrandScope & { outputId: string; usageDate: string; dailyDownloadLimit: number }): Promise<DownloadPackageDto>;
   downloadAiContentGeneration(input: BrandGenerationScope & { outputIds?: string[]; usageDate: string; dailyDownloadLimit: number }): Promise<DownloadPackageDto>;
-  sendAiContentToPublish(input: BrandScope & { outputId: string }): Promise<{ publishGroupId: string; channelOutputId: string }>;
   prepareAiContentPublish(
     input: BrandScope & { outputId: string } & import("./aiContentPublishTargets.js").AiContentPublishRequest,
   ): Promise<import("./aiContentPublish.js").PreparedAiContentPublishResult>;
@@ -1236,6 +1291,13 @@ export interface ApiRepository
   listSourceCrawlRuns(brandId: string): Promise<SourceCrawlRunDto[]>;
   generateContent(brandId: string, now?: Date): Promise<PipelineRunResult>;
   runDailyGeneration(now?: Date): Promise<DailyGenerationRunResult>;
+  allocatePublishCalendar?(now?: Date): Promise<{
+    brandsSelected: number;
+    openSlotsCreated: number;
+    proposalsAssigned: number;
+    quotaBlocked: number;
+    brandsFailed: number;
+  }>;
   runDailyPerformanceSync(now?: Date): Promise<PerformanceSyncSummaryDto>;
   getDashboard(brandId: string): Promise<DashboardDto>;
   getPerformanceInsights?(brandId: string): Promise<PerformanceInsightsDto>;
