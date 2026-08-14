@@ -1304,7 +1304,12 @@ test("all CLI worker images install the pinned Codex runtime and run real entryp
     ["dm", {
       path: "workers/brand-pilot-dm-worker/Dockerfile",
       entrypoint: /workers\/brand-pilot-dm-worker\/dist\/index\.js/,
-      assets: [/workers\/brand-pilot-dm-worker\/runtime/],
+      assets: [
+        /workers\/brand-pilot-dm-worker\/runtime/,
+        /packages\/brand-pilot-content-contracts\/package\.json/,
+        /packages\/brand-pilot-content-contracts\/dist/,
+        /packages\/brand-pilot-content-contracts\/generated/,
+      ],
     }],
     ["content proposal", {
       path: "workers/brand-pilot-content-proposal-worker/Dockerfile",
