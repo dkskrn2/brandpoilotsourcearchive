@@ -54,7 +54,7 @@
 
 - [ ] Preserve current asynchronous direct Reel/card-news publishing and the existing publish-due route.
 - [ ] Link suggestions to the existing generation flow and prepare publish queues automatically after generation output is ready.
-- [ ] Enforce active subscription, weekly generation/publish limits, channel state, due time, slot channel, and content format at mutation and execution boundaries.
+- [ ] Enforce active subscription and weekly generation/publish limits for calendar-linked work, while preserving existing direct publishing; keep channel state and due-time checks on every queue execution.
 - [ ] Keep automatic publishing settings disabled by default and retain reservations when generation is not ready.
 - [ ] Remove unused duplicate queue entry points without removing operating recovery actions.
 - [ ] Run focused API tests after each behavior change, then the complete API suite and build.
@@ -89,7 +89,7 @@
 
 - [ ] Verify current production main SHA, deployed API digest, worker digests, restart counts, and dirty/hotfix state.
 - [ ] Capture provider database backup metadata and preserve the previous API digest for rollback.
-- [ ] Verify every active brand has a valid plan catalog row and active subscription, or prove there are no active brands.
+- [ ] Verify every calendar-enabled brand has a valid plan catalog row and active subscription; brands without calendar settings must retain existing direct publishing without arbitrary plan seeds.
 - [ ] Apply only migration 079 with migration evidence and re-run schema verification.
 - [ ] Deploy only the API image by immutable digest to canary, verify health/ready and calendar endpoints, then promote.
 - [ ] Leave workers and the operating publish-due trigger unchanged.

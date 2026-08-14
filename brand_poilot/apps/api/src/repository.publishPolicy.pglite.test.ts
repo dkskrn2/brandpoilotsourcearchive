@@ -135,6 +135,38 @@ describe("publish queue execution policy with PostgreSQL semantics", () => {
     )).resolves.toMatchObject({ rows: [{ count: 0 }] });
   });
 
+  it("keeps a due legacy direct queue claimable when no calendar subscription exists", async () => {
+    await database.query("delete from brand_subscriptions where brand_id=$1", [ids.brand]);
+    await database.query(
+      "update publish_queue set status='scheduled',scheduled_for=now()-interval '1 minute',last_error=null where id=$1",
+      [ids.queue],
+    );
+    const query = async (sql: string, values: unknown[] = []) => {
+      const result = await database.query(sql, values as never[]);
+      return { rows: result.rows, rowCount: result.rows.length || Number(result.affectedRows ?? 0) };
+    };
+    const repository = createRepository({ query } as never, { instagramPublish: { enabled: true } });
+
+    await expect(repository.publishQueueItem(ids.queue)).rejects.toThrow("channel_not_connected");
+    await expect(database.query<{ status: string; last_error: string }>(
+      "select status,last_error from publish_queue where id=$1",
+      [ids.queue],
+    )).resolves.toMatchObject({
+      rows: [{ status: "failed", last_error: "channel_not_connected" }],
+    });
+
+    await database.query(
+      `insert into brand_subscriptions(
+         brand_id,plan_code,status,started_at,current_period_start,current_period_end
+       ) values($1,'policy_test','active',now()-interval '1 day',now()-interval '1 day',now()+interval '29 days')`,
+      [ids.brand],
+    );
+    await database.query(
+      "update publish_queue set status='scheduled',scheduled_for=now()+interval '1 hour',last_error=null where id=$1",
+      [ids.queue],
+    );
+  });
+
   it("reconciles a persisted AI publish success into its calendar group and slot", async () => {
     await database.query(
       "update channel_outputs set ai_content_generation_output_id=$2 where id=$1",

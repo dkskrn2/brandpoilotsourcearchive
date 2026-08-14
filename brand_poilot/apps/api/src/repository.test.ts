@@ -2548,7 +2548,7 @@ describe("repository", () => {
     expect(statements[0]).toContain("pending.id not in (select recovered_queue.id from recovered recovered_queue)");
   });
 
-  it("renews subscriptions, isolates brand scheduling failures, and fairly selects due queues only for eligible brands", async () => {
+  it("renews subscriptions, isolates calendar scheduling failures, and still selects legacy direct queues", async () => {
     const statements: Array<{ sql: string; values: unknown[] }> = [];
     const query = vi.fn(async (sql: string, values?: unknown[]) => {
       statements.push({ sql: sql.replace(/\s+/g, " "), values: values ?? [] });
@@ -2576,10 +2576,17 @@ describe("repository", () => {
       .resolves.toEqual({ processed: 0, created: 0, updated: 0, failed: 1 });
 
     expect(events).toEqual(["renewed", "scheduled:brand-failed", "scheduled:brand-ready"]);
+    const candidateBrands = statements.find(({ sql }) => sql.includes("select id from brands"));
+    expect(candidateBrands?.sql).toContain("from publish_calendar_settings settings");
+    expect(candidateBrands?.sql).toContain("settings.enabled");
+    expect(candidateBrands?.sql).toContain("from publish_calendar_slots slot");
+    expect(candidateBrands?.sql).toContain("slot.status in ('proposal_assigned','generation_pending','content_assigned','ready','publish_delayed','quota_blocked','scheduled')");
     const due = statements.find(({ sql }) => sql.includes("row_number() over"));
     expect(due?.sql).toContain("partition by queue.brand_id");
     expect(due?.sql).toContain("order by brand_rank");
     expect(due?.sql).toContain("limit 50");
+    expect(due?.sql).toContain("left join publish_calendar_slots linked_slot");
+    expect(due?.sql).toContain("linked_slot.id is null or queue.brand_id=any($2::uuid[])");
     expect(due?.values[1]).toEqual(["brand-ready"]);
   });
 
@@ -3436,8 +3443,10 @@ describe("repository", () => {
     expect(claimSql).toContain("join brand_channels policy_channel");
     expect(claimSql).toContain("policy_channel.enabled");
     expect(claimSql).toContain("policy_channel.status = 'connected'");
-    expect(claimSql).toContain("join brand_subscriptions subscription");
-    expect(claimSql).toContain("join billing_plan_catalog plan");
+    expect(claimSql).toContain("left join brand_subscriptions subscription");
+    expect(claimSql).toContain("left join billing_plan_catalog plan");
+    expect(claimSql).toContain("slot.id is null or (");
+    expect(claimSql).toContain("subscription.status in ('active','cancel_scheduled')");
     expect(claimSql).toContain("slot.status='scheduled'");
     expect(claimSql).toContain("pq.channel=any(slot.channels)");
     expect(claimSql).toContain("slot.content_format='card_news'");
