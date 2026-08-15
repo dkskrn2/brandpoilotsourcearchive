@@ -380,6 +380,44 @@ export interface InstagramTrendConnection {
   lastErrorCode: string | null;
 }
 
+export type MetaAdSearchInput =
+  | { mode: "keyword"; query: string }
+  | { mode: "page"; pageIds: string[] };
+
+export interface MetaAdLibraryItem {
+  id: string;
+  providerAdId: string;
+  sourcePlatform: "meta_ad_library";
+  pageId: string | null;
+  pageName: string | null;
+  creativeBody: string | null;
+  creativeTitle: string | null;
+  creativeCaption: string | null;
+  creativeDescription: string | null;
+  snapshotUrl: string | null;
+  publisherPlatforms: string[];
+  deliveryStartedAt: string | null;
+  deliveryStoppedAt: string | null;
+  activeStatus: "ACTIVE" | "INACTIVE" | "UNKNOWN";
+  reachedCountries: string[];
+  isSaved: boolean;
+}
+
+export interface MetaAdLibrarySearchPage {
+  searchId: string;
+  cacheState: "pending" | "fresh" | "stale";
+  errorCode: string | null;
+  refreshedAt: string | null;
+  items: MetaAdLibraryItem[];
+  nextCursor: string | null;
+}
+
+export interface MetaAdLibrarySaved {
+  savedId: string;
+  adId: string;
+  isSaved: true;
+}
+
 export interface BrandContentFormat {
   format: InstagramDeliveryFormat;
   enabled: boolean;
@@ -732,6 +770,8 @@ export interface ReferenceItem {
   favorite: boolean;
   archivedAt: string | null;
   referenceBrandId: string | null;
+  sourcePlatform?: "instagram" | "meta_ad_library" | null;
+  sourceState?: "available" | "unavailable" | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -766,6 +806,24 @@ export interface ReferenceBrand {
   publicSourceUrl: string;
   profileSnapshot: Record<string, unknown>;
   previewUrl: string | null;
+  providerAccountId?: string | null;
+  cacheState?: "pending" | "fresh" | "stale" | "ineligible";
+  refreshedAt?: string | null;
+  lastRefreshAttemptedAt?: string | null;
+  lastRefreshError?: string | null;
+}
+
+export interface ReferenceChannelMedia extends InstagramTrendMedia {
+  sourcePlatform: "instagram";
+  author: { referenceBrandId: string; handle: string; displayName: string };
+  metrics: { viewCount: number | null; likeCount: number | null; commentsCount: number | null };
+}
+
+export interface ReferenceChannelMediaPage {
+  items: ReferenceChannelMedia[];
+  total: number;
+  refreshedAt: string | null;
+  cacheState: "pending" | "fresh" | "stale" | "ineligible";
 }
 
 export interface PublishSlot {

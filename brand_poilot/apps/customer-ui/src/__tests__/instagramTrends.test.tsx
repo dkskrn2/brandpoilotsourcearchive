@@ -97,6 +97,17 @@ async function renderTrendPage(overrides: Partial<ApiMock> = {}) {
       handle: "creator1",
       displayName: "creator1",
     })),
+    findMetaAdLibraryCache: vi.fn(async () => null),
+    searchMetaAdLibrary: vi.fn(async () => ({
+      searchId: "meta-search-1", cacheState: "fresh", errorCode: null,
+      refreshedAt: "2026-08-13T00:00:00.000Z", items: [], nextCursor: null,
+    })),
+    getMetaAdLibrarySearch: vi.fn(async () => ({
+      searchId: "meta-search-1", cacheState: "fresh", errorCode: null,
+      refreshedAt: "2026-08-13T00:00:00.000Z", items: [], nextCursor: null,
+    })),
+    saveMetaAdLibraryAd: vi.fn(async (_brandId: string, adId: string) => ({ savedId: "saved-1", adId, isSaved: true })),
+    removeMetaAdLibraryAd: vi.fn(async () => undefined),
     ...overrides
   };
   vi.doMock("../lib/apiClient", () => ({ DEMO_BRAND_ID: "brand-1", api }));
@@ -114,6 +125,45 @@ afterEach(() => {
 });
 
 describe("InstagramTrendExplorerPanel", () => {
+  it("keeps Instagram and Meta ad discovery separate and prefills ads from the primary category", async () => {
+    const user = userEvent.setup();
+    const api = await renderTrendPage();
+
+    const sourceNav = screen.getByRole("navigation", { name: "트렌드 출처" });
+    expect(within(sourceNav).getByRole("button", { name: "Instagram 공개 콘텐츠" })).toHaveAttribute("aria-current", "page");
+    await user.click(within(sourceNav).getByRole("button", { name: "Meta 광고 라이브러리" }));
+
+    expect(screen.getByRole("textbox", { name: "광고 키워드" })).toHaveValue("여행");
+    expect(api.findMetaAdLibraryCache).toHaveBeenCalledWith("brand-1", { mode: "keyword", query: "여행" });
+    expect(api.searchMetaAdLibrary).not.toHaveBeenCalled();
+    expect(screen.queryByRole("textbox", { name: "해시태그" })).not.toBeInTheDocument();
+  });
+
+  it("requires an explicit Page ID mode and sends a Meta ad search only on submit", async () => {
+    const user = userEvent.setup();
+    const api = await renderTrendPage();
+    await user.click(screen.getByRole("button", { name: "Meta 광고 라이브러리" }));
+    await user.click(screen.getByRole("button", { name: "광고주 Page ID" }));
+    const input = screen.getByRole("textbox", { name: "광고주 Page ID" });
+    await user.clear(input);
+    await user.type(input, "123456");
+    await user.click(screen.getByRole("button", { name: "Meta 광고 검색" }));
+
+    expect(api.searchMetaAdLibrary).toHaveBeenCalledWith("brand-1", { mode: "page", pageIds: ["123456"] });
+  });
+
+  it("selects the brand primary category and immediately shows its cached first recommendation", async () => {
+    const cached = page([media(1)]);
+    const api = await renderTrendPage({ getInstagramTrends: vi.fn(async () => cached) });
+
+    expect(await screen.findByText("@creator1")).toBeVisible();
+    expect(screen.getByRole("combobox", { name: "분야" })).toHaveValue("travel");
+    expect(api.getInstagramTrends).toHaveBeenCalledWith("brand-1", {
+      hashtag: "여행콘텐츠", type: "all", sort: "meta", page: 1,
+    });
+    expect(api.searchInstagramTrends).not.toHaveBeenCalled();
+  });
+
   it("shows a page skeleton while channel and trend connection state is loading", async () => {
     const pending = new Promise<never>(() => undefined);
     await renderTrendPage({
@@ -403,6 +453,21 @@ describe("InstagramTrendExplorerPanel", () => {
     expect(await screen.findByText("@creator2")).toBeVisible();
   });
 
+  it("removes spaces, a leading hash, and emoji before searching", async () => {
+    const api = await renderTrendPage();
+    const input = await screen.findByRole("textbox", { name: "해시태그" });
+
+    await userEvent.type(input, "# 여 행 ✨콘텐츠");
+    await userEvent.click(screen.getByRole("button", { name: "검색" }));
+
+    expect(api.getInstagramTrends).toHaveBeenCalledWith(
+      "brand-1",
+      expect.objectContaining({ hashtag: "여행콘텐츠", page: 1 }),
+    );
+    expect(api.searchInstagramTrends).toHaveBeenCalledWith("brand-1", "여행콘텐츠");
+    expect(screen.getByText("공백과 이모지는 자동으로 제거됩니다.")).toBeVisible();
+  });
+
   it("keeps stale rows and shows a non-blocking error when refresh fails", async () => {
     const cached = page([media(1)]);
     const api = await renderTrendPage({
@@ -487,6 +552,7 @@ describe("InstagramTrendExplorerPanel", () => {
     const firstPage = page(Array.from({ length: 21 }, (_, index) => media(index + 1)), { total: 21 });
     const secondPage = page([media(22)], { page: 2, total: 22 });
     const getInstagramTrends = vi.fn()
+      .mockResolvedValueOnce(firstPage)
       .mockResolvedValueOnce(firstPage)
       .mockResolvedValueOnce(secondPage);
     const api = await renderTrendPage({ getInstagramTrends, searchInstagramTrends: vi.fn(async () => firstPage) });
@@ -620,6 +686,7 @@ describe("InstagramTrendExplorerPanel", () => {
       media(2, { kind: "carousel" }),
     ]);
     const getInstagramTrends = vi.fn()
+      .mockResolvedValueOnce(mixed)
       .mockResolvedValueOnce(mixed)
       .mockRejectedValueOnce(new Error("instagram_hashtag_not_found"));
     await renderTrendPage({

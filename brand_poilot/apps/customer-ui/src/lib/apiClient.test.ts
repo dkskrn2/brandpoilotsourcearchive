@@ -2,6 +2,23 @@ import { describe, expect, it, vi } from "vitest";
 import { ApiRequestError, apiClient, SUPPORT_REQUESTS_CHANGED_EVENT } from "./apiClient";
 
 describe("apiClient", () => {
+  it("keeps Meta ad cache reads separate from explicit provider searches", async () => {
+    const page = { searchId: "search-1", cacheState: "fresh", errorCode: null, refreshedAt: null, items: [], nextCursor: null };
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify(page), { status: 200 }));
+    const client = apiClient({ baseUrl: "http://api.test", fetcher: fetchMock as typeof fetch });
+
+    await client.findMetaAdLibraryCache("brand-1", { mode: "keyword", query: "여행" });
+    await client.searchMetaAdLibrary("brand-1", { mode: "page", pageIds: ["123"] });
+
+    expect(fetchMock).toHaveBeenNthCalledWith(1,
+      "http://api.test/brands/brand-1/meta-ad-library/cache?mode=keyword&query=%EC%97%AC%ED%96%89",
+      expect.objectContaining({ method: "GET" }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(2,
+      "http://api.test/brands/brand-1/meta-ad-library/search",
+      expect.objectContaining({ method: "POST", body: JSON.stringify({ mode: "page", pageIds: ["123"] }) }),
+    );
+  });
   it("dispatches the support history event only after a simplified request succeeds", async () => {
     const listener = vi.fn();
     window.addEventListener(SUPPORT_REQUESTS_CHANGED_EVENT, listener);

@@ -1,5 +1,6 @@
 import { expect, test } from "@playwright/test";
 import type { Page } from "@playwright/test";
+import type { InstagramTrendSaveSource } from "../src/types";
 
 const previewUrl = "data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=";
 const browserErrors = new WeakMap<Page, string[]>();
@@ -113,7 +114,22 @@ test.beforeEach(async ({ page }) => {
       return route.fulfill({ ...common, json: [] });
     }
     if (pathname.endsWith("/save-source")) {
-      return route.fulfill({ ...common, json: { source: { id: "source-growth-1", brandId: "brand-e2e", sourceType: "reference", url: "https://www.instagram.com/p/growthline352/" }, alreadySaved: false } });
+      const savedSource = {
+        source: {
+          id: "source-growth-1",
+          brandId: "brand-e2e",
+          sourceType: "reference",
+          url: "https://www.instagram.com/p/growthline352/",
+          title: "@growthline352",
+          status: "active",
+          enabled: true,
+          lastCrawledAt: null,
+          lastError: null,
+        },
+        referenceItemId: "33333333-3333-4333-8333-333333333333",
+        alreadySaved: false,
+      } satisfies InstagramTrendSaveSource;
+      return route.fulfill({ ...common, json: savedSource });
     }
     if (pathname.endsWith("/instagram-trends/search")) {
       return route.fulfill({ ...common, json: trendPage() });

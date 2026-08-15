@@ -1,8 +1,8 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
 import { PageHeader } from "../components/layout/PageHeader";
+import { ReferenceAddMenu } from "../components/references/ReferenceAddMenu";
 import { isReferenceView, ReferenceFilters } from "../components/references/ReferenceFilters";
 import { InstagramTrendExplorerPanel } from "../components/references/InstagramTrendExplorerPanel";
-import { SavedTrendReferencesPanel } from "../components/references/SavedTrendReferencesPanel";
 import { useSearchParams } from "react-router-dom";
 import { SavedReferenceBrandsPanel } from "../components/references/SavedReferenceBrandsPanel";
 import { ExternalUrlsPanel } from "../components/references/ExternalUrlsPanel";
@@ -17,28 +17,54 @@ import type { InstagramTrendMediaTypeFilter, InstagramTrendSort } from "../types
 import { libraryGateway } from "../features/libraries/libraryGateway";
 import { ReferenceUploadDialog } from "../components/references/ReferenceUploadDialog";
 
-function ReferenceCollection({ view }: { view: "all" | "saved-content" | "recent" | "favorites" }) {
+type ReferenceCollectionView = "all" | "saved-content" | "saved-trends" | "recent" | "favorites";
+
+function ReferenceCollection({ view, query }: { view: ReferenceCollectionView; query: string }) {
   const [items, setItems] = useState<ReferenceItem[] | null>(null);
   const [selected, setSelected] = useState<ReferenceItem | null>(null);
   const [failed, setFailed] = useState(false);
   const [purpose, setPurpose] = useState<ReferenceContentPurpose | "all">("all");
+  const copy: Record<ReferenceCollectionView, { heading: string; description: string }> = {
+    all: {
+      heading: "전체 레퍼런스",
+      description: "저장한 자료의 미리보기와 출처 정보를 확인합니다.",
+    },
+    "saved-content": {
+      heading: "저장한 콘텐츠",
+      description: "저장한 콘텐츠의 미리보기와 출처 정보를 확인합니다.",
+    },
+    "saved-trends": {
+      heading: "저장한 트렌드",
+      description: "하트로 저장한 공개 트렌드의 미리보기와 출처 정보를 확인합니다.",
+    },
+    recent: {
+      heading: "최근 추가한 자료",
+      description: "최근 30일에 추가한 자료의 미리보기와 출처 정보를 확인합니다.",
+    },
+    favorites: {
+      heading: "즐겨찾기",
+      description: "즐겨찾기한 자료의 미리보기와 출처 정보를 확인합니다.",
+    },
+  };
 
   useEffect(() => {
     let active = true;
     setFailed(false);
     setItems(null);
     const filters = view === "saved-content"
-      ? { kind: "saved_content" }
+      ? { collection: "content" as const, ...(query ? { q: query } : {}) }
+      : view === "saved-trends"
+        ? { collection: "trend" as const, ...(query ? { q: query } : {}) }
       : view === "recent"
         ? { recent: 30 }
         : view === "favorites"
           ? { favorite: true }
-          : {};
+          : { collection: "all" as const, ...(query ? { q: query } : {}) };
     void api.listReferences(DEMO_BRAND_ID, filters)
       .then((rows) => { if (active) setItems(rows); })
       .catch(() => { if (active) { setItems([]); setFailed(true); } });
     return () => { active = false; };
-  }, [view]);
+  }, [query, view]);
 
   const visibleItems = useMemo(
     () => (items ?? []).filter((item) => purpose === "all" || item.contentPurpose === purpose || item.contentPurpose === "both"),
@@ -65,7 +91,7 @@ function ReferenceCollection({ view }: { view: "all" | "saved-content" | "recent
   return (
     <section className="panel reference-collection" aria-labelledby="reference-collection-title">
       <div className="panel-head">
-        <div><h2 id="reference-collection-title">저장된 레퍼런스</h2><p className="muted">카드에는 보관된 미리보기와 출처 metadata만 먼저 표시합니다.</p></div>
+        <div><h2 id="reference-collection-title">{copy[view].heading}</h2><p className="muted">{copy[view].description}</p></div>
         <label>용도
           <select aria-label="레퍼런스 용도 필터" value={purpose} onChange={(event) => setPurpose(event.target.value as ReferenceContentPurpose | "all")}>
             <option value="all">전체</option><option value="informational">정보성</option><option value="marketing">마케팅성</option><option value="both">둘 다</option>
@@ -85,32 +111,15 @@ function ReferenceCollection({ view }: { view: "all" | "saved-content" | "recent
   );
 }
 
-function DirectReferenceAddPanel() {
-  const [open, setOpen] = useState(false);
-  return (
-    <section className="panel">
-      <div className="panel-head"><h2>직접 추가</h2></div>
-      <div className="panel-body">
-        <p className="muted">파일 내용 확인 후 안전한 업로드 세션으로 보관합니다. 진행 중인 파일을 제거하면 예약된 업로드도 정리합니다.</p>
-        <button className="button primary" type="button" onClick={() => setOpen(true)}>파일 업로드</button>
-      </div>
-      {open ? (
-        <ReferenceUploadDialog
-          brandId={DEMO_BRAND_ID}
-          gateway={libraryGateway}
-          onClose={() => setOpen(false)}
-        />
-      ) : null}
-    </section>
-  );
-}
-
 export function ReferenceLibraryPage() {
-  const [searchParams] = useSearchParams();
+  const [searchParams, setSearchParams] = useSearchParams();
   const requestedView = searchParams.get("view");
-  const activeView = isReferenceView(requestedView) ? requestedView : "all";
-  const requestedPage = Number(searchParams.get("page"));
-  const archivePage = Number.isInteger(requestedPage) && requestedPage > 0 ? requestedPage : 1;
+  const activeView = requestedView === null ? "trends" : isReferenceView(requestedView) ? requestedView : "all";
+  const displayView = activeView === "add" ? "all" : activeView;
+  const showsLibrarySearch = ["all", "saved-content", "saved-trends"].includes(displayView);
+  const libraryQuery = searchParams.get("q")?.trim().slice(0, 200) ?? "";
+  const [queryDraft, setQueryDraft] = useState(libraryQuery);
+  const [uploadOpen, setUploadOpen] = useState(activeView === "add");
   const type = searchParams.get("type");
   const trendType: InstagramTrendMediaTypeFilter =
     type && ["all", "image", "carousel", "video", "reel"].includes(type)
@@ -119,18 +128,60 @@ export function ReferenceLibraryPage() {
   const sort = searchParams.get("sort");
   const trendSort: InstagramTrendSort =
     sort && ["meta", "likes", "comments"].includes(sort) ? sort as InstagramTrendSort : "meta";
+
+  useEffect(() => {
+    setUploadOpen(activeView === "add");
+  }, [activeView]);
+
+  useEffect(() => {
+    setQueryDraft(libraryQuery);
+  }, [libraryQuery]);
+
+  function submitLibrarySearch(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const next = new URLSearchParams(searchParams);
+    const normalized = queryDraft.trim().slice(0, 200);
+    if (normalized) next.set("q", normalized); else next.delete("q");
+    setSearchParams(next);
+  }
+
   return (
     <section className="content reference-library-page">
-      <PageHeader title="레퍼런스" description="저장한 자료와 공개 트렌드를 한곳에서 확인합니다." />
-      <ReferenceFilters activeView={activeView} />
-      {activeView === "trends" ? <InstagramTrendExplorerPanel initialType={trendType} initialSort={trendSort} /> : null}
-      {activeView === "saved-trends" ? <SavedTrendReferencesPanel initialPage={archivePage} /> : null}
-      {activeView === "saved-brands" ? <SavedReferenceBrandsPanel /> : null}
-      {activeView === "external-urls" ? <ExternalUrlsPanel /> : null}
-      {activeView === "add" ? <DirectReferenceAddPanel /> : null}
-      {["all", "saved-content", "recent", "favorites"].includes(activeView)
-        ? <ReferenceCollection view={activeView as "all" | "saved-content" | "recent" | "favorites"} />
+      <PageHeader
+        title="레퍼런스"
+        description="저장한 자료와 공개 트렌드를 한곳에서 확인합니다."
+        actions={<ReferenceAddMenu onUpload={() => setUploadOpen(true)} />}
+      />
+      <ReferenceFilters activeView={activeView} libraryQuery={libraryQuery} />
+      {showsLibrarySearch ? (
+        <form className="reference-library-search" role="search" onSubmit={submitLibrarySearch}>
+          <label htmlFor="reference-library-search">내 라이브러리 검색</label>
+          <div>
+            <input
+              id="reference-library-search"
+              type="search"
+              value={queryDraft}
+              maxLength={200}
+              onChange={(event) => setQueryDraft(event.target.value)}
+              placeholder="제목, 출처, 작성자 검색"
+            />
+            <button className="button primary" type="submit">검색</button>
+          </div>
+        </form>
+      ) : null}
+      {displayView === "trends" ? <InstagramTrendExplorerPanel initialType={trendType} initialSort={trendSort} /> : null}
+      {displayView === "saved-brands" ? <SavedReferenceBrandsPanel /> : null}
+      {displayView === "external-urls" ? <ExternalUrlsPanel /> : null}
+      {["all", "saved-content", "saved-trends", "recent", "favorites"].includes(displayView)
+        ? <ReferenceCollection view={displayView as ReferenceCollectionView} query={libraryQuery} />
         : null}
+      {uploadOpen ? (
+        <ReferenceUploadDialog
+          brandId={DEMO_BRAND_ID}
+          gateway={libraryGateway}
+          onClose={() => setUploadOpen(false)}
+        />
+      ) : null}
     </section>
   );
 }

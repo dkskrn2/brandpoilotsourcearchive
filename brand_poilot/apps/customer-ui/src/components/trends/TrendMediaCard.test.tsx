@@ -23,6 +23,16 @@ const media: InstagramTrendMedia = {
 };
 
 describe("TrendMediaCard", () => {
+  it("shows Instagram public-content provenance in the card body", () => {
+    render(<TrendMediaCard media={media} onSelect={vi.fn()} />);
+
+    const detail = screen.getByRole("button", { name: "상세 보기 @creator" });
+    const source = within(detail).getByText("Instagram 공개 콘텐츠", { exact: true });
+    expect(source).toBeVisible();
+    expect(source.closest(".trend-media-card__body")).not.toBeNull();
+    expect(source.closest(".trend-media-card__frame")).toBeNull();
+  });
+
   it("renders sibling detail and bookmark buttons without nesting interactive controls", async () => {
     const onSelect = vi.fn();
     const onBookmark = vi.fn(async () => undefined);

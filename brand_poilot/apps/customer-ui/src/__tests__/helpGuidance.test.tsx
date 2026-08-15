@@ -61,6 +61,17 @@ describe("통합형 도움말", () => {
     expect(trends?.summary).toContain("공개 해시태그");
   });
 
+  it("레퍼런스 안내에 S2 작업 공간과 자료 추가 명칭을 사용한다", () => {
+    const all = guideForPath("/references?view=all");
+
+    expect(guideForPath("/references?view=saved-brands")?.title).toContain("브랜드·작성자");
+    expect(guideForPath("/references?view=trends")?.title).toContain("트렌드 찾기");
+    expect(guideForPath("/references?view=recent")?.title).toContain("최근 추가");
+    expect(guideForPath("/references?view=add")?.title).toContain("자료 추가");
+    expect(all?.tour.map((step) => `${step.title} ${step.description}`).join(" ")).toContain("내 라이브러리");
+    expect(all?.tour.map((step) => `${step.title} ${step.description}`).join(" ")).not.toMatch(/저장한 브랜드|최근 사용|직접 추가/);
+  });
+
   it("현재 화면 가이드와 OAuth 체크리스트를 서랍에 표시한다", () => {
     render(<MemoryRouter initialEntries={["/channels"]}><HelpProvider><HelpHarness /></HelpProvider></MemoryRouter>);
 
