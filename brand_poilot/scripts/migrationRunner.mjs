@@ -96,6 +96,8 @@ export const fullSourceMigrationIds = Object.freeze([
   "077_content_suggestion_batches.sql",
   "078_faq_utterance_matching.sql",
   "079_publish_calendar_runtime.sql",
+  "080_reference_channel_archive.sql",
+  "081_meta_ad_library_references.sql",
 ]);
 const legacyTriggerSearchPathMigrationId = "073a_legacy_trigger_function_search_path.sql";
 export const legacyTriggerSearchPathMigrationChecksum =
@@ -112,11 +114,15 @@ const post075SchemaMigrationIds = Object.freeze([
   "077_content_suggestion_batches.sql",
   "078_faq_utterance_matching.sql",
   "079_publish_calendar_runtime.sql",
+  "080_reference_channel_archive.sql",
+  "081_meta_ad_library_references.sql",
 ]);
 export const post075SchemaMigrationChecksums = Object.freeze({
   "077_content_suggestion_batches.sql": "3b178464c5ae5c4e220428e0752ab3e79a2ca06b5b2b23f1e89c34e983e63f76",
   "078_faq_utterance_matching.sql": "a2c481f4ea5aba0430668d8e87d236f0a301a695cbecb4874400de0896aecde5",
   "079_publish_calendar_runtime.sql": "c46ffafa578f6c1f8bb353f4e7bc94d16033416dd5a6aa730cf81119e6e6ef61",
+  "080_reference_channel_archive.sql": "9067430f0e8fbc6d52455ef5fcf712820fe405e4fca0e51835b6cd0552ce7fe0",
+  "081_meta_ad_library_references.sql": "232f4ee76b7812b0a9399ee3124b4542e5c6f01c0d5d37ecb786b0b41c25f9ef",
 });
 const post075DeferredMigrationIds = Object.freeze([
   ...post075DataMigrationIds,

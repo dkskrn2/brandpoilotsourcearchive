@@ -86,7 +86,7 @@ const deploymentScripts = [
   ubuntuBootstrapPath,
 ];
 
-test("cutover API image contains ordered migrations through publish calendar 079", () => {
+test("cutover API image contains ordered migrations through reference archive 081", () => {
   const dockerfile = read("apps/api/Dockerfile");
   const migrate = read("scripts/migrate.mjs");
   const runner = read("scripts/migrationRunner.mjs");
@@ -102,6 +102,8 @@ test("cutover API image contains ordered migrations through publish calendar 079
   assert.equal(existsSync("db/migrations/077_content_suggestion_batches.sql"), true);
   assert.equal(existsSync("db/migrations/078_faq_utterance_matching.sql"), true);
   assert.equal(existsSync("db/migrations/079_publish_calendar_runtime.sql"), true);
+  assert.equal(existsSync("db/migrations/080_reference_channel_archive.sql"), true);
+  assert.equal(existsSync("db/migrations/081_meta_ad_library_references.sql"), true);
   assert.match(migrate, /AI_CONTENT_074_AUTHORIZATION_PUBLIC_KEY_FILE/);
   assert.match(migrate, /AI_CONTENT_074_PROVIDER_ATTESTATION_PUBLIC_KEY_FILE/);
   assert.doesNotMatch(migrate, /readFile\([^\n]*(?:PRIVATE|SIGNING)|createPrivateKey|AI_CONTENT_074_(?:AUTHORIZATION|PROVIDER_ATTESTATION)_KEY_FILE/);
@@ -147,7 +149,7 @@ test("deployment applies or verifies the pinned post-075 data migration before c
   assert.ok(migrationGate >= 0 && migrationGate < transition && transition < canary);
 });
 
-test("deployment applies the ordered content suggestion, FAQ, and publish calendar schemas after 076 and before canary mutation", () => {
+test("deployment applies the ordered content suggestion, FAQ, publish calendar, and reference schemas after 076 and before canary mutation", () => {
   const deploy = read("deploy/scripts/deploy.sh");
   const runner = read("scripts/migrationRunner.mjs");
   assert.match(runner, /077_content_suggestion_batches\.sql/);
@@ -156,6 +158,10 @@ test("deployment applies the ordered content suggestion, FAQ, and publish calend
   assert.match(runner, /a2c481f4ea5aba0430668d8e87d236f0a301a695cbecb4874400de0896aecde5/);
   assert.match(deploy, /079_publish_calendar_runtime\.sql/);
   assert.match(deploy, /c46ffafa578f6c1f8bb353f4e7bc94d16033416dd5a6aa730cf81119e6e6ef61/);
+  assert.match(runner, /080_reference_channel_archive\.sql/);
+  assert.match(runner, /9067430f0e8fbc6d52455ef5fcf712820fe405e4fca0e51835b6cd0552ce7fe0/);
+  assert.match(runner, /081_meta_ad_library_references\.sql/);
+  assert.match(runner, /232f4ee76b7812b0a9399ee3124b4542e5c6f01c0d5d37ecb786b0b41c25f9ef/);
   assert.match(deploy, /scripts\/migrate\.mjs --post-075-schema/);
   assert.match(deploy, /post-075-schema-migration-evidence\.v1/);
   const dataGate = deploy.lastIndexOf("run_post_075_data_migration_gate");
@@ -216,7 +222,7 @@ test("cutover API image contains both ordered migrations in an actual no-network
   try {
     const script = [
       "const fs=require('node:fs');",
-      "const required=['/app/db/migrations/074_ai_content_maintenance_write_fence.sql','/app/db/migrations/075_ai_content_three_format_cutover.sql','/app/db/migrations/076_manual_content_generation_brand_rules.sql','/app/db/migrations/077_content_suggestion_batches.sql','/app/db/migrations/078_faq_utterance_matching.sql','/app/db/migrations/079_publish_calendar_runtime.sql','/app/scripts/migrationRunner.mjs','/app/scripts/migrate.mjs','/app/scripts/databaseTls.mjs'];",
+      "const required=['/app/db/migrations/074_ai_content_maintenance_write_fence.sql','/app/db/migrations/075_ai_content_three_format_cutover.sql','/app/db/migrations/076_manual_content_generation_brand_rules.sql','/app/db/migrations/077_content_suggestion_batches.sql','/app/db/migrations/078_faq_utterance_matching.sql','/app/db/migrations/079_publish_calendar_runtime.sql','/app/db/migrations/080_reference_channel_archive.sql','/app/db/migrations/081_meta_ad_library_references.sql','/app/scripts/migrationRunner.mjs','/app/scripts/migrate.mjs','/app/scripts/databaseTls.mjs'];",
       "for(const path of required)if(!fs.existsSync(path))throw new Error('missing:'+path);",
     ].join("");
     const inspect = spawnSync("docker", ["run", "--rm", "--network", "none", "--entrypoint", "node", tag, "-e", script], {

@@ -54,6 +54,8 @@ export interface ReferenceItem extends BrandScope {
   favorite: boolean;
   archivedAt: string | null;
   referenceBrandId: string | null;
+  sourcePlatform: "instagram" | "meta_ad_library" | null;
+  sourceState: "available" | "unavailable" | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -159,14 +161,21 @@ function avatar(row: Record<string, unknown>): Avatar {
   };
 }
 function reference(row: Record<string, unknown>): ReferenceItem {
+  const kind = String(row.kind);
   return {
     id: String(row.id), workspaceId: String(row.workspace_id), brandId: String(row.brand_id),
-    kind: String(row.kind), contentPurpose: String(row.content_purpose), origin: String(row.origin),
+    kind, contentPurpose: String(row.content_purpose), origin: String(row.origin),
     title: String(row.title), previewUrl: row.preview_url ? String(row.preview_url) : null,
     sourceUrl: row.source_url ? String(row.source_url) : null, format: row.format ? String(row.format) : null,
     metadata: json(row.metadata, {}), favorite: Boolean(row.is_favorite),
     archivedAt: row.archived_at ? iso(row.archived_at) : null,
     referenceBrandId: row.reference_brand_id ? String(row.reference_brand_id) : null,
+    sourcePlatform: row.source_platform === "instagram" || row.source_platform === "meta_ad_library"
+      ? row.source_platform
+      : kind === "trend" ? "instagram" : kind === "meta_ad" ? "meta_ad_library" : null,
+    sourceState: row.source_state === "available" || row.source_state === "unavailable"
+      ? row.source_state
+      : null,
     createdAt: iso(row.created_at), updatedAt: iso(row.updated_at),
   };
 }
@@ -542,6 +551,12 @@ export function createAssetLibraryRepository(pool: Pool): AssetLibraryRepository
       const values: unknown[] = [scope.workspaceId, scope.brandId];
       const where = ["item.workspace_id=$1", "item.brand_id=$2", "item.archived_at is null"];
       const add = (sql: string, value: unknown) => { values.push(value); where.push(sql.replace("?", `$${values.length}`)); };
+      const collectionKinds = {
+        all: ["saved_content", "trend", "meta_ad", "external_url", "upload", "owned_performance"],
+        content: ["saved_content", "external_url", "upload", "owned_performance"],
+        trend: ["trend", "meta_ad"],
+      } as const;
+      if (filters.collection) add("item.kind = any(?::text[])", [...collectionKinds[filters.collection]]);
       if (filters.kind) add("item.kind=?", filters.kind);
       if (filters.contentFamily) add("item.metadata->>'contentFamily'=?", filters.contentFamily);
       if (filters.strategy) add("item.metadata->>'strategy'=?", filters.strategy);
@@ -549,6 +564,20 @@ export function createAssetLibraryRepository(pool: Pool): AssetLibraryRepository
       if (filters.origin) add("item.origin ilike '%' || ? || '%'", filters.origin);
       if (filters.favorite !== undefined) add("item.is_favorite=?", filters.favorite);
       if (filters.recent) add("item.created_at >= now() - (?::int * interval '1 day')", filters.recent);
+      if (filters.q) {
+        values.push(filters.q);
+        const parameter = `$${values.length}`;
+        where.push(`(
+          item.title ilike '%' || ${parameter} || '%'
+          or item.origin ilike '%' || ${parameter} || '%'
+          or item.metadata->>'description' ilike '%' || ${parameter} || '%'
+          or item.metadata->>'pageName' ilike '%' || ${parameter} || '%'
+          or item.metadata->>'creativeBody' ilike '%' || ${parameter} || '%'
+          or latest_snapshot.extracted_text ilike '%' || ${parameter} || '%'
+          or author.handle ilike '%' || ${parameter} || '%'
+          or author.display_name ilike '%' || ${parameter} || '%'
+        )`);
+      }
       const result = await pool.query(
         `select
           item.id,item.workspace_id,item.brand_id,item.kind,item.content_purpose,item.origin,
@@ -559,6 +588,11 @@ export function createAssetLibraryRepository(pool: Pool): AssetLibraryRepository
             item.preview_url
           ) preview_url,
           item.source_url,item.format,item.is_favorite,item.archived_at,item.reference_brand_id,
+          case when item.kind='trend' then 'instagram'
+            when item.kind='meta_ad' then 'meta_ad_library' end source_platform,
+          case when item.kind='meta_ad' then
+            case when meta_ad.active_status='ACTIVE' then 'available' else 'unavailable' end
+          end source_state,
           item.created_at,item.updated_at,
           jsonb_strip_nulls(jsonb_build_object(
             'patternAvailable',exists(
@@ -570,14 +604,25 @@ export function createAssetLibraryRepository(pool: Pool): AssetLibraryRepository
             'fileName',case when item.kind='upload' then item.metadata->>'fileName' end,
             'mimeType',case when item.kind='upload' then artifact.mime_type end,
             'sizeBytes',case when item.kind='upload' then artifact.byte_size end
+            ,'pageName',case when item.kind='meta_ad' then item.metadata->>'pageName' end
+            ,'creativeBody',case when item.kind='meta_ad' then item.metadata->>'creativeBody' end
           )) metadata
           from reference_items item
           left join storage_artifacts artifact
             on artifact.id=item.storage_artifact_id
            and artifact.workspace_id=item.workspace_id
            and artifact.brand_id=item.brand_id
+          left join reference_brands author
+            on author.id=item.reference_brand_id
+           and author.workspace_id=item.workspace_id
+           and author.brand_id=item.brand_id
+          left join brand_meta_ad_saved saved_meta_ad
+            on saved_meta_ad.id=item.saved_meta_ad_id
+           and saved_meta_ad.workspace_id=item.workspace_id
+           and saved_meta_ad.brand_id=item.brand_id
+          left join meta_ad_library_ads meta_ad on meta_ad.id=saved_meta_ad.meta_ad_id
           left join lateral (
-            select snapshot.extracted_title,snapshot.metadata
+            select snapshot.extracted_title,snapshot.extracted_text,snapshot.metadata
             from source_snapshots snapshot
             where snapshot.source_url_id=item.source_url_id
               and snapshot.workspace_id=item.workspace_id
@@ -587,7 +632,7 @@ export function createAssetLibraryRepository(pool: Pool): AssetLibraryRepository
             limit 1
           ) latest_snapshot on item.source_url_id is not null
           where ${where.join(" and ")}
-          order by item.created_at desc`,
+          order by item.created_at desc,item.id desc`,
         values,
       );
       return result.rows.map((row) => reference(row as Record<string, unknown>));
@@ -603,15 +648,22 @@ export function createAssetLibraryRepository(pool: Pool): AssetLibraryRepository
             item.preview_url
           ) preview_url,
           item.source_url,item.format,item.metadata,item.is_favorite,item.archived_at,
+          case when item.kind='trend' then 'instagram'
+            when item.kind='meta_ad' then 'meta_ad_library' end source_platform,
+          case when item.kind='meta_ad' then
+            case when meta_ad.active_status='ACTIVE' then 'available' else 'unavailable' end
+          end source_state,
           item.reference_brand_id,item.created_at,item.updated_at,
           coalesce(
             nullif(latest_snapshot.summary,''),
             nullif(latest_snapshot.extracted_text,''),
+            nullif(item.metadata->>'creativeBody',''),
             nullif(item.metadata->>'description',''),
             nullif(source.meta_description,'')
           ) detail_description,
           coalesce(
             nullif(latest_snapshot.extracted_text,''),
+            nullif(item.metadata->>'creativeBody',''),
             nullif(item.metadata->>'caption',''),
             nullif(item.metadata->>'body',''),
             nullif(item.metadata->>'description','')
@@ -624,6 +676,11 @@ export function createAssetLibraryRepository(pool: Pool): AssetLibraryRepository
             on source.id=item.source_url_id
            and source.workspace_id=item.workspace_id
            and source.brand_id=item.brand_id
+          left join brand_meta_ad_saved saved_meta_ad
+            on saved_meta_ad.id=item.saved_meta_ad_id
+           and saved_meta_ad.workspace_id=item.workspace_id
+           and saved_meta_ad.brand_id=item.brand_id
+          left join meta_ad_library_ads meta_ad on meta_ad.id=saved_meta_ad.meta_ad_id
           left join lateral (
             select snapshot.id,snapshot.fetched_at,snapshot.extracted_title,
               snapshot.extracted_text,snapshot.summary,snapshot.metadata

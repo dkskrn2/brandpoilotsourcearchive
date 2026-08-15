@@ -855,10 +855,29 @@ export function registerBrandCenterRoutes(
     },
   );
 
-  app.get<{ Params: { brandId: string } }>("/brands/:brandId/reference-brands", async (request) => {
+  app.get<{ Params: { brandId: string }; Querystring: { q?: string } }>("/brands/:brandId/reference-brands", async (request) => {
+    const scope = options.scope(request, request.params.brandId);
+    if (repository.listReferenceChannels) return repository.listReferenceChannels(scope, request.query.q);
     if (!repository.listReferenceBrands) throw new Error("asset_library_not_configured");
-    return repository.listReferenceBrands(options.scope(request, request.params.brandId));
+    return repository.listReferenceBrands(scope);
   });
+
+  app.post<{ Params: { brandId: string }; Body: unknown }>(
+    "/brands/:brandId/reference-brands/resolve",
+    async (request, reply) => {
+      if (!repository.resolveReferenceChannel) throw new Error("asset_library_not_configured");
+      const body = request.body && typeof request.body === "object" ? request.body as Record<string, unknown> : {};
+      if (typeof body.profile !== "string" || !body.profile.trim()) {
+        throw new Error("reference_channel_handle_invalid");
+      }
+      const value = await repository.resolveReferenceChannel(
+        { ...options.scope(request, request.params.brandId), actorUserId: requireActor(options, request) },
+        body.profile,
+      );
+      reply.code(201);
+      return value;
+    },
+  );
 
   app.post<{ Params: { brandId: string }; Body: unknown }>(
     "/brands/:brandId/reference-brands",
@@ -882,6 +901,16 @@ export function registerBrandCenterRoutes(
       });
       reply.code(201);
       return value;
+    },
+  );
+
+  app.get<{ Params: { brandId: string; referenceBrandId: string } }>(
+    "/brands/:brandId/reference-brands/:referenceBrandId/media",
+    async (request) => {
+      if (!repository.listReferenceChannelMedia) throw new Error("asset_library_not_configured");
+      return repository.listReferenceChannelMedia({
+        ...options.scope(request, request.params.brandId), referenceBrandId: request.params.referenceBrandId,
+      });
     },
   );
 

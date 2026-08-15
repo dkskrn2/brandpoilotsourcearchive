@@ -109,17 +109,19 @@ export async function getMetaGraphJson({
   params,
   fetchImpl,
   graphVersion,
-  host = "graph.facebook.com"
+  host = "graph.facebook.com",
+  signal,
 }: {
   path: string;
   params: Record<string, string>;
   fetchImpl: typeof fetch;
   graphVersion: string;
   host?: "graph.facebook.com" | "graph.instagram.com";
+  signal?: AbortSignal;
 }) {
   const url = new URL(`https://${host}/${graphVersion}/${path.replace(/^\//, "")}`);
   for (const [key, value] of Object.entries(params)) url.searchParams.set(key, value);
-  return readGraphResponse(await fetchImpl(url.toString(), { method: "GET" }));
+  return readGraphResponse(await fetchImpl(url.toString(), { method: "GET", signal }));
 }
 
 export async function postMetaGraphForm({

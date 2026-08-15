@@ -1006,6 +1006,7 @@ describe("asset library repository", () => {
     const fake = fakePool((sql) => {
       const access = member(sql, "admin");
       if (access) return access;
+      if (sql.includes("from brand_profiles") && sql.includes("for update")) return { rows: [{ brand_id: scope.brandId }] };
       if (sql.includes("from reference_items") && sql.includes("for update")) {
         return { rows: [row()] };
       }
@@ -1057,6 +1058,7 @@ describe("asset library repository", () => {
     const fake = fakePool((sql) => {
       const access = member(sql, "admin");
       if (access) return access;
+      if (sql.includes("from brand_profiles") && sql.includes("for update")) return { rows: [{ brand_id: scope.brandId }] };
       if (sql.includes("from reference_items")) {
         return { rows: [{
           id: imageId, kind: "trend", source_url_id: null,
@@ -1089,6 +1091,7 @@ describe("asset library repository", () => {
     const fake = fakePool((sql) => {
       const access = member(sql, "admin");
       if (access) return access;
+      if (sql.includes("from brand_profiles") && sql.includes("for update")) return { rows: [{ brand_id: scope.brandId }] };
       if (sql.includes("from reference_items") && !sql.includes("for update")) {
         return { rows: [{
           id: imageId, kind: "trend", source_url_id: null, saved_trend_id: savedId,
@@ -1184,6 +1187,12 @@ describe("asset library repository", () => {
             }
             if (sql.includes("select workspace_id from brands")) {
               return { rows: [{ workspace_id: scope.workspaceId }], rowCount: 1 };
+            }
+            if (sql.includes("from brand_profiles") && sql.includes("for update")) {
+              return { rows: [{ brand_id: scope.brandId }], rowCount: 1 };
+            }
+            if (sql.includes("from brand_profiles profile") && sql.includes("brand_rule_sets")) {
+              return { rows: [], rowCount: 0 };
             }
             if (sql.includes("from instagram_trend_media media")) {
               return {
@@ -1395,6 +1404,11 @@ describe("asset library repository", () => {
     expect(listSql).not.toContain("select item.*");
     expect(listSql).toContain("jsonb_build_object");
     expect(listSql).toContain("patternAvailable");
+    expect(listSql).toContain("source_platform");
+    expect(listSql).toContain("source_state");
+    expect(listSql).toContain("brand_meta_ad_saved saved_meta_ad");
+    expect(listSql).toContain("meta_ad_library_ads meta_ad");
+    expect(listSql).toContain("creativeBody");
     expect(fake.query.mock.calls.some(([sql]) =>
       String(sql).includes("brand_trend_saved_media") && String(sql).includes("instagram_trend_media"),
     )).toBe(true);
@@ -1402,6 +1416,48 @@ describe("asset library repository", () => {
       sql.includes("brand_trend_saved_media") && sql.includes("instagram_trend_media"));
     expect(brandItemsSql).not.toContain("select item.*");
     expect(brandItemsSql).toContain("patternAvailable");
+  });
+
+  it("searches the three saved Library collections without returning saved-brand rows", async () => {
+    const fake = fakePool(() => ({ rows: [] }));
+    const repository = createAssetLibraryRepository(fake.pool);
+
+    await repository.listReferences({ workspaceId: scope.workspaceId, brandId: scope.brandId }, {
+      collection: "content",
+      q: "여름 루틴",
+    });
+
+    const call = fake.query.mock.calls.find(([sql]) => String(sql).includes("from reference_items item"));
+    const sql = String(call?.[0]).replace(/\s+/g, " ");
+    expect(call?.[1]).toEqual([
+      scope.workspaceId,
+      scope.brandId,
+      ["saved_content", "external_url", "upload", "owned_performance"],
+      "여름 루틴",
+    ]);
+    expect(sql).toContain("item.kind = any($3::text[])");
+    expect(sql).toContain("latest_snapshot.extracted_text");
+    expect(sql).toContain("select snapshot.extracted_title,snapshot.extracted_text,snapshot.metadata");
+    expect(sql).toContain("author.handle");
+    expect(sql).toContain("author.display_name");
+    expect(sql).toContain("or item.metadata->>'pageName' ilike");
+    expect(sql).toContain("or item.metadata->>'creativeBody' ilike");
+    expect(sql).toContain("order by item.created_at desc,item.id desc");
+  });
+
+  it.each([
+    ["all", ["saved_content", "trend", "meta_ad", "external_url", "upload", "owned_performance"]],
+    ["content", ["saved_content", "external_url", "upload", "owned_performance"]],
+    ["trend", ["trend", "meta_ad"]],
+  ] as const)("maps collection=%s to its saved reference kinds", async (collection, kinds) => {
+    const fake = fakePool(() => ({ rows: [] }));
+    await createAssetLibraryRepository(fake.pool).listReferences(
+      { workspaceId: scope.workspaceId, brandId: scope.brandId },
+      { collection },
+    );
+    const call = fake.query.mock.calls.find(([sql]) => String(sql).includes("from reference_items item"));
+    expect(call?.[1]).toEqual([scope.workspaceId, scope.brandId, [...kinds]]);
+    expect(call?.[1]?.[2]).not.toContain("saved_brand");
   });
 
   it("loads a tenant-scoped reference detail without mutating its stored snapshot", async () => {
@@ -1444,5 +1500,35 @@ describe("asset library repository", () => {
     expect(String(query)).toContain("item.brand_id=$3");
     expect(values).toEqual([imageId, scope.workspaceId, scope.brandId]);
     expect(fake.query.mock.calls.some(([sql]) => /^\s*update\b/i.test(String(sql)))).toBe(false);
+  });
+
+  it("uses saved Meta ad copy as the reference detail body", async () => {
+    const row = {
+      id: imageId, workspace_id: scope.workspaceId, brand_id: scope.brandId,
+      kind: "meta_ad", content_purpose: "marketing", origin: "Meta 광고 라이브러리",
+      title: "Acme 광고", preview_url: null,
+      source_url: "https://www.facebook.com/ads/library/?id=123", format: "ad",
+      metadata: { pageName: "Acme", creativeBody: "여름 프로모션 광고 문구" },
+      is_favorite: false, archived_at: null, reference_brand_id: null,
+      created_at: new Date(), updated_at: new Date(),
+      detail_description: "여름 프로모션 광고 문구",
+      detail_body: "여름 프로모션 광고 문구",
+      source_state: "unavailable",
+      snapshot_id: null, snapshot_fetched_at: null, snapshot_metadata: null,
+    };
+    const fake = fakePool((sql) => sql.includes("from reference_items item")
+      && sql.includes("source_snapshots") ? { rows: [row] } : {});
+
+    const detail = await createAssetLibraryRepository(fake.pool).getReference({
+      workspaceId: scope.workspaceId,
+      brandId: scope.brandId,
+      referenceId: imageId,
+    });
+
+    expect(detail?.body).toBe("여름 프로모션 광고 문구");
+    expect(detail?.sourceState).toBe("unavailable");
+    const sql = String(fake.query.mock.calls[0]?.[0]);
+    expect(sql).toContain("item.metadata->>'creativeBody'");
+    expect(sql).toContain("meta_ad.active_status");
   });
 });

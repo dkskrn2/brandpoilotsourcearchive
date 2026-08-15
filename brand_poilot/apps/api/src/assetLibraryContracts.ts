@@ -1,12 +1,12 @@
 export type ReferenceKind =
-  | "saved_brand" | "saved_content" | "trend" | "external_url" | "upload" | "owned_performance";
+  | "saved_brand" | "saved_content" | "trend" | "meta_ad" | "external_url" | "upload" | "owned_performance";
 export type ContentPurpose = "informational" | "marketing" | "both";
 
 const SHA256 = /^[0-9a-f]{64}$/i;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const SAFE_FILE_NAME = /^[\p{L}\p{N}._ -]+$/u;
 const referenceKinds = new Set<ReferenceKind>([
-  "saved_brand", "saved_content", "trend", "external_url", "upload", "owned_performance",
+  "saved_brand", "saved_content", "trend", "meta_ad", "external_url", "upload", "owned_performance",
 ]);
 const contentPurposes = new Set<ContentPurpose>(["informational", "marketing", "both"]);
 
@@ -126,6 +126,8 @@ export function parseReferenceUrlInput(value: unknown): ReferenceUrlInput {
 }
 
 export interface ReferenceFilters {
+  q?: string;
+  collection?: "all" | "content" | "trend";
   kind?: ReferenceKind;
   contentFamily?: string;
   strategy?: string;
@@ -136,8 +138,15 @@ export interface ReferenceFilters {
 }
 export function parseReferenceFilters(value: unknown): ReferenceFilters {
   const row = object(value ?? {}, "reference_filter_invalid:root");
-  unknownKey(row, ["kind", "contentFamily", "strategy", "format", "origin", "favorite", "recent"], "reference_filter_invalid");
+  unknownKey(row, ["q", "collection", "kind", "contentFamily", "strategy", "format", "origin", "favorite", "recent"], "reference_filter_invalid");
   const result: ReferenceFilters = {};
+  if (row.q !== undefined) result.q = text(row.q, "reference_filter_invalid:q", true, 200);
+  if (row.collection !== undefined) {
+    if (!new Set(["all", "content", "trend"]).has(String(row.collection))) {
+      throw new Error("reference_filter_invalid:collection");
+    }
+    result.collection = row.collection as "all" | "content" | "trend";
+  }
   if (row.kind !== undefined) {
     if (!referenceKinds.has(row.kind as ReferenceKind)) throw new Error("reference_filter_invalid:kind");
     result.kind = row.kind as ReferenceKind;

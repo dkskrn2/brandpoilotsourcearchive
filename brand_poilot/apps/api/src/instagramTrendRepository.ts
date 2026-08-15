@@ -661,16 +661,26 @@ export function createInstagramTrendRepository(input: {
                 like_count, comments_count, raw_metadata
          from instagram_trend_media media
          where media.id = $1
-           and exists (
-             select 1
-             from instagram_trend_hashtag_media relation
-             join brand_trend_searches search
-               on search.hashtag_id = relation.hashtag_id
-              and search.brand_id = $2
-             where relation.media_id = media.id
+           and (
+             exists (
+               select 1
+               from instagram_trend_hashtag_media relation
+               join brand_trend_searches search
+                 on search.hashtag_id = relation.hashtag_id
+                and search.brand_id = $2
+               where relation.media_id = media.id
+             )
+             or exists (
+               select 1
+               from reference_brand_media channel_relation
+               where channel_relation.trend_media_id=media.id
+                 and channel_relation.brand_id=$2
+                 and channel_relation.workspace_id=$3
+                 and channel_relation.is_current
+             )
            )
          for update`,
-        [mediaId, brandId],
+        [mediaId, brandId, workspaceId],
       );
       if (!selected.rowCount) throw new Error("instagram_trend_media_not_found");
       const item = selected.rows[0];

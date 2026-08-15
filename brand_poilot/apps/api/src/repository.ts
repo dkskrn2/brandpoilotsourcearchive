@@ -21,6 +21,10 @@ import { classifyInstagramDmSendError, sendInstagramDirectMessage } from "./inst
 import { fetchInstagramMessagingProfile } from "./instagramLoginGraph.js";
 import { fetchInstagramHashtagTopMedia } from "./instagramTrendMeta.js";
 import { createInstagramTrendRepository } from "./instagramTrendRepository.js";
+import { fetchInstagramBusinessDiscovery } from "./instagramBusinessDiscoveryMeta.js";
+import { createInstagramReferenceArchiveRepository } from "./instagramReferenceArchiveRepository.js";
+import { fetchMetaAdLibrary } from "./metaAdLibrary.js";
+import { createMetaAdLibraryRepository } from "./metaAdLibraryRepository.js";
 import { createAiContentRepository } from "./aiContentRepository.js";
 import { assertAiContentWritable, withAiContentTransactionFence } from "./aiContentMaintenance.js";
 import { createAiContentAttachmentGcRepository } from "./aiContentAttachmentGcRepository.js";
@@ -1221,6 +1225,10 @@ interface RepositoryOptions {
   sendInstagramDirectMessage?: typeof sendInstagramDirectMessage;
   fetchInstagramMessagingProfile?: typeof fetchInstagramMessagingProfile;
   fetchInstagramHashtagTopMedia?: typeof fetchInstagramHashtagTopMedia;
+  fetchInstagramBusinessDiscovery?: typeof fetchInstagramBusinessDiscovery;
+  fetchMetaAdLibrary?: typeof fetchMetaAdLibrary;
+  metaAdLibraryAccessToken?: string | null;
+  metaAdLibraryAppId?: string | null;
   trendNow?: () => Date;
   performanceAdapters?: Partial<Record<PerformanceChannel, PerformanceAdapter>>;
   workerResourceLimits?: Pick<WorkerResourceLimits, "total" | "dmReserved">;
@@ -1501,6 +1509,19 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
     decryptCredential,
     encryptCredential,
     fetchTopMedia: options.fetchInstagramHashtagTopMedia ?? fetchInstagramHashtagTopMedia,
+    now: options.trendNow,
+  });
+  const instagramReferenceArchiveRepository = createInstagramReferenceArchiveRepository({
+    pool,
+    decryptCredential,
+    fetchBusinessDiscovery: options.fetchInstagramBusinessDiscovery ?? fetchInstagramBusinessDiscovery,
+    now: options.trendNow,
+  });
+  const metaAdLibraryRepository = createMetaAdLibraryRepository({
+    pool,
+    accessToken: options.metaAdLibraryAccessToken ?? process.env.META_AD_LIBRARY_ACCESS_TOKEN,
+    appId: options.metaAdLibraryAppId ?? process.env.META_AD_LIBRARY_APP_ID,
+    fetchAds: options.fetchMetaAdLibrary ?? fetchMetaAdLibrary,
     now: options.trendNow,
   });
   const performanceAdapters = {
@@ -2166,6 +2187,13 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
     ...brandCore,
     ...productLibrary,
     ...assetLibrary,
+    ...instagramReferenceArchiveRepository,
+    searchMetaAdLibrary: metaAdLibraryRepository.search,
+    findMetaAdLibraryCache: metaAdLibraryRepository.findCache,
+    getMetaAdLibrarySearch: metaAdLibraryRepository.getSearch,
+    saveMetaAdLibraryAd: metaAdLibraryRepository.save,
+    removeMetaAdLibraryAd: metaAdLibraryRepository.remove,
+    runSavedMetaAdPageRefreshes: metaAdLibraryRepository.runSavedPageRefreshes,
     ...faqSuggestions,
     ...instagramTrendRepository,
     ...aiContent,

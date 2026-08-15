@@ -4,6 +4,11 @@ import type { BrandCoreRepository } from "./brandCoreRepository.js";
 import type { ProductLibraryRepository } from "./productLibraryRepository.js";
 import type { WikiManagementRepository } from "./wikiManagementContracts.js";
 import type { FaqSuggestionRepository } from "./faqSuggestionRepository.js";
+import type { MetaAdSearchInput } from "./metaAdLibrary.js";
+import type {
+  MetaAdLibrarySavedDto,
+  MetaAdLibrarySearchPageDto,
+} from "./metaAdLibraryRepository.js";
 import type {
   AiContentGenerationRecord,
   AiContentJobRecord,
@@ -1136,6 +1141,7 @@ export interface ApiRepository
     Partial<WikiManagementRepository>,
     Partial<FaqSuggestionRepository>,
     Partial<import("./assetLibraryRepository.js").AssetLibraryRepository>,
+    Partial<import("./instagramReferenceArchiveRepository.js").InstagramReferenceArchiveRepository>,
     Partial<import("./aiContentAttachmentRepository.js").AiContentAttachmentLifecycleRepository>,
     Partial<import("./aiContentAttachmentGcRepository.js").AiContentAttachmentGcRepository>,
     Partial<import("./publishCalendarRepository.js").PublishCalendarRepository>,
@@ -1231,6 +1237,27 @@ export interface ApiRepository
   setInstagramTrendFavorite(brandId: string, hashtagId: string, input: InstagramTrendFavoriteInput): Promise<InstagramTrendSearchHistoryDto>;
   saveInstagramTrendSource(brandId: string, mediaId: string, actorUserId?: string | null): Promise<InstagramTrendSaveSourceDto>;
   removeInstagramTrendSource(brandId: string, mediaId: string, actorUserId?: string | null): Promise<InstagramTrendRemoveSourceDto>;
+  searchMetaAdLibrary(
+    scope: BrandScope & { actorUserId: string },
+    input: MetaAdSearchInput,
+  ): Promise<MetaAdLibrarySearchPageDto>;
+  findMetaAdLibraryCache(
+    scope: BrandScope,
+    input: MetaAdSearchInput,
+  ): Promise<MetaAdLibrarySearchPageDto | null>;
+  getMetaAdLibrarySearch(
+    scope: BrandScope,
+    searchId: string,
+    cursor?: string | null,
+  ): Promise<MetaAdLibrarySearchPageDto>;
+  saveMetaAdLibraryAd(
+    scope: BrandScope & { actorUserId: string },
+    adId: string,
+  ): Promise<MetaAdLibrarySavedDto>;
+  removeMetaAdLibraryAd(scope: BrandScope, adId: string): Promise<void>;
+  runSavedMetaAdPageRefreshes(limit?: number): Promise<{
+    enqueued: number; processed: number; succeeded: number; failed: number; skipped: number;
+  }>;
   getBillingSummary(brandId: string): Promise<BillingSummaryDto>;
   getBrandUiStatus(brandId: string): Promise<BrandUiStatusDto>;
   getBrandProfile(brandId: string): Promise<BrandProfileDto>;

@@ -58,6 +58,8 @@ describe("asset library contracts", () => {
   it("normalizes all supported list filters", () => {
     expect(parseReferenceFilters({
       kind: "trend",
+      collection: "content",
+      q: "  여름 루틴  ",
       contentFamily: "blog",
       strategy: "educational",
       format: " reel ",
@@ -66,6 +68,8 @@ describe("asset library contracts", () => {
       recent: "30",
     })).toEqual({
       kind: "trend",
+      collection: "content",
+      q: "여름 루틴",
       contentFamily: "blog",
       strategy: "educational",
       format: "reel",
@@ -75,6 +79,14 @@ describe("asset library contracts", () => {
     });
     expect(() => parseReferenceFilters({ favorite: "sometimes" }))
       .toThrow("reference_filter_invalid:favorite");
+    expect(() => parseReferenceFilters({ collection: "brands" }))
+      .toThrow("reference_filter_invalid:collection");
+    expect(() => parseReferenceFilters({ q: "가".repeat(201) }))
+      .toThrow("reference_filter_invalid:q");
+  });
+
+  it("accepts Meta ad references as a first-class saved kind", () => {
+    expect(parseReferenceFilters({ kind: "meta_ad" })).toEqual({ kind: "meta_ad" });
   });
 
   it("validates upload metadata and reference-brand public identities", () => {
