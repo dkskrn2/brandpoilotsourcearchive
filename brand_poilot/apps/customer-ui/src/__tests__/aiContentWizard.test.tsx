@@ -20,11 +20,11 @@ function Location() {
   return <span data-testid="location">{useLocation().search}</span>;
 }
 
-function renderWizard(path: string) {
+function renderWizard(path: string, calendarProvisioner?: (brandId: string, input: never) => Promise<unknown>) {
   return render(
     <MemoryRouter initialEntries={[path]}>
       <Routes>
-        <Route path="/ai-content/new" element={<><AiContentWizardPage gateway={createMockAiContentGateway()} brandId="brand-demo" /><Location /></>} />
+        <Route path="/ai-content/new" element={<><AiContentWizardPage gateway={createMockAiContentGateway()} brandId="brand-demo" calendarProvisioner={calendarProvisioner as never} /><Location /></>} />
       </Routes>
     </MemoryRouter>,
   );
@@ -85,5 +85,20 @@ describe("AiContentWizardPage active entry", () => {
     renderWizard("/ai-content/new?reference=missing&proposalFormat=reel");
     act(() => latestProps().onSeedReferenceInvalid?.());
     expect(screen.getByTestId("location")).toHaveTextContent("?proposalFormat=reel");
+  });
+
+  it("provisions the reserved calendar slot only after a proposal creates a generation draft", async () => {
+    const calendarProvisioner = vi.fn(async () => ({}));
+    renderWizard("/ai-content/new?proposalFamily=informational&proposalFormat=reel&proposalChannels=instagram&proposalTopic=SNS%20마케팅&calendarScheduledFor=2026-09-01T02%3A30%3A00.000Z&calendarIdempotencyKey=calendar-key", calendarProvisioner);
+
+    await latestProps().onGenerationDraftReady?.({ generationId: "generation-1", contentFormat: "reel" });
+
+    expect(calendarProvisioner).toHaveBeenCalledWith("brand-demo", {
+      scheduledFor: "2026-09-01T02:30:00.000Z",
+      channel: "instagram",
+      contentFormat: "reel",
+      idempotencyKey: "calendar-key",
+      source: { kind: "existing_generation", generationId: "generation-1" },
+    });
   });
 });

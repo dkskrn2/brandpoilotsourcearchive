@@ -40,6 +40,11 @@ import type {
   PipelineRunResult,
   PublishArtifact,
   PublishCalendarSettings,
+  PublishCalendarContentCandidateList,
+  PublishCalendarManualBatchInput,
+  PublishCalendarManualBatchResult,
+  PublishCalendarManualOptions,
+  PublishCalendarManualSlotInput,
   PublishCalendarSlot,
   PublishCalendarWeeklyUsage,
   PublishSlot,
@@ -721,8 +726,17 @@ export function apiClient(options: ApiClientOptions = {}) {
     listPublishCalendarSlots(brandId: string, period: { from: string; to: string }) {
       return request<PublishCalendarSlot[]>(fetcher, `${baseUrl}/brands/${brandId}/publish-calendar/slots?${new URLSearchParams(period)}`, { method: "GET" });
     },
-    createPublishCalendarSlot(brandId: string, payload: { scheduledFor: string; contentFormat: "card_news" | "reel"; channels: ChannelType[] }) {
-      return request<PublishCalendarSlot>(fetcher, `${baseUrl}/brands/${brandId}/publish-calendar/slots`, { method: "POST", body: JSON.stringify(payload) });
+    getPublishCalendarManualOptions(brandId: string) {
+      return request<PublishCalendarManualOptions>(fetcher, `${baseUrl}/brands/${brandId}/publish-calendar/manual-options`, { method: "GET" });
+    },
+    listPublishCalendarContentCandidates(brandId: string, kind: "generating" | "completed_unpublished") {
+      return request<PublishCalendarContentCandidateList>(fetcher, `${baseUrl}/brands/${brandId}/publish-calendar/content-candidates?${new URLSearchParams({ kind })}`, { method: "GET" });
+    },
+    provisionPublishCalendarManualSlot(brandId: string, payload: PublishCalendarManualSlotInput) {
+      return request<PublishCalendarSlot>(fetcher, `${baseUrl}/brands/${brandId}/publish-calendar/manual-slots`, { method: "POST", body: JSON.stringify(payload) });
+    },
+    provisionPublishCalendarManualSlotsBatch(brandId: string, payload: PublishCalendarManualBatchInput) {
+      return request<PublishCalendarManualBatchResult>(fetcher, `${baseUrl}/brands/${brandId}/publish-calendar/manual-slots/batch`, { method: "POST", body: JSON.stringify(payload) });
     },
     assignPublishCalendarSlot(brandId: string, slotId: string, payload: { topicPublishGroupId: string; title: string }) {
       return request<PublishCalendarSlot>(fetcher, `${baseUrl}/brands/${brandId}/publish-calendar/slots/${slotId}/assignment`, { method: "PUT", body: JSON.stringify(payload) });

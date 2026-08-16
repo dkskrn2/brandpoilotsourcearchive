@@ -5,6 +5,7 @@ export const PUBLISH_CALENDAR_USAGE_CHANGED_EVENT = "brand-pilot:publish-calenda
 export type CalendarEntry = {
   id: string;
   scheduledFor: string;
+  effectiveScheduledFor?: string | null;
   title: string;
   status: string;
   mode: "automatic" | "manual";
@@ -36,6 +37,7 @@ export function entryFromSlot(slot: PublishCalendarSlot): CalendarEntry {
   return {
     id: slot.id,
     scheduledFor: slot.scheduledFor,
+    effectiveScheduledFor: slot.effectiveScheduledFor,
     title: slot.title ?? (slot.recommendationKind === "trend" ? "트렌드 추천 대기" : slot.recommendationKind === "informational" ? "정보성 추천 대기" : "수동 배정 대기"),
     status: slot.status,
     mode: slot.assignmentMode,

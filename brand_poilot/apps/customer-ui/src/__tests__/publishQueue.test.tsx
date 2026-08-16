@@ -281,6 +281,7 @@ const preLlmQueueRows: PublishSlot[] = [{
 
 afterEach(() => {
   cleanup();
+  window.localStorage.clear();
   window.history.replaceState({}, "", "/publish-queue");
   vi.resetModules();
   vi.restoreAllMocks();
@@ -455,6 +456,35 @@ describe("PublishQueuePage", () => {
     expect(within(detail).getByText("릴스")).toBeVisible();
   });
 
+  it("shows both the original reservation and the effective late publication time", async () => {
+    const slot: PublishCalendarSlot = {
+      id: "late-slot", workspaceId: "w", brandId: "brand-1", scheduledFor: "2026-08-15T02:30:00.000Z", effectiveScheduledFor: "2026-08-15T03:30:00.000Z",
+      assignmentMode: "manual", status: "scheduled", recommendationKind: null, contentFormat: "card_news", channels: ["instagram"], contentSuggestionId: null, proposalId: null,
+      generationId: "generation-1", generationOutputId: "output-1", topicPublishGroupId: "group-1", title: "늦게 준비된 콘텐츠", lastError: null, updatedAt: "2026-08-15T03:00:00.000Z"
+    };
+    await renderPublishQueuePage({ listChannels: vi.fn(async () => [{ type: "instagram", enabled: true, status: "connected" }]), getPublishCalendarSettings: vi.fn(async () => ({ brandId: "brand-1", enabled: false, channels: [], informationalFormat: "card_news", trendFormat: "reel", slotTimes: ["11:30"], updatedAt: null })), listPublishCalendarSlots: vi.fn(async () => [slot]) });
+    await userEvent.click(screen.getByRole("tab", { name: "캘린더" }));
+    await userEvent.click(await screen.findByRole("button", { name: "늦게 준비된 콘텐츠 슬롯 상세 보기" }));
+    const detail = screen.getByRole("complementary", { name: "늦게 준비된 콘텐츠 슬롯 상세" });
+    expect(within(detail).getByText("원래 예약 시각")).toBeVisible();
+    expect(within(detail).getByText("지연 후 실제 게시 예정")).toBeVisible();
+    expect(within(detail).getByText("12:30")).toBeVisible();
+  });
+
+  it("labels a completed delayed slot with its actual publication time", async () => {
+    const slot: PublishCalendarSlot = {
+      id: "published-late-slot", workspaceId: "w", brandId: "brand-1", scheduledFor: "2026-08-15T02:30:00.000Z", effectiveScheduledFor: "2026-08-15T03:30:00.000Z",
+      assignmentMode: "manual", status: "published", recommendationKind: null, contentFormat: "card_news", channels: ["instagram"], contentSuggestionId: null, proposalId: null,
+      generationId: "generation-1", generationOutputId: "output-1", topicPublishGroupId: "group-1", title: "게시 완료된 지연 콘텐츠", lastError: null, updatedAt: "2026-08-15T03:30:00.000Z"
+    };
+    await renderPublishQueuePage({ listChannels: vi.fn(async () => [{ type: "instagram", enabled: true, status: "connected" }]), getPublishCalendarSettings: vi.fn(async () => ({ brandId: "brand-1", enabled: false, channels: [], informationalFormat: "card_news", trendFormat: "reel", slotTimes: ["11:30"], updatedAt: null })), listPublishCalendarSlots: vi.fn(async () => [slot]) });
+    await userEvent.click(screen.getByRole("tab", { name: "캘린더" }));
+    await userEvent.click(await screen.findByRole("button", { name: "게시 완료된 지연 콘텐츠 슬롯 상세 보기" }));
+    const detail = screen.getByRole("complementary", { name: "게시 완료된 지연 콘텐츠 슬롯 상세" });
+    expect(within(detail).getByText("실제 게시 시각")).toBeVisible();
+    expect(within(detail).queryByText("지연 후 실제 게시 예정")).not.toBeInTheDocument();
+  });
+
   it("offers only UUID-backed topic groups when assigning an open calendar slot", async () => {
     const slot: PublishCalendarSlot = {
       id: "calendar-open", workspaceId: "workspace-1", brandId: "brand-1", scheduledFor: "2026-08-15T02:30:00.000Z",
@@ -533,27 +563,153 @@ describe("PublishQueuePage", () => {
     });
   });
 
-  it("creates a manual Instagram-only slot from the selected date", async () => {
-    const createPublishCalendarSlot = vi.fn(async (_brandId: string, input: Record<string, unknown>) => ({
-      id: "manual-slot", workspaceId: "workspace-1", brandId: "brand-1", assignmentMode: "manual", status: "open", recommendationKind: null,
-      contentSuggestionId: null, proposalId: null, generationId: null, generationOutputId: null, topicPublishGroupId: null, title: null, lastError: null, updatedAt: "2026-08-14T00:00:00.000Z", ...input
+  it("blocks automatic posting times that are less than 30 minutes apart, including midnight", async () => {
+    const savePublishCalendarSettings = vi.fn();
+    await renderPublishQueuePage({
+      listChannels: vi.fn(async () => [{ type: "instagram", enabled: true, status: "connected" }]),
+      getPublishCalendarSettings: vi.fn(async () => ({ brandId: "brand-1", enabled: false, channels: [], informationalFormat: "card_news", trendFormat: "reel", slotTimes: ["11:30"], updatedAt: null })),
+      listPublishCalendarSlots: vi.fn(async () => []), savePublishCalendarSettings
+    });
+    await userEvent.click(screen.getByRole("tab", { name: "캘린더" }));
+    await userEvent.click(screen.getByRole("button", { name: "자동 게시 설정" }));
+    const slotTimes = screen.getByRole("dialog", { name: "자동 게시 설정" }).querySelector<HTMLInputElement>('input[aria-label="게시 시간"]')!;
+    await userEvent.clear(slotTimes);
+    await userEvent.type(slotTimes, "23:45, 00:00");
+    await userEvent.click(screen.getByRole("button", { name: "설정 저장" }));
+    expect(screen.getByText("게시 시간은 서로 최소 30분 간격이어야 합니다.")).toBeVisible();
+    expect(savePublishCalendarSettings).not.toHaveBeenCalled();
+  });
+
+  it("provisions a manual Instagram slot with a completed unpublished output", async () => {
+    const outputId = "11111111-1111-4111-8111-111111111111";
+    const generationId = "22222222-2222-4222-8222-222222222222";
+    const provisionPublishCalendarManualSlot = vi.fn(async (_brandId: string, input: Record<string, unknown>) => ({
+      id: "manual-slot", workspaceId: "workspace-1", brandId: "brand-1", assignmentMode: "manual", status: "content_assigned", recommendationKind: null,
+      contentSuggestionId: null, proposalId: null, generationId, generationOutputId: outputId, topicPublishGroupId: null, title: "완료 콘텐츠", lastError: null, updatedAt: "2026-08-14T00:00:00.000Z", ...input
     }));
     await renderPublishQueuePage({
       listChannels: vi.fn(async () => [{ type: "instagram", enabled: true, status: "connected" }]),
       getPublishCalendarSettings: vi.fn(async () => ({ brandId: "brand-1", enabled: false, channels: [], informationalFormat: "card_news", trendFormat: "reel", slotTimes: ["11:30"], updatedAt: null })),
       listPublishCalendarSlots: vi.fn(async () => []),
-      createPublishCalendarSlot
+      getPublishCalendarManualOptions: vi.fn(async () => ({ purposes: [], subjectModes: [], channels: [{ value: "instagram", label: "Instagram", formats: [{ value: "card_news", label: "카드뉴스" }, { value: "reel", label: "릴스" }] }], products: [], suggestions: [], references: [], usage: { periodStart: "", periodEnd: "", limit: 10, published: 0, reserved: 0, remaining: 10 } })),
+      listPublishCalendarContentCandidates: vi.fn(async () => ({ items: [{ kind: "completed_unpublished", generationId, generationOutputId: outputId, topicPublishGroupId: null, title: "완료 콘텐츠", contentFormat: "reel", status: "completed", createdAt: "2026-08-15T00:00:00.000Z", assignable: true, blockedReason: null }] })),
+      provisionPublishCalendarManualSlot
     });
 
     await userEvent.click(screen.getByRole("tab", { name: "캘린더" }));
     await userEvent.click(screen.getByRole("button", { name: "다음 달" }));
-    await screen.findByRole("button", { name: "수동 슬롯 추가" });
+    await screen.findByRole("group", { name: "추가할 콘텐츠 선택" });
     await userEvent.clear(screen.getByLabelText("수동 게시 시간"));
     await userEvent.type(screen.getByLabelText("수동 게시 시간"), "15:20");
-    await userEvent.selectOptions(screen.getByLabelText("수동 콘텐츠 형식"), "reel");
-    await userEvent.click(screen.getByRole("button", { name: "수동 슬롯 추가" }));
+    await userEvent.click(screen.getByRole("radio", { name: "생성 완료 · 미게시" }));
+    await userEvent.selectOptions(await screen.findByLabelText("게시할 콘텐츠"), `${generationId}:${outputId}`);
+    await userEvent.click(screen.getByRole("button", { name: "콘텐츠 연결 후 예약" }));
 
-    expect(createPublishCalendarSlot).toHaveBeenCalledWith("brand-1", expect.objectContaining({ contentFormat: "reel", channels: ["instagram"], scheduledFor: expect.stringMatching(/T06:20:00\.000Z$/) }));
+    expect(provisionPublishCalendarManualSlot).toHaveBeenCalledWith("brand-1", expect.objectContaining({ contentFormat: "reel", channel: "instagram", scheduledFor: expect.stringMatching(/T06:20:00\.000Z$/), source: { kind: "existing_output", generationOutputId: outputId } }));
+  });
+
+  it("requires a content source before provisioning a manual publication", async () => {
+    await renderPublishQueuePage({
+      listChannels: vi.fn(async () => [{ type: "instagram", enabled: true, status: "connected" }]),
+      getPublishCalendarSettings: vi.fn(async () => ({ brandId: "brand-1", enabled: false, channels: [], informationalFormat: "card_news", trendFormat: "reel", slotTimes: ["11:30"], updatedAt: null })),
+      listPublishCalendarSlots: vi.fn(async () => []),
+      getPublishCalendarManualOptions: vi.fn(async () => ({
+        purposes: [{ value: "informational", label: "정보성" }, { value: "marketing", label: "마케팅성" }],
+        subjectModes: [{ value: "topic_text", label: "주제 직접 입력", requiredField: "topicText" }, { value: "topic_url", label: "URL 입력", requiredField: "topicUrl" }],
+        channels: [{ value: "instagram", label: "Instagram", formats: [{ value: "card_news", label: "카드뉴스" }, { value: "reel", label: "릴스" }] }],
+        products: [], suggestions: [], references: [],
+        usage: { periodStart: "2026-08-01T00:00:00.000Z", periodEnd: "2026-08-08T00:00:00.000Z", limit: 10, published: 0, reserved: 0, remaining: 10 }
+      }))
+    });
+
+    await userEvent.click(screen.getByRole("tab", { name: "캘린더" }));
+    await userEvent.click(await screen.findByRole("button", { name: "다음 달" }));
+
+    expect(await screen.findByRole("group", { name: "추가할 콘텐츠 선택" })).toBeVisible();
+    expect(screen.getByRole("radio", { name: "생성 중 콘텐츠" })).toBeVisible();
+    expect(screen.getByRole("radio", { name: "생성 완료 · 미게시" })).toBeVisible();
+    expect(screen.getByRole("radio", { name: "새 콘텐츠 생성" })).toBeVisible();
+    expect(screen.getByRole("radio", { name: "여러 주제 일괄 설정" })).toBeVisible();
+    expect(screen.queryByRole("button", { name: "수동 슬롯 추가" })).not.toBeInTheDocument();
+  });
+
+  it("uses server options in a multi-row Step 1 table with 30-minute default spacing", async () => {
+    await renderPublishQueuePage({
+      listChannels: vi.fn(async () => [{ type: "instagram", enabled: true, status: "connected" }]),
+      getPublishCalendarSettings: vi.fn(async () => ({ brandId: "brand-1", enabled: false, channels: [], informationalFormat: "card_news", trendFormat: "reel", slotTimes: ["11:30"], updatedAt: null })),
+      listPublishCalendarSlots: vi.fn(async () => []),
+      getPublishCalendarManualOptions: vi.fn(async () => ({
+        purposes: [{ value: "informational", label: "정보성" }, { value: "marketing", label: "마케팅성" }],
+        subjectModes: [{ value: "topic_text", label: "주제 직접 입력", requiredField: "topicText" }, { value: "topic_url", label: "URL 입력", requiredField: "topicUrl" }],
+        channels: [{ value: "instagram", label: "Instagram", formats: [{ value: "card_news", label: "카드뉴스" }, { value: "reel", label: "릴스" }] }],
+        products: [{ value: "product-1", label: "사장님 SNS 코칭" }], suggestions: [], references: [],
+        usage: { periodStart: "", periodEnd: "", limit: 10, published: 0, reserved: 0, remaining: 10 }
+      }))
+    });
+    await userEvent.click(screen.getByRole("tab", { name: "캘린더" }));
+    await userEvent.click(await screen.findByRole("button", { name: "다음 달" }));
+    await userEvent.click(await screen.findByRole("radio", { name: "여러 주제 일괄 설정" }));
+
+    expect(screen.getByRole("table", { name: "일괄 주제 설정" })).toBeVisible();
+    expect(screen.getByLabelText("1행 게시 시간")).toHaveValue("11:30");
+    expect(screen.getByLabelText("2행 게시 시간")).toHaveValue("12:00");
+    expect(screen.getAllByLabelText("콘텐츠 목적")[0]).toHaveTextContent("정보성");
+    expect(screen.getAllByLabelText("콘텐츠 형식")[0]).toHaveTextContent("릴스");
+  });
+
+  it("blocks a bulk topic setup that exceeds the plan generation availability", async () => {
+    await renderPublishQueuePage({
+      listChannels: vi.fn(async () => [{ type: "instagram", enabled: true, status: "connected" }]),
+      getPublishCalendarSettings: vi.fn(async () => ({ brandId: "brand-1", enabled: false, channels: [], informationalFormat: "card_news", trendFormat: "reel", slotTimes: ["11:30"], updatedAt: null })),
+      listPublishCalendarSlots: vi.fn(async () => []),
+      getPublishCalendarManualOptions: vi.fn(async () => ({
+        purposes: [{ value: "informational", label: "정보성" }],
+        subjectModes: [{ value: "topic_text", label: "주제 직접 입력", requiredField: "topicText" }],
+        channels: [{ value: "instagram", label: "Instagram", formats: [{ value: "card_news", label: "카드뉴스" }, { value: "reel", label: "릴스" }] }],
+        products: [], suggestions: [], references: [],
+        usage: {
+          startsAt: "2026-08-01T00:00:00.000Z", endsAt: "2026-08-08T00:00:00.000Z",
+          generation: { limit: 1, succeeded: 0, reserved: 0, remaining: 1, additionalAvailable: 1 },
+          publishing: { limit: 10, succeeded: 0, reserved: 0, remaining: 10, additionalAvailable: 10 },
+        },
+      })),
+    });
+    await userEvent.click(screen.getByRole("tab", { name: "캘린더" }));
+    await userEvent.click(await screen.findByRole("button", { name: "다음 달" }));
+    await userEvent.click(await screen.findByRole("radio", { name: "여러 주제 일괄 설정" }));
+    const topics = screen.getAllByLabelText("주제");
+    await userEvent.type(topics[0], "사장님 SNS 콘텐츠 전략");
+    await userEvent.type(topics[1], "매출로 이어지는 마케팅 콘텐츠");
+
+    expect(screen.getByText("생성 가능 횟수는 1건이며 현재 2개 주제가 입력되었습니다.")).toBeVisible();
+    expect(screen.getByRole("button", { name: "일괄 설정 시작" })).toBeDisabled();
+  });
+
+  it("atomically provisions every prepared bulk row and clears the browser draft", async () => {
+    const draftId = "bulk-draft-1";
+    const generation1 = "11111111-1111-4111-8111-111111111111";
+    const generation2 = "22222222-2222-4222-8222-222222222222";
+    window.localStorage.setItem(`brand-pilot:publish-calendar-bulk:${draftId}`, JSON.stringify({ id: draftId, rows: [
+      { clientRowId: "row-1", scheduledFor: "2026-09-01T02:30:00.000Z", contentFormat: "card_news", setup: { purpose: "informational", subjectMode: "topic_text", topicText: "사장님 SNS 운영법" }, generationId: generation1 },
+      { clientRowId: "row-2", scheduledFor: "2026-09-01T03:00:00.000Z", contentFormat: "reel", setup: { purpose: "informational", subjectMode: "topic_text", topicText: "매출 콘텐츠 만드는 법" }, generationId: generation2 },
+    ] }));
+    window.history.replaceState({}, "", `/publish-queue?view=calendar&calendarBatchDraft=${draftId}`);
+    const provisionPublishCalendarManualSlotsBatch = vi.fn(async () => ({ slots: [] }));
+    await renderPublishQueuePage({
+      listChannels: vi.fn(async () => [{ type: "instagram", enabled: true, status: "connected" }]),
+      getPublishCalendarSettings: vi.fn(async () => ({ brandId: "brand-1", enabled: false, channels: [], informationalFormat: "card_news", trendFormat: "reel", slotTimes: ["11:30"], updatedAt: null })),
+      listPublishCalendarSlots: vi.fn(async () => []),
+      getPublishCalendarManualOptions: vi.fn(async () => ({ purposes: [{ value: "informational", label: "정보성" }], subjectModes: [{ value: "topic_text", label: "주제 직접 입력", requiredField: "topicText" }], channels: [{ value: "instagram", label: "Instagram", formats: [{ value: "card_news", label: "카드뉴스" }, { value: "reel", label: "릴스" }] }], products: [], suggestions: [], references: [], usage: { periodStart: "", periodEnd: "", limit: 10, published: 0, reserved: 0, remaining: 10 } })),
+      provisionPublishCalendarManualSlotsBatch
+    });
+
+    await userEvent.click(await screen.findByRole("button", { name: "전체 게시 일정 배정" }));
+
+    expect(provisionPublishCalendarManualSlotsBatch).toHaveBeenCalledWith("brand-1", { idempotencyKey: draftId, rows: [
+      expect.objectContaining({ clientRowId: "row-1", scheduledFor: "2026-09-01T02:30:00.000Z", source: { kind: "existing_generation", generationId: generation1 } }),
+      expect.objectContaining({ clientRowId: "row-2", scheduledFor: "2026-09-01T03:00:00.000Z", source: { kind: "existing_generation", generationId: generation2 } }),
+    ] });
+    expect(window.localStorage.getItem(`brand-pilot:publish-calendar-bulk:${draftId}`)).toBeNull();
   });
 
   it("blocks creation of a manual slot at a known past date and time", async () => {
@@ -567,8 +723,8 @@ describe("PublishQueuePage", () => {
 
     await userEvent.click(screen.getByRole("tab", { name: "캘린더" }));
     await userEvent.click(await screen.findByRole("button", { name: "이전 달" }));
-    const createButton = await screen.findByRole("button", { name: "수동 슬롯 추가" });
-    expect(screen.getByText("과거 시각에는 수동 슬롯을 추가할 수 없습니다.")).toBeVisible();
+    const createButton = await screen.findByRole("button", { name: "콘텐츠 연결 후 예약" });
+    expect(screen.getByText("과거 시각에는 게시 일정을 추가할 수 없습니다.")).toBeVisible();
     expect(createButton).toBeDisabled();
     await userEvent.click(createButton);
     expect(createPublishCalendarSlot).not.toHaveBeenCalled();
@@ -576,28 +732,31 @@ describe("PublishQueuePage", () => {
 
   it("revalidates a manual slot at click time when a once-future selection has become past", async () => {
     const now = vi.spyOn(Date, "now").mockReturnValue(Date.parse("2026-08-15T00:00:00+09:00"));
-    const createPublishCalendarSlot = vi.fn(async (_brandId: string, input: Record<string, unknown>) => ({ id: "unexpected-manual-slot", workspaceId: "workspace-1", brandId: "brand-1", assignmentMode: "manual", status: "open", recommendationKind: null, contentSuggestionId: null, proposalId: null, generationId: null, generationOutputId: null, topicPublishGroupId: null, title: null, lastError: null, updatedAt: "2026-08-14T00:00:00.000Z", ...input }));
+    const provisionPublishCalendarManualSlot = vi.fn(async (_brandId: string, input: Record<string, unknown>) => ({ id: "unexpected-manual-slot", workspaceId: "workspace-1", brandId: "brand-1", assignmentMode: "manual", status: "generation_pending", recommendationKind: null, contentSuggestionId: null, proposalId: null, generationId: "generation-1", generationOutputId: null, topicPublishGroupId: null, title: null, lastError: null, updatedAt: "2026-08-14T00:00:00.000Z", ...input }));
     await renderPublishQueuePage({
       listChannels: vi.fn(async () => [{ type: "instagram", enabled: true, status: "connected" }]),
       getPublishCalendarSettings: vi.fn(async () => ({ brandId: "brand-1", enabled: false, channels: [], informationalFormat: "card_news", trendFormat: "reel", slotTimes: ["11:30"], updatedAt: null })),
       listPublishCalendarSlots: vi.fn(async () => []),
-      createPublishCalendarSlot
+      listPublishCalendarContentCandidates: vi.fn(async () => ({ items: [{ kind: "generating", generationId: "generation-1", generationOutputId: null, topicPublishGroupId: null, title: "생성 중 콘텐츠", contentFormat: "card_news", status: "generating", createdAt: "2026-08-15T00:00:00.000Z", assignable: true, blockedReason: null }] })),
+      provisionPublishCalendarManualSlot
     });
 
     await userEvent.click(screen.getByRole("tab", { name: "캘린더" }));
     await userEvent.click(await screen.findByRole("button", { name: "다음 달" }));
-    const createButton = await screen.findByRole("button", { name: "수동 슬롯 추가" });
+    await userEvent.selectOptions(await screen.findByLabelText("게시할 콘텐츠"), "generation-1:");
+    const createButton = await screen.findByRole("button", { name: "콘텐츠 연결 후 예약" });
     expect(createButton).toBeEnabled();
     now.mockReturnValue(Date.parse("2026-09-01T12:00:00+09:00"));
     await userEvent.click(createButton);
 
-    expect(createPublishCalendarSlot).not.toHaveBeenCalled();
-    expect(screen.getByRole("alert")).toHaveTextContent("선택한 게시 시각이 이미 지났습니다. 미래 시각을 선택해 주세요.");
+    expect(provisionPublishCalendarManualSlot).not.toHaveBeenCalled();
+    expect(screen.getByText("선택한 게시 시각이 이미 지났습니다. 미래 시각을 선택해 주세요.")).toBeVisible();
   });
 
   it("defines a single-column calendar and detail panel for narrow screens", () => {
     const narrowRules = prototypeCss.slice(prototypeCss.indexOf("@media (max-width: 980px)"));
     expect(narrowRules).toContain(".publish-calendar-layout { grid-template-columns: 1fr; }");
+    expect(prototypeCss).toContain(".publish-calendar-card, .publish-calendar-detail { min-width: 0;");
   });
 
   it("keeps mobile weekday labels and cells in one shared calendar scroll container", async () => {

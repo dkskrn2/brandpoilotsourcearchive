@@ -19,6 +19,56 @@ describe("apiClient", () => {
       expect.objectContaining({ method: "POST", body: JSON.stringify({ mode: "page", pageIds: ["123"] }) }),
     );
   });
+
+  it("uses the content-backed manual calendar provisioning endpoints", async () => {
+    const responses = [
+      { purposes: [], subjectModes: [], channels: [], products: [], suggestions: [], references: [], usage: null },
+      { items: [] },
+      { id: "slot-1" },
+      { slots: [{ id: "slot-2" }] },
+    ];
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify(responses.shift()), { status: 200 }));
+    const client = apiClient({ baseUrl: "http://api.test", fetcher: fetchMock as typeof fetch }) as ReturnType<typeof apiClient> & {
+      getPublishCalendarManualOptions(brandId: string): Promise<unknown>;
+      listPublishCalendarContentCandidates(brandId: string, kind: "generating" | "completed_unpublished"): Promise<unknown>;
+      provisionPublishCalendarManualSlot(brandId: string, payload: Record<string, unknown>): Promise<unknown>;
+      provisionPublishCalendarManualSlotsBatch(brandId: string, payload: Record<string, unknown>): Promise<unknown>;
+    };
+    const singlePayload = {
+      scheduledFor: "2026-08-17T00:00:00.000Z",
+      channel: "instagram",
+      contentFormat: "card_news",
+      idempotencyKey: "manual-slot-1",
+      source: { kind: "existing_output", generationOutputId: "output-1" },
+    };
+    const batchPayload = {
+      idempotencyKey: "manual-batch-1",
+      rows: [{ clientRowId: "row-1", scheduledFor: "2026-08-17T00:30:00.000Z" }],
+    };
+
+    await client.getPublishCalendarManualOptions("brand-1");
+    await client.listPublishCalendarContentCandidates("brand-1", "completed_unpublished");
+    await client.provisionPublishCalendarManualSlot("brand-1", singlePayload);
+    await client.provisionPublishCalendarManualSlotsBatch("brand-1", batchPayload);
+
+    expect(fetchMock).toHaveBeenNthCalledWith(1,
+      "http://api.test/brands/brand-1/publish-calendar/manual-options",
+      expect.objectContaining({ method: "GET", credentials: "include" }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(2,
+      "http://api.test/brands/brand-1/publish-calendar/content-candidates?kind=completed_unpublished",
+      expect.objectContaining({ method: "GET", credentials: "include" }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(3,
+      "http://api.test/brands/brand-1/publish-calendar/manual-slots",
+      expect.objectContaining({ method: "POST", credentials: "include", body: JSON.stringify(singlePayload) }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(4,
+      "http://api.test/brands/brand-1/publish-calendar/manual-slots/batch",
+      expect.objectContaining({ method: "POST", credentials: "include", body: JSON.stringify(batchPayload) }),
+    );
+  });
+
   it("dispatches the support history event only after a simplified request succeeds", async () => {
     const listener = vi.fn();
     window.addEventListener(SUPPORT_REQUESTS_CHANGED_EVENT, listener);

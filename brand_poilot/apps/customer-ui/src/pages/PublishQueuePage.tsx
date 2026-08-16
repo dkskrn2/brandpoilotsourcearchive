@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { CalendarDays, Download, ExternalLink, List, RotateCcw, X } from "lucide-react";
 import { PageHeader } from "../components/layout/PageHeader";
 import { PublishArtifactPreview } from "../components/publish/PublishArtifactPreview";
@@ -20,7 +20,8 @@ import {
 } from "../components/publish/publishManagementFilters";
 import { api, DEMO_BRAND_ID } from "../lib/apiClient";
 import { entryFromSlot, monthPeriod, PUBLISH_CALENDAR_USAGE_CHANGED_EVENT, type CalendarEntry } from "../features/publishing/publishCalendar";
-import type { BadgeVariant, ChannelType, ContentOutput, PublishArtifact, PublishCalendarSettings, PublishCalendarSlot, PublishResult, PublishResultChannel, PublishSlot, ReviewStatus } from "../types";
+import { clearPublishCalendarBulkDraft, loadPublishCalendarBulkDraft, savePublishCalendarBulkDraft, type PublishCalendarBulkDraft, type PublishCalendarBulkDraftRow } from "../features/publishing/publishCalendarBulkDraft";
+import type { BadgeVariant, ChannelType, ContentOutput, PublishArtifact, PublishCalendarContentCandidate, PublishCalendarManualOptions, PublishCalendarManualSlotInput, PublishCalendarNewContentSetup, PublishCalendarSettings, PublishCalendarSlot, PublishResult, PublishResultChannel, PublishSlot, ReviewStatus } from "../types";
 
 const channelLabels: Record<ChannelType, string> = {
   instagram: "Instagram",
@@ -850,8 +851,11 @@ export function PublishQueuePage() {
   const initialQuery = useMemo(() => new URLSearchParams(window.location.search), []);
   const highlightedQueueId = useMemo(() => initialQuery.get("queueId"), [initialQuery]);
   const [view, setView] = useState<PublishView>(() => initialQuery.get("view") === "calendar" ? "calendar" : "list");
+  const [calendarBulkDraft, setCalendarBulkDraft] = useState<PublishCalendarBulkDraft | null>(() => loadPublishCalendarBulkDraft(initialQuery.get("calendarBatchDraft")));
   const [calendarMonth, setCalendarMonth] = useState(() => new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Seoul", year: "numeric", month: "2-digit" }).format(new Date()).replace("/", "-"));
   const [calendarSettings, setCalendarSettings] = useState<PublishCalendarSettings | null>(null);
+  const [calendarManualOptions, setCalendarManualOptions] = useState<PublishCalendarManualOptions | null>(null);
+  const [calendarManualOptionsError, setCalendarManualOptionsError] = useState<string | null>(null);
   const [calendarSlots, setCalendarSlots] = useState<PublishCalendarSlot[]>([]);
   const [calendarSlotsLoading, setCalendarSlotsLoading] = useState(false);
   const [calendarChannels, setCalendarChannels] = useState<ChannelType[]>([]);
@@ -1004,6 +1008,11 @@ export function PublishQueuePage() {
         .then((settings) => { if (!ignore) { setCalendarSettings(settings); setCalendarSettingsError(null); } })
         .catch(() => { if (!ignore) { setCalendarSettings(null); setCalendarSettingsError("자동 게시 설정을 불러오지 못했습니다."); } });
     }
+    if (typeof api.getPublishCalendarManualOptions === "function") {
+      void api.getPublishCalendarManualOptions(DEMO_BRAND_ID)
+        .then((options) => { if (!ignore) { setCalendarManualOptions(options); setCalendarManualOptionsError(null); } })
+        .catch(() => { if (!ignore) { setCalendarManualOptions(null); setCalendarManualOptionsError("수동 게시 선택 항목을 불러오지 못했습니다."); } });
+    }
     if (typeof api.listPublishCalendarSlots === "function") {
       setCalendarSlotsLoading(true);
       setCalendarSlots([]);
@@ -1018,13 +1027,81 @@ export function PublishQueuePage() {
     return () => { ignore = true; };
   }, [calendarMonth, view]);
 
-  async function createCalendarSlot(input: { dateKey: string; time: string; contentFormat: "card_news" | "reel"; channels: ChannelType[] }) {
+  const loadCalendarCandidates = useCallback(async (kind: "generating" | "completed_unpublished"): Promise<PublishCalendarContentCandidate[]> => {
+    if (typeof api.listPublishCalendarContentCandidates !== "function") return [];
+    const result = await api.listPublishCalendarContentCandidates(DEMO_BRAND_ID, kind);
+    return result.items;
+  }, []);
+
+  async function provisionCalendarContent(input: PublishCalendarManualSlotInput) {
+    if (typeof api.provisionPublishCalendarManualSlot !== "function") return false;
     try {
-      const slot = await api.createPublishCalendarSlot(DEMO_BRAND_ID, { ...input, scheduledFor: new Date(`${input.dateKey}T${input.time}:00+09:00`).toISOString() });
+      const slot = await api.provisionPublishCalendarManualSlot(DEMO_BRAND_ID, input);
       setCalendarSlots((current) => [...current.filter((item) => item.id !== slot.id), slot]);
       window.dispatchEvent(new Event(PUBLISH_CALENDAR_USAGE_CHANGED_EVENT));
-      setNotice("수동 게시 슬롯을 추가했습니다.");
-    } catch { setNotice("수동 게시 슬롯을 추가하지 못했습니다."); }
+      setNotice("콘텐츠를 연결해 게시 일정을 추가했습니다.");
+      return true;
+    } catch {
+      setNotice("콘텐츠를 게시 일정에 연결하지 못했습니다.");
+      return false;
+    }
+  }
+
+  function startCalendarContent(input: { scheduledFor: string; contentFormat: "card_news" | "reel"; setup: PublishCalendarNewContentSetup }) {
+    const params = new URLSearchParams({
+      proposalFamily: input.setup.purpose,
+      proposalFormat: input.contentFormat,
+      proposalChannels: "instagram",
+      calendarScheduledFor: input.scheduledFor,
+      calendarIdempotencyKey: crypto.randomUUID(),
+    });
+    if (input.setup.topicText) params.set("proposalTopic", input.setup.topicText);
+    if (input.setup.topicUrl) params.set("proposalUrl", input.setup.topicUrl);
+    if (input.setup.contentSuggestionId) { params.set("view", "suggestions"); params.set("suggestionId", input.setup.contentSuggestionId); }
+    if (input.setup.referenceId) params.set("reference", input.setup.referenceId);
+    if (input.setup.productId) params.set("product", input.setup.productId);
+    if (input.setup.contentInstruction) params.set("proposalBrief", input.setup.contentInstruction);
+    window.location.assign(`/ai-content/new?${params}`);
+  }
+
+  function continueCalendarBulk(draft: PublishCalendarBulkDraft, row: PublishCalendarBulkDraftRow) {
+    const params = new URLSearchParams({
+      proposalFamily: row.setup.purpose,
+      proposalFormat: row.contentFormat,
+      proposalChannels: "instagram",
+      calendarBatchDraft: draft.id,
+      calendarBatchRow: row.clientRowId,
+    });
+    if (row.setup.topicText) params.set("proposalTopic", row.setup.topicText);
+    if (row.setup.topicUrl) params.set("proposalUrl", row.setup.topicUrl);
+    if (row.setup.contentSuggestionId) { params.set("view", "suggestions"); params.set("suggestionId", row.setup.contentSuggestionId); }
+    if (row.setup.referenceId) params.set("reference", row.setup.referenceId);
+    if (row.setup.productId) params.set("product", row.setup.productId);
+    if (row.setup.contentInstruction) params.set("proposalBrief", row.setup.contentInstruction);
+    window.location.assign(`/ai-content/new?${params}`);
+  }
+
+  function startCalendarBulk(rows: PublishCalendarBulkDraftRow[]) {
+    const draft = { id: crypto.randomUUID(), rows };
+    savePublishCalendarBulkDraft(draft);
+    setCalendarBulkDraft(draft);
+    continueCalendarBulk(draft, rows[0]);
+  }
+
+  async function provisionCalendarBatch(draft: PublishCalendarBulkDraft) {
+    if (typeof api.provisionPublishCalendarManualSlotsBatch !== "function" || draft.rows.some((row) => !row.generationId)) return false;
+    try {
+      const result = await api.provisionPublishCalendarManualSlotsBatch(DEMO_BRAND_ID, {
+        idempotencyKey: draft.id,
+        rows: draft.rows.map((row) => ({ clientRowId: row.clientRowId, scheduledFor: row.scheduledFor, channel: "instagram" as const, contentFormat: row.contentFormat, source: { kind: "existing_generation" as const, generationId: row.generationId! } })),
+      });
+      setCalendarSlots((current) => [...current.filter((slot) => !result.slots.some((item) => item.id === slot.id)), ...result.slots]);
+      clearPublishCalendarBulkDraft(draft.id);
+      setCalendarBulkDraft(null);
+      window.dispatchEvent(new Event(PUBLISH_CALENDAR_USAGE_CHANGED_EVENT));
+      setNotice(`${result.slots.length}개 콘텐츠의 게시 일정을 배정했습니다.`);
+      return true;
+    } catch { setNotice("일괄 게시 일정을 배정하지 못했습니다. 입력과 한도를 확인하세요."); return false; }
   }
 
   async function cancelCalendarSlot(slotId: string) {
@@ -1174,13 +1251,21 @@ export function PublishQueuePage() {
           entries={calendarEntries}
           connectedChannels={calendarChannels}
           settings={calendarSettings}
+          manualOptions={calendarManualOptions}
+          manualOptionsError={calendarManualOptionsError}
           settingsError={calendarSettingsError}
           slotsError={calendarSlotsError}
           slotsLoading={calendarSlotsLoading}
           assignableContents={assignableCalendarContents}
           saving={calendarSaving}
           onMonthChange={setCalendarMonth}
-          onCreate={(input) => void createCalendarSlot(input)}
+          onLoadCandidates={loadCalendarCandidates}
+          onProvision={provisionCalendarContent}
+          onStartNew={startCalendarContent}
+          initialBulkDraft={calendarBulkDraft}
+          onStartBulk={startCalendarBulk}
+          onContinueBulk={continueCalendarBulk}
+          onProvisionBatch={provisionCalendarBatch}
           onAssign={assignCalendarSlot}
           onCancel={(slotId) => void cancelCalendarSlot(slotId)}
           onSaveSettings={saveCalendarSettings}
