@@ -283,6 +283,19 @@ function toDateKey(value: Date | string | null): string | null {
   return Number.isNaN(date.getTime()) ? null : kstDateKey(date);
 }
 
+function earliestSafePublicationTime(start: Date, blockedValues: unknown[]): Date {
+  const intervalMs = 30 * 60 * 1_000;
+  let candidate = start.getTime();
+  const blocked = blockedValues
+    .map((value) => new Date(value as string | number | Date).getTime())
+    .filter(Number.isFinite)
+    .sort((left, right) => left - right);
+  for (const blockedAt of blocked) {
+    if (Math.abs(candidate - blockedAt) < intervalMs) candidate = blockedAt + intervalMs;
+  }
+  return new Date(candidate);
+}
+
 const maxReferenceSourceUrls = 10;
 const instagramReadinessFailureCodes = new Set([
   "channel_not_connected",
@@ -2210,6 +2223,12 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
     },
     async getAiContentPublishQueueResult(input) {
       return aiContentPublish.getAiContentPublishQueueResult(input);
+    },
+    async prepareCompletedCalendarPublish(input) {
+      return aiContentPublish.prepareCompletedCalendarPublish({
+        ...input,
+        preparationEnabled: instagramPublish.enabled,
+      });
     },
     async health() {
       const result = await pool.query(`
@@ -5331,7 +5350,43 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
         for (const group of calendarReadyGroups.rows) {
           const scheduledFor = new Date(group.scheduled_for);
           if (!Number.isFinite(scheduledFor.getTime())) throw new Error("publish_calendar_slot_time_invalid");
-          const allowedGroups = await allowedPublicationGroupIds(scheduledFor);
+          let effectiveScheduledFor = scheduledFor;
+          if (scheduledFor <= now) {
+            const blocked = await client.query(
+              `select candidate.blocked_at
+                 from (
+                   select slot.scheduled_for as blocked_at
+                     from publish_calendar_slots slot
+                    where slot.brand_id=$1::uuid and slot.id<>$2::uuid
+                      and slot.status in (
+                        'proposal_assigned','generation_pending','content_assigned','ready',
+                        'scheduled','publish_delayed','quota_blocked'
+                      )
+                      and slot.channels @> array['instagram']::text[]
+                   union all
+                   select queue.scheduled_for as blocked_at
+                     from publish_queue queue
+                    where queue.brand_id=$1::uuid and queue.topic_publish_group_id<>$3
+                      and queue.channel='instagram'
+                      and queue.status in ('scheduled','publishing','deferred')
+                      and queue.scheduled_for is not null
+                   union all
+                   select queue.published_at as blocked_at
+                     from publish_queue queue
+                    where queue.brand_id=$1::uuid and queue.topic_publish_group_id<>$3
+                      and queue.channel='instagram' and queue.status='published'
+                      and queue.published_at >= $4::timestamptz - interval '30 minutes'
+                 ) candidate
+                where candidate.blocked_at is not null
+                order by candidate.blocked_at`,
+              [brandId, group.slot_id, group.group_id, now],
+            );
+            effectiveScheduledFor = earliestSafePublicationTime(
+              now,
+              blocked.rows.map((row) => row.blocked_at),
+            );
+          }
+          const allowedGroups = await allowedPublicationGroupIds(effectiveScheduledFor);
           if (!allowedGroups.has(String(group.group_id))) {
             await client.query(
               `update publish_calendar_slots
@@ -5342,14 +5397,14 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
             );
             continue;
           }
-          const slotDate = kstDateKey(scheduledFor);
+          const slotDate = kstDateKey(effectiveScheduledFor);
           const claimed = await client.query(
             `update topic_publish_groups
                 set status='scheduled',slot_date=$2::date,slot_number=null,
                     scheduled_for=$3::timestamptz,updated_at=now()
               where id=$1 and status='ready'
               returning id`,
-            [group.group_id, slotDate, scheduledFor],
+            [group.group_id, slotDate, effectiveScheduledFor],
           );
           if (!claimed.rowCount) continue;
           const queueRows = await client.query(
@@ -5357,7 +5412,7 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
                 set status='scheduled',slot_date=$2::date,slot_number=null,
                     scheduled_for=$3::timestamptz,updated_at=now()
               where topic_publish_group_id=$1 and status='queued'`,
-            [group.group_id, slotDate, scheduledFor],
+            [group.group_id, slotDate, effectiveScheduledFor],
           );
           await client.query(
             `update publish_calendar_slots

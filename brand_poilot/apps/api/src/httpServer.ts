@@ -1186,6 +1186,7 @@ export function createServer(
         "publish_calendar_subscription_inactive",
         "publish_calendar_channel_not_connected",
         "publish_calendar_slot_not_assignable",
+        "publish_calendar_generation_quota_exceeded",
         "publish_weekly_quota_exceeded",
       ].includes(message);
       reply.code(unavailable ? 503 : conflict ? 409 : 400).send({ error: message });
@@ -2146,6 +2147,70 @@ export function createServer(
     },
   );
 
+  app.post<{ Params: { brandId: string }; Body: unknown }>(
+    "/brands/:brandId/publish-calendar/manual-slots/batch",
+    async (request) => {
+      if (!repository.provisionManualSlotsBatch) throw new Error("publish_calendar_not_configured");
+      if (!hasExactKeys(request.body, ["idempotencyKey", "rows"])) {
+        throw new Error("publish_calendar_batch_invalid");
+      }
+      const body = request.body as Record<string, unknown>;
+      if (typeof body.idempotencyKey !== "string" || !body.idempotencyKey.trim()
+        || body.idempotencyKey.length > 200 || !Array.isArray(body.rows)
+        || body.rows.length < 1 || body.rows.length > 50) {
+        throw new Error("publish_calendar_batch_invalid");
+      }
+      const rows = body.rows.map((rawRow) => {
+        if (!hasExactKeys(rawRow, ["clientRowId", "scheduledFor", "channel", "contentFormat", "source"])) {
+          throw new Error("publish_calendar_batch_invalid");
+        }
+        const row = rawRow as Record<string, unknown>;
+        const source = row.source;
+        if (typeof row.clientRowId !== "string" || !row.clientRowId.trim() || row.clientRowId.length > 100
+          || row.channel !== "instagram" || !publishCalendarFormats.has(String(row.contentFormat))
+          || !source || typeof source !== "object" || Array.isArray(source)) {
+          throw new Error("publish_calendar_batch_invalid");
+        }
+        const sourceRecord = source as Record<string, unknown>;
+        const normalizedSource = sourceRecord.kind === "existing_generation"
+          && hasExactKeys(sourceRecord, ["kind", "generationId"])
+          && uuidPattern.test(String(sourceRecord.generationId ?? ""))
+          ? { kind: "existing_generation" as const, generationId: String(sourceRecord.generationId) }
+          : sourceRecord.kind === "existing_output"
+            && hasExactKeys(sourceRecord, ["kind", "generationOutputId"])
+            && uuidPattern.test(String(sourceRecord.generationOutputId ?? ""))
+            ? { kind: "existing_output" as const, generationOutputId: String(sourceRecord.generationOutputId) }
+            : null;
+        if (!normalizedSource) throw new Error("publish_calendar_batch_invalid");
+        return {
+          clientRowId: row.clientRowId,
+          scheduledFor: publishCalendarDate(row.scheduledFor),
+          channel: "instagram" as const,
+          contentFormat: row.contentFormat as "card_news" | "reel",
+          source: normalizedSource,
+        };
+      });
+      const slots = await repository.provisionManualSlotsBatch({
+        ...aiContentScope(request, request.params.brandId),
+        idempotencyKey: body.idempotencyKey,
+        createdByUserId: aiContentActorUserId(request),
+        rows,
+      });
+      if (repository.prepareCompletedCalendarPublish) {
+        const scope = aiContentScope(request, request.params.brandId);
+        for (const row of rows) {
+          if (row.source.kind === "existing_output") {
+            await repository.prepareCompletedCalendarPublish({
+              ...scope,
+              outputId: row.source.generationOutputId,
+            });
+          }
+        }
+      }
+      return { slots };
+    },
+  );
+
   app.get<{ Params: { brandId: string }; Querystring: { period?: string } }>(
     "/brands/:brandId/performance/insights",
     async (request, reply) => {
@@ -2461,6 +2526,55 @@ export function createServer(
       }))
     };
   });
+
+  app.post<{ Params: { brandId: string }; Body: unknown }>(
+    "/brands/:brandId/publish-calendar/manual-slots",
+    async (request) => {
+      if (!repository.provisionManualSlot) throw new Error("publish_calendar_not_configured");
+      if (!hasExactKeys(request.body, ["scheduledFor", "channel", "contentFormat", "idempotencyKey", "source"])) {
+        throw new Error("publish_calendar_manual_slot_invalid");
+      }
+      const body = request.body as Record<string, unknown>;
+      const source = body.source;
+      if (!source || typeof source !== "object" || Array.isArray(source)) {
+        throw new Error("publish_calendar_manual_slot_invalid");
+      }
+      const sourceRecord = source as Record<string, unknown>;
+      const sourceValid = sourceRecord.kind === "existing_generation"
+        ? hasExactKeys(sourceRecord, ["kind", "generationId"])
+          && uuidPattern.test(String(sourceRecord.generationId ?? ""))
+        : sourceRecord.kind === "existing_output"
+          ? hasExactKeys(sourceRecord, ["kind", "generationOutputId"])
+            && uuidPattern.test(String(sourceRecord.generationOutputId ?? ""))
+          : false;
+      if (!sourceValid || body.channel !== "instagram"
+        || !publishCalendarFormats.has(String(body.contentFormat))
+        || typeof body.idempotencyKey !== "string" || !body.idempotencyKey.trim()
+        || body.idempotencyKey.length > 200) {
+        throw new Error("publish_calendar_manual_slot_invalid");
+      }
+      const normalizedSource = sourceRecord.kind === "existing_generation"
+        ? { kind: "existing_generation" as const, generationId: String(sourceRecord.generationId) }
+        : { kind: "existing_output" as const, generationOutputId: String(sourceRecord.generationOutputId) };
+      const scope = aiContentScope(request, request.params.brandId);
+      const slot = await repository.provisionManualSlot({
+        ...scope,
+        scheduledFor: publishCalendarDate(body.scheduledFor),
+        channel: "instagram",
+        contentFormat: body.contentFormat as "card_news" | "reel",
+        idempotencyKey: body.idempotencyKey,
+        createdByUserId: aiContentActorUserId(request),
+        source: normalizedSource,
+      });
+      if (normalizedSource.kind === "existing_output" && repository.prepareCompletedCalendarPublish) {
+        await repository.prepareCompletedCalendarPublish({
+          ...scope,
+          outputId: normalizedSource.generationOutputId,
+        });
+      }
+      return slot;
+    },
+  );
 
   app.put<{ Params: { brandId: string }; Body: Record<string, unknown> }>("/brands/:brandId/instagram-formats", async (request, reply) => {
     const validation = validateInstagramFormatSettings(request.body);
@@ -3896,6 +4010,27 @@ export function createServer(
   app.get<{ Params: { brandId: string } }>("/brands/:brandId/publish-calendar/settings", async (request) => {
     if (!repository.getSettings) throw new Error("publish_calendar_not_configured");
     return repository.getSettings(aiContentScope(request, request.params.brandId));
+  });
+
+  app.get<{ Params: { brandId: string } }>("/brands/:brandId/publish-calendar/manual-options", async (request) => {
+    if (!repository.getManualOptions) throw new Error("publish_calendar_not_configured");
+    return repository.getManualOptions(aiContentScope(request, request.params.brandId));
+  });
+
+  app.get<{
+    Params: { brandId: string };
+    Querystring: { kind?: string };
+  }>("/brands/:brandId/publish-calendar/content-candidates", async (request) => {
+    if (!repository.listManualContentCandidates) throw new Error("publish_calendar_not_configured");
+    if (request.query.kind !== "generating" && request.query.kind !== "completed_unpublished") {
+      throw new Error("publish_calendar_candidate_kind_invalid");
+    }
+    return {
+      items: await repository.listManualContentCandidates({
+        ...aiContentScope(request, request.params.brandId),
+        kind: request.query.kind,
+      }),
+    };
   });
 
   app.put<{ Params: { brandId: string }; Body: unknown }>("/brands/:brandId/publish-calendar/settings", async (request) => {

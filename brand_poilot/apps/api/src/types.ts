@@ -616,6 +616,7 @@ export interface PublishCalendarSlotDto {
   workspaceId: string;
   brandId: string;
   scheduledFor: string;
+  effectiveScheduledFor?: string | null;
   assignmentMode: "automatic" | "manual";
   status: "open" | "proposal_assigned" | "generation_pending" | "content_assigned" | "ready"
     | "scheduled" | "publish_delayed" | "quota_blocked" | "published" | "cancelled";
@@ -637,6 +638,76 @@ export interface PublishCalendarWeeklyUsageDto {
   endsAt: string;
   generation: import("./publishCalendarQuota.js").UsageAvailability;
   publishing: import("./publishCalendarQuota.js").UsageAvailability;
+}
+
+export interface PublishCalendarOptionDto<TValue extends string = string> {
+  value: TValue;
+  label: string;
+}
+
+export interface PublishCalendarManualOptionsDto {
+  purposes: Array<PublishCalendarOptionDto<"informational" | "marketing">>;
+  subjectModes: Array<PublishCalendarOptionDto<"topic_text" | "topic_url" | "suggestion" | "reference"> & {
+    requiredField: "topicText" | "topicUrl" | "contentSuggestionId" | "referenceId";
+  }>;
+  channels: Array<{
+    value: Channel;
+    label: string;
+    formats: Array<PublishCalendarOptionDto<"card_news" | "reel">>;
+  }>;
+  products: Array<PublishCalendarOptionDto>;
+  suggestions: Array<PublishCalendarOptionDto & { intent: "informational" | "trend" }>;
+  references: Array<PublishCalendarOptionDto>;
+  usage: PublishCalendarWeeklyUsageDto;
+}
+
+export interface PublishCalendarContentCandidateDto {
+  kind: "generating" | "completed_unpublished";
+  generationId: string;
+  generationOutputId: string | null;
+  topicPublishGroupId: string | null;
+  title: string;
+  contentFormat: "card_news" | "reel";
+  status: string;
+  createdAt: string;
+  assignable: boolean;
+  blockedReason: string | null;
+}
+
+export interface PublishCalendarNewContentSetupDto {
+  purpose: "informational" | "marketing";
+  subjectMode: "topic_text" | "topic_url" | "suggestion" | "reference";
+  topicText?: string;
+  topicUrl?: string;
+  contentSuggestionId?: string;
+  referenceId?: string;
+  productId?: string;
+  contentInstruction?: string;
+}
+
+export type PublishCalendarManualSlotSourceDto =
+  | { kind: "existing_generation"; generationId: string }
+  | { kind: "existing_output"; generationOutputId: string };
+
+export interface PublishCalendarManualSlotInputDto {
+  scheduledFor: string;
+  channel: Channel;
+  contentFormat: "card_news" | "reel";
+  idempotencyKey: string;
+  source: PublishCalendarManualSlotSourceDto;
+}
+
+export interface PublishCalendarManualBatchRowDto {
+  clientRowId: string;
+  scheduledFor: string;
+  channel: Channel;
+  contentFormat: "card_news" | "reel";
+  source: PublishCalendarManualSlotSourceDto;
+}
+
+export interface PublishCalendarManualBatchInputDto {
+  idempotencyKey: string;
+  rows: PublishCalendarManualBatchRowDto[];
 }
 
 export interface CredentialInput {
@@ -1226,6 +1297,9 @@ export interface ApiRepository
   getAiContentPublishQueueResult(
     input: BrandScope & { queueId: string },
   ): Promise<import("./aiContentPublish.js").AiContentPublishTargetResult>;
+  prepareCompletedCalendarPublish?(
+    input: BrandScope & { outputId: string },
+  ): Promise<import("./aiContentPublish.js").PreparedAiContentPublishResult | null>;
   listContentCategories(): Promise<ContentCategoryDto[]>;
   getInstagramTrendConnection(brandId: string): Promise<InstagramTrendConnectionDto>;
   saveInstagramTrendCredentials(brandId: string, input: InstagramTrendCredentialInput): Promise<InstagramTrendConnectionDto>;

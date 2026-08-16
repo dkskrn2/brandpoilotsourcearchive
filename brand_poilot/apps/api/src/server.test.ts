@@ -3057,6 +3057,221 @@ describe("API server", () => {
     expect(repository.createSlot).not.toHaveBeenCalled();
   });
 
+  it("returns brand-scoped authoritative manual calendar options", async () => {
+    vi.stubEnv("BRAND_PILOT_DEV_WORKSPACE_ID", "22222222-2222-4222-8222-222222222222");
+    const repository = createRepository();
+    const getManualOptions = vi.fn(async () => ({
+      purposes: [{ value: "informational" as const, label: "정보성" }],
+      subjectModes: [],
+      channels: [],
+      products: [],
+      suggestions: [],
+      references: [],
+      usage: {
+        startsAt: "2026-08-16T00:00:00.000Z",
+        endsAt: "2026-08-23T00:00:00.000Z",
+        generation: { limit: 10, succeeded: 0, reserved: 0, remaining: 10, additionalAvailable: 10 },
+        publishing: { limit: 3, succeeded: 0, reserved: 0, remaining: 3, additionalAvailable: 3 },
+      },
+    }));
+    repository.getManualOptions = getManualOptions;
+    const app = createServer({ repository, logger: false });
+
+    const response = await app.inject({
+      method: "GET",
+      url: `/brands/${brandId}/publish-calendar/manual-options`,
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({ purposes: [{ value: "informational" }] });
+    expect(getManualOptions).toHaveBeenCalledWith({
+      workspaceId: "22222222-2222-4222-8222-222222222222",
+      brandId,
+    });
+  });
+
+  it("lists scoped calendar content candidates and rejects unknown candidate kinds", async () => {
+    vi.stubEnv("BRAND_PILOT_DEV_WORKSPACE_ID", "22222222-2222-4222-8222-222222222222");
+    const repository = createRepository();
+    const listManualContentCandidates = vi.fn(async () => [{
+      kind: "completed_unpublished" as const,
+      generationId: "generation-1",
+      generationOutputId: "output-1",
+      topicPublishGroupId: null,
+      title: "SNS 마케팅 콘텐츠",
+      contentFormat: "card_news" as const,
+      status: "completed",
+      createdAt: "2026-08-16T00:00:00.000Z",
+      assignable: true,
+      blockedReason: null,
+    }]);
+    repository.listManualContentCandidates = listManualContentCandidates;
+    const app = createServer({ repository, logger: false });
+
+    const response = await app.inject({
+      method: "GET",
+      url: `/brands/${brandId}/publish-calendar/content-candidates?kind=completed_unpublished`,
+    });
+    const invalid = await app.inject({
+      method: "GET",
+      url: `/brands/${brandId}/publish-calendar/content-candidates?kind=published`,
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({ items: [expect.objectContaining({ generationOutputId: "output-1" })] });
+    expect(listManualContentCandidates).toHaveBeenCalledWith({
+      workspaceId: "22222222-2222-4222-8222-222222222222",
+      brandId,
+      kind: "completed_unpublished",
+    });
+    expect(invalid.statusCode).toBe(400);
+    expect(listManualContentCandidates).toHaveBeenCalledTimes(1);
+  });
+
+  it("provisions a content-backed manual slot and rejects a source-less request", async () => {
+    vi.stubEnv("BRAND_PILOT_DEV_WORKSPACE_ID", "22222222-2222-4222-8222-222222222222");
+    vi.stubEnv("BRAND_PILOT_DEV_USER_ID", "33333333-3333-4333-8333-333333333333");
+    const repository = createRepository();
+    const provisionManualSlot = vi.fn(async (input: Parameters<NonNullable<ApiRepository["provisionManualSlot"]>>[0]) => ({
+      id: "30000000-0000-4000-8000-000000000001",
+      workspaceId: input.workspaceId,
+      brandId: input.brandId,
+      scheduledFor: input.scheduledFor.toISOString(),
+      assignmentMode: "manual" as const,
+      status: "generation_pending" as const,
+      recommendationKind: null,
+      contentFormat: input.contentFormat,
+      channels: [input.channel],
+      contentSuggestionId: null,
+      proposalId: null,
+      generationId: input.source.kind === "existing_generation" ? input.source.generationId : "generation-1",
+      generationOutputId: input.source.kind === "existing_output" ? input.source.generationOutputId : null,
+      topicPublishGroupId: null,
+      title: "SNS 마케팅 콘텐츠",
+      lastError: null,
+      updatedAt: "2026-08-16T00:00:00.000Z",
+    }));
+    repository.provisionManualSlot = provisionManualSlot;
+    const prepareCompletedCalendarPublish = vi.fn(async () => null);
+    repository.prepareCompletedCalendarPublish = prepareCompletedCalendarPublish;
+    const app = createServer({ repository, logger: false });
+    const payload = {
+      scheduledFor: "2099-08-17T00:00:00.000Z",
+      channel: "instagram",
+      contentFormat: "card_news",
+      idempotencyKey: "manual-slot-1",
+      source: { kind: "existing_generation", generationId: "40000000-0000-4000-8000-000000000001" },
+    };
+
+    const response = await app.inject({
+      method: "POST",
+      url: `/brands/${brandId}/publish-calendar/manual-slots`,
+      payload,
+    });
+    const invalid = await app.inject({
+      method: "POST",
+      url: `/brands/${brandId}/publish-calendar/manual-slots`,
+      payload: { ...payload, source: undefined },
+    });
+    const completedOutputId = "40000000-0000-4000-8000-000000000002";
+    const completed = await app.inject({
+      method: "POST",
+      url: `/brands/${brandId}/publish-calendar/manual-slots`,
+      payload: {
+        ...payload,
+        scheduledFor: "2099-08-17T00:30:00.000Z",
+        idempotencyKey: "manual-slot-2",
+        source: { kind: "existing_output", generationOutputId: completedOutputId },
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({ status: "generation_pending", generationId: payload.source.generationId });
+    expect(provisionManualSlot).toHaveBeenCalledWith(expect.objectContaining({
+      workspaceId: "22222222-2222-4222-8222-222222222222",
+      brandId,
+      channel: "instagram",
+      contentFormat: "card_news",
+      createdByUserId: "33333333-3333-4333-8333-333333333333",
+      source: payload.source,
+    }));
+    expect(provisionManualSlot.mock.calls[0]?.[0].scheduledFor).toEqual(new Date(payload.scheduledFor));
+    expect(invalid.statusCode).toBe(400);
+    expect(completed.statusCode).toBe(200);
+    expect(provisionManualSlot).toHaveBeenCalledTimes(2);
+    expect(prepareCompletedCalendarPublish).toHaveBeenCalledWith({
+      workspaceId: "22222222-2222-4222-8222-222222222222",
+      brandId,
+      outputId: completedOutputId,
+    });
+  });
+
+  it("provisions a validated manual slot batch with parsed dates", async () => {
+    vi.stubEnv("BRAND_PILOT_DEV_WORKSPACE_ID", "22222222-2222-4222-8222-222222222222");
+    vi.stubEnv("BRAND_PILOT_DEV_USER_ID", "33333333-3333-4333-8333-333333333333");
+    const repository = createRepository();
+    const provisionManualSlotsBatch = vi.fn(async () => []);
+    repository.provisionManualSlotsBatch = provisionManualSlotsBatch;
+    const app = createServer({ repository, logger: false });
+    const payload = {
+      idempotencyKey: "manual-batch-1",
+      rows: [{
+        clientRowId: "row-1",
+        scheduledFor: "2099-08-17T00:00:00.000Z",
+        channel: "instagram",
+        contentFormat: "card_news",
+        source: { kind: "existing_generation", generationId: "40000000-0000-4000-8000-000000000001" },
+      }],
+    };
+
+    const response = await app.inject({
+      method: "POST",
+      url: `/brands/${brandId}/publish-calendar/manual-slots/batch`,
+      payload,
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({ slots: [] });
+    expect(provisionManualSlotsBatch).toHaveBeenCalledWith(expect.objectContaining({
+      workspaceId: "22222222-2222-4222-8222-222222222222",
+      brandId,
+      idempotencyKey: payload.idempotencyKey,
+      createdByUserId: "33333333-3333-4333-8333-333333333333",
+      rows: [expect.objectContaining({
+        clientRowId: "row-1",
+        scheduledFor: new Date(payload.rows[0].scheduledFor),
+        source: payload.rows[0].source,
+      })],
+    }));
+  });
+
+  it("returns a conflict when a manual batch exceeds the plan generation quota", async () => {
+    vi.stubEnv("BRAND_PILOT_DEV_WORKSPACE_ID", "22222222-2222-4222-8222-222222222222");
+    const repository = createRepository();
+    repository.provisionManualSlotsBatch = vi.fn(async () => {
+      throw new Error("publish_calendar_generation_quota_exceeded");
+    });
+    const app = createServer({ repository, logger: false });
+
+    const response = await app.inject({
+      method: "POST",
+      url: `/brands/${brandId}/publish-calendar/manual-slots/batch`,
+      payload: {
+        idempotencyKey: "manual-batch-quota",
+        rows: [{
+          clientRowId: "row-1",
+          scheduledFor: "2099-08-17T00:00:00.000Z",
+          channel: "instagram",
+          contentFormat: "card_news",
+          source: { kind: "existing_generation", generationId: "40000000-0000-4000-8000-000000000001" },
+        }],
+      },
+    });
+
+    expect(response.statusCode).toBe(409);
+    expect(response.json()).toEqual({ error: "publish_calendar_generation_quota_exceeded" });
+  });
+
   it("lists publish results grouped by content for the completed tab", async () => {
     const repository = createRepository();
     const app = createServer({ repository });

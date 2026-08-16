@@ -2868,6 +2868,63 @@ describe("repository", () => {
       expect(queueUpdate?.values).toEqual(["calendar-group-1", "2026-07-15", scheduledFor]);
       expect(statements.some(({ sql }) => sql.includes("set status='scheduled',last_error=null"))).toBe(true);
     });
+
+    it("moves a late-ready calendar group to the earliest 30-minute-safe time without changing existing reservations", async () => {
+      const statements: Array<{ sql: string; values: unknown[] }> = [];
+      const reservedFor = new Date("2026-07-15T08:00:00.000Z");
+      const now = new Date("2026-07-15T09:50:00.000Z");
+      const existingReservation = new Date("2026-07-15T10:00:00.000Z");
+      const query = vi.fn(async (sql: string, values?: unknown[]) => {
+        statements.push({ sql, values: values ?? [] });
+        if (["begin", "commit", "rollback"].includes(sql.trim()) || sql.includes("pg_advisory_xact_lock")) {
+          return { rowCount: 0, rows: [] };
+        }
+        if (sql.includes("select id from brands") && sql.includes("for update")) {
+          return { rowCount: 1, rows: [{ id: "brand-1" }] };
+        }
+        if (sql.includes("from brand_subscriptions subscription")) {
+          return { rowCount: 1, rows: [{ started_at: "2026-07-01T00:00:00.000Z", weekly_publish_limit: 2 }] };
+        }
+        if (sql.includes("publication_units") && sql.includes("allowed_group_ids")) {
+          return { rowCount: 1, rows: [{ allowed_group_ids: ["late-group-1"] }] };
+        }
+        if (sql.includes("from publish_calendar_slots slot") && sql.includes("for update of slot")) {
+          return {
+            rowCount: 1,
+            rows: [{ slot_id: "late-slot-1", group_id: "late-group-1", scheduled_for: reservedFor }],
+          };
+        }
+        if (sql.includes("as blocked_at") && sql.includes("publish_calendar_slots")) {
+          return { rowCount: 1, rows: [{ blocked_at: existingReservation }] };
+        }
+        if (sql.includes("update topic_publish_groups") && sql.includes("slot_number=null")) {
+          return { rowCount: 1, rows: [{ id: "late-group-1" }] };
+        }
+        if (sql.includes("update publish_queue") && sql.includes("topic_publish_group_id=$1")) {
+          return { rowCount: 1, rows: [] };
+        }
+        if (sql.includes("update publish_calendar_slots") && sql.includes("status='scheduled'")) {
+          return { rowCount: 1, rows: [] };
+        }
+        if (sql.includes("from topic_publish_groups") && sql.includes("slot_date >=")) return { rowCount: 0, rows: [] };
+        if (sql.includes("from topic_publish_groups") && sql.includes("status = 'ready'") && sql.includes("for update")) {
+          return { rowCount: 0, rows: [] };
+        }
+        return { rowCount: 0, rows: [] };
+      });
+      const repository = createRepository(fakePoolWithClient(query) as any, { instagramPublish: { enabled: true } });
+
+      await repository.schedulePublishQueue("brand-1", now);
+
+      const expected = new Date("2026-07-15T10:30:00.000Z");
+      const groupUpdate = statements.find(({ sql }) => sql.includes("slot_number=null"));
+      const queueUpdate = statements.find(({ sql }) => sql.includes("topic_publish_group_id=$1"));
+      expect(groupUpdate?.values).toEqual(["late-group-1", "2026-07-15", expected]);
+      expect(queueUpdate?.values).toEqual(["late-group-1", "2026-07-15", expected]);
+      expect(statements.some(({ sql }) => sql.includes("as blocked_at"))).toBe(true);
+      const slotUpdate = statements.find(({ sql }) => sql.includes("set status='scheduled',last_error=null"));
+      expect(slotUpdate?.values).toEqual(["late-slot-1", "brand-1"]);
+    });
   });
 
   it("publishes Instagram queue items through Meta when generated image manifest is available", async () => {
