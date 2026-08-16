@@ -2196,8 +2196,8 @@ details.panel > summary.panel-head::-webkit-details-marker {
 .publish-view-tabs { display: inline-flex; gap: 4px; padding: 4px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); }
 .publish-view-tabs button { display: inline-flex; align-items: center; gap: 6px; min-height: 34px; padding: 0 11px; border: 0; border-radius: 5px; color: var(--muted); background: transparent; font: inherit; font-weight: 700; cursor: pointer; }
 .publish-view-tabs button.is-active { color: var(--primary); background: var(--info-bg); }
-.publish-calendar-layout { display: grid; grid-template-columns: minmax(0, 1fr) 320px; gap: 16px; align-items: start; }
-.publish-calendar-card, .publish-calendar-detail { border: 1px solid var(--line); border-radius: 10px; background: var(--surface); }
+.publish-calendar-layout { display: grid; grid-template-columns: minmax(0, 1fr) 380px; gap: 16px; align-items: start; }
+.publish-calendar-card, .publish-calendar-detail { min-width: 0; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); }
 .publish-calendar-toolbar, .publish-calendar-detail__header { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 18px; border-bottom: 1px solid var(--line); }
 .publish-calendar-toolbar h2, .publish-calendar-detail h2 { margin: 4px 0 0; font-size: 18px; }
 .publish-calendar-eyebrow { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-size: 12px; font-weight: 700; }
@@ -2226,6 +2226,19 @@ details.panel > summary.panel-head::-webkit-details-marker {
 .publish-calendar-manual-form { display: grid; gap: 10px; padding-top: 14px; border-top: 1px solid var(--line); }
 .publish-calendar-manual-form label, .auto-publish-settings__section { display: grid; gap: 5px; color: var(--muted); font-size: 12px; }
 .publish-calendar-manual-form input, .publish-calendar-manual-form select, .auto-publish-settings input { min-height: 36px; box-sizing: border-box; border: 1px solid var(--line); border-radius: 5px; padding: 0 8px; font: inherit; }
+.publish-calendar-provisioner fieldset { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; margin: 0; padding: 0; border: 0; }
+.publish-calendar-provisioner fieldset legend { grid-column: 1 / -1; margin-bottom: 4px; color: var(--muted); font-size: 12px; }
+.publish-calendar-provisioner fieldset label { display: flex; align-items: center; gap: 6px; min-height: 38px; padding: 7px; border: 1px solid var(--line); border-radius: 6px; color: var(--text); }
+.publish-calendar-provisioner fieldset input { min-height: auto; }
+.publish-calendar-setup-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.publish-calendar-setup-fields label:has(input[type="url"]), .publish-calendar-setup-fields label:has(input[aria-label="주제"]) { grid-column: 1 / -1; }
+.publish-calendar-bulk-intro { display: grid; gap: 10px; }
+.publish-calendar-bulk-table { display: grid; gap: 10px; }
+.publish-calendar-bulk-table__head { display: grid; grid-template-columns: 64px 1fr auto; gap: 8px; color: var(--muted); font-size: 11px; }
+.publish-calendar-bulk-table > [role="row"]:not(.publish-calendar-bulk-table__head) { display: grid; gap: 8px; padding: 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface-subtle); }
+.publish-calendar-bulk-progress { display: grid; gap: 8px; }
+.publish-calendar-bulk-progress > div { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 5px 8px; align-items: center; padding: 8px; border: 1px solid var(--line); border-radius: 6px; }
+.publish-calendar-bulk-progress > div .button { grid-column: 1 / -1; }
 .auto-publish-settings { width: min(620px, calc(100vw - 32px)); max-height: min(760px, calc(100vh - 32px)); overflow: auto; }
 .auto-publish-settings__header, .auto-publish-settings__footer { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 18px; border-bottom: 1px solid var(--line); }
 .auto-publish-settings__header h2 { margin: 4px 0; }

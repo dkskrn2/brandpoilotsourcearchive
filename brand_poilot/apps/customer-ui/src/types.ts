@@ -861,6 +861,7 @@ export interface PublishCalendarSlot {
   workspaceId: string;
   brandId: string;
   scheduledFor: string;
+  effectiveScheduledFor?: string | null;
   assignmentMode: "automatic" | "manual";
   status: "open" | "proposal_assigned" | "generation_pending" | "content_assigned" | "ready" | "scheduled" | "publish_delayed" | "quota_blocked" | "published" | "cancelled";
   recommendationKind: "informational" | "trend" | null;
@@ -889,6 +890,84 @@ export interface PublishCalendarWeeklyUsage {
   endsAt: string;
   generation: PublishCalendarUsageCounter;
   publishing: PublishCalendarUsageCounter;
+}
+
+export interface PublishCalendarOption<TValue extends string = string> {
+  value: TValue;
+  label: string;
+}
+
+export interface PublishCalendarManualOptions {
+  purposes: Array<PublishCalendarOption<"informational" | "marketing">>;
+  subjectModes: Array<PublishCalendarOption<"topic_text" | "topic_url" | "suggestion" | "reference"> & {
+    requiredField: "topicText" | "topicUrl" | "contentSuggestionId" | "referenceId";
+  }>;
+  channels: Array<{
+    value: ChannelType;
+    label: string;
+    formats: Array<PublishCalendarOption<"card_news" | "reel">>;
+  }>;
+  products: Array<PublishCalendarOption>;
+  suggestions: Array<PublishCalendarOption & { intent: "informational" | "trend" }>;
+  references: Array<PublishCalendarOption>;
+  usage: PublishCalendarWeeklyUsage;
+}
+
+export interface PublishCalendarContentCandidate {
+  kind: "generating" | "completed_unpublished";
+  generationId: string;
+  generationOutputId: string | null;
+  topicPublishGroupId: string | null;
+  title: string;
+  contentFormat: "card_news" | "reel";
+  status: string;
+  createdAt: string;
+  assignable: boolean;
+  blockedReason: string | null;
+}
+
+export interface PublishCalendarContentCandidateList {
+  items: PublishCalendarContentCandidate[];
+}
+
+export interface PublishCalendarNewContentSetup {
+  purpose: "informational" | "marketing";
+  subjectMode: "topic_text" | "topic_url" | "suggestion" | "reference";
+  topicText?: string;
+  topicUrl?: string;
+  contentSuggestionId?: string;
+  referenceId?: string;
+  productId?: string;
+  contentInstruction?: string;
+}
+
+export type PublishCalendarManualSlotSource =
+  | { kind: "existing_generation"; generationId: string }
+  | { kind: "existing_output"; generationOutputId: string };
+
+export interface PublishCalendarManualSlotInput {
+  scheduledFor: string;
+  channel: ChannelType;
+  contentFormat: "card_news" | "reel";
+  idempotencyKey: string;
+  source: PublishCalendarManualSlotSource;
+}
+
+export interface PublishCalendarManualBatchRow {
+  clientRowId: string;
+  scheduledFor: string;
+  channel: ChannelType;
+  contentFormat: "card_news" | "reel";
+  source: PublishCalendarManualSlotSource;
+}
+
+export interface PublishCalendarManualBatchInput {
+  idempotencyKey: string;
+  rows: PublishCalendarManualBatchRow[];
+}
+
+export interface PublishCalendarManualBatchResult {
+  slots: PublishCalendarSlot[];
 }
 
 export interface PublishResultChannel {

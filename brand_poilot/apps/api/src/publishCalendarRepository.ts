@@ -4,6 +4,9 @@ import { subscriptionWeekWindow, usageAvailability, type UsageAvailability } fro
 import type {
   AppliedSubscriptionRenewal,
   Channel,
+  PublishCalendarContentCandidateDto,
+  PublishCalendarManualOptionsDto,
+  PublishCalendarManualSlotSourceDto,
   PublishCalendarSettingsDto,
   PublishCalendarSlotDto,
   PublishCalendarWeeklyUsageDto,
@@ -13,8 +16,35 @@ type BrandScope = { workspaceId: string; brandId: string };
 type ContentFormat = "card_news" | "reel";
 type RecommendationKind = "informational" | "trend";
 type AssignmentMode = "automatic" | "manual";
+type ManualSlotProvisionInput = BrandScope & {
+  scheduledFor: Date;
+  channel: Channel;
+  contentFormat: ContentFormat;
+  idempotencyKey: string;
+  createdByUserId?: string | null;
+  source: PublishCalendarManualSlotSourceDto;
+};
+
+type PublishCalendarRepositoryOptions = {
+  afterManualSlotProvisioned?: (input: BrandScope & {
+    generationId: string;
+    outputId: string;
+  }) => Promise<void>;
+};
 
 export interface PublishCalendarRepository {
+  getManualOptions(scope: BrandScope): Promise<PublishCalendarManualOptionsDto>;
+  listManualContentCandidates(input: BrandScope & {
+    kind: "generating" | "completed_unpublished";
+  }): Promise<PublishCalendarContentCandidateDto[]>;
+  provisionManualSlot(input: ManualSlotProvisionInput): Promise<PublishCalendarSlotDto>;
+  provisionManualSlotsBatch(input: BrandScope & {
+    idempotencyKey: string;
+    createdByUserId?: string | null;
+    rows: Array<Omit<ManualSlotProvisionInput, keyof BrandScope | "idempotencyKey" | "createdByUserId"> & {
+      clientRowId: string;
+    }>;
+  }): Promise<PublishCalendarSlotDto[]>;
   getSettings(scope: BrandScope): Promise<PublishCalendarSettingsDto>;
   saveSettings(input: BrandScope & {
     enabled: boolean;
@@ -82,6 +112,7 @@ function mapSlot(row: Record<string, unknown>): PublishCalendarSlotDto {
     workspaceId: String(row.workspace_id),
     brandId: String(row.brand_id),
     scheduledFor: iso(row.scheduled_for),
+    effectiveScheduledFor: row.effective_scheduled_for ? iso(row.effective_scheduled_for) : null,
     assignmentMode: row.assignment_mode as AssignmentMode,
     status: row.status as PublishCalendarSlotDto["status"],
     recommendationKind: row.recommendation_kind as RecommendationKind | null,
@@ -95,6 +126,25 @@ function mapSlot(row: Record<string, unknown>): PublishCalendarSlotDto {
     title: row.title ? String(row.title) : null,
     lastError: row.last_error ? String(row.last_error) : null,
     updatedAt: iso(row.updated_at),
+  };
+}
+
+function mapContentCandidate(
+  row: Record<string, unknown>,
+  kind: "generating" | "completed_unpublished",
+): PublishCalendarContentCandidateDto {
+  const blockedReason = row.blocked_reason ? String(row.blocked_reason) : null;
+  return {
+    kind,
+    generationId: String(row.generation_id),
+    generationOutputId: row.generation_output_id ? String(row.generation_output_id) : null,
+    topicPublishGroupId: row.topic_publish_group_id ? String(row.topic_publish_group_id) : null,
+    title: String(row.title),
+    contentFormat: row.content_format as ContentFormat,
+    status: String(row.status),
+    createdAt: iso(row.created_at),
+    assignable: blockedReason === null,
+    blockedReason,
   };
 }
 
@@ -112,6 +162,14 @@ function validateSlotTimes(values: string[]): string[] {
   }
   const unique = [...new Set(values)].sort();
   if (unique.length !== values.length) throw new Error("publish_calendar_time_duplicate");
+  if (unique.length > 1) {
+    const minutes = unique.map((value) => Number(value.slice(0, 2)) * 60 + Number(value.slice(3)));
+    for (let index = 0; index < minutes.length; index += 1) {
+      const current = minutes[index];
+      const next = index + 1 < minutes.length ? minutes[index + 1] : minutes[0] + 24 * 60;
+      if (next - current < 30) throw new Error("publish_calendar_spacing_conflict");
+    }
+  }
   return unique;
 }
 
@@ -149,6 +207,23 @@ async function assertConnectedChannels(
   if (new Set(connected.rows.map(({ channel }) => String(channel))).size !== channels.length) {
     throw new Error("publish_calendar_channel_not_connected");
   }
+}
+
+async function assertSlotSpacing(
+  client: Pick<PoolClient, "query">,
+  scope: BrandScope,
+  scheduledFor: Date,
+  excludeSlotId?: string,
+): Promise<void> {
+  const conflict = await client.query(
+    `select slot.id from publish_calendar_slots slot
+      where slot.workspace_id=$1::uuid and slot.brand_id=$2::uuid and slot.status<>'cancelled'
+        and ($4::uuid is null or slot.id<>$4::uuid)
+        and abs(extract(epoch from (slot.scheduled_for-$3::timestamptz))) < 1800
+      order by slot.scheduled_for,slot.id limit 1 for update`,
+    [scope.workspaceId, scope.brandId, scheduledFor, excludeSlotId ?? null],
+  );
+  if (conflict.rowCount) throw new Error("publish_calendar_spacing_conflict");
 }
 
 async function subscriptionAndPublishUsage(
@@ -250,9 +325,383 @@ function addAnchoredUtcMonth(value: Date, anchorDay: number): Date {
   ));
 }
 
-export function createPublishCalendarRepository(pool: Pool): PublishCalendarRepository {
+export function createPublishCalendarRepository(
+  pool: Pool,
+  options: PublishCalendarRepositoryOptions = {},
+): PublishCalendarRepository {
   const fencedPool = withAiContentTransactionFence(pool);
+  const loadSlotById = async (input: BrandScope & { slotId: string }) => {
+    const result = await pool.query(
+      `select slot.*,queue_schedule.effective_scheduled_for
+         from publish_calendar_slots slot
+         left join lateral (
+           select coalesce(
+                    max(queue.published_at) filter (where queue.status='published'),
+                    min(queue.scheduled_for) filter (where queue.status in ('scheduled','publishing','deferred'))
+                  ) as effective_scheduled_for
+             from publish_queue queue
+            where queue.topic_publish_group_id=slot.topic_publish_group_id
+         ) queue_schedule on true
+        where slot.workspace_id=$1::uuid and slot.brand_id=$2::uuid and slot.id=$3::uuid`,
+      [input.workspaceId, input.brandId, input.slotId],
+    );
+    return result.rowCount ? mapSlot(result.rows[0]) : null;
+  };
+  const loadWeeklyUsage = async (
+    queryable: Pick<PoolClient, "query">,
+    input: BrandScope & { at?: Date },
+  ): Promise<PublishCalendarWeeklyUsageDto> => {
+    const at = input.at ?? new Date();
+    const { window, availability: publishing, generationLimit } = await subscriptionAndPublishUsage(queryable, input, at);
+    const generated = await queryable.query(
+      `with net as (
+         select ledger.generation_id,sum(ledger.quantity)::integer quantity
+           from ai_content_usage_ledger ledger
+          where ledger.brand_id=$1::uuid and ledger.workspace_id=$2::uuid
+            and ledger.usage_type in ('generation','reversal')
+            and ledger.usage_date >= ($3::timestamptz at time zone 'Asia/Seoul')::date
+            and ledger.usage_date < ($4::timestamptz at time zone 'Asia/Seoul')::date
+          group by ledger.generation_id
+       ) select
+           coalesce(sum(net.quantity) filter (where generation.status in ('completed','partial_failed')),0)::integer succeeded_count,
+           coalesce(sum(net.quantity) filter (
+             where generation.status in ('draft','analyzing','analysis_ready','queued','planning','generating')
+           ),0)::integer reserved_count
+         from net join ai_content_generations generation on generation.id=net.generation_id`,
+      [input.brandId, input.workspaceId, window.startsAt, window.endsAt],
+    );
+    return {
+      startsAt: window.startsAt.toISOString(),
+      endsAt: window.endsAt.toISOString(),
+      generation: usageAvailability({
+        limit: generationLimit,
+        succeeded: Number(generated.rows[0]?.succeeded_count ?? 0),
+        reserved: Number(generated.rows[0]?.reserved_count ?? 0),
+      }),
+      publishing,
+    };
+  };
+  const validateManualProvisionInput = (input: ManualSlotProvisionInput) => {
+    const channels = validateChannels([input.channel]);
+    if (!Number.isFinite(input.scheduledFor.getTime())) throw new Error("publish_calendar_time_invalid");
+    if (input.scheduledFor <= new Date()) throw new Error("publish_calendar_time_past");
+    if (!input.idempotencyKey.trim() || input.idempotencyKey.length > 200) {
+      throw new Error("publish_calendar_idempotency_key_invalid");
+    }
+    return channels;
+  };
+  const provisionManualSlotLocked = async (
+    client: PoolClient,
+    input: ManualSlotProvisionInput,
+  ): Promise<PublishCalendarSlotDto> => {
+    const channels = validateManualProvisionInput(input);
+    const future = await client.query(
+      "select clock_timestamp() < $1::timestamptz as future",
+      [input.scheduledFor],
+    );
+    if (future.rows[0]?.future !== true) throw new Error("publish_calendar_time_past");
+    await assertConnectedChannels(client, input, channels);
+    const exact = await client.query(
+      `select slot.* from publish_calendar_slots slot
+        where slot.workspace_id=$1::uuid and slot.brand_id=$2::uuid
+          and slot.scheduled_for=$3::timestamptz and slot.status<>'cancelled'
+        for update`,
+      [input.workspaceId, input.brandId, input.scheduledFor],
+    );
+    if (exact.rowCount) {
+      const row = exact.rows[0] as Record<string, unknown>;
+      const sameSource = input.source.kind === "existing_generation"
+        ? String(row.generation_id ?? "") === input.source.generationId
+        : String(row.generation_output_id ?? "") === input.source.generationOutputId;
+      const sameChannels = Array.isArray(row.channels)
+        && row.channels.length === 1 && row.channels[0] === input.channel;
+      if (sameSource && sameChannels && row.content_format === input.contentFormat) return mapSlot(row);
+      throw new Error("publish_calendar_slot_time_conflict");
+    }
+    await assertSlotSpacing(client, input, input.scheduledFor);
+
+    const lineage = input.source.kind === "existing_generation"
+      ? await client.query(
+          `select generation.id as generation_id,null::uuid as generation_output_id,
+                  null::uuid as topic_publish_group_id,generation.title,
+                  generation.output_format as content_format
+             from ai_content_generations generation
+            where generation.workspace_id=$1::uuid and generation.brand_id=$2::uuid
+              and generation.id=$3::uuid and generation.output_format=$4
+              and generation.status in ('draft','analyzing','analysis_ready','queued','planning','generating')
+            for key share`,
+          [input.workspaceId, input.brandId, input.source.generationId, input.contentFormat],
+        )
+      : await client.query(
+          `select generation.id as generation_id,output.id as generation_output_id,
+                  null::uuid as topic_publish_group_id,
+                  coalesce(nullif(output.title,''),generation.title) as title,
+                  generation.output_format as content_format
+             from ai_content_generation_outputs output
+             join ai_content_generations generation
+               on generation.id=output.generation_id
+              and generation.workspace_id=output.workspace_id and generation.brand_id=output.brand_id
+            where output.workspace_id=$1::uuid and output.brand_id=$2::uuid
+              and output.id=$3::uuid and output.status='completed'
+              and generation.output_format=$4
+              and not exists (
+                select 1 from channel_outputs channel_output
+                join publish_queue queue on queue.channel_output_id=channel_output.id
+                where channel_output.workspace_id=output.workspace_id
+                  and channel_output.brand_id=output.brand_id
+                  and channel_output.ai_content_generation_output_id=output.id
+              )
+            for key share of output,generation`,
+          [input.workspaceId, input.brandId, input.source.generationOutputId, input.contentFormat],
+        );
+    if (!lineage.rowCount) throw new Error("publish_calendar_content_not_assignable");
+    const resolved = lineage.rows[0] as Record<string, unknown>;
+    const duplicate = await client.query(
+      `select slot.id from publish_calendar_slots slot
+        where slot.workspace_id=$1::uuid and slot.brand_id=$2::uuid and slot.status<>'cancelled'
+          and (slot.generation_id=$3::uuid or ($4::uuid is not null and slot.generation_output_id=$4::uuid))
+        limit 1 for update`,
+      [input.workspaceId, input.brandId, resolved.generation_id, resolved.generation_output_id ?? null],
+    );
+    if (duplicate.rowCount) throw new Error("publish_calendar_content_already_scheduled");
+    const { availability } = await subscriptionAndPublishUsage(client, input, input.scheduledFor);
+    if (availability.additionalAvailable < 1) throw new Error("publish_weekly_quota_exceeded");
+    const status = resolved.topic_publish_group_id ? "content_assigned" : "generation_pending";
+    const result = await client.query(
+      `insert into publish_calendar_slots(
+         workspace_id,brand_id,scheduled_for,assignment_mode,status,recommendation_kind,
+         content_format,channels,generation_id,generation_output_id,topic_publish_group_id,
+         title,created_by_user_id
+       ) values($1::uuid,$2::uuid,$3::timestamptz,'manual',$11,null,
+         $4,$5::text[],$6::uuid,$7::uuid,$8::uuid,$9,$10::uuid)
+       returning *`,
+      [input.workspaceId, input.brandId, input.scheduledFor, input.contentFormat, channels,
+        resolved.generation_id, resolved.generation_output_id ?? null,
+        resolved.topic_publish_group_id ?? null, String(resolved.title), input.createdByUserId ?? null, status],
+    );
+    return mapSlot(result.rows[0]);
+  };
   return {
+    async getManualOptions(scope) {
+      const [channels, products, suggestions, references, usage] = await Promise.all([
+        pool.query(
+          `select channel from brand_channels
+            where workspace_id=$1::uuid and brand_id=$2::uuid and deleted_at is null
+              and enabled and status='connected' and channel='instagram'
+            order by channel`,
+          [scope.workspaceId, scope.brandId],
+        ),
+        pool.query(
+          `select item.id, item.display_name as label
+             from product_services item
+             join product_service_versions version
+               on version.id=item.active_version_id
+              and version.product_service_id=item.id
+              and version.workspace_id=item.workspace_id
+              and version.brand_id=item.brand_id
+              and version.status='approved'
+            where item.workspace_id=$1::uuid and item.brand_id=$2::uuid and item.status='active'
+            order by item.display_name,item.id`,
+          [scope.workspaceId, scope.brandId],
+        ),
+        pool.query(
+          `select suggestion.id,suggestion.title as label,suggestion.intent
+             from content_suggestions suggestion
+             join content_suggestion_batches batch on batch.id=suggestion.batch_id
+             join brand_profiles profile
+               on profile.workspace_id=$1::uuid and profile.brand_id=$2::uuid
+              and profile.primary_category_id=batch.category_id
+            where batch.id=(
+              select latest.id from content_suggestion_batches latest
+               where latest.category_id=profile.primary_category_id
+               order by latest.generation_date desc,latest.published_at desc,latest.id desc
+               limit 1
+            )
+            order by suggestion.position,suggestion.id`,
+          [scope.workspaceId, scope.brandId],
+        ),
+        pool.query(
+          `select item.id,coalesce(nullif(item.title,''),'이름 없는 레퍼런스') as label
+             from reference_items item
+            where item.workspace_id=$1::uuid and item.brand_id=$2::uuid and item.archived_at is null
+            order by item.created_at desc,item.id`,
+          [scope.workspaceId, scope.brandId],
+        ),
+        loadWeeklyUsage(pool, scope),
+      ]);
+      return {
+        purposes: [
+          { value: "informational", label: "정보성" },
+          { value: "marketing", label: "마케팅성" },
+        ],
+        subjectModes: [
+          { value: "topic_text", label: "직접 입력", requiredField: "topicText" },
+          { value: "topic_url", label: "URL", requiredField: "topicUrl" },
+          { value: "suggestion", label: "오늘의 주제", requiredField: "contentSuggestionId" },
+          { value: "reference", label: "레퍼런스", requiredField: "referenceId" },
+        ],
+        channels: channels.rows.map(() => ({
+          value: "instagram" as const,
+          label: "Instagram",
+          formats: [
+            { value: "card_news" as const, label: "카드뉴스" },
+            { value: "reel" as const, label: "릴스" },
+          ],
+        })),
+        products: products.rows.map((row) => ({ value: String(row.id), label: String(row.label) })),
+        suggestions: suggestions.rows.map((row) => ({
+          value: String(row.id),
+          label: String(row.label),
+          intent: row.intent as "informational" | "trend",
+        })),
+        references: references.rows.map((row) => ({ value: String(row.id), label: String(row.label) })),
+        usage,
+      };
+    },
+
+    async listManualContentCandidates(input) {
+      if (input.kind === "generating") {
+        const result = await pool.query(
+          `select generation.id as generation_id,null::uuid as generation_output_id,
+                  null::uuid as topic_publish_group_id,generation.title,
+                  generation.output_format as content_format,generation.status,generation.created_at,
+                  case when active_slot.id is not null then 'already_scheduled' end as blocked_reason
+             from ai_content_generations generation
+             left join lateral (
+               select slot.id from publish_calendar_slots slot
+                where slot.workspace_id=generation.workspace_id and slot.brand_id=generation.brand_id
+                  and slot.generation_id=generation.id and slot.status<>'cancelled'
+                order by slot.scheduled_for,slot.id limit 1
+             ) active_slot on true
+            where generation.workspace_id=$1::uuid and generation.brand_id=$2::uuid
+              and generation.status in ('draft','analyzing','analysis_ready','queued','planning','generating')
+              and generation.output_format in ('card_news','reel')
+            order by generation.created_at desc,generation.id`,
+          [input.workspaceId, input.brandId],
+        );
+        return result.rows.map((row) => mapContentCandidate(row, input.kind));
+      }
+      const result = await pool.query(
+        `select generation.id as generation_id,output.id as generation_output_id,
+                queue_context.topic_publish_group_id,
+                coalesce(nullif(output.title,''),generation.title) as title,
+                generation.output_format as content_format,output.status,output.created_at,
+                case
+                  when active_slot.id is not null then 'already_scheduled'
+                  when queue_context.has_published then 'already_published'
+                  when queue_context.has_any then 'already_scheduled'
+                end as blocked_reason
+           from ai_content_generation_outputs output
+           join ai_content_generations generation
+             on generation.id=output.generation_id
+            and generation.workspace_id=output.workspace_id and generation.brand_id=output.brand_id
+           left join lateral (
+             select slot.id from publish_calendar_slots slot
+              where slot.workspace_id=output.workspace_id and slot.brand_id=output.brand_id
+                and slot.generation_output_id=output.id and slot.status<>'cancelled'
+              order by slot.scheduled_for,slot.id limit 1
+           ) active_slot on true
+           left join lateral (
+             select min(queue.topic_publish_group_id::text)::uuid as topic_publish_group_id,
+                    count(*) > 0 as has_any,
+                    bool_or(queue.status='published') as has_published
+               from channel_outputs channel_output
+               join publish_queue queue on queue.channel_output_id=channel_output.id
+              where channel_output.workspace_id=output.workspace_id
+                and channel_output.brand_id=output.brand_id
+                and channel_output.ai_content_generation_output_id=output.id
+           ) queue_context on true
+          where generation.workspace_id=$1::uuid and generation.brand_id=$2::uuid
+            and generation.output_format in ('card_news','reel') and output.status='completed'
+          order by output.created_at desc,output.id`,
+        [input.workspaceId, input.brandId],
+      );
+      return result.rows.map((row) => mapContentCandidate(row, input.kind));
+    },
+
+    async provisionManualSlot(input) {
+      validateManualProvisionInput(input);
+      const slot = await transaction(fencedPool, async (client) => {
+        await lockBrand(client, input.brandId);
+        return provisionManualSlotLocked(client, input);
+      });
+      if (input.source.kind === "existing_output" && slot.generationId) {
+        await options.afterManualSlotProvisioned?.({
+          workspaceId: input.workspaceId,
+          brandId: input.brandId,
+          generationId: slot.generationId,
+          outputId: input.source.generationOutputId,
+        });
+        return await loadSlotById({
+          workspaceId: input.workspaceId,
+          brandId: input.brandId,
+          slotId: slot.id,
+        }) ?? slot;
+      }
+      return slot;
+    },
+
+    async provisionManualSlotsBatch(input) {
+      if (!input.idempotencyKey.trim() || input.idempotencyKey.length > 200
+        || !Array.isArray(input.rows) || input.rows.length < 1 || input.rows.length > 50) {
+        throw new Error("publish_calendar_batch_invalid");
+      }
+      const rowIds = new Set(input.rows.map(({ clientRowId }) => clientRowId));
+      if (rowIds.size !== input.rows.length || [...rowIds].some((value) => !value.trim() || value.length > 100)) {
+        throw new Error("publish_calendar_batch_invalid");
+      }
+      const rows = input.rows.map((row) => ({
+        ...input,
+        ...row,
+        idempotencyKey: `${input.idempotencyKey}:${row.clientRowId}`,
+        createdByUserId: input.createdByUserId ?? null,
+      }));
+      rows.forEach(validateManualProvisionInput);
+      const slots = await transaction(fencedPool, async (client) => {
+        await lockBrand(client, input.brandId);
+        const unstartedGenerationIds = [...new Set(rows.flatMap((row) => (
+          row.source.kind === "existing_generation" ? [row.source.generationId] : []
+        )))];
+        if (unstartedGenerationIds.length > 0) {
+          const unstarted = await client.query(
+            `select count(*)::integer count
+               from ai_content_generations generation
+              where generation.workspace_id=$1::uuid and generation.brand_id=$2::uuid
+                and generation.id=any($3::uuid[]) and generation.status='draft'`,
+            [input.workspaceId, input.brandId, unstartedGenerationIds],
+          );
+          const unstartedCount = Number(unstarted.rows[0]?.count ?? 0);
+          if (unstartedCount > 0) {
+            const usage = await loadWeeklyUsage(client, input);
+            if (unstartedCount > usage.generation.additionalAvailable) {
+              throw new Error("publish_calendar_generation_quota_exceeded");
+            }
+          }
+        }
+        const slots: PublishCalendarSlotDto[] = [];
+        for (const row of rows) slots.push(await provisionManualSlotLocked(client, row));
+        return slots;
+      });
+      for (let index = 0; index < rows.length; index += 1) {
+        const row = rows[index];
+        const slot = slots[index];
+        if (row.source.kind === "existing_output" && slot?.generationId) {
+          await options.afterManualSlotProvisioned?.({
+            workspaceId: input.workspaceId,
+            brandId: input.brandId,
+            generationId: slot.generationId,
+            outputId: row.source.generationOutputId,
+          });
+          slots[index] = await loadSlotById({
+            workspaceId: input.workspaceId,
+            brandId: input.brandId,
+            slotId: slot.id,
+          }) ?? slot;
+        }
+      }
+      return slots;
+    },
+
     async getSettings(scope) {
       const result = await pool.query(
         "select * from publish_calendar_settings where brand_id=$1::uuid and workspace_id=$2::uuid",
@@ -287,10 +736,19 @@ export function createPublishCalendarRepository(pool: Pool): PublishCalendarRepo
       if (!Number.isFinite(input.startsAt.getTime()) || !Number.isFinite(input.endsAt.getTime())
         || input.startsAt >= input.endsAt) throw new Error("publish_calendar_period_invalid");
       const result = await pool.query(
-        `select * from publish_calendar_slots
-          where brand_id=$1::uuid and workspace_id=$2::uuid
-            and scheduled_for >= $3::timestamptz and scheduled_for < $4::timestamptz
-          order by scheduled_for,id`,
+        `select slot.*,queue_schedule.effective_scheduled_for
+           from publish_calendar_slots slot
+           left join lateral (
+             select coalesce(
+                      max(queue.published_at) filter (where queue.status='published'),
+                      min(queue.scheduled_for) filter (where queue.status in ('scheduled','publishing','deferred'))
+                    ) as effective_scheduled_for
+               from publish_queue queue
+              where queue.topic_publish_group_id=slot.topic_publish_group_id
+           ) queue_schedule on true
+          where slot.brand_id=$1::uuid and slot.workspace_id=$2::uuid
+            and slot.scheduled_for >= $3::timestamptz and slot.scheduled_for < $4::timestamptz
+          order by slot.scheduled_for,slot.id`,
         [input.brandId, input.workspaceId, input.startsAt, input.endsAt],
       );
       return result.rows.map(mapSlot);
@@ -308,6 +766,7 @@ export function createPublishCalendarRepository(pool: Pool): PublishCalendarRepo
         );
         if (future.rows[0]?.future !== true) throw new Error("publish_calendar_time_past");
         await assertConnectedChannels(client, input, channels);
+        await assertSlotSpacing(client, input, input.scheduledFor);
         await subscriptionAndPublishUsage(client, input, input.scheduledFor);
         const result = await client.query(
           `insert into publish_calendar_slots(
@@ -531,35 +990,7 @@ export function createPublishCalendarRepository(pool: Pool): PublishCalendarRepo
     },
 
     async getWeeklyUsage(input) {
-      const at = input.at ?? new Date();
-      const { window, availability: publishing, generationLimit } = await subscriptionAndPublishUsage(pool, input, at);
-      const generated = await pool.query(
-        `with net as (
-           select ledger.generation_id,sum(ledger.quantity)::integer quantity
-             from ai_content_usage_ledger ledger
-            where ledger.brand_id=$1::uuid and ledger.workspace_id=$2::uuid
-              and ledger.usage_type in ('generation','reversal')
-              and ledger.usage_date >= ($3::timestamptz at time zone 'Asia/Seoul')::date
-              and ledger.usage_date < ($4::timestamptz at time zone 'Asia/Seoul')::date
-            group by ledger.generation_id
-         ) select
-             coalesce(sum(net.quantity) filter (where generation.status in ('completed','partial_failed')),0)::integer succeeded_count,
-             coalesce(sum(net.quantity) filter (
-               where generation.status in ('draft','analyzing','analysis_ready','queued','planning','generating')
-             ),0)::integer reserved_count
-           from net join ai_content_generations generation on generation.id=net.generation_id`,
-        [input.brandId, input.workspaceId, window.startsAt, window.endsAt],
-      );
-      return {
-        startsAt: window.startsAt.toISOString(),
-        endsAt: window.endsAt.toISOString(),
-        generation: usageAvailability({
-          limit: generationLimit,
-          succeeded: Number(generated.rows[0]?.succeeded_count ?? 0),
-          reserved: Number(generated.rows[0]?.reserved_count ?? 0),
-        }),
-        publishing,
-      };
+      return loadWeeklyUsage(pool, input);
     },
 
     async applyDueSubscriptionRenewals(now = new Date()) {

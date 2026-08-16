@@ -57,6 +57,14 @@ function activeSubscription(sql: string): QueryResult | null {
 }
 
 describe("publish calendar repository settings and slot validation", () => {
+  it("returns the effective queue time without replacing the original slot reservation", async () => {
+    const run = harness((sql) => sql.includes("queue_schedule.effective_scheduled_for") ? { rows: [slotRow({ effective_scheduled_for: "2099-08-15T03:30:00Z" })], rowCount: 1 } : { rows: [], rowCount: 0 });
+    await expect(createPublishCalendarRepository(run.pool).listSlots({ ...scope, startsAt: new Date("2099-08-01T00:00:00Z"), endsAt: new Date("2099-09-01T00:00:00Z") })).resolves.toEqual([
+      expect.objectContaining({ scheduledFor: "2099-08-15T02:30:00.000Z", effectiveScheduledFor: "2099-08-15T03:30:00.000Z" }),
+    ]);
+    expect(run.statements[0]?.sql).toContain("queue.status in ('scheduled','publishing','deferred')");
+  });
+
   it("returns default-off settings and persists up to 24 connected Instagram times", async () => {
     const times = Array.from({ length: 24 }, (_, hour) => `${String(hour).padStart(2, "0")}:00`);
     const run = harness((sql) => {
@@ -110,6 +118,22 @@ describe("publish calendar repository settings and slot validation", () => {
       ...input,
       slotTimes: Array.from({ length: 25 }, (_, index) => `${String(index % 24).padStart(2, "0")}:01`),
     })).rejects.toThrowError("publish_calendar_time_invalid");
+  });
+
+  it("requires automatic slot times to stay at least 30 minutes apart across midnight", async () => {
+    const repository = createPublishCalendarRepository(harness(() => ({ rows: [], rowCount: 0 })).pool);
+    const input = {
+      ...scope,
+      enabled: false,
+      channels: [] as "instagram"[],
+      informationalFormat: "card_news" as const,
+      trendFormat: "reel" as const,
+    };
+
+    await expect(repository.saveSettings({ ...input, slotTimes: ["09:00", "09:29"] }))
+      .rejects.toThrowError("publish_calendar_spacing_conflict");
+    await expect(repository.saveSettings({ ...input, slotTimes: ["00:00", "23:45"] }))
+      .rejects.toThrowError("publish_calendar_spacing_conflict");
   });
 
   it("rejects unsupported calendar channels even while automatic settings are disabled", async () => {
@@ -227,6 +251,402 @@ describe("publish calendar repository settings and slot validation", () => {
       contentFormat: "card_news",
       channels: ["instagram"],
     })).rejects.toThrowError("publish_calendar_subscription_inactive");
+  });
+});
+
+describe("publish calendar manual provisioning catalogs", () => {
+  it("returns only brand-scoped active database choices and server-supported formats", async () => {
+    const run = harness((sql, values) => {
+      if (sql.includes("from brand_channels")) return {
+        rows: [{ channel: "instagram" }],
+        rowCount: 1,
+      };
+      if (sql.includes("from product_services item")) return {
+        rows: [{ id: "product-1", label: "사장님 SNS 컨설팅" }],
+        rowCount: 1,
+      };
+      if (sql.includes("from content_suggestions suggestion")) return {
+        rows: [{ id: "suggestion-1", label: "매출로 이어지는 SNS 콘텐츠", intent: "informational" }],
+        rowCount: 1,
+      };
+      if (sql.includes("from reference_items item")) return {
+        rows: [{ id: "reference-1", label: "SNS 마케팅 사례" }],
+        rowCount: 1,
+      };
+      const subscription = activeSubscription(sql);
+      if (subscription) return subscription;
+      if (sql.includes("calendar_usage") && sql.includes("direct_publish_groups")) {
+        return { rows: [{ published_count: 0, reserved_count: 1 }], rowCount: 1 };
+      }
+      if (sql.includes("from net join ai_content_generations generation")) {
+        return { rows: [{ succeeded_count: 2, reserved_count: 0 }], rowCount: 1 };
+      }
+      throw new Error(`unexpected query: ${sql} ${JSON.stringify(values)}`);
+    });
+    const repository = createPublishCalendarRepository(run.pool) as ReturnType<typeof createPublishCalendarRepository> & {
+      getManualOptions(input: typeof scope): Promise<Record<string, unknown>>;
+    };
+
+    await expect(repository.getManualOptions(scope)).resolves.toMatchObject({
+      purposes: [
+        { value: "informational", label: "정보성" },
+        { value: "marketing", label: "마케팅성" },
+      ],
+      channels: [{
+        value: "instagram",
+        label: "Instagram",
+        formats: [
+          { value: "card_news", label: "카드뉴스" },
+          { value: "reel", label: "릴스" },
+        ],
+      }],
+      products: [{ value: "product-1", label: "사장님 SNS 컨설팅" }],
+      suggestions: [{ value: "suggestion-1", label: "매출로 이어지는 SNS 콘텐츠", intent: "informational" }],
+      references: [{ value: "reference-1", label: "SNS 마케팅 사례" }],
+      usage: { publishing: { reserved: 1 } },
+    });
+
+    for (const table of ["product_services item", "content_suggestions suggestion", "reference_items item"]) {
+      const statement = run.statements.find(({ sql }) => sql.includes(`from ${table}`));
+      expect(statement?.values).toEqual([scope.workspaceId, scope.brandId]);
+    }
+  });
+
+  it("lists generating and completed-unpublished candidates without broadening blocked rows", async () => {
+    const run = harness((sql, values) => {
+      if (sql.includes("generation.status in ('draft'")) return {
+        rows: [{
+          generation_id: "generation-1",
+          generation_output_id: null,
+          topic_publish_group_id: null,
+          title: "사장님 SNS 운영법",
+          content_format: "card_news",
+          status: "generating",
+          created_at: "2026-08-16T00:00:00.000Z",
+          blocked_reason: null,
+        }],
+        rowCount: 1,
+      };
+      if (sql.includes("output.status='completed'")) return {
+        rows: [
+          {
+            generation_id: "generation-2",
+            generation_output_id: "output-2",
+            topic_publish_group_id: "group-2",
+            title: "SNS 마케팅 체크리스트",
+            content_format: "reel",
+            status: "completed",
+            created_at: "2026-08-16T01:00:00.000Z",
+            blocked_reason: null,
+          },
+          {
+            generation_id: "generation-3",
+            generation_output_id: "output-3",
+            topic_publish_group_id: null,
+            title: "이미 예약된 콘텐츠",
+            content_format: "card_news",
+            status: "completed",
+            created_at: "2026-08-16T02:00:00.000Z",
+            blocked_reason: "already_scheduled",
+          },
+        ],
+        rowCount: 2,
+      };
+      throw new Error(`unexpected query: ${sql} ${JSON.stringify(values)}`);
+    });
+    const repository = createPublishCalendarRepository(run.pool) as ReturnType<typeof createPublishCalendarRepository> & {
+      listManualContentCandidates(input: typeof scope & { kind: "generating" | "completed_unpublished" }): Promise<unknown[]>;
+    };
+
+    await expect(repository.listManualContentCandidates({ ...scope, kind: "generating" })).resolves.toEqual([
+      expect.objectContaining({ kind: "generating", generationId: "generation-1", assignable: true }),
+    ]);
+    await expect(repository.listManualContentCandidates({ ...scope, kind: "completed_unpublished" })).resolves.toEqual([
+      expect.objectContaining({ kind: "completed_unpublished", generationOutputId: "output-2", topicPublishGroupId: "group-2", assignable: true }),
+      expect.objectContaining({ generationOutputId: "output-3", assignable: false, blockedReason: "already_scheduled" }),
+    ]);
+    expect(run.statements.filter(({ sql }) => sql.includes("ai_content_generations generation"))
+      .every(({ values }) => JSON.stringify(values) === JSON.stringify([scope.workspaceId, scope.brandId]))).toBe(true);
+  });
+});
+
+describe("publish calendar content-backed manual provisioning", () => {
+  it("prepares a completed output only after its calendar slot commits", async () => {
+    const outputId = "40000000-0000-4000-8000-000000000002";
+    const generationId = "40000000-0000-4000-8000-000000000001";
+    const run = harness((sql) => {
+      if (sql.includes("clock_timestamp()")) return { rows: [{ future: true }], rowCount: 1 };
+      if (sql.includes("from brand_channels")) return { rows: [{ channel: "instagram" }], rowCount: 1 };
+      if (sql.includes("slot.scheduled_for=$3::timestamptz") || sql.includes("abs(extract(epoch")) {
+        return { rows: [], rowCount: 0 };
+      }
+      if (sql.includes("from ai_content_generation_outputs output") && sql.includes("for key share")) {
+        return {
+          rows: [{
+            generation_id: generationId,
+            generation_output_id: outputId,
+            topic_publish_group_id: null,
+            title: "완료된 카드뉴스",
+            content_format: "card_news",
+          }],
+          rowCount: 1,
+        };
+      }
+      if (sql.includes("and (slot.generation_id=$3::uuid")) return { rows: [], rowCount: 0 };
+      const subscription = activeSubscription(sql);
+      if (subscription) return subscription;
+      if (sql.includes("calendar_usage") && sql.includes("direct_publish_groups")) {
+        return { rows: [{ published_count: 0, reserved_count: 0 }], rowCount: 1 };
+      }
+      if (sql.startsWith("insert into publish_calendar_slots")) {
+        return {
+          rows: [slotRow({
+            assignment_mode: "manual",
+            status: "generation_pending",
+            recommendation_kind: null,
+            generation_id: generationId,
+            generation_output_id: outputId,
+            title: "완료된 카드뉴스",
+          })],
+          rowCount: 1,
+        };
+      }
+      if (sql.includes("where slot.workspace_id=$1::uuid and slot.brand_id=$2::uuid and slot.id=$3::uuid")) {
+        return {
+          rows: [slotRow({
+            assignment_mode: "manual",
+            status: "content_assigned",
+            recommendation_kind: null,
+            generation_id: generationId,
+            generation_output_id: outputId,
+            topic_publish_group_id: "60000000-0000-4000-8000-000000000001",
+            title: "완료된 카드뉴스",
+          })],
+          rowCount: 1,
+        };
+      }
+      throw new Error(`unexpected query: ${sql}`);
+    });
+    const afterManualSlotProvisioned = vi.fn(async () => {
+      expect(run.statements.at(-1)?.sql).toBe("commit");
+    });
+    const repository = createPublishCalendarRepository(run.pool, { afterManualSlotProvisioned });
+
+    const result = await repository.provisionManualSlot({
+      ...scope,
+      scheduledFor: new Date("2099-08-15T11:30:00+09:00"),
+      channel: "instagram",
+      contentFormat: "card_news",
+      idempotencyKey: "completed-output",
+      source: { kind: "existing_output", generationOutputId: outputId },
+    });
+
+    expect(result).toMatchObject({ status: "content_assigned", generationOutputId: outputId });
+    expect(afterManualSlotProvisioned).toHaveBeenCalledWith({
+      workspaceId: scope.workspaceId,
+      brandId: scope.brandId,
+      generationId,
+      outputId,
+    });
+  });
+
+  it("fails closed when a completed output already has any publish queue", async () => {
+    const run = harness((sql) => {
+      if (sql.includes("clock_timestamp()")) return { rows: [{ future: true }], rowCount: 1 };
+      if (sql.includes("from brand_channels")) return { rows: [{ channel: "instagram" }], rowCount: 1 };
+      if (sql.includes("slot.scheduled_for=$3::timestamptz") || sql.includes("abs(extract(epoch")) return { rows: [], rowCount: 0 };
+      if (sql.includes("from ai_content_generation_outputs output") && sql.includes("for key share")) return { rows: [], rowCount: 0 };
+      throw new Error(`unexpected query: ${sql}`);
+    });
+
+    await expect(createPublishCalendarRepository(run.pool).provisionManualSlot({
+      ...scope,
+      scheduledFor: new Date("2099-08-15T11:30:00+09:00"),
+      channel: "instagram",
+      contentFormat: "card_news",
+      idempotencyKey: "completed-output-guard",
+      source: { kind: "existing_output", generationOutputId: "40000000-0000-4000-8000-000000000001" },
+    })).rejects.toThrowError("publish_calendar_content_not_assignable");
+
+    const lineage = run.statements.find(({ sql }) => sql.includes("from ai_content_generation_outputs output") && sql.includes("for key share"));
+    expect(lineage?.sql).not.toContain("queue.status in (");
+  });
+
+  it("rejects any non-cancelled slot less than 30 minutes away under the brand lock", async () => {
+    const run = harness((sql) => {
+      if (sql.includes("clock_timestamp()")) return { rows: [{ future: true }], rowCount: 1 };
+      if (sql.includes("from brand_channels")) return { rows: [{ channel: "instagram" }], rowCount: 1 };
+      if (sql.includes("abs(extract(epoch")) return { rows: [{ id: "near-slot" }], rowCount: 1 };
+      const subscription = activeSubscription(sql);
+      if (subscription) return subscription;
+      if (sql.includes("calendar_usage") && sql.includes("direct_publish_groups")) {
+        return { rows: [{ published_count: 0, reserved_count: 0 }], rowCount: 1 };
+      }
+      if (sql.startsWith("insert into publish_calendar_slots")) return { rows: [slotRow()], rowCount: 1 };
+      throw new Error(`unexpected query: ${sql}`);
+    });
+
+    await expect(createPublishCalendarRepository(run.pool).createSlot({
+      ...scope,
+      scheduledFor: new Date("2099-08-15T11:30:00+09:00"),
+      assignmentMode: "manual",
+      recommendationKind: null,
+      contentFormat: "card_news",
+      channels: ["instagram"],
+    })).rejects.toThrowError("publish_calendar_spacing_conflict");
+
+    const statements = run.statements.map(({ sql }) => sql);
+    const lockIndex = statements.findIndex((sql) => sql.includes("pg_advisory_xact_lock"));
+    const spacingIndex = statements.findIndex((sql) => sql.includes("abs(extract(epoch"));
+    expect(lockIndex).toBeLessThan(spacingIndex);
+    expect(statements.some((sql) => sql.startsWith("insert into publish_calendar_slots"))).toBe(false);
+  });
+
+  it("creates a generation-backed slot without ever inserting an open slot", async () => {
+    const run = harness((sql) => {
+      if (sql.includes("clock_timestamp()")) return { rows: [{ future: true }], rowCount: 1 };
+      if (sql.includes("from brand_channels")) return { rows: [{ channel: "instagram" }], rowCount: 1 };
+      if (sql.includes("abs(extract(epoch")) return { rows: [], rowCount: 0 };
+      if (sql.includes("slot.scheduled_for=$3::timestamptz")) return { rows: [], rowCount: 0 };
+      if (sql.includes("and (slot.generation_id=$3::uuid")) return { rows: [], rowCount: 0 };
+      if (sql.includes("from ai_content_generations generation") && sql.includes("for key share")) return {
+        rows: [{
+          generation_id: "40000000-0000-4000-8000-000000000001",
+          generation_output_id: null,
+          topic_publish_group_id: null,
+          title: "사장님 SNS 콘텐츠",
+          content_format: "card_news",
+        }],
+        rowCount: 1,
+      };
+      const subscription = activeSubscription(sql);
+      if (subscription) return subscription;
+      if (sql.includes("calendar_usage") && sql.includes("direct_publish_groups")) {
+        return { rows: [{ published_count: 0, reserved_count: 1 }], rowCount: 1 };
+      }
+      if (sql.startsWith("insert into publish_calendar_slots")) return {
+        rows: [slotRow({
+          assignment_mode: "manual",
+          status: "generation_pending",
+          recommendation_kind: null,
+          generation_id: "40000000-0000-4000-8000-000000000001",
+          title: "사장님 SNS 콘텐츠",
+        })],
+        rowCount: 1,
+      };
+      throw new Error(`unexpected query: ${sql}`);
+    });
+    const repository = createPublishCalendarRepository(run.pool) as ReturnType<typeof createPublishCalendarRepository> & {
+      provisionManualSlot(input: typeof scope & {
+        scheduledFor: Date;
+        channel: "instagram";
+        contentFormat: "card_news";
+        idempotencyKey: string;
+        createdByUserId: string;
+        source: { kind: "existing_generation"; generationId: string };
+      }): Promise<unknown>;
+    };
+
+    await expect(repository.provisionManualSlot({
+      ...scope,
+      scheduledFor: new Date("2099-08-15T11:30:00+09:00"),
+      channel: "instagram",
+      contentFormat: "card_news",
+      idempotencyKey: "manual-slot-1",
+      createdByUserId: "50000000-0000-4000-8000-000000000001",
+      source: { kind: "existing_generation", generationId: "40000000-0000-4000-8000-000000000001" },
+    })).resolves.toMatchObject({ status: "generation_pending", generationId: "40000000-0000-4000-8000-000000000001" });
+
+    const insert = run.statements.find(({ sql }) => sql.startsWith("insert into publish_calendar_slots"));
+    expect(insert?.sql).toContain("'manual',$11,null");
+    expect(insert?.values[10]).toBe("generation_pending");
+    expect(insert?.sql).not.toContain("'open'");
+  });
+
+  it("creates a 30-minute-spaced batch in one transaction and one brand lock", async () => {
+    let inserts = 0;
+    const run = harness((sql, values) => {
+      if (sql.includes("clock_timestamp()")) return { rows: [{ future: true }], rowCount: 1 };
+      if (sql.includes("from brand_channels")) return { rows: [{ channel: "instagram" }], rowCount: 1 };
+      if (sql.includes("slot.scheduled_for=$3::timestamptz")) return { rows: [], rowCount: 0 };
+      if (sql.includes("abs(extract(epoch")) return { rows: [], rowCount: 0 };
+      if (sql.includes("and (slot.generation_id=$3::uuid")) return { rows: [], rowCount: 0 };
+      if (sql.includes("generation.id=any($3::uuid[])") && sql.includes("generation.status='draft'")) {
+        return { rows: [{ count: 0 }], rowCount: 1 };
+      }
+      if (sql.includes("from ai_content_generations generation") && sql.includes("for key share")) return {
+        rows: [{
+          generation_id: values[2],
+          generation_output_id: null,
+          topic_publish_group_id: null,
+          title: `콘텐츠 ${inserts + 1}`,
+          content_format: values[3],
+        }],
+        rowCount: 1,
+      };
+      const subscription = activeSubscription(sql);
+      if (subscription) return subscription;
+      if (sql.includes("calendar_usage") && sql.includes("direct_publish_groups")) {
+        return { rows: [{ published_count: 0, reserved_count: inserts }], rowCount: 1 };
+      }
+      if (sql.startsWith("insert into publish_calendar_slots")) {
+        inserts += 1;
+        return {
+          rows: [slotRow({
+            id: `30000000-0000-4000-8000-00000000000${inserts}`,
+            scheduled_for: values[2],
+            assignment_mode: "manual",
+            status: "generation_pending",
+            recommendation_kind: null,
+            content_format: values[3],
+            generation_id: values[5],
+            title: values[8],
+          })],
+          rowCount: 1,
+        };
+      }
+      throw new Error(`unexpected query: ${sql}`);
+    });
+    const repository = createPublishCalendarRepository(run.pool) as ReturnType<typeof createPublishCalendarRepository> & {
+      provisionManualSlotsBatch(input: typeof scope & {
+        idempotencyKey: string;
+        createdByUserId: string;
+        rows: Array<{
+          clientRowId: string;
+          scheduledFor: Date;
+          channel: "instagram";
+          contentFormat: "card_news" | "reel";
+          source: { kind: "existing_generation"; generationId: string };
+        }>;
+      }): Promise<unknown[]>;
+    };
+
+    await expect(repository.provisionManualSlotsBatch({
+      ...scope,
+      idempotencyKey: "manual-batch-1",
+      createdByUserId: "50000000-0000-4000-8000-000000000001",
+      rows: [
+        {
+          clientRowId: "row-1",
+          scheduledFor: new Date("2099-08-15T11:30:00+09:00"),
+          channel: "instagram",
+          contentFormat: "card_news",
+          source: { kind: "existing_generation", generationId: "40000000-0000-4000-8000-000000000001" },
+        },
+        {
+          clientRowId: "row-2",
+          scheduledFor: new Date("2099-08-15T12:00:00+09:00"),
+          channel: "instagram",
+          contentFormat: "reel",
+          source: { kind: "existing_generation", generationId: "40000000-0000-4000-8000-000000000002" },
+        },
+      ],
+    })).resolves.toHaveLength(2);
+
+    expect(run.statements.filter(({ sql }) => sql === "begin")).toHaveLength(1);
+    expect(run.statements.filter(({ sql }) => sql.includes("pg_advisory_xact_lock"))).toHaveLength(1);
+    expect(run.statements.filter(({ sql }) => sql === "commit")).toHaveLength(1);
+    expect(run.statements.filter(({ sql }) => sql.startsWith("insert into publish_calendar_slots"))).toHaveLength(2);
   });
 });
 

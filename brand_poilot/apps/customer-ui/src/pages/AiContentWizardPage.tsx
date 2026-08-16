@@ -6,7 +6,9 @@ import type {
   ContentChannelTarget,
   ContentOutputFormatV2,
 } from "../features/ai-content/types";
-import { DEMO_BRAND_ID } from "../lib/apiClient";
+import { api, DEMO_BRAND_ID } from "../lib/apiClient";
+import type { PublishCalendarManualSlotInput } from "../types";
+import { completePublishCalendarBulkDraftRow, loadPublishCalendarBulkDraft } from "../features/publishing/publishCalendarBulkDraft";
 
 const proposalFormats: readonly ContentOutputFormatV2[] = ["card_news", "blog", "reel"];
 const proposalChannels: readonly ContentChannelTarget[] = [
@@ -34,11 +36,17 @@ function activeProposalChannels(value: string | null): ContentChannelTarget[] {
 export function AiContentWizardPage({
   gateway = aiContentApiGateway,
   brandId = DEMO_BRAND_ID,
+  calendarProvisioner = api.provisionPublishCalendarManualSlot,
 }: {
   gateway?: AiContentGateway;
   brandId?: string;
+  calendarProvisioner?: (brandId: string, input: PublishCalendarManualSlotInput) => Promise<unknown>;
 }) {
   const [params, setParams] = useSearchParams();
+  const calendarScheduledFor = params.get("calendarScheduledFor");
+  const calendarIdempotencyKey = params.get("calendarIdempotencyKey");
+  const calendarBatchDraftId = params.get("calendarBatchDraft");
+  const calendarBatchRowId = params.get("calendarBatchRow");
 
   return <ContentProposalFlow
     brandId={brandId}
@@ -53,10 +61,27 @@ export function AiContentWizardPage({
         ? params.get("proposalFamily") as "informational" | "marketing"
         : null,
       topic: params.get("proposalTopic") ?? "",
+      topicUrl: params.get("proposalUrl") ?? "",
+      productId: params.get("product"),
+      subjectMode: params.get("proposalUrl") ? "topic_url" : params.get("suggestionId") ? "suggestion" : params.get("reference") ? "reference" : "topic_text",
       format: activeProposalFormat(params.get("proposalFormat")),
       channels: activeProposalChannels(params.get("proposalChannels")),
       brief: params.get("proposalBrief") ?? "",
     }}
+    onGenerationDraftReady={calendarBatchDraftId && calendarBatchRowId ? async ({ generationId }) => {
+      const draft = loadPublishCalendarBulkDraft(calendarBatchDraftId);
+      if (!draft || !draft.rows.some((row) => row.clientRowId === calendarBatchRowId)) throw new Error("publish_calendar_bulk_draft_missing");
+      completePublishCalendarBulkDraftRow(draft, calendarBatchRowId, generationId);
+      window.location.assign(`/publish-queue?view=calendar&calendarBatchDraft=${encodeURIComponent(calendarBatchDraftId)}`);
+    } : calendarScheduledFor && calendarIdempotencyKey ? async ({ generationId, contentFormat }) => {
+      await calendarProvisioner(brandId, {
+        scheduledFor: calendarScheduledFor,
+        channel: "instagram",
+        contentFormat,
+        idempotencyKey: calendarIdempotencyKey,
+        source: { kind: "existing_generation", generationId },
+      });
+    } : undefined}
     onSeedReferenceInvalid={() => {
       const next = new URLSearchParams(params);
       next.delete("reference");

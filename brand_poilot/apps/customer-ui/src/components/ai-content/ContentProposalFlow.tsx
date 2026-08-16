@@ -125,6 +125,7 @@ export function ContentProposalFlow({
   suggestionGateway = contentSuggestionGateway,
   initialSetup,
   referenceTrendGateway = api,
+  onGenerationDraftReady,
 }: {
   brandId: string;
   gateway: AiContentGateway;
@@ -140,9 +141,13 @@ export function ContentProposalFlow({
   initialSuggestionView?: boolean;
   suggestionGateway?: ContentSuggestionGateway;
   referenceTrendGateway?: ReferenceTrendGateway;
+  onGenerationDraftReady?(input: { generationId: string; contentFormat: "card_news" | "reel" }): Promise<void>;
   initialSetup?: {
     family: ContentFamily | null;
+    subjectMode?: ContentSubjectMode;
     topic: string;
+    topicUrl?: string;
+    productId?: string | null;
     format: ContentOutputFormatV2 | "single_image" | "channel_text" | null;
     channels: ContentChannelTarget[];
     brief: string;
@@ -153,11 +158,11 @@ export function ContentProposalFlow({
   const [machine, setMachine] = useState(createContentWizardState);
   const [family, setFamily] = useState<ContentFamily | null>(initialSetup?.family ?? null);
   const [subjectMode, setSubjectMode] = useState<ContentSubjectMode>(
-    initialSuggestionView || initialSuggestionId ? "suggestion" : "topic_text",
+    initialSuggestionView || initialSuggestionId ? "suggestion" : initialSetup?.subjectMode ?? "topic_text",
   );
   const [topic, setTopic] = useState(initialSetup?.topic ?? "");
-  const [topicUrl, setTopicUrl] = useState("");
-  const [selectedProductId, setSelectedProductId] = useState<string | null>(null);
+  const [topicUrl, setTopicUrl] = useState(initialSetup?.topicUrl ?? "");
+  const [selectedProductId, setSelectedProductId] = useState<string | null>(initialSetup?.productId ?? null);
   const [products, setProducts] = useState<Awaited<ReturnType<ContentLibraries["listProductServices"]>>>([]);
   const [loadingSubjects, setLoadingSubjects] = useState(false);
   const [format, setFormat] = useState<ContentOutputFormatV2>(
@@ -539,6 +544,10 @@ export function ContentProposalFlow({
         keyForRequest(selectionKey, { brandId: requestedBrandId, proposalId: item.id }),
       );
       if (activeBrandId.current !== requestedBrandId) return;
+      if (onGenerationDraftReady && (format === "card_news" || format === "reel")) {
+        await onGenerationDraftReady({ generationId: generation.id, contentFormat: format });
+        if (activeBrandId.current !== requestedBrandId) return;
+      }
       setSelectedProposal(item);
       setSelectedGenerationId(generation.id);
       setStyleImages([]);
