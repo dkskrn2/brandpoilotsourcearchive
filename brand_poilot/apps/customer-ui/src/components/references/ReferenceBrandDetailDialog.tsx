@@ -1,10 +1,13 @@
 import { useEffect, useRef, useState } from "react";
 import { X } from "lucide-react";
-import type { ReferenceBrand, ReferenceDetail, ReferenceItem, ReferencePattern } from "../../types";
+import type { ReferenceBrand, ReferenceChannelMedia, ReferenceChannelMediaPage, ReferenceDetail, ReferenceItem, ReferencePattern } from "../../types";
 import { EmptyState } from "../ui/EmptyState";
 import { ListSkeleton } from "../ui/LoadingState";
 import { ReferenceCard } from "./ReferenceCard";
 import { ReferenceDetailDialog } from "./ReferenceDetailDialog";
+import { TrendMediaCard } from "../trends/TrendMediaCard";
+import { TrendMediaDetailDialog } from "../trends/TrendMediaDetailDialog";
+import { api, DEMO_BRAND_ID } from "../../lib/apiClient";
 
 export function ReferenceBrandDetailDialog({
   brand,
@@ -12,12 +15,14 @@ export function ReferenceBrandDetailDialog({
   loadItems,
   loadDetail,
   loadPattern,
+  loadMedia,
 }: {
   brand: ReferenceBrand;
   onClose(): void;
   loadItems(referenceBrandId: string): Promise<ReferenceItem[]>;
   loadDetail(referenceId: string): Promise<ReferenceDetail>;
   loadPattern(referenceId: string): Promise<ReferencePattern>;
+  loadMedia(referenceBrandId: string): Promise<ReferenceChannelMediaPage>;
 }) {
   const dialogRef = useRef<HTMLElement>(null);
   const closeRef = useRef<HTMLButtonElement>(null);
@@ -25,14 +30,18 @@ export function ReferenceBrandDetailDialog({
   const [items, setItems] = useState<ReferenceItem[] | null>(null);
   const [failed, setFailed] = useState(false);
   const [selectedItem, setSelectedItem] = useState<ReferenceItem | null>(null);
+  const [mediaPage, setMediaPage] = useState<ReferenceChannelMediaPage | null>(null);
+  const [selectedMedia, setSelectedMedia] = useState<ReferenceChannelMedia | null>(null);
   const selectedItemRef = useRef(selectedItem);
   selectedItemRef.current = selectedItem;
+  const selectedMediaRef = useRef(selectedMedia);
+  selectedMediaRef.current = selectedMedia;
 
   useEffect(() => {
     previousFocus.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     closeRef.current?.focus();
     const keydown = (event: KeyboardEvent) => {
-      if (selectedItemRef.current) return;
+      if (selectedItemRef.current || selectedMediaRef.current) return;
       if (event.key === "Escape") {
         onClose();
         return;
@@ -53,12 +62,19 @@ export function ReferenceBrandDetailDialog({
       }
     };
     document.addEventListener("keydown", keydown);
-    void loadItems(brand.id).then(setItems).catch(() => setFailed(true));
+    void Promise.allSettled([loadItems(brand.id), loadMedia(brand.id)])
+      .then(([savedItems, channelMedia]) => {
+        setItems(savedItems.status === "fulfilled" ? savedItems.value : []);
+        setMediaPage(channelMedia.status === "fulfilled"
+          ? channelMedia.value
+          : { items: [], total: 0, refreshedAt: brand.refreshedAt ?? null, cacheState: brand.cacheState ?? "pending" });
+        setFailed(savedItems.status === "rejected" && channelMedia.status === "rejected");
+      });
     return () => {
       document.removeEventListener("keydown", keydown);
       previousFocus.current?.focus();
     };
-  }, [brand.id, loadItems, onClose]);
+  }, [brand.cacheState, brand.id, brand.refreshedAt, loadItems, loadMedia, onClose]);
 
   return (
     <div className="modal-backdrop" role="presentation" onMouseDown={(event) => {
@@ -73,10 +89,20 @@ export function ReferenceBrandDetailDialog({
           <button ref={closeRef} className="button" type="button" aria-label="닫기" onClick={onClose}><X size={18} aria-hidden="true" /></button>
         </header>
         <a className="button" href={brand.publicSourceUrl} target="_blank" rel="noreferrer">공개 프로필 원본 보기</a>
+        {mediaPage ? <p className="muted">Instagram 채널 캐시 {mediaPage.total}개 · {mediaPage.refreshedAt ? `${new Date(mediaPage.refreshedAt).toLocaleString("ko-KR")} 갱신` : "갱신 대기"}</p> : null}
         {items === null && !failed ? <ListSkeleton rows={3} columns={3} label="저장한 콘텐츠를 불러오는 중입니다." /> : null}
         {failed ? <p role="alert">저장한 콘텐츠를 불러오지 못했습니다.</p> : null}
-        {items?.length === 0 ? <EmptyState title="저장한 콘텐츠가 없습니다" description="이 출처에서 실제로 저장한 콘텐츠만 여기에 표시됩니다." /> : null}
-        {items?.length ? <div className="reference-card-grid">{items.map((item) => (
+        {mediaPage?.items.length ? <div className="reference-card-grid">{mediaPage.items.map((media) => (
+          <TrendMediaCard
+            key={media.id}
+            media={media}
+            onSelect={(value) => setSelectedMedia(value as ReferenceChannelMedia)}
+            onBookmark={(value) => api.saveInstagramTrendSource(DEMO_BRAND_ID, value.id).then(() => undefined)}
+            onUnbookmark={(value) => api.removeInstagramTrendSource(DEMO_BRAND_ID, value.id).then(() => undefined)}
+          />
+        ))}</div> : null}
+        {mediaPage?.items.length === 0 && items?.length === 0 ? <EmptyState title="채널 콘텐츠가 없습니다" description="아직 캐시된 공개 콘텐츠가 없습니다. 다음 채널 갱신 후 다시 확인하세요." /> : null}
+        {!mediaPage?.items.length && items?.length ? <div className="reference-card-grid">{items.map((item) => (
           <ReferenceCard key={item.id} item={item} onSelect={setSelectedItem} />
         ))}</div> : null}
       </section>
@@ -86,6 +112,13 @@ export function ReferenceBrandDetailDialog({
           onClose={() => setSelectedItem(null)}
           loadDetail={loadDetail}
           loadPattern={loadPattern}
+        />
+      ) : null}
+      {selectedMedia ? (
+        <TrendMediaDetailDialog
+          media={selectedMedia}
+          onClose={() => setSelectedMedia(null)}
+          onSave={() => api.saveInstagramTrendSource(DEMO_BRAND_ID, selectedMedia.id)}
         />
       ) : null}
     </div>

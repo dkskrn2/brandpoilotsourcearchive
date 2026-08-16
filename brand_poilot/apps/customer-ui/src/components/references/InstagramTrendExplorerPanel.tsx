@@ -6,6 +6,7 @@ import { Alert } from "../ui/Alert";
 import { EmptyState } from "../ui/EmptyState";
 import { InlineSpinner, LoadingOverlay, PageSkeleton } from "../ui/LoadingState";
 import { api, DEMO_BRAND_ID } from "../../lib/apiClient";
+import { MetaAdLibraryPanel } from "./MetaAdLibraryPanel";
 import type {
   BrandProfile,
   ChannelConnection,
@@ -66,7 +67,7 @@ function errorCode(error: unknown): TrendErrorCode {
 }
 
 function normalizedHashtag(value: string) {
-  return value.trim().replace(/^#/, "");
+  return recommendedHashtag(value);
 }
 
 function isInstagramConnected(channels: ChannelConnection[]) {
@@ -81,11 +82,16 @@ function recommendedHashtag(value: string) {
     .replace(/[^\p{L}\p{N}_]/gu, "");
 }
 
-function recommendationsForBrand(profile: BrandProfile | null, categories: ContentCategory[]) {
-  const selectedCategory = categories.find((category) => category.code === profile?.primaryCategory?.code);
+function recommendationsForBrand(profile: BrandProfile | null, categories: ContentCategory[], selectedCategoryCode: string | null) {
+  const selectedCategory = categories.find((category) => category.code === selectedCategoryCode);
   const candidates = selectedCategory
-    ? [...(profile?.subcategories.map((subcategory) => subcategory.name) ?? []), ...selectedCategory.recommendedHashtags]
-    : categories.flatMap((category) => category.recommendedHashtags);
+    ? [
+      ...(profile?.primaryCategory?.code === selectedCategoryCode
+        ? profile.subcategories.map((subcategory) => subcategory.name)
+        : []),
+      ...selectedCategory.recommendedHashtags,
+    ]
+    : [];
   return Array.from(new Set(candidates.map(recommendedHashtag).filter(Boolean))).slice(0, 6);
 }
 
@@ -102,7 +108,7 @@ function applyLocalTrendView(
   return { ...result, page: 1, total: items.length, items };
 }
 
-export function InstagramTrendExplorerPanel({
+function InstagramTrendContent({
   initialType = "all",
   initialSort = "meta",
 }: {
@@ -110,9 +116,11 @@ export function InstagramTrendExplorerPanel({
   initialSort?: InstagramTrendSort;
 } = {}) {
   const resultRequestId = useRef(0);
+  const autoLoadedCategoryRef = useRef<string | null>(null);
   const [channels, setChannels] = useState<ChannelConnection[]>([]);
   const [categories, setCategories] = useState<ContentCategory[]>([]);
   const [brandProfile, setBrandProfile] = useState<BrandProfile | null>(null);
+  const [selectedCategoryCode, setSelectedCategoryCode] = useState<string | null>(null);
   const [trendConnection, setTrendConnection] = useState<InstagramTrendConnection | null>(null);
   const [selectedMedia, setSelectedMedia] = useState<InstagramTrendMedia | null>(null);
   const [initialLoading, setInitialLoading] = useState(true);
@@ -146,7 +154,10 @@ export function InstagramTrendExplorerPanel({
   const connected = isInstagramConnected(channels);
   const trendConnected = trendConnection?.status === "connected";
   const accountLinkRequired = new URLSearchParams(window.location.search).get("meta_trends") === "account_link_required";
-  const recommendedHashtags = useMemo(() => recommendationsForBrand(brandProfile, categories), [brandProfile, categories]);
+  const recommendedHashtags = useMemo(
+    () => recommendationsForBrand(brandProfile, categories, selectedCategoryCode),
+    [brandProfile, categories, selectedCategoryCode],
+  );
   const displayedResult = useMemo(
     () => applyLocalTrendView(view.result, view.type, view.sort),
     [view.result, view.type, view.sort],
@@ -154,6 +165,53 @@ export function InstagramTrendExplorerPanel({
   const visibleItems = displayedResult?.items.slice(0, 20) ?? [];
   const hasVisibleResults = visibleItems.length > 0;
   const hasNextPage = Boolean(displayedResult && displayedResult.page * 20 < displayedResult.total);
+
+  useEffect(() => {
+    if (initialLoading || !trendConnected) return;
+    const primaryCategoryCode = brandProfile?.primaryCategory?.code ?? null;
+    if (!primaryCategoryCode || !categories.some((category) => category.code === primaryCategoryCode)) return;
+    if (autoLoadedCategoryRef.current === primaryCategoryCode) return;
+    autoLoadedCategoryRef.current = primaryCategoryCode;
+    setSelectedCategoryCode(primaryCategoryCode);
+    const category = categories.find((item) => item.code === primaryCategoryCode);
+    const hashtag = recommendedHashtag(category?.recommendedHashtags[0] ?? "");
+    if (!hashtag) return;
+    const requestId = ++resultRequestId.current;
+    void api.getInstagramTrends(DEMO_BRAND_ID, {
+      hashtag, type: view.type, sort: view.sort, page: 1,
+    }).then((result) => {
+      if (!result) return;
+      if (requestId !== resultRequestId.current) return;
+      setView((current) => ({
+        ...current,
+        submittedHashtag: hashtag,
+        page: 1,
+        result,
+        error: result.lastErrorCode ? trendErrorCopy[errorCode(new Error(result.lastErrorCode))] : null,
+      }));
+    }).catch(() => undefined);
+  }, [brandProfile, categories, initialLoading, trendConnected, view.sort, view.type]);
+
+  function selectCategory(categoryCode: string) {
+    setSelectedCategoryCode(categoryCode || null);
+    const category = categories.find((item) => item.code === categoryCode);
+    const hashtag = recommendedHashtag(category?.recommendedHashtags[0] ?? "");
+    if (!hashtag) {
+      setView((current) => ({ ...current, hashtag: "", submittedHashtag: "", result: null, error: null }));
+      return;
+    }
+    const requestId = ++resultRequestId.current;
+    void api.getInstagramTrends(DEMO_BRAND_ID, {
+      hashtag, type: view.type, sort: view.sort, page: 1,
+    }).then((result) => {
+      if (!result) return;
+      if (requestId !== resultRequestId.current) return;
+      setView((current) => ({ ...current, hashtag: "", submittedHashtag: hashtag, result, page: 1, error: null }));
+    }).catch(() => {
+      if (requestId !== resultRequestId.current) return;
+      setView((current) => ({ ...current, hashtag: `#${hashtag}`, submittedHashtag: "", result: null, error: null }));
+    });
+  }
 
   async function loadPage(
     hashtag: string,
@@ -164,6 +222,7 @@ export function InstagramTrendExplorerPanel({
   ) {
     try {
       const result = await api.getInstagramTrends(DEMO_BRAND_ID, { hashtag, type, sort, page: pageNumber });
+      if (!result) throw new Error("instagram_trend_fetch_failed");
       if (requestId !== resultRequestId.current) return null;
       setView((current) => ({ ...current, page: pageNumber, result, error: result.lastErrorCode ? trendErrorCopy[errorCode(new Error(result.lastErrorCode))] : null }));
       return result;
@@ -289,6 +348,7 @@ export function InstagramTrendExplorerPanel({
     <section className="trend-page" aria-labelledby="instagram-trend-explorer-title">
       <div className="panel-head">
         <div>
+          <p className="reference-source-label">Instagram 공개 콘텐츠</p>
           <h2 id="instagram-trend-explorer-title">Instagram 트렌드 탐색</h2>
           <p className="muted">공개 Instagram 해시태그 결과를 확인하고 레퍼런스로 저장합니다.</p>
         </div>
@@ -315,16 +375,23 @@ export function InstagramTrendExplorerPanel({
         <>
           <section className="panel trend-search-panel">
             <div className="panel-body grid">
+              <label className="trend-category-select">분야
+                <select aria-label="분야" value={selectedCategoryCode ?? ""} onChange={(event) => selectCategory(event.target.value)}>
+                  <option value="">분야 선택</option>
+                  {categories.map((category) => <option key={category.code} value={category.code}>{category.name}</option>)}
+                </select>
+              </label>
               <form className="trend-search-form" aria-busy={view.isLoadingResults} onSubmit={(event) => { event.preventDefault(); void search(); }}>
                 <div className="trend-search-box">
                   <Search size={18} aria-hidden="true" />
                   <label className="visually-hidden" htmlFor="trend-hashtag">해시태그</label>
-                  <input id="trend-hashtag" value={view.hashtag} onChange={(event) => setView((current) => ({ ...current, hashtag: event.target.value }))} placeholder="#해시태그" />
+                  <input id="trend-hashtag" aria-describedby="trend-hashtag-help" value={view.hashtag} onChange={(event) => setView((current) => ({ ...current, hashtag: event.target.value }))} placeholder="#해시태그" />
                   <button className="button primary trend-search-submit" type="submit" aria-label="검색" disabled={view.isSearching}>
                     {view.isSearching ? <InlineSpinner label="검색 중" /> : null}
                     <span>검색</span>
                   </button>
                 </div>
+                <p className="muted small" id="trend-hashtag-help">공백과 이모지는 자동으로 제거됩니다.</p>
               </form>
               <div className="trend-history-row">
                 <span className="muted">추천</span>
@@ -363,5 +430,42 @@ export function InstagramTrendExplorerPanel({
         </>
       )}
     </section>
+  );
+}
+
+export function InstagramTrendExplorerPanel({
+  initialType = "all",
+  initialSort = "meta",
+}: {
+  initialType?: InstagramTrendMediaTypeFilter;
+  initialSort?: InstagramTrendSort;
+} = {}) {
+  const [source, setSource] = useState<"instagram" | "meta_ad_library">("instagram");
+
+  return (
+    <div className="trend-discovery-sources">
+      <nav className="reference-source-switch" aria-label="트렌드 출처">
+        <button
+          type="button"
+          aria-current={source === "instagram" ? "page" : undefined}
+          onClick={() => setSource("instagram")}
+        >
+          Instagram 공개 콘텐츠
+        </button>
+        <button
+          type="button"
+          aria-current={source === "meta_ad_library" ? "page" : undefined}
+          onClick={() => setSource("meta_ad_library")}
+        >
+          Meta 광고 라이브러리
+        </button>
+      </nav>
+      <div hidden={source !== "instagram"}>
+        <InstagramTrendContent initialType={initialType} initialSort={initialSort} />
+      </div>
+      <div hidden={source !== "meta_ad_library"}>
+        <MetaAdLibraryPanel active={source === "meta_ad_library"} />
+      </div>
+    </div>
   );
 }

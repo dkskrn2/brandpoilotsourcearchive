@@ -1,8 +1,9 @@
 import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
+import { Link, MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as routeModule from "../routes";
+import { ReferenceAddMenu } from "../components/references/ReferenceAddMenu";
 import { ReferenceLibraryPage } from "../pages/ReferenceLibraryPage";
 import { aiContentApiGateway } from "../features/ai-content/aiContentApiGateway";
 import { api, DEMO_BRAND_ID } from "../lib/apiClient";
@@ -59,6 +60,8 @@ function installReferenceApi(overrides: Record<string, unknown> = {}) {
     addReferenceUrl: vi.fn(async () => referenceItem),
     listReferenceBrands: vi.fn(async () => []),
     listReferenceBrandItems: vi.fn(async () => []),
+    listReferenceChannelMedia: vi.fn(async () => ({ items: [], total: 0, refreshedAt: null, cacheState: "pending" })),
+    resolveReferenceChannel: vi.fn(async () => undefined),
     createReferenceBrand: vi.fn(async () => undefined),
     ...overrides,
   });
@@ -97,30 +100,332 @@ afterEach(() => {
 });
 
 describe("ReferenceLibraryPage", () => {
-  it("uses the fixed view keys and customer labels", () => {
+  it("opens Trend discovery first when the URL has no explicit legacy view", () => {
+    installReferenceApi();
     render(<MemoryRouter initialEntries={["/references"]}><ReferenceLibraryPage /></MemoryRouter>);
+    expect(screen.getByRole("link", { name: "트렌드 찾기" })).toHaveAttribute("aria-current", "page");
+    expect(screen.getByRole("heading", { level: 2, name: "Instagram 트렌드 탐색" })).toBeVisible();
+  });
 
-    const expected = [
-      ["전체", "all"],
-      ["저장한 브랜드", "saved-brands"],
-      ["저장한 콘텐츠", "saved-content"],
-      ["트렌드 탐색", "trends"],
-      ["저장한 트렌드", "saved-trends"],
-      ["외부 URL", "external-urls"],
-      ["최근 사용", "recent"],
-      ["즐겨찾기", "favorites"],
-      ["직접 추가", "add"],
-    ];
-    for (const [label, view] of expected) {
-      expect(screen.getByRole("link", { name: label })).toHaveAttribute("href", `/references?view=${view}`);
-    }
+  it("groups reference destinations into three workspaces and library filters", () => {
+    render(
+      <MemoryRouter initialEntries={["/references?view=all"]}>
+        <ReferenceLibraryPage />
+      </MemoryRouter>,
+    );
+
+    const workspaces = within(screen.getByRole("navigation", { name: "레퍼런스 작업 공간" }));
+    expect(workspaces.getAllByRole("link")).toHaveLength(3);
+    expect(workspaces.getAllByRole("link").map((link) => link.textContent)).toEqual([
+      "트렌드 찾기",
+      "내 라이브러리",
+      "브랜드·작성자",
+    ]);
+    expect(workspaces.getByRole("link", { name: "내 라이브러리" })).toHaveAttribute(
+      "href",
+      "/references?view=all",
+    );
+    expect(workspaces.getByRole("link", { name: "트렌드 찾기" })).toHaveAttribute(
+      "href",
+      "/references?view=trends",
+    );
+    expect(workspaces.getByRole("link", { name: "브랜드·작성자" })).toHaveAttribute(
+      "href",
+      "/references?view=saved-brands",
+    );
+    expect(workspaces.getByRole("link", { name: "내 라이브러리" })).toHaveAttribute(
+      "aria-current",
+      "page",
+    );
+
+    const filters = within(screen.getByRole("navigation", { name: "내 라이브러리 필터" }));
+    expect(filters.getAllByRole("link")).toHaveLength(3);
+    expect(filters.getByRole("link", { name: "전체" })).toHaveAttribute("href", "/references?view=all");
+    expect(filters.getByRole("link", { name: "콘텐츠" })).toHaveAttribute(
+      "href",
+      "/references?view=saved-content",
+    );
+    expect(filters.getByRole("link", { name: "트렌드" })).toHaveAttribute(
+      "href",
+      "/references?view=saved-trends",
+    );
+    expect(filters.queryByRole("link", { name: "외부 URL" })).not.toBeInTheDocument();
+    expect(filters.queryByRole("link", { name: "최근 추가" })).not.toBeInTheDocument();
+    expect(filters.queryByRole("link", { name: "즐겨찾기" })).not.toBeInTheDocument();
+  });
+
+  it.each([
+    ["all", "전체 레퍼런스", { collection: "all" }],
+    ["saved-content", "저장한 콘텐츠", { collection: "content" }],
+    ["saved-trends", "저장한 트렌드", { collection: "trend" }],
+    ["recent", "최근 추가한 자료", { recent: 30 }],
+    ["favorites", "즐겨찾기", { favorite: true }],
+  ] as const)("shows the contextual Library heading for view=%s", async (view, heading, filters) => {
+    const listReferences = vi.fn(async () => []);
+    installReferenceApi({ listReferences });
+    const rendered = render(
+      <MemoryRouter initialEntries={[`/references?view=${view}`]}>
+        <ReferenceLibraryPage />
+      </MemoryRouter>,
+    );
+
+    expect(screen.getByRole("heading", { level: 2, name: heading })).toBeVisible();
+    expect(screen.getByText(/출처 정보/)).toBeVisible();
+    expect(screen.queryByText(/metadata/i)).not.toBeInTheDocument();
+    await waitFor(() => {
+      expect(listReferences).toHaveBeenCalledWith(DEMO_BRAND_ID, filters);
+    });
+
+    rendered.unmount();
+  });
+
+  it("searches each saved Library collection and keeps the query between its three filters", async () => {
+    const listReferences = vi.fn(async () => []);
+    installReferenceApi({ listReferences });
+    render(
+      <MemoryRouter initialEntries={["/references?view=saved-content&q=%EC%97%AC%EB%A6%84+%EB%A3%A8%ED%8B%B4"]}>
+        <ReferenceLibraryPage />
+      </MemoryRouter>,
+    );
+
+    expect(screen.getByRole("searchbox", { name: "내 라이브러리 검색" })).toHaveValue("여름 루틴");
+    expect(screen.getByRole("link", { name: "전체" })).toHaveAttribute(
+      "href",
+      "/references?view=all&q=%EC%97%AC%EB%A6%84+%EB%A3%A8%ED%8B%B4",
+    );
+    expect(screen.getByRole("link", { name: "트렌드" })).toHaveAttribute(
+      "href",
+      "/references?view=saved-trends&q=%EC%97%AC%EB%A6%84+%EB%A3%A8%ED%8B%B4",
+    );
+    await waitFor(() => {
+      expect(listReferences).toHaveBeenCalledWith(DEMO_BRAND_ID, {
+        collection: "content",
+        q: "여름 루틴",
+      });
+    });
+  });
+
+  it.each(["external-urls", "recent", "favorites"])(
+    "does not show the three-collection search on the hidden legacy view=%s",
+    async (view) => {
+      installReferenceApi({ listReferences: vi.fn(async () => []) });
+      const rendered = render(
+        <MemoryRouter initialEntries={[`/references?view=${view}&q=legacy`] }>
+          <ReferenceLibraryPage />
+        </MemoryRouter>,
+      );
+
+      expect(screen.queryByRole("searchbox", { name: "내 라이브러리 검색" })).not.toBeInTheDocument();
+      rendered.unmount();
+    },
+  );
+
+  it("offers URL and file acquisition from one page action", async () => {
+    installReferenceApi({ listReferences: vi.fn(async () => []) });
+    render(
+      <MemoryRouter initialEntries={["/references?view=all"]}>
+        <ReferenceLibraryPage />
+      </MemoryRouter>,
+    );
+
+    const trigger = screen.getByRole("button", { name: "자료 추가" });
+    await userEvent.click(trigger);
+    const menu = screen.getByRole("menu", { name: "자료 추가" });
+    expect(within(menu).getByRole("menuitem", { name: "외부 URL 추가" })).toHaveAttribute(
+      "href",
+      "/references?view=external-urls",
+    );
+    await userEvent.click(within(menu).getByRole("menuitem", { name: "파일 업로드" }));
+    expect(screen.queryByRole("menu", { name: "자료 추가" })).not.toBeInTheDocument();
+    expect(screen.getByRole("dialog", { name: "레퍼런스 파일 업로드" })).toBeVisible();
+
+    await userEvent.click(screen.getByRole("button", { name: "닫기" }));
+    expect(trigger).toHaveFocus();
+  });
+
+  it("closes the add menu with Escape and restores trigger focus", async () => {
+    installReferenceApi({ listReferences: vi.fn(async () => []) });
+    render(
+      <MemoryRouter initialEntries={["/references"]}>
+        <ReferenceLibraryPage />
+      </MemoryRouter>,
+    );
+
+    const trigger = screen.getByRole("button", { name: "자료 추가" });
+    await userEvent.click(trigger);
+    await userEvent.keyboard("{Escape}");
+    expect(screen.queryByRole("menu", { name: "자료 추가" })).not.toBeInTheDocument();
+    expect(trigger).toHaveFocus();
+  });
+
+  it("closes an open add menu when its trigger is clicked again", async () => {
+    render(
+      <MemoryRouter>
+        <ReferenceAddMenu onUpload={vi.fn()} />
+      </MemoryRouter>,
+    );
+
+    const trigger = screen.getByRole("button", { name: "자료 추가" });
+    await userEvent.click(trigger);
+    expect(screen.getByRole("menu", { name: "자료 추가" })).toBeVisible();
+    await userEvent.click(trigger);
+    expect(screen.queryByRole("menu", { name: "자료 추가" })).not.toBeInTheDocument();
+    expect(trigger).toHaveFocus();
+  });
+
+  it.each([
+    { key: "{ArrowDown}", item: "외부 URL 추가" },
+    { key: "{ArrowUp}", item: "파일 업로드" },
+  ])("opens the add menu from its trigger with $key and focuses $item", async ({ key, item }) => {
+    render(
+      <MemoryRouter>
+        <ReferenceAddMenu onUpload={vi.fn()} />
+      </MemoryRouter>,
+    );
+
+    const trigger = screen.getByRole("button", { name: "자료 추가" });
+    trigger.focus();
+    await userEvent.keyboard(key);
+
+    const menu = screen.getByRole("menu", { name: "자료 추가" });
+    expect(within(menu).getByRole("menuitem", { name: item })).toHaveFocus();
+  });
+
+  it("moves add menu focus with arrow keys and wraps", async () => {
+    render(
+      <MemoryRouter>
+        <ReferenceAddMenu onUpload={vi.fn()} />
+      </MemoryRouter>,
+    );
+
+    await userEvent.click(screen.getByRole("button", { name: "자료 추가" }));
+    const first = screen.getByRole("menuitem", { name: "외부 URL 추가" });
+    const last = screen.getByRole("menuitem", { name: "파일 업로드" });
+    expect(first).toHaveFocus();
+
+    await userEvent.keyboard("{ArrowDown}");
+    expect(last).toHaveFocus();
+    await userEvent.keyboard("{ArrowDown}");
+    expect(first).toHaveFocus();
+    await userEvent.keyboard("{ArrowUp}");
+    expect(last).toHaveFocus();
+    await userEvent.keyboard("{ArrowUp}");
+    expect(first).toHaveFocus();
+  });
+
+  it("moves add menu focus to its Home and End boundaries", async () => {
+    render(
+      <MemoryRouter>
+        <ReferenceAddMenu onUpload={vi.fn()} />
+      </MemoryRouter>,
+    );
+
+    await userEvent.click(screen.getByRole("button", { name: "자료 추가" }));
+    const first = screen.getByRole("menuitem", { name: "외부 URL 추가" });
+    const last = screen.getByRole("menuitem", { name: "파일 업로드" });
+
+    await userEvent.keyboard("{End}");
+    expect(last).toHaveFocus();
+    await userEvent.keyboard("{Home}");
+    expect(first).toHaveFocus();
+  });
+
+  it.each([
+    { direction: "forward", shift: false, target: "다음" },
+    { direction: "backward", shift: true, target: "자료 추가" },
+  ])("closes the add menu on Tab without blocking $direction focus movement", async ({ shift, target }) => {
+    render(
+      <MemoryRouter>
+        <button type="button">이전</button>
+        <ReferenceAddMenu onUpload={vi.fn()} />
+        <button type="button">다음</button>
+      </MemoryRouter>,
+    );
+
+    const trigger = screen.getByRole("button", { name: "자료 추가" });
+    await userEvent.click(trigger);
+    await userEvent.tab({ shift });
+    await waitFor(() => {
+      expect(screen.queryByRole("menu", { name: "자료 추가" })).not.toBeInTheDocument();
+    });
+    expect(screen.getByRole("button", { name: target })).toHaveFocus();
+  });
+
+  it("closes the add menu after outside interaction and URL selection", async () => {
+    installReferenceApi({ listReferences: vi.fn(async () => []) });
+    render(
+      <MemoryRouter initialEntries={["/references?view=all"]}>
+        <ReferenceLibraryPage />
+      </MemoryRouter>,
+    );
+
+    const trigger = screen.getByRole("button", { name: "자료 추가" });
+    await userEvent.click(trigger);
+    await userEvent.click(screen.getByRole("heading", { name: "레퍼런스" }));
+    expect(screen.queryByRole("menu", { name: "자료 추가" })).not.toBeInTheDocument();
+
+    await userEvent.click(trigger);
+    await userEvent.click(screen.getByRole("menuitem", { name: "외부 URL 추가" }));
+    expect(screen.queryByRole("menu", { name: "자료 추가" })).not.toBeInTheDocument();
+    expect(screen.getByRole("textbox", { name: "외부 URL" })).toBeVisible();
+  });
+
+  it("opens upload when navigation later reaches the legacy add view", async () => {
+    installReferenceApi({ listReferences: vi.fn(async () => []) });
+    render(
+      <MemoryRouter initialEntries={["/references?view=all"]}>
+        <Link to="/references?view=add">legacy add</Link>
+        <ReferenceLibraryPage />
+      </MemoryRouter>,
+    );
+
+    expect(screen.queryByRole("dialog", { name: "레퍼런스 파일 업로드" })).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("link", { name: "legacy add" }));
+    expect(await screen.findByRole("dialog", { name: "레퍼런스 파일 업로드" })).toBeVisible();
+  });
+
+  it("closes legacy add upload when navigating to the all view", async () => {
+    installReferenceApi({ listReferences: vi.fn(async () => []) });
+    render(
+      <MemoryRouter initialEntries={["/references?view=add"]}>
+        <ReferenceLibraryPage />
+      </MemoryRouter>,
+    );
+
+    expect(screen.getByRole("dialog", { name: "레퍼런스 파일 업로드" })).toBeVisible();
+    await userEvent.click(screen.getByRole("link", { name: "내 라이브러리" }));
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog", { name: "레퍼런스 파일 업로드" })).not.toBeInTheDocument();
+    });
+    expect(screen.getByRole("heading", { name: "전체 레퍼런스" })).toBeVisible();
+  });
+
+  it("maps the legacy add view to the Library and opens upload directly", () => {
+    installReferenceApi({ listReferences: vi.fn(async () => []) });
+    render(
+      <MemoryRouter initialEntries={["/references?view=add"]}>
+        <ReferenceLibraryPage />
+      </MemoryRouter>,
+    );
+
+    expect(screen.getByRole("link", { name: "내 라이브러리" })).toHaveAttribute(
+      "aria-current",
+      "page",
+    );
+    const filters = within(screen.getByRole("navigation", { name: "내 라이브러리 필터" }));
+    expect(filters.getByRole("link", { name: "전체" })).toHaveAttribute("aria-current", "page");
+    expect(screen.getByRole("heading", { name: "전체 레퍼런스" })).toBeVisible();
+    expect(screen.getByRole("dialog", { name: "레퍼런스 파일 업로드" })).toBeVisible();
   });
 
   it("embeds reusable trend panels without a Reel creation action", () => {
     const first = render(
       <MemoryRouter initialEntries={["/references?view=trends"]}><ReferenceLibraryPage /></MemoryRouter>,
     );
-    expect(screen.getByRole("heading", { name: "Instagram 트렌드 탐색" })).toBeVisible();
+    expect(screen.queryByRole("navigation", { name: "내 라이브러리 필터" })).not.toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "트렌드 찾기" })).toHaveAttribute("aria-current", "page");
+    expect(screen.getAllByText("Instagram 공개 콘텐츠").some((node) => node.classList.contains("reference-source-label"))).toBe(true);
+    expect(screen.getByRole("heading", { level: 2, name: "Instagram 트렌드 탐색" })).toBeVisible();
     expect(screen.queryByRole("button", { name: /Reel 만들기/ })).not.toBeInTheDocument();
     first.unmount();
 
@@ -130,17 +435,21 @@ describe("ReferenceLibraryPage", () => {
     expect(screen.getByRole("heading", { name: "저장한 트렌드" })).toBeVisible();
   });
 
-  it("applies preserved archive pagination and trend filters in the canonical panels", async () => {
-    const listInstagramTrendArchive = vi.fn(async () => ({ items: [], page: 2, limit: 30, total: 0 }));
-    installReferenceApi({ listInstagramTrendArchive });
+  it("keeps the legacy saved-trends URL on the searchable Library collection", async () => {
+    const listReferences = vi.fn(async () => []);
+    installReferenceApi({ listReferences });
     const archiveRender = render(
       <MemoryRouter initialEntries={["/references?view=saved-trends&page=2"]}>
         <ReferenceLibraryPage />
       </MemoryRouter>,
     );
-    expect(await screen.findByText("저장한 트렌드가 없습니다.")).toBeVisible();
-    expect(listInstagramTrendArchive).toHaveBeenCalledWith(DEMO_BRAND_ID, { page: 2, limit: 30 });
+    expect(await screen.findByText("조건에 맞는 레퍼런스가 없습니다")).toBeVisible();
+    expect(listReferences).toHaveBeenCalledWith(DEMO_BRAND_ID, { collection: "trend" });
     archiveRender.unmount();
+
+  });
+
+  it("applies preserved trend filters in the discovery panel", async () => {
 
     installReferenceApi({
       listChannels: vi.fn(async () => [{
@@ -312,6 +621,9 @@ describe("ReferenceLibraryPage", () => {
       </MemoryRouter>,
     );
 
+    expect(screen.queryByRole("navigation", { name: "내 라이브러리 필터" })).not.toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "브랜드·작성자" })).toHaveAttribute("aria-current", "page");
+    expect(screen.getByRole("heading", { level: 2, name: "브랜드·작성자" })).toBeVisible();
     const brandButton = await screen.findByRole("button", { name: "Actual Author 상세 보기" });
     expect(brandButton).toBeVisible();
     expect(referenceApi.listReferenceBrandItems).not.toHaveBeenCalled();
@@ -381,8 +693,6 @@ describe("ReferenceLibraryPage", () => {
         <ReferenceLibraryPage />
       </MemoryRouter>,
     );
-    const launch = screen.getByRole("button", { name: "파일 업로드" });
-    await userEvent.click(launch);
     expect(screen.getByRole("dialog", { name: "레퍼런스 파일 업로드" })).toBeVisible();
     const first = new File(["image"], "evidence.png", { type: "image/png" });
     const duplicate = new File(["image"], "copy.png", { type: "image/png" });
@@ -400,7 +710,6 @@ describe("ReferenceLibraryPage", () => {
     expect(uploadReferenceFile).toHaveBeenCalledTimes(1);
     await userEvent.click(screen.getByRole("button", { name: "닫기" }));
     expect(screen.queryByRole("dialog", { name: "레퍼런스 파일 업로드" })).not.toBeInTheDocument();
-    expect(launch).toHaveFocus();
   });
 
   it("cancels an unconsumed session before retrying a failed upload", async () => {
@@ -435,7 +744,7 @@ describe("ReferenceLibraryPage", () => {
         <ReferenceLibraryPage />
       </MemoryRouter>,
     );
-    await userEvent.click(screen.getByRole("button", { name: "파일 업로드" }));
+    expect(screen.getByRole("dialog", { name: "레퍼런스 파일 업로드" })).toBeVisible();
     await userEvent.upload(
       screen.getByLabelText("레퍼런스 파일 선택"),
       new File(["brief"], "retry.pdf", { type: "application/pdf" }),
@@ -469,7 +778,7 @@ describe("ReferenceLibraryPage", () => {
         <ReferenceLibraryPage />
       </MemoryRouter>,
     );
-    await userEvent.click(screen.getByRole("button", { name: "파일 업로드" }));
+    expect(screen.getByRole("dialog", { name: "레퍼런스 파일 업로드" })).toBeVisible();
     await userEvent.upload(
       screen.getByLabelText("레퍼런스 파일 선택"),
       new File(["brief"], "pending.pdf", { type: "application/pdf" }),
@@ -505,7 +814,7 @@ describe("ReferenceLibraryPage", () => {
         <ReferenceLibraryPage />
       </MemoryRouter>,
     );
-    await userEvent.click(screen.getByRole("button", { name: "파일 업로드" }));
+    expect(screen.getByRole("dialog", { name: "레퍼런스 파일 업로드" })).toBeVisible();
     await userEvent.upload(
       screen.getByLabelText("레퍼런스 파일 선택"),
       new File(["brief"], "unmount.pdf", { type: "application/pdf" }),
@@ -532,7 +841,7 @@ describe("ReferenceLibraryPage", () => {
     };
     const referenceApi = installReferenceApi({
       listReferenceBrands: vi.fn(async () => []),
-      createReferenceBrand: vi.fn(async () => created),
+      resolveReferenceChannel: vi.fn(async () => created),
     });
     render(
       <MemoryRouter initialEntries={["/references?view=saved-brands"]}>
@@ -540,17 +849,61 @@ describe("ReferenceLibraryPage", () => {
       </MemoryRouter>,
     );
 
-    expect(await screen.findByText(/공개 Instagram 프로필 URL 또는 handle/)).toBeVisible();
+    expect(await screen.findByText(/공개 Instagram Business 또는 Creator 채널/)).toBeVisible();
     await userEvent.type(screen.getByRole("textbox", { name: "공개 Instagram 프로필" }), "@public_author");
     await userEvent.click(screen.getByRole("button", { name: "브랜드 저장" }));
 
-    expect(referenceApi.createReferenceBrand).toHaveBeenCalledWith(DEMO_BRAND_ID, {
-      platform: "instagram",
-      handle: "public_author",
-      publicSourceUrl: "",
-    });
+    expect(referenceApi.resolveReferenceChannel).toHaveBeenCalledWith(DEMO_BRAND_ID, "@public_author");
     expect(await screen.findByRole("button", { name: "public_author 상세 보기" })).toBeVisible();
     expect(screen.queryByText(/광고 DB|상시 모니터링/)).not.toBeInTheDocument();
+  });
+
+  it("shows cached channel content and stores only media explicitly bookmarked by the user", async () => {
+    const channel = {
+      id: "brand-ref-1", workspaceId: "workspace-1", brandId: "brand-1", platform: "instagram",
+      handle: "actual_author", displayName: "Actual Author",
+      publicSourceUrl: "https://www.instagram.com/actual_author/", profileSnapshot: {}, previewUrl: null,
+      providerAccountId: "ig-user-1", cacheState: "fresh", refreshedAt: "2026-08-13T03:00:00.000Z",
+      lastRefreshAttemptedAt: "2026-08-13T03:00:00.000Z", lastRefreshError: null,
+    };
+    const cachedMedia = {
+      id: "media-1", instagramMediaId: "ig-media-1", username: "actual_author",
+      caption: "채널 캐시 콘텐츠", kind: "reel" as const,
+      mediaUrl: null, previewUrl: null, permalink: "https://www.instagram.com/reel/example/",
+      postedAt: "2026-08-12T00:00:00.000Z", likeCount: 32, commentsCount: 4,
+      metaRank: 0, refreshedAt: "2026-08-13T03:00:00.000Z", isSaved: false,
+      sourcePlatform: "instagram", author: { referenceBrandId: channel.id, handle: channel.handle, displayName: channel.displayName },
+      metrics: { viewCount: 1200, likeCount: 32, commentsCount: 4 },
+    };
+    const referenceApi = installReferenceApi({
+      listReferenceBrands: vi.fn(async () => [channel]),
+      listReferenceChannelMedia: vi.fn(async () => ({
+        items: [cachedMedia], total: 1, refreshedAt: channel.refreshedAt, cacheState: "fresh",
+      })),
+      listReferenceBrandItems: vi.fn(async () => []),
+      saveInstagramTrendSource: vi.fn(async () => ({ alreadySaved: false })),
+    });
+    render(<MemoryRouter initialEntries={["/references?view=saved-brands"]}><ReferenceLibraryPage /></MemoryRouter>);
+
+    await userEvent.click(await screen.findByRole("button", { name: "Actual Author 상세 보기" }));
+    expect(await screen.findByText("채널 캐시 콘텐츠")).toBeVisible();
+    await userEvent.click(screen.getByRole("button", { name: "@actual_author 북마크" }));
+    expect(referenceApi.saveInstagramTrendSource).toHaveBeenCalledWith(DEMO_BRAND_ID, "media-1");
+  });
+
+  it("searches saved channels independently from Library and trend search", async () => {
+    installReferenceApi({
+      listReferenceBrands: vi.fn(async () => [
+        { id: "channel-a", workspaceId: "workspace-1", brandId: "brand-1", platform: "instagram", handle: "alpha", displayName: "Alpha Studio", publicSourceUrl: "https://www.instagram.com/alpha/", profileSnapshot: {}, previewUrl: null },
+        { id: "channel-b", workspaceId: "workspace-1", brandId: "brand-1", platform: "instagram", handle: "bravo", displayName: "Bravo Lab", publicSourceUrl: "https://www.instagram.com/bravo/", profileSnapshot: {}, previewUrl: null },
+      ]),
+    });
+    render(<MemoryRouter initialEntries={["/references?view=saved-brands"]}><ReferenceLibraryPage /></MemoryRouter>);
+
+    await screen.findByRole("button", { name: "Alpha Studio 상세 보기" });
+    await userEvent.type(screen.getByRole("searchbox", { name: "채널 검색" }), "bravo");
+    expect(screen.queryByRole("button", { name: "Alpha Studio 상세 보기" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Bravo Lab 상세 보기" })).toBeVisible();
   });
 
   it("preserves OAuth and filter query when redirecting the legacy trend route", () => {

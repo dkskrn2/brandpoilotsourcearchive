@@ -20,6 +20,9 @@ import type {
   InstagramTrendPage,
   InstagramTrendSaveSource,
   InstagramTrendSearchHistory,
+  MetaAdLibrarySaved,
+  MetaAdLibrarySearchPage,
+  MetaAdSearchInput,
   AiContentReferenceSeed,
   AiContentReferenceSeedFormat,
   AiContentReferenceSeedList,
@@ -42,6 +45,7 @@ import type {
   PublishSlot,
   PublishResult,
   ReferenceBrand,
+  ReferenceChannelMediaPage,
   ReferenceDetail,
   ReferenceContentPurpose,
   ReferenceItem,
@@ -381,6 +385,37 @@ export function apiClient(options: ApiClientOptions = {}) {
         body: JSON.stringify({ hashtag })
       });
     },
+    async findMetaAdLibraryCache(brandId: string, input: MetaAdSearchInput) {
+      const query = new URLSearchParams({ mode: input.mode });
+      if (input.mode === "keyword") query.set("query", input.query);
+      else query.set("pageIds", input.pageIds.join(","));
+      try {
+        return await request<MetaAdLibrarySearchPage>(
+          fetcher,
+          `${baseUrl}/brands/${brandId}/meta-ad-library/cache?${query.toString()}`,
+          { method: "GET" },
+        );
+      } catch (error) {
+        if (error instanceof ApiRequestError && error.status === 404) return null;
+        throw error;
+      }
+    },
+    searchMetaAdLibrary(brandId: string, input: MetaAdSearchInput) {
+      return request<MetaAdLibrarySearchPage>(fetcher, `${baseUrl}/brands/${brandId}/meta-ad-library/search`, {
+        method: "POST",
+        body: JSON.stringify(input),
+      });
+    },
+    getMetaAdLibrarySearch(brandId: string, searchId: string, cursor?: string) {
+      const query = cursor ? `?${new URLSearchParams({ cursor }).toString()}` : "";
+      return request<MetaAdLibrarySearchPage>(fetcher, `${baseUrl}/brands/${brandId}/meta-ad-library/searches/${searchId}${query}`, { method: "GET" });
+    },
+    saveMetaAdLibraryAd(brandId: string, adId: string) {
+      return request<MetaAdLibrarySaved>(fetcher, `${baseUrl}/brands/${brandId}/meta-ad-library/ads/${adId}/save`, { method: "POST" });
+    },
+    removeMetaAdLibraryAd(brandId: string, adId: string) {
+      return request<void>(fetcher, `${baseUrl}/brands/${brandId}/meta-ad-library/ads/${adId}/save`, { method: "DELETE" });
+    },
     listInstagramTrendSearches(brandId: string) {
       return request<InstagramTrendSearchHistory[]>(fetcher, `${baseUrl}/brands/${brandId}/instagram-trend-searches`, { method: "GET" });
     },
@@ -464,6 +499,8 @@ export function apiClient(options: ApiClientOptions = {}) {
     listReferences(
       brandId: string,
       filters: {
+        q?: string;
+        collection?: "all" | "content" | "trend";
         kind?: string;
         contentFamily?: string;
         strategy?: string;
@@ -512,8 +549,15 @@ export function apiClient(options: ApiClientOptions = {}) {
         method: "GET",
       });
     },
-    listReferenceBrands(brandId: string) {
-      return request<ReferenceBrand[]>(fetcher, `${baseUrl}/brands/${brandId}/reference-brands`, { method: "GET" });
+    listReferenceBrands(brandId: string, q = "") {
+      const query = q.trim() ? `?${new URLSearchParams({ q: q.trim() }).toString()}` : "";
+      return request<ReferenceBrand[]>(fetcher, `${baseUrl}/brands/${brandId}/reference-brands${query}`, { method: "GET" });
+    },
+    resolveReferenceChannel(brandId: string, profile: string) {
+      return request<ReferenceBrand>(fetcher, `${baseUrl}/brands/${brandId}/reference-brands/resolve`, {
+        method: "POST",
+        body: JSON.stringify({ profile }),
+      });
     },
     createReferenceBrand(
       brandId: string,
@@ -535,6 +579,13 @@ export function apiClient(options: ApiClientOptions = {}) {
       return request<ReferenceItem[]>(
         fetcher,
         `${baseUrl}/brands/${brandId}/reference-brands/${referenceBrandId}/items`,
+        { method: "GET" },
+      );
+    },
+    listReferenceChannelMedia(brandId: string, referenceBrandId: string) {
+      return request<ReferenceChannelMediaPage>(
+        fetcher,
+        `${baseUrl}/brands/${brandId}/reference-brands/${referenceBrandId}/media`,
         { method: "GET" },
       );
     },

@@ -105,7 +105,7 @@ export const helpGuides: HelpGuide[] = [
       "외부 URL은 정보성, 마케팅성 또는 둘 다 용도를 지정하며 활성 항목 기준 최대 10개까지 등록합니다.",
       "패턴 분석은 저장된 분석이 있을 때만 관찰 사실과 AI 해석을 구분해 표시하고, 아직 생성되지 않은 분석은 사용할 수 없음으로 표시합니다.",
     ] }],
-    tour: [pageHeaderStep("실제 저장 자료와 공개 Instagram 해시태그 탐색을 보기별로 전환합니다."), { selector: ".reference-view-nav", title: "레퍼런스 보기", description: "저장한 브랜드, 콘텐츠, 트렌드, 외부 URL, 최근 사용과 즐겨찾기 보기를 선택합니다." }, { selector: ".reference-card-grid", title: "저장된 snapshot", description: "실제 저장된 미리보기와 metadata를 확인하고 상세에서 원본 링크와 분석 가능 여부를 확인합니다." }]
+    tour: [pageHeaderStep("내 라이브러리, 트렌드 찾기, 브랜드·작성자 작업 공간을 전환합니다."), { selector: ".reference-view-nav", title: "레퍼런스 작업 공간", description: "내 라이브러리, 트렌드 찾기, 브랜드·작성자를 선택합니다. 내 라이브러리에서는 콘텐츠, 트렌드, 외부 URL, 최근 추가와 즐겨찾기를 필터링합니다." }, { selector: ".reference-add-menu-trigger", title: "자료 추가", description: "외부 URL을 등록하거나 파일을 업로드해 내 라이브러리에 자료를 추가합니다." }, { selector: ".reference-card-grid", title: "저장된 snapshot", description: "실제 저장된 미리보기와 metadata를 확인하고 상세에서 원본 링크와 분석 가능 여부를 확인합니다." }]
   },
   {
     id: "sources",
@@ -215,14 +215,14 @@ export function guideForPath(pathname: string) {
   const view = new URLSearchParams(rawSearch).get("view") || "all";
   const labels: Record<string, string> = {
     all: "전체",
-    "saved-brands": "저장한 브랜드",
+    "saved-brands": "브랜드·작성자",
     "saved-content": "저장한 콘텐츠",
-    trends: "트렌드 탐색",
+    trends: "트렌드 찾기",
     "saved-trends": "저장한 트렌드",
     "external-urls": "외부 URL",
-    recent: "최근 사용",
+    recent: "최근 추가",
     favorites: "즐겨찾기",
-    add: "직접 추가",
+    add: "자료 추가",
   };
   const key = labels[view] ? view : "all";
   return {

@@ -75,10 +75,12 @@ export function TrendMediaCard({ media, onSelect, onBookmark, onUnbookmark }: { 
         )}
       </span>
       <span className="trend-media-card__body">
+        <span className="trend-media-card__source">Instagram 공개 콘텐츠</span>
         <span className="trend-media-card__topline">
           <strong>{authorLabel}</strong>
           <span className="muted">{kindLabels[media.kind]}</span>
         </span>
+        {media.caption ? <span className="trend-media-card__caption">{media.caption}</span> : null}
         <span className="trend-media-card__meta">
           <span>{formatDate(media.postedAt)}</span>
           {media.likeCount !== null ? <span>좋아요 {media.likeCount.toLocaleString("ko-KR")}</span> : null}
