@@ -2631,7 +2631,7 @@ if [[ "$*" == *"/app/scripts/ai-content-cutover-floor-probe.mjs"* ]]; then
   exit 0
 fi
 if [[ "$*" == *"/app/scripts/migrate.mjs --post-075-schema"* ]]; then
-  printf '{\n  "post075SchemaMigration": {\n    "contractVersion": "post-075-schema-migration-evidence.v1",\n    "providerRoleName": "postgres",\n    "migrationId": "079_publish_calendar_runtime.sql",\n    "migrationSha256": "%s",\n    "status": "already_applied"\n  }\n}\n' "$POST_075_SCHEMA_SHA_FOR_TEST"
+  printf '{\n  "post075SchemaMigration": {\n    "contractVersion": "post-075-schema-migration-evidence.v1",\n    "providerRoleName": "postgres",\n    "migrationId": "081_meta_ad_library_references.sql",\n    "migrationSha256": "%s",\n    "status": "already_applied"\n  }\n}\n' "$POST_075_SCHEMA_SHA_FOR_TEST"
   exit 0
 fi
 if [[ "$1 $2" == "image inspect" ]]; then
@@ -2736,12 +2736,12 @@ function runDeployFixture({
   }, null, 2)}\n`, { mode: 0o600 });
   const post075SchemaState = join(root, "state", "post-075-schema-migrations");
   mkdirSync(post075SchemaState, { recursive: true, mode: 0o700 });
-  writeFileSync(join(post075SchemaState, "079_publish_calendar_runtime.sql.json"), `${JSON.stringify({
+  writeFileSync(join(post075SchemaState, "081_meta_ad_library_references.sql.json"), `${JSON.stringify({
     post075SchemaMigration: {
       contractVersion: "post-075-schema-migration-evidence.v1",
       providerRoleName: "postgres",
-      migrationId: "079_publish_calendar_runtime.sql",
-      migrationSha256: "c46ffafa578f6c1f8bb353f4e7bc94d16033416dd5a6aa730cf81119e6e6ef61",
+      migrationId: "081_meta_ad_library_references.sql",
+      migrationSha256: "232f4ee76b7812b0a9399ee3124b4542e5c6f01c0d5d37ecb786b0b41c25f9ef",
       status: "already_applied",
     },
   }, null, 2)}\n`, { mode: 0o600 });
@@ -2823,7 +2823,7 @@ function runDeployFixture({
       DOCKER_FAIL_UP_TIMES: "1",
       RELEASE_SHA_FOR_TEST: "1".repeat(40),
       AI_CONTENT_POST_075_PROVIDER_DATABASE_URL_FILE: bashPath(providerDatabaseUrlFile),
-      POST_075_SCHEMA_SHA_FOR_TEST: "c46ffafa578f6c1f8bb353f4e7bc94d16033416dd5a6aa730cf81119e6e6ef61",
+      POST_075_SCHEMA_SHA_FOR_TEST: "232f4ee76b7812b0a9399ee3124b4542e5c6f01c0d5d37ecb786b0b41c25f9ef",
     },
   });
   return { fixture, root, dockerLog, preflightLog, result, candidateSha: "1".repeat(40) };
