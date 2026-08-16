@@ -8,6 +8,8 @@ const ids = {
   brand: "20000000-0000-4000-8000-000000000001",
   generation1: "30000000-0000-4000-8000-000000000001",
   generation2: "30000000-0000-4000-8000-000000000002",
+  output: "40000000-0000-4000-8000-000000000001",
+  channelOutput: "50000000-0000-4000-8000-000000000001",
 };
 
 describe("publish calendar manual provisioning with postgres semantics", () => {
@@ -92,6 +94,35 @@ describe("publish calendar manual provisioning with postgres semantics", () => {
         { clientRowId: "row-2", scheduledFor: new Date("2099-08-15T03:00:00Z"), channel: "instagram", contentFormat: "reel", source: { kind: "existing_generation", generationId: ids.generation2 } },
       ],
     })).rejects.toThrow("publish_calendar_generation_quota_exceeded");
+
+    const stored = await db.query<{ count: number }>("select count(*)::integer count from publish_calendar_slots");
+    expect(stored.rows[0]?.count).toBe(0);
+  });
+
+  it("does not reschedule a completed output that already owns a failed publish queue", async () => {
+    await db.query("update ai_content_generations set status='completed' where id=$1", [ids.generation1]);
+    await db.query(
+      "insert into ai_content_generation_outputs(id,generation_id,workspace_id,brand_id,title,status) values($1,$2,$3,$4,'완료 콘텐츠','completed')",
+      [ids.output, ids.generation1, ids.workspace, ids.brand],
+    );
+    await db.query(
+      "insert into channel_outputs(id,workspace_id,brand_id,ai_content_generation_output_id) values($1,$2,$3,$4)",
+      [ids.channelOutput, ids.workspace, ids.brand, ids.output],
+    );
+    await db.query(
+      "insert into publish_queue(workspace_id,brand_id,channel_output_id,status) values($1,$2,$3,'failed')",
+      [ids.workspace, ids.brand, ids.channelOutput],
+    );
+
+    await expect(repository.provisionManualSlot({
+      workspaceId: ids.workspace,
+      brandId: ids.brand,
+      scheduledFor: new Date("2099-08-15T02:30:00Z"),
+      channel: "instagram",
+      contentFormat: "card_news",
+      idempotencyKey: "failed-output",
+      source: { kind: "existing_output", generationOutputId: ids.output },
+    })).rejects.toThrow("publish_calendar_content_not_assignable");
 
     const stored = await db.query<{ count: number }>("select count(*)::integer count from publish_calendar_slots");
     expect(stored.rows[0]?.count).toBe(0);

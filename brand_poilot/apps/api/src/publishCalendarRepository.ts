@@ -25,6 +25,13 @@ type ManualSlotProvisionInput = BrandScope & {
   source: PublishCalendarManualSlotSourceDto;
 };
 
+type PublishCalendarRepositoryOptions = {
+  afterManualSlotProvisioned?: (input: BrandScope & {
+    generationId: string;
+    outputId: string;
+  }) => Promise<void>;
+};
+
 export interface PublishCalendarRepository {
   getManualOptions(scope: BrandScope): Promise<PublishCalendarManualOptionsDto>;
   listManualContentCandidates(input: BrandScope & {
@@ -318,8 +325,28 @@ function addAnchoredUtcMonth(value: Date, anchorDay: number): Date {
   ));
 }
 
-export function createPublishCalendarRepository(pool: Pool): PublishCalendarRepository {
+export function createPublishCalendarRepository(
+  pool: Pool,
+  options: PublishCalendarRepositoryOptions = {},
+): PublishCalendarRepository {
   const fencedPool = withAiContentTransactionFence(pool);
+  const loadSlotById = async (input: BrandScope & { slotId: string }) => {
+    const result = await pool.query(
+      `select slot.*,queue_schedule.effective_scheduled_for
+         from publish_calendar_slots slot
+         left join lateral (
+           select coalesce(
+                    max(queue.published_at) filter (where queue.status='published'),
+                    min(queue.scheduled_for) filter (where queue.status in ('scheduled','publishing','deferred'))
+                  ) as effective_scheduled_for
+             from publish_queue queue
+            where queue.topic_publish_group_id=slot.topic_publish_group_id
+         ) queue_schedule on true
+        where slot.workspace_id=$1::uuid and slot.brand_id=$2::uuid and slot.id=$3::uuid`,
+      [input.workspaceId, input.brandId, input.slotId],
+    );
+    return result.rowCount ? mapSlot(result.rows[0]) : null;
+  };
   const loadWeeklyUsage = async (
     queryable: Pick<PoolClient, "query">,
     input: BrandScope & { at?: Date },
@@ -423,7 +450,6 @@ export function createPublishCalendarRepository(pool: Pool): PublishCalendarRepo
                 where channel_output.workspace_id=output.workspace_id
                   and channel_output.brand_id=output.brand_id
                   and channel_output.ai_content_generation_output_id=output.id
-                  and queue.status in ('queued','scheduled','publishing','deferred','published')
               )
             for key share of output,generation`,
           [input.workspaceId, input.brandId, input.source.generationOutputId, input.contentFormat],
@@ -563,7 +589,7 @@ export function createPublishCalendarRepository(pool: Pool): PublishCalendarRepo
                 case
                   when active_slot.id is not null then 'already_scheduled'
                   when queue_context.has_published then 'already_published'
-                  when queue_context.has_active then 'already_scheduled'
+                  when queue_context.has_any then 'already_scheduled'
                 end as blocked_reason
            from ai_content_generation_outputs output
            join ai_content_generations generation
@@ -577,8 +603,8 @@ export function createPublishCalendarRepository(pool: Pool): PublishCalendarRepo
            ) active_slot on true
            left join lateral (
              select min(queue.topic_publish_group_id::text)::uuid as topic_publish_group_id,
-                    bool_or(queue.status='published') as has_published,
-                    bool_or(queue.status in ('queued','scheduled','publishing','deferred')) as has_active
+                    count(*) > 0 as has_any,
+                    bool_or(queue.status='published') as has_published
                from channel_outputs channel_output
                join publish_queue queue on queue.channel_output_id=channel_output.id
               where channel_output.workspace_id=output.workspace_id
@@ -595,10 +621,24 @@ export function createPublishCalendarRepository(pool: Pool): PublishCalendarRepo
 
     async provisionManualSlot(input) {
       validateManualProvisionInput(input);
-      return transaction(fencedPool, async (client) => {
+      const slot = await transaction(fencedPool, async (client) => {
         await lockBrand(client, input.brandId);
         return provisionManualSlotLocked(client, input);
       });
+      if (input.source.kind === "existing_output" && slot.generationId) {
+        await options.afterManualSlotProvisioned?.({
+          workspaceId: input.workspaceId,
+          brandId: input.brandId,
+          generationId: slot.generationId,
+          outputId: input.source.generationOutputId,
+        });
+        return await loadSlotById({
+          workspaceId: input.workspaceId,
+          brandId: input.brandId,
+          slotId: slot.id,
+        }) ?? slot;
+      }
+      return slot;
     },
 
     async provisionManualSlotsBatch(input) {
@@ -617,7 +657,7 @@ export function createPublishCalendarRepository(pool: Pool): PublishCalendarRepo
         createdByUserId: input.createdByUserId ?? null,
       }));
       rows.forEach(validateManualProvisionInput);
-      return transaction(fencedPool, async (client) => {
+      const slots = await transaction(fencedPool, async (client) => {
         await lockBrand(client, input.brandId);
         const unstartedGenerationIds = [...new Set(rows.flatMap((row) => (
           row.source.kind === "existing_generation" ? [row.source.generationId] : []
@@ -642,6 +682,24 @@ export function createPublishCalendarRepository(pool: Pool): PublishCalendarRepo
         for (const row of rows) slots.push(await provisionManualSlotLocked(client, row));
         return slots;
       });
+      for (let index = 0; index < rows.length; index += 1) {
+        const row = rows[index];
+        const slot = slots[index];
+        if (row.source.kind === "existing_output" && slot?.generationId) {
+          await options.afterManualSlotProvisioned?.({
+            workspaceId: input.workspaceId,
+            brandId: input.brandId,
+            generationId: slot.generationId,
+            outputId: row.source.generationOutputId,
+          });
+          slots[index] = await loadSlotById({
+            workspaceId: input.workspaceId,
+            brandId: input.brandId,
+            slotId: slot.id,
+          }) ?? slot;
+        }
+      }
+      return slots;
     },
 
     async getSettings(scope) {

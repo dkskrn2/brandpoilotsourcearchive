@@ -3199,11 +3199,7 @@ describe("API server", () => {
     expect(invalid.statusCode).toBe(400);
     expect(completed.statusCode).toBe(200);
     expect(provisionManualSlot).toHaveBeenCalledTimes(2);
-    expect(prepareCompletedCalendarPublish).toHaveBeenCalledWith({
-      workspaceId: "22222222-2222-4222-8222-222222222222",
-      brandId,
-      outputId: completedOutputId,
-    });
+    expect(prepareCompletedCalendarPublish).not.toHaveBeenCalled();
   });
 
   it("provisions a validated manual slot batch with parsed dates", async () => {
@@ -3212,6 +3208,8 @@ describe("API server", () => {
     const repository = createRepository();
     const provisionManualSlotsBatch = vi.fn(async () => []);
     repository.provisionManualSlotsBatch = provisionManualSlotsBatch;
+    const prepareCompletedCalendarPublish = vi.fn(async () => null);
+    repository.prepareCompletedCalendarPublish = prepareCompletedCalendarPublish;
     const app = createServer({ repository, logger: false });
     const payload = {
       idempotencyKey: "manual-batch-1",
@@ -3220,7 +3218,7 @@ describe("API server", () => {
         scheduledFor: "2099-08-17T00:00:00.000Z",
         channel: "instagram",
         contentFormat: "card_news",
-        source: { kind: "existing_generation", generationId: "40000000-0000-4000-8000-000000000001" },
+        source: { kind: "existing_output", generationOutputId: "40000000-0000-4000-8000-000000000001" },
       }],
     };
 
@@ -3243,6 +3241,7 @@ describe("API server", () => {
         source: payload.rows[0].source,
       })],
     }));
+    expect(prepareCompletedCalendarPublish).not.toHaveBeenCalled();
   });
 
   it("returns a conflict when a manual batch exceeds the plan generation quota", async () => {

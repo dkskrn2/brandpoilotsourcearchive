@@ -371,7 +371,86 @@ describe("publish calendar manual provisioning catalogs", () => {
 });
 
 describe("publish calendar content-backed manual provisioning", () => {
-  it("fails closed when a completed output already has an active or published queue", async () => {
+  it("prepares a completed output only after its calendar slot commits", async () => {
+    const outputId = "40000000-0000-4000-8000-000000000002";
+    const generationId = "40000000-0000-4000-8000-000000000001";
+    const run = harness((sql) => {
+      if (sql.includes("clock_timestamp()")) return { rows: [{ future: true }], rowCount: 1 };
+      if (sql.includes("from brand_channels")) return { rows: [{ channel: "instagram" }], rowCount: 1 };
+      if (sql.includes("slot.scheduled_for=$3::timestamptz") || sql.includes("abs(extract(epoch")) {
+        return { rows: [], rowCount: 0 };
+      }
+      if (sql.includes("from ai_content_generation_outputs output") && sql.includes("for key share")) {
+        return {
+          rows: [{
+            generation_id: generationId,
+            generation_output_id: outputId,
+            topic_publish_group_id: null,
+            title: "완료된 카드뉴스",
+            content_format: "card_news",
+          }],
+          rowCount: 1,
+        };
+      }
+      if (sql.includes("and (slot.generation_id=$3::uuid")) return { rows: [], rowCount: 0 };
+      const subscription = activeSubscription(sql);
+      if (subscription) return subscription;
+      if (sql.includes("calendar_usage") && sql.includes("direct_publish_groups")) {
+        return { rows: [{ published_count: 0, reserved_count: 0 }], rowCount: 1 };
+      }
+      if (sql.startsWith("insert into publish_calendar_slots")) {
+        return {
+          rows: [slotRow({
+            assignment_mode: "manual",
+            status: "generation_pending",
+            recommendation_kind: null,
+            generation_id: generationId,
+            generation_output_id: outputId,
+            title: "완료된 카드뉴스",
+          })],
+          rowCount: 1,
+        };
+      }
+      if (sql.includes("where slot.workspace_id=$1::uuid and slot.brand_id=$2::uuid and slot.id=$3::uuid")) {
+        return {
+          rows: [slotRow({
+            assignment_mode: "manual",
+            status: "content_assigned",
+            recommendation_kind: null,
+            generation_id: generationId,
+            generation_output_id: outputId,
+            topic_publish_group_id: "60000000-0000-4000-8000-000000000001",
+            title: "완료된 카드뉴스",
+          })],
+          rowCount: 1,
+        };
+      }
+      throw new Error(`unexpected query: ${sql}`);
+    });
+    const afterManualSlotProvisioned = vi.fn(async () => {
+      expect(run.statements.at(-1)?.sql).toBe("commit");
+    });
+    const repository = createPublishCalendarRepository(run.pool, { afterManualSlotProvisioned });
+
+    const result = await repository.provisionManualSlot({
+      ...scope,
+      scheduledFor: new Date("2099-08-15T11:30:00+09:00"),
+      channel: "instagram",
+      contentFormat: "card_news",
+      idempotencyKey: "completed-output",
+      source: { kind: "existing_output", generationOutputId: outputId },
+    });
+
+    expect(result).toMatchObject({ status: "content_assigned", generationOutputId: outputId });
+    expect(afterManualSlotProvisioned).toHaveBeenCalledWith({
+      workspaceId: scope.workspaceId,
+      brandId: scope.brandId,
+      generationId,
+      outputId,
+    });
+  });
+
+  it("fails closed when a completed output already has any publish queue", async () => {
     const run = harness((sql) => {
       if (sql.includes("clock_timestamp()")) return { rows: [{ future: true }], rowCount: 1 };
       if (sql.includes("from brand_channels")) return { rows: [{ channel: "instagram" }], rowCount: 1 };
@@ -390,7 +469,7 @@ describe("publish calendar content-backed manual provisioning", () => {
     })).rejects.toThrowError("publish_calendar_content_not_assignable");
 
     const lineage = run.statements.find(({ sql }) => sql.includes("from ai_content_generation_outputs output") && sql.includes("for key share"));
-    expect(lineage?.sql).toContain("queue.status in ('queued','scheduled','publishing','deferred','published')");
+    expect(lineage?.sql).not.toContain("queue.status in (");
   });
 
   it("rejects any non-cancelled slot less than 30 minutes away under the brand lock", async () => {

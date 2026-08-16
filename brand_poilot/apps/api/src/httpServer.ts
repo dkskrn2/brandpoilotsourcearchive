@@ -2196,17 +2196,6 @@ export function createServer(
         createdByUserId: aiContentActorUserId(request),
         rows,
       });
-      if (repository.prepareCompletedCalendarPublish) {
-        const scope = aiContentScope(request, request.params.brandId);
-        for (const row of rows) {
-          if (row.source.kind === "existing_output") {
-            await repository.prepareCompletedCalendarPublish({
-              ...scope,
-              outputId: row.source.generationOutputId,
-            });
-          }
-        }
-      }
       return { slots };
     },
   );
@@ -2566,12 +2555,6 @@ export function createServer(
         createdByUserId: aiContentActorUserId(request),
         source: normalizedSource,
       });
-      if (normalizedSource.kind === "existing_output" && repository.prepareCompletedCalendarPublish) {
-        await repository.prepareCompletedCalendarPublish({
-          ...scope,
-          outputId: normalizedSource.generationOutputId,
-        });
-      }
       return slot;
     },
   );

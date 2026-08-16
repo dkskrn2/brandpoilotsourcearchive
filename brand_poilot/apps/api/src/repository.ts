@@ -1491,9 +1491,18 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
   };
   const brandIntelligenceProvider = createBrandIntelligenceProvider(createBrandIntelligenceRepository(pool));
   const instagramPublish = resolveInstagramPublishOptions(options);
-  const publishCalendar = createPublishCalendarRepository(pool);
-  const publishCalendarAllocator = createDatabasePublishCalendarAllocator(pool, publishCalendar);
   const aiContentPublish = createAiContentPublishRepository(fencedAiContentSubrepositoryPool);
+  const publishCalendar = createPublishCalendarRepository(pool, {
+    afterManualSlotProvisioned: async (input) => {
+      await aiContentPublish.prepareCompletedCalendarPublish({
+        workspaceId: input.workspaceId,
+        brandId: input.brandId,
+        outputId: input.outputId,
+        preparationEnabled: instagramPublish.enabled,
+      });
+    },
+  });
+  const publishCalendarAllocator = createDatabasePublishCalendarAllocator(pool, publishCalendar);
   const aiContent = createAiContentRepository(aiContentPool, {
     brandIntelligenceProvider,
     afterRenderPackageCompleted: async (input) => {
