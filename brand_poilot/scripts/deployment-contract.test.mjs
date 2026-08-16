@@ -156,12 +156,14 @@ test("deployment applies the ordered content suggestion, FAQ, publish calendar, 
   assert.match(runner, /3b178464c5ae5c4e220428e0752ab3e79a2ca06b5b2b23f1e89c34e983e63f76/);
   assert.match(runner, /078_faq_utterance_matching\.sql/);
   assert.match(runner, /a2c481f4ea5aba0430668d8e87d236f0a301a695cbecb4874400de0896aecde5/);
-  assert.match(deploy, /079_publish_calendar_runtime\.sql/);
-  assert.match(deploy, /c46ffafa578f6c1f8bb353f4e7bc94d16033416dd5a6aa730cf81119e6e6ef61/);
+  assert.match(runner, /079_publish_calendar_runtime\.sql/);
+  assert.match(runner, /c46ffafa578f6c1f8bb353f4e7bc94d16033416dd5a6aa730cf81119e6e6ef61/);
   assert.match(runner, /080_reference_channel_archive\.sql/);
   assert.match(runner, /9067430f0e8fbc6d52455ef5fcf712820fe405e4fca0e51835b6cd0552ce7fe0/);
   assert.match(runner, /081_meta_ad_library_references\.sql/);
   assert.match(runner, /232f4ee76b7812b0a9399ee3124b4542e5c6f01c0d5d37ecb786b0b41c25f9ef/);
+  assert.match(deploy, /POST_075_SCHEMA_MIGRATION_ID="081_meta_ad_library_references\.sql"/);
+  assert.match(deploy, /POST_075_SCHEMA_MIGRATION_SHA256="232f4ee76b7812b0a9399ee3124b4542e5c6f01c0d5d37ecb786b0b41c25f9ef"/);
   assert.match(deploy, /scripts\/migrate\.mjs --post-075-schema/);
   assert.match(deploy, /post-075-schema-migration-evidence\.v1/);
   const dataGate = deploy.lastIndexOf("run_post_075_data_migration_gate");
@@ -2629,7 +2631,7 @@ if [[ "$*" == *"/app/scripts/ai-content-cutover-floor-probe.mjs"* ]]; then
   exit 0
 fi
 if [[ "$*" == *"/app/scripts/migrate.mjs --post-075-schema"* ]]; then
-  printf '{\n  "post075SchemaMigration": {\n    "contractVersion": "post-075-schema-migration-evidence.v1",\n    "providerRoleName": "postgres",\n    "migrationId": "079_publish_calendar_runtime.sql",\n    "migrationSha256": "%s",\n    "status": "already_applied"\n  }\n}\n' "$POST_075_SCHEMA_SHA_FOR_TEST"
+  printf '{\n  "post075SchemaMigration": {\n    "contractVersion": "post-075-schema-migration-evidence.v1",\n    "providerRoleName": "postgres",\n    "migrationId": "081_meta_ad_library_references.sql",\n    "migrationSha256": "%s",\n    "status": "already_applied"\n  }\n}\n' "$POST_075_SCHEMA_SHA_FOR_TEST"
   exit 0
 fi
 if [[ "$1 $2" == "image inspect" ]]; then
@@ -2734,12 +2736,12 @@ function runDeployFixture({
   }, null, 2)}\n`, { mode: 0o600 });
   const post075SchemaState = join(root, "state", "post-075-schema-migrations");
   mkdirSync(post075SchemaState, { recursive: true, mode: 0o700 });
-  writeFileSync(join(post075SchemaState, "079_publish_calendar_runtime.sql.json"), `${JSON.stringify({
+  writeFileSync(join(post075SchemaState, "081_meta_ad_library_references.sql.json"), `${JSON.stringify({
     post075SchemaMigration: {
       contractVersion: "post-075-schema-migration-evidence.v1",
       providerRoleName: "postgres",
-      migrationId: "079_publish_calendar_runtime.sql",
-      migrationSha256: "c46ffafa578f6c1f8bb353f4e7bc94d16033416dd5a6aa730cf81119e6e6ef61",
+      migrationId: "081_meta_ad_library_references.sql",
+      migrationSha256: "232f4ee76b7812b0a9399ee3124b4542e5c6f01c0d5d37ecb786b0b41c25f9ef",
       status: "already_applied",
     },
   }, null, 2)}\n`, { mode: 0o600 });
@@ -2821,7 +2823,7 @@ function runDeployFixture({
       DOCKER_FAIL_UP_TIMES: "1",
       RELEASE_SHA_FOR_TEST: "1".repeat(40),
       AI_CONTENT_POST_075_PROVIDER_DATABASE_URL_FILE: bashPath(providerDatabaseUrlFile),
-      POST_075_SCHEMA_SHA_FOR_TEST: "c46ffafa578f6c1f8bb353f4e7bc94d16033416dd5a6aa730cf81119e6e6ef61",
+      POST_075_SCHEMA_SHA_FOR_TEST: "232f4ee76b7812b0a9399ee3124b4542e5c6f01c0d5d37ecb786b0b41c25f9ef",
     },
   });
   return { fixture, root, dockerLog, preflightLog, result, candidateSha: "1".repeat(40) };
