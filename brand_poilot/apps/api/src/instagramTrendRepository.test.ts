@@ -591,7 +591,11 @@ describe("createInstagramTrendRepository", () => {
     let sourceCreated = false;
     const fixture = poolWith((sql, values) => {
       if (sql.includes("select workspace_id from brands")) return result([{ workspace_id: "workspace-1" }]);
-      if (sql.includes("from instagram_trend_media") && sql.includes("for update")) return result([{ ...media, id: "media-1" }]);
+      if (sql.includes("from instagram_trend_media") && sql.includes("for update")) {
+        expect(sql).toContain("from reference_brand_media channel_relation");
+        expect(sql).toContain("channel_relation.workspace_id");
+        return result([{ ...media, id: "media-1" }]);
+      }
       if (sql.includes("from source_urls") && sql.includes("url_hash")) return result(sourceCreated ? [{ id: "source-1", brand_id: "brand-1", source_type: "reference", url: media.permalink, title: media.caption, status: "crawled", enabled: true, last_crawled_at: now, last_error: null }] : []);
       if (sql.includes("insert into source_urls")) { sourceCreated = true; return result([{ id: "source-1" }]); }
       if (sql.includes("update source_urls") && sql.includes("disabled_at = null")) {

@@ -70,6 +70,9 @@ function setup(overrides: Partial<ApiRepository> = {}) {
     listReferenceBrands: vi.fn(async () => []), createReferenceBrand: vi.fn(async () => ({ id: referenceId })),
     createReferenceBrandFromTrend: vi.fn(async () => ({ id: referenceId })),
     listReferenceBrandItems: vi.fn(async () => []),
+    listReferenceChannels: vi.fn(async () => []),
+    resolveReferenceChannel: vi.fn(async () => ({ id: referenceId })),
+    listReferenceChannelMedia: vi.fn(async () => ({ items: [], total: 0, refreshedAt: null, cacheState: "pending" as const })),
     ...overrides,
   } as unknown as ApiRepository;
   const kakaoAuth = {
@@ -314,12 +317,12 @@ describe("asset library customer routes", () => {
     const { app, repository } = setup();
     const listed = await app.inject({
       method: "GET",
-      url: `/brands/${brandId}/references?kind=trend&contentFamily=blog&strategy=educational&format=reel&origin=acme&favorite=true&recent=30`,
+      url: `/brands/${brandId}/references?kind=trend&collection=content&q=${encodeURIComponent(" 여름 루틴 ")}&contentFamily=blog&strategy=educational&format=reel&origin=acme&favorite=true&recent=30`,
       headers: auth,
     });
     expect(listed.statusCode).toBe(200);
     expect(repository.listReferences).toHaveBeenCalledWith({ workspaceId, brandId }, {
-      kind: "trend", contentFamily: "blog", strategy: "educational", format: "reel",
+      kind: "trend", collection: "content", q: "여름 루틴", contentFamily: "blog", strategy: "educational", format: "reel",
       origin: "acme", favorite: true, recent: 30,
     });
     expect(listed.json()).toEqual([]);
@@ -397,6 +400,32 @@ describe("asset library customer routes", () => {
     });
     expect(response.statusCode).toBe(400);
     expect(response.json()).toEqual({ error: "reference_brand_author_unavailable" });
+    await app.close();
+  });
+
+  it("resolves an Instagram channel and reads its tenant-scoped cached media", async () => {
+    const { app, repository } = setup();
+    const resolved = await app.inject({
+      method: "POST",
+      url: `/brands/${brandId}/reference-brands/resolve`,
+      headers: auth,
+      payload: { profile: "https://www.instagram.com/acme/" },
+    });
+    expect(resolved.statusCode).toBe(201);
+    expect(repository.resolveReferenceChannel).toHaveBeenCalledWith(
+      { workspaceId, brandId, actorUserId: userId },
+      "https://www.instagram.com/acme/",
+    );
+
+    const media = await app.inject({
+      method: "GET",
+      url: `/brands/${brandId}/reference-brands/${referenceId}/media`,
+      headers: auth,
+    });
+    expect(media.statusCode).toBe(200);
+    expect(repository.listReferenceChannelMedia).toHaveBeenCalledWith({
+      workspaceId, brandId, referenceBrandId: referenceId,
+    });
     await app.close();
   });
 });

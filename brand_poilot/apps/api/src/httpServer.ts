@@ -12,6 +12,7 @@ import { buildInstagramLoginAuthorizeUrl, exchangeInstagramLoginCode, instagramL
 import { parseInstagramMessagingEvents, verifyInstagramSignature } from "./instagramWebhook.js";
 import { isDmAutomationReady, parseDmWorkerResult } from "./dmTypes.js";
 import { normalizeInstagramHashtag } from "./instagramTrend.js";
+import { normalizeMetaAdSearchInput, type MetaAdSearchInput } from "./metaAdLibrary.js";
 import { StoryCapabilityRequiredError } from "./repository.js";
 import type { ApiRepository, BrandProfileInput, Channel, DmAttentionType, DmConversationFilter, InstagramDeliveryFormat, InstagramFormatSettingsInput, InstagramTrendMediaTypeFilter, InstagramTrendPageDto, InstagramTrendSort, SourceType, SubjectAnalysisRepositoryV2, SupportRequestCategory, SupportRequestStatus } from "./types.js";
 import type { AiContentAttachmentLifecycleRepository } from "./aiContentAttachmentRepository.js";
@@ -1090,6 +1091,18 @@ export function createServer(
       reply.code(400).send({ error: message.slice(0, separator), field: message.slice(separator + 1) });
       return;
     }
+    if (message === "reference_channel_handle_invalid" || message === "reference_channel_ineligible") {
+      reply.code(400).send({ error: message });
+      return;
+    }
+    if (message === "instagram_rate_limited") {
+      reply.code(429).send({ error: message });
+      return;
+    }
+    if (["instagram_business_discovery_failed", "instagram_business_discovery_invalid"].includes(message)) {
+      reply.code(502).send({ error: message });
+      return;
+    }
     if (message === "asset_library_admin_required" || message === "asset_library_access_forbidden") {
       reply.code(403).send({ error: message });
       return;
@@ -1555,6 +1568,14 @@ export function createServer(
     }
     if (!repository.allocatePublishCalendar) throw new Error("publish_calendar_not_configured");
     return repository.allocatePublishCalendar(new Date());
+  });
+
+  app.post("/internal/cron/meta-ad-page-refresh", async (request, reply) => {
+    if (!matchesBearerSecret(request.headers.authorization, cronSecret)) {
+      reply.code(401);
+      return { error: "cron_unauthorized" };
+    }
+    return repository.runSavedMetaAdPageRefreshes(20);
   });
 
   app.get("/internal/cron/avatar-upload-cleanup", async (request, reply) => {
@@ -2262,6 +2283,126 @@ export function createServer(
         aiContentActorUserId(request),
       )
     );
+  });
+
+  async function metaAdLibraryResponse<T>(reply: FastifyReply, operation: () => Promise<T>) {
+    try {
+      return await operation();
+    } catch (error) {
+      const code = error instanceof Error ? error.message : "meta_ad_library_fetch_failed";
+      const status = code === "meta_ad_library_not_configured"
+        ? 503
+        : code === "meta_ad_library_permission_required" || code === "meta_ad_library_reconnect_required"
+          ? 403
+          : code === "meta_ad_library_rate_limited"
+            ? 429
+            : code === "meta_ad_library_search_not_found" || code === "meta_ad_library_ad_not_found"
+              ? 404
+              : code === "meta_ad_library_search_invalid"
+                ? 400
+                : 502;
+      reply.code(status);
+      return { error: code };
+    }
+  }
+
+  app.get<{
+    Params: { brandId: string };
+    Querystring: { mode?: unknown; query?: unknown; pageIds?: unknown };
+  }>("/brands/:brandId/meta-ad-library/cache", async (request, reply) => {
+    let searchInput: MetaAdSearchInput;
+    if (request.query.mode === "keyword" && typeof request.query.query === "string") {
+      searchInput = { mode: "keyword", query: request.query.query };
+    } else if (request.query.mode === "page" && typeof request.query.pageIds === "string") {
+      searchInput = { mode: "page", pageIds: request.query.pageIds.split(",") };
+    } else {
+      reply.code(400);
+      return { error: "meta_ad_library_search_invalid" };
+    }
+    try {
+      normalizeMetaAdSearchInput(searchInput);
+    } catch {
+      reply.code(400);
+      return { error: "meta_ad_library_search_invalid" };
+    }
+    const cached = await repository.findMetaAdLibraryCache(
+      aiContentScope(request, request.params.brandId),
+      searchInput,
+    );
+    if (!cached) {
+      reply.code(404);
+      return { error: "meta_ad_library_search_not_found" };
+    }
+    return cached;
+  });
+
+  app.post<{
+    Params: { brandId: string };
+    Body: Record<string, unknown>;
+  }>("/brands/:brandId/meta-ad-library/search", async (request, reply) => {
+    if (!isObject(request.body)) {
+      reply.code(400);
+      return { error: "meta_ad_library_search_invalid" };
+    }
+    let searchInput: MetaAdSearchInput;
+    if (request.body.mode === "keyword" && typeof request.body.query === "string") {
+      searchInput = { mode: "keyword", query: request.body.query };
+    } else if (request.body.mode === "page" && Array.isArray(request.body.pageIds)
+      && request.body.pageIds.every((value) => typeof value === "string")) {
+      searchInput = { mode: "page", pageIds: request.body.pageIds as string[] };
+    } else {
+      reply.code(400);
+      return { error: "meta_ad_library_search_invalid" };
+    }
+    try {
+      normalizeMetaAdSearchInput(searchInput);
+    } catch {
+      reply.code(400);
+      return { error: "meta_ad_library_search_invalid" };
+    }
+    return metaAdLibraryResponse(reply, () => repository.searchMetaAdLibrary(
+      {
+        ...aiContentScope(request, request.params.brandId),
+        actorUserId: requiredAiContentActorUserId(request),
+      },
+      searchInput,
+    ));
+  });
+
+  app.get<{
+    Params: { brandId: string; searchId: string };
+    Querystring: { cursor?: unknown };
+  }>("/brands/:brandId/meta-ad-library/searches/:searchId", async (request, reply) => {
+    const cursor = request.query.cursor;
+    if (cursor !== undefined && (typeof cursor !== "string" || !/^\d+$/.test(cursor))) {
+      reply.code(400);
+      return { error: "meta_ad_library_cursor_invalid" };
+    }
+    return metaAdLibraryResponse(reply, () => repository.getMetaAdLibrarySearch(
+      aiContentScope(request, request.params.brandId),
+      request.params.searchId,
+      cursor as string | undefined,
+    ));
+  });
+
+  app.post<{
+    Params: { brandId: string; adId: string };
+  }>("/brands/:brandId/meta-ad-library/ads/:adId/save", async (request, reply) => {
+    return metaAdLibraryResponse(reply, () => repository.saveMetaAdLibraryAd({
+      ...aiContentScope(request, request.params.brandId),
+      actorUserId: requiredAiContentActorUserId(request),
+    }, request.params.adId));
+  });
+
+  app.delete<{
+    Params: { brandId: string; adId: string };
+  }>("/brands/:brandId/meta-ad-library/ads/:adId/save", async (request, reply) => {
+    const result = await metaAdLibraryResponse(reply, () => repository.removeMetaAdLibraryAd(
+      aiContentScope(request, request.params.brandId),
+      request.params.adId,
+    ));
+    if (reply.statusCode >= 400) return result;
+    reply.code(204).send();
   });
 
   app.get<{ Params: { brandId: string } }>("/brands/:brandId/billing/summary", async (request) => {

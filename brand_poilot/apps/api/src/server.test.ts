@@ -199,6 +199,18 @@ function createRepository(): ApiRepository {
     })),
     saveInstagramTrendSource: vi.fn(async () => { throw new Error("not_implemented"); }),
     removeInstagramTrendSource: vi.fn(async (_brandId, mediaId) => ({ mediaId, removed: true })),
+    searchMetaAdLibrary: vi.fn(async () => ({
+      searchId: "meta-search-1", cacheState: "fresh" as const, errorCode: null,
+      refreshedAt: "2026-08-13T00:00:00.000Z", items: [], nextCursor: null,
+    })),
+    findMetaAdLibraryCache: vi.fn(async () => null),
+    runSavedMetaAdPageRefreshes: vi.fn(async () => ({ enqueued: 0, processed: 0, succeeded: 0, failed: 0, skipped: 0 })),
+    getMetaAdLibrarySearch: vi.fn(async () => ({
+      searchId: "meta-search-1", cacheState: "fresh" as const, errorCode: null,
+      refreshedAt: "2026-08-13T00:00:00.000Z", items: [], nextCursor: null,
+    })),
+    saveMetaAdLibraryAd: vi.fn(async (_scope, adId) => ({ savedId: "meta-saved-1", adId, isSaved: true as const })),
+    removeMetaAdLibraryAd: vi.fn(async () => undefined),
     getBillingSummary: vi.fn(async () => ({
       configured: false,
       subscription: {
