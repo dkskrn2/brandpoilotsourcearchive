@@ -4608,6 +4608,7 @@ test("an installation applied through 064 has every later migration pending", as
       "079_publish_calendar_runtime.sql",
       "080_reference_channel_archive.sql",
       "081_meta_ad_library_references.sql",
+      "082_manual_brand_visual_assets.sql",
     ],
   );
 });
@@ -4660,6 +4661,7 @@ const post076SchemaMigrationIdsForTests = [
   "079_publish_calendar_runtime.sql",
   "080_reference_channel_archive.sql",
   "081_meta_ad_library_references.sql",
+  "082_manual_brand_visual_assets.sql",
 ];
 
 test("post-075 data migrations are a closed DML-only contract", async () => {
