@@ -3,6 +3,97 @@ import { ApiRequestError } from "../../lib/apiClient";
 import { classifyLibraryError, createLibraryGateway } from "./libraryGateway";
 
 describe("library gateway", () => {
+  it("uses named style preset and product image endpoints", async () => {
+    const requestJson = vi.fn().mockResolvedValue({});
+    const gateway = createLibraryGateway({ requestJson } as never);
+    const preset = {
+      contractVersion: "brand-style-preset.v1" as const,
+      name: "Editorial", description: "Clear cards",
+      visualTokens: { colors: ["red"], fonts: ["sans"], notes: ["high contrast"] },
+      referenceItemIds: ["reference-1"], isDefault: true,
+    };
+
+    await gateway.listStylePresets("brand-1");
+    await gateway.createStylePreset("brand-1", preset);
+    await gateway.updateStylePreset("brand-1", "preset-1", 2, preset);
+    await gateway.setDefaultStylePreset("brand-1", "preset-1");
+    await gateway.archiveStylePreset("brand-1", "preset-1");
+    await gateway.listProductImages("brand-1", "product-1", "version-1");
+
+    expect(requestJson).toHaveBeenNthCalledWith(1, "/brands/brand-1/style-presets", { method: "GET" });
+    expect(requestJson).toHaveBeenNthCalledWith(2, "/brands/brand-1/style-presets", { method: "POST", body: JSON.stringify(preset) });
+    expect(requestJson).toHaveBeenNthCalledWith(3, "/brands/brand-1/style-presets/preset-1", {
+      method: "PATCH", headers: { "if-match": '"2"' }, body: JSON.stringify(preset),
+    });
+    expect(requestJson).toHaveBeenNthCalledWith(4, "/brands/brand-1/style-presets/preset-1/default", { method: "POST" });
+    expect(requestJson).toHaveBeenNthCalledWith(5, "/brands/brand-1/style-presets/preset-1", { method: "DELETE" });
+    expect(requestJson).toHaveBeenNthCalledWith(6, "/brands/brand-1/products/product-1/versions/version-1/images", { method: "GET" });
+  });
+
+  it("stages, confirms, and deletes an optional product image", async () => {
+    const token = {
+      pathname: "brands/brand-1/asset-library/products/product-1/session-1/checksum-product.png",
+      clientToken: "client-token",
+      sessionId: "session-1",
+      nonce: "nonce-1",
+      expiresAt: "2026-08-14T01:00:00.000Z",
+    };
+    const confirmed = {
+      id: "image-1", productServiceId: "product-1", versionId: "version-1",
+      role: "hero", position: 1, storageUrl: `https://store.example/${token.pathname}`,
+      mimeType: "image/png", sizeBytes: 5,
+    };
+    const requestJson = vi.fn()
+      .mockResolvedValueOnce(token)
+      .mockResolvedValueOnce(confirmed)
+      .mockResolvedValueOnce(undefined);
+    const blobPut = vi.fn(async () => ({ url: confirmed.storageUrl }));
+    const gateway = createLibraryGateway({ requestJson } as never, blobPut as never);
+    const file = new File(["image"], "product.png", { type: "image/png" });
+
+    await expect(gateway.uploadProductImage(
+      "brand-1", "product-1", "version-1", file,
+      { role: "hero", position: 1, checksum: "a".repeat(64) },
+    )).resolves.toEqual(confirmed);
+    await gateway.deleteProductImage("brand-1", "product-1", "image-1");
+
+    expect(requestJson).toHaveBeenNthCalledWith(1, "/brands/brand-1/products/product-1/images/upload-token", {
+      method: "POST",
+      body: expect.stringContaining('"versionId":"version-1"'),
+    });
+    expect(blobPut).toHaveBeenCalledWith(token.pathname, file, expect.objectContaining({
+      access: "public", token: "client-token", contentType: "image/png",
+    }));
+    expect(requestJson).toHaveBeenNthCalledWith(2, "/brands/brand-1/products/product-1/images/confirm", {
+      method: "POST",
+      body: expect.stringContaining('"role":"hero","position":1'),
+    });
+    expect(requestJson).toHaveBeenNthCalledWith(3, "/brands/brand-1/products/product-1/images/image-1", { method: "DELETE" });
+  });
+
+  it("cancels the product upload reservation when confirmation fails", async () => {
+    const token = {
+      pathname: "brands/brand-1/asset-library/products/product-1/session-1/checksum-product.png",
+      clientToken: "client-token", sessionId: "session-1", nonce: "nonce-1",
+      expiresAt: "2026-08-14T01:00:00.000Z",
+    };
+    const confirmError = new Error("confirm failed");
+    const requestJson = vi.fn().mockResolvedValueOnce(token).mockRejectedValueOnce(confirmError)
+      .mockResolvedValueOnce({ status: "cleanup_pending", immediateCleanup: "succeeded" });
+    const gateway = createLibraryGateway(
+      { requestJson } as never,
+      vi.fn(async () => ({ url: `https://store.example/${token.pathname}` })) as never,
+    );
+    await expect(gateway.uploadProductImage(
+      "brand-1", "product-1", "version-1",
+      new File(["image"], "product.png", { type: "image/png" }),
+      { role: "hero", position: 1, checksum: "a".repeat(64) },
+    )).rejects.toBe(confirmError);
+    expect(requestJson).toHaveBeenNthCalledWith(
+      3, "/brands/brand-1/products/product-1/images/upload-sessions/session-1", { method: "DELETE" },
+    );
+  });
+
   it("loads a scoped reference detail for persisted style previews", async () => {
     const detail = { id: "reference-1", previewUrl: "https://blob.example/style.png" };
     const requestJson = vi.fn().mockResolvedValue(detail);

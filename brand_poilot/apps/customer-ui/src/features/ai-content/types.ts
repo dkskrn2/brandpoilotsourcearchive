@@ -485,6 +485,13 @@ export interface AiContentPublishTargetResult extends AiContentPublishTargetInpu
   errorCode: string | null;
 }
 
+export interface ManualVisualSelectionV1 {
+  contractVersion: "manual-visual-selection.v1";
+  product: null | { productServiceId: string; versionId: string };
+  stylePreset: null | { presetId: string; revision: number };
+  avatar: null | { avatarId: string; revision: number };
+}
+
 export interface AiContentGateway {
   getUsage(brandId: string): Promise<AiContentUsage>;
   getBrandContext(brandId: string): Promise<AiContentBrandContext>;
@@ -525,6 +532,15 @@ export interface AiContentGateway {
     generationId: string,
     draft: AiContentFinalizationDraftV2,
   ): Promise<AiContentGeneration>;
+  getManualVisualSelection?(
+    brandId: string,
+    generationId: string,
+  ): Promise<ManualVisualSelectionV1>;
+  updateManualVisualSelection?(
+    brandId: string,
+    generationId: string,
+    selection: ManualVisualSelectionV1,
+  ): Promise<ManualVisualSelectionV1>;
   startGenerationV2?(
     brandId: string,
     generationId: string,

@@ -32,6 +32,7 @@ export interface AvatarImage {
 }
 export interface Avatar extends BrandScope {
   id: string;
+  revision: number;
   name: string;
   description: string;
   isDefault: boolean;
@@ -95,7 +96,12 @@ export interface AssetLibraryRepository {
   setReferenceFavorite(scope: BrandScope & { actorUserId: string; referenceId: string }, favorite: boolean): Promise<ReferenceItem>;
   archiveReference(scope: BrandScope & { actorUserId: string; referenceId: string }): Promise<void>;
   getReferencePattern(scope: BrandScope & { referenceId: string }): Promise<Record<string, unknown> | null>;
-  createUploadSession(scope: BrandScope & { actorUserId: string }, kind: AssetLibraryUploadKind, upload: AssetUploadInput, avatarId?: string): Promise<AssetLibraryUploadSession>;
+  createUploadSession(
+    scope: BrandScope & { actorUserId: string },
+    kind: AssetLibraryUploadKind,
+    upload: AssetUploadInput,
+    ownerId?: string,
+  ): Promise<AssetLibraryUploadSession>;
   getUploadSession(scope: BrandScope & { sessionId: string }, fileName: string): Promise<AssetLibraryUploadSession | null>;
   confirmAvatarUpload(
     scope: BrandScope & { actorUserId: string; avatarId: string; sessionId: string },
@@ -113,6 +119,14 @@ export interface AssetLibraryRepository {
     cleanupBlobs: (storagePathPrefix: string, storagePath?: string) => Promise<void>,
     limit?: number,
   ): Promise<{ scanned: number; cancelled: number; failed: Array<{ sessionId: string; error: string }> }>;
+  cancelProductUpload(
+    scope: BrandScope & { actorUserId: string; productId: string; sessionId: string },
+    cleanupBlobs: (storagePathPrefix: string, storagePath?: string) => Promise<void>,
+    reason?: "user" | "expired",
+  ): Promise<
+    { status: "cleanup_pending"; immediateCleanup: "succeeded" | "retry_scheduled" | "already_pending" }
+    | { status: "already_cancelled" }
+  >;
   cancelReferenceUpload(
     scope: BrandScope & { actorUserId: string; sessionId: string },
     cleanupBlobs: (storagePathPrefix: string, storagePath?: string) => Promise<void>,
@@ -154,6 +168,7 @@ function image(row: Record<string, unknown>): AvatarImage {
 function avatar(row: Record<string, unknown>): Avatar {
   return {
     id: String(row.id), workspaceId: String(row.workspace_id), brandId: String(row.brand_id),
+    revision: Number(row.revision ?? 1),
     name: String(row.name), description: String(row.description), isDefault: Boolean(row.is_default),
     status: row.status as Avatar["status"], createdByUserId: String(row.created_by_user_id),
     createdAt: iso(row.created_at), updatedAt: iso(row.updated_at),
@@ -463,7 +478,7 @@ export function createAssetLibraryRepository(pool: Pool): AssetLibraryRepository
       return transaction(pool, async (client) => {
         await requireMember(client, scope);
         const result = await client.query(
-          `update brand_avatars set name=$1,description=$2
+          `update brand_avatars set name=$1,description=$2,revision=revision+1
             where id=$3 and workspace_id=$4 and brand_id=$5 and status='active' returning id`,
           [input.name, input.description, scope.avatarId, scope.workspaceId, scope.brandId],
         );
@@ -475,6 +490,10 @@ export function createAssetLibraryRepository(pool: Pool): AssetLibraryRepository
       return transaction(pool, async (client) => {
         await requireMember(client, scope);
         await addImage(client, scope, value);
+        await client.query(
+          "update brand_avatars set revision=revision+1 where id=$1 and workspace_id=$2 and brand_id=$3",
+          [scope.avatarId, scope.workspaceId, scope.brandId],
+        );
         return (await getAvatar(scope, client))!;
       });
     },
@@ -505,6 +524,10 @@ export function createAssetLibraryRepository(pool: Pool): AssetLibraryRepository
             [next.id, scope.workspaceId, scope.brandId],
           );
         }
+        await client.query(
+          "update brand_avatars set revision=revision+1 where id=$1 and workspace_id=$2 and brand_id=$3",
+          [scope.avatarId, scope.workspaceId, scope.brandId],
+        );
       });
     },
     async setDefaultAvatar(scope) {
@@ -918,14 +941,15 @@ export function createAssetLibraryRepository(pool: Pool): AssetLibraryRepository
         confidence: Number(row.confidence), analysisVersion: row.analysis_version, updatedAt: iso(row.updated_at),
       };
     },
-    async createUploadSession(scope, kind, upload, avatarId) {
+    async createUploadSession(scope, kind, upload, ownerId) {
       return transaction(pool, async (client) => {
         await requireMember(client, scope);
-        if (kind === "avatar" && !avatarId) throw new Error("asset_library_upload_scope_invalid");
+        if (kind !== "reference" && !ownerId) throw new Error("asset_library_upload_scope_invalid");
         const id = randomUUID();
         const nonce = randomBytes(24).toString("hex");
-        const part = kind === "avatar" ? "avatars" : "references";
-        const target = kind === "avatar" ? `${avatarId}/${id}` : id;
+        const part = kind === "avatar" ? "avatars"
+          : kind === "reference" ? "references" : "products";
+        const target = kind === "reference" ? id : `${ownerId}/${id}`;
         const storagePathPrefix = `brands/${scope.brandId}/asset-library/${part}/${target}/`;
         const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
         await client.query(
@@ -939,7 +963,8 @@ export function createAssetLibraryRepository(pool: Pool): AssetLibraryRepository
         );
         return {
           id, nonce, workspaceId: scope.workspaceId, brandId: scope.brandId, kind,
-          avatarId: kind === "avatar" ? avatarId! : null,
+          avatarId: kind === "avatar" ? ownerId! : null,
+          productId: kind === "product" ? ownerId! : null,
           fileName: upload.fileName, storagePathPrefix, expectedMimeType: upload.mimeType,
           expectedSizeBytes: upload.sizeBytes, expectedChecksum: upload.checksum,
           expiresAt: expiresAt.toISOString(), confirmedAt: null,
@@ -954,12 +979,16 @@ export function createAssetLibraryRepository(pool: Pool): AssetLibraryRepository
       );
       if (!result.rowCount) return null;
       const row = result.rows[0];
+      const prefix = String(row.storage_path_prefix);
+      const kind: AssetLibraryUploadKind = prefix.includes("/avatars/") ? "avatar"
+        : prefix.includes("/products/") ? "product" : "reference";
+      const ownerId = kind === "reference"
+        ? null : prefix.split(`/asset-library/${kind === "avatar" ? "avatars" : "products"}/`)[1]?.split("/")[0] ?? null;
       return {
         id: String(row.id), nonce: String(row.nonce), workspaceId: String(row.workspace_id),
-        brandId: String(row.brand_id), kind: String(row.storage_path_prefix).includes("/avatars/") ? "avatar" : "reference",
-        avatarId: String(row.storage_path_prefix).includes("/avatars/")
-          ? String(row.storage_path_prefix).split("/avatars/")[1]?.split("/")[0] ?? null
-          : null,
+        brandId: String(row.brand_id), kind,
+        avatarId: kind === "avatar" ? ownerId : null,
+        productId: kind === "product" ? ownerId : null,
         fileName: row.file_name ? String(row.file_name) : fileName, storagePathPrefix: String(row.storage_path_prefix),
         expectedMimeType: String(row.expected_mime_type), expectedSizeBytes: Number(row.expected_size_bytes),
         expectedChecksum: String(row.expected_checksum), expiresAt: iso(row.expires_at),
@@ -994,6 +1023,10 @@ export function createAssetLibraryRepository(pool: Pool): AssetLibraryRepository
           return { status: "staged", avatarId: scope.avatarId, sessionId: scope.sessionId };
         }
         await addImage(client, scope, upload);
+        await client.query(
+          "update brand_avatars set revision=revision+1 where id=$1 and workspace_id=$2 and brand_id=$3",
+          [scope.avatarId, scope.workspaceId, scope.brandId],
+        );
         await client.query(
           "delete from reference_upload_sessions where id=$1 and workspace_id=$2 and brand_id=$3",
           [scope.sessionId, scope.workspaceId, scope.brandId],
@@ -1225,6 +1258,67 @@ export function createAssetLibraryRepository(pool: Pool): AssetLibraryRepository
       }
       return { scanned: candidates.rows.length, cancelled, failed };
     },
+    async cancelProductUpload(scope, cleanupBlobs, reason = "user") {
+      const pending = await transaction(pool, async (client) => {
+        if (reason === "user") await requireMember(client, scope);
+        await client.query("select pg_advisory_xact_lock(hashtextextended($1,0))", [scope.sessionId]);
+        const expectedPrefix =
+          `brands/${scope.brandId}/asset-library/products/${scope.productId}/${scope.sessionId}/`;
+        const receipt = await client.query(
+          "select * from reference_upload_cancellation_receipts where session_id=$1 for update",
+          [scope.sessionId],
+        );
+        if (receipt.rowCount) {
+          const row = receipt.rows[0];
+          if (String(row.workspace_id) !== scope.workspaceId || String(row.brand_id) !== scope.brandId
+            || String(row.created_by_user_id) !== scope.actorUserId
+            || String(row.storage_path_prefix) !== expectedPrefix) {
+            throw new Error("asset_library_upload_session_not_found");
+          }
+          return row.status === "completed" ? { terminal: true as const } : { existing: true as const };
+        }
+        const session = await client.query(
+          "select * from reference_upload_sessions where id=$1 and workspace_id=$2 and brand_id=$3 for update",
+          [scope.sessionId, scope.workspaceId, scope.brandId],
+        );
+        if (!session.rowCount) throw new Error("asset_library_upload_session_not_found");
+        const row = session.rows[0];
+        if (String(row.created_by_user_id) !== scope.actorUserId) throw new Error("asset_library_upload_actor_mismatch");
+        if (String(row.storage_path_prefix) !== expectedPrefix) throw new Error("asset_library_upload_session_not_found");
+        const storagePath = row.storage_path ? String(row.storage_path) : undefined;
+        if (storagePath && !storagePath.startsWith(expectedPrefix)) throw new Error("asset_library_upload_path_mismatch");
+        const transitioned = await client.query(
+          `update reference_upload_sessions set cancelled_at=coalesce(cancelled_at,now())
+            where id=$1 and workspace_id=$2 and brand_id=$3 and confirmed_at is null returning *`,
+          [scope.sessionId, scope.workspaceId, scope.brandId],
+        );
+        if (Number(transitioned.rowCount ?? 0) !== 1) throw new Error("asset_library_upload_session_not_found");
+        await client.query(
+          `insert into reference_upload_cancellation_receipts(
+            session_id,workspace_id,brand_id,created_by_user_id,storage_path,
+            storage_path_prefix,token_expires_at,reason,status,next_attempt_at
+          ) values($1,$2,$3,$4,$5,$6,$7,$8,'pending',
+            greatest($7::timestamptz + interval '1 minute',now()))
+          on conflict(session_id) do nothing`,
+          [scope.sessionId, scope.workspaceId, scope.brandId, scope.actorUserId,
+            storagePath ?? null, expectedPrefix, row.expires_at, reason],
+        );
+        return { existing: false as const, prefix: expectedPrefix, storagePath };
+      });
+      if ("terminal" in pending) return { status: "already_cancelled" };
+      if (pending.existing) return { status: "cleanup_pending", immediateCleanup: "already_pending" };
+      try {
+        await cleanupBlobs(pending.prefix, pending.storagePath);
+        return { status: "cleanup_pending", immediateCleanup: "succeeded" };
+      } catch (error) {
+        await pool.query(
+          `update reference_upload_cancellation_receipts
+            set attempt_count=attempt_count+1,last_error=$2 where session_id=$1 and status='pending'`,
+          [scope.sessionId, error instanceof Error ? error.message : "unknown"],
+        );
+        return { status: "cleanup_pending", immediateCleanup: "retry_scheduled" };
+      }
+    },
     async cancelReferenceUpload(scope, cleanupBlobs, reason = "user") {
       const pending = await transaction(pool, async (client) => {
         if (reason === "user") await requireMember(client, scope);
@@ -1311,7 +1405,8 @@ export function createAssetLibraryRepository(pool: Pool): AssetLibraryRepository
           from reference_upload_sessions session
           left join reference_upload_cancellation_receipts receipt
             on receipt.session_id=session.id
-          where session.storage_path_prefix like '%/asset-library/references/%'
+          where (session.storage_path_prefix like '%/asset-library/references/%'
+              or session.storage_path_prefix like '%/asset-library/products/%')
             and (
               (receipt.status='pending' and receipt.next_attempt_at <= now()
                 and receipt.token_expires_at < now())
@@ -1327,10 +1422,19 @@ export function createAssetLibraryRepository(pool: Pool): AssetLibraryRepository
       let preserved = 0;
       for (const candidate of candidates.rows) {
         const sessionId = String(candidate.id);
-        const expectedPrefix =
-          `brands/${candidate.brand_id}/asset-library/references/${sessionId}/`;
+        const referencePrefix = `brands/${candidate.brand_id}/asset-library/references/${sessionId}/`;
+        const rawPrefix = String(candidate.storage_path_prefix);
+        const productPrefixMatch = rawPrefix.match(new RegExp(
+          `^brands/${candidate.brand_id}/asset-library/products/([^/]+)/${sessionId}/$`, "i",
+        ));
+        const expectedPrefix = rawPrefix === referencePrefix
+          ? referencePrefix
+          : productPrefixMatch
+            ? `brands/${candidate.brand_id}/asset-library/products/${productPrefixMatch[1]}/${sessionId}/`
+            : "";
+        const referenceUpload = expectedPrefix === referencePrefix;
         try {
-          if (String(candidate.storage_path_prefix) !== expectedPrefix) {
+          if (!expectedPrefix || rawPrefix !== expectedPrefix) {
             throw new Error("asset_library_upload_path_mismatch");
           }
           let row = candidate;
@@ -1427,7 +1531,7 @@ export function createAssetLibraryRepository(pool: Pool): AssetLibraryRepository
             // A newly expired reservation enters the one-minute late-upload grace.
             continue;
           }
-          const consumed = await pool.query(
+          const consumed = referenceUpload ? await pool.query(
             `select item.id from reference_items item
               join storage_artifacts artifact
                 on artifact.id=item.storage_artifact_id
@@ -1438,7 +1542,7 @@ export function createAssetLibraryRepository(pool: Pool): AssetLibraryRepository
                 and artifact.path like $3
               limit 1`,
             [row.workspace_id, row.brand_id, `${expectedPrefix}%`],
-          );
+          ) : { rowCount: 0 };
           if (consumed.rowCount) {
             await transaction(pool, async (client) => {
               await client.query(

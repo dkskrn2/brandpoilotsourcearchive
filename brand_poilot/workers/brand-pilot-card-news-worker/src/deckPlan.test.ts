@@ -17,6 +17,7 @@ function input() {
     },
     researchEvidence: { items: [{ id: id(1) }, { id: id(2) }] },
     product: { images: [{ assetId: id(3) }] },
+    references: { brandStyleImages: [{ referenceItemId: id(4), tags: ["avatar"] }] },
   } as never;
 }
 
@@ -43,6 +44,7 @@ function deck() {
       layoutArchetype: index === 2 ? "before_after" : "editorial_freeform",
       evidenceIds: [id(index === 3 ? 2 : 1)],
       productImageAssetIds: index === 3 ? [id(3)] : [],
+      avatarImageAssetIds: index === 1 ? [id(4)] : [],
     })),
   };
 }
@@ -68,6 +70,7 @@ describe("card deck submission", () => {
     ["index", (value: any) => { value.scenes[0].index = 2; }, "card_deck_editorial_plan_invalid"],
     ["unknown evidence", (value: any) => { value.scenes[0].evidenceIds = [id(99)]; }, "evidence_id_unknown"],
     ["unknown product", (value: any) => { value.scenes[0].productImageAssetIds = [id(99)]; }, "product_image_id_unknown"],
+    ["unknown avatar", (value: any) => { value.scenes[0].avatarImageAssetIds = [id(99)]; }, "avatar_image_id_unknown"],
   ])("rejects %s", (_name, mutate, error) => {
     const value = deck();
     mutate(value);

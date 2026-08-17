@@ -56,6 +56,17 @@ import {
   type VerifiedGeneratedContentCatalog,
 } from "@brand-pilot/content-contracts";
 import {
+  type FrozenManualVisualSelectionV1,
+  type ManualVisualSelectionV1,
+  parseManualVisualSelectionV1,
+} from "@brand-pilot/content-contracts/manual-visual-selection";
+import {
+  materializeFrozenManualVisualAssets,
+  prepareManualVisualSelection,
+  saveManualVisualSelection,
+  sealManualVisualSelection,
+} from "./aiContentManualVisualSelection.js";
+import {
   compileCardDeckPlanDraftV1,
   parseCardDeckEditorialPlanV1,
 } from "@brand-pilot/content-contracts/card-deck-editorial-plan";
@@ -335,6 +346,10 @@ export interface AiContentRepository extends AiContentAttachmentLifecycleReposit
   updateAiContentFinalizationDraft(input: BrandGenerationScope & AuthenticatedBrandScope & {
     draft: ContentFinalizationDraftV2;
   }): Promise<AiContentGenerationRecord>;
+  getAiContentManualVisualSelection(input: BrandGenerationScope): Promise<ManualVisualSelectionV1 | null>;
+  updateAiContentManualVisualSelection(
+    input: BrandGenerationScope & AuthenticatedBrandScope & { selection: ManualVisualSelectionV1 },
+  ): Promise<ManualVisualSelectionV1>;
   startAiContentGenerationV3(
     input: BrandGenerationScope & AuthenticatedBrandScope & ContentGenerationStartV2 & {
       usageDate: string;
@@ -2141,6 +2156,8 @@ async function startAiContentGenerationV3Transaction(input: {
       && !isDeepStrictEqual(finalization, command.expectedFinalization)) {
       throw new Error("ai_content_finalization_changed");
     }
+    const preparedVisualSelection = await prepareManualVisualSelection(client, command);
+    const frozenVisualSelection: FrozenManualVisualSelectionV1 = preparedVisualSelection.frozen;
     const requestFingerprint = proposalSha256({
       generationId: command.generationId,
       contractVersion: command.contractVersion,
@@ -2151,6 +2168,7 @@ async function startAiContentGenerationV3Transaction(input: {
       outputFormat: generation.output_format,
       purpose: generation.purpose,
       finalization,
+      manualVisualSelection: frozenVisualSelection,
     });
 
     await client.query("select pg_advisory_xact_lock(hashtextextended($1,0))", [
@@ -2164,6 +2182,7 @@ async function startAiContentGenerationV3Transaction(input: {
     );
     const existingOperation = operationResult.rows[0] as Record<string, unknown> | undefined;
     if (existingOperation) {
+      if (!preparedVisualSelection.alreadyFrozen) throw new Error("ai_content_generation_start_conflict");
       if (String(existingOperation.workspace_id) !== command.workspaceId
         || String(existingOperation.generation_id) !== command.generationId
         || String(existingOperation.request_fingerprint_sha256) !== requestFingerprint
@@ -2244,7 +2263,37 @@ async function startAiContentGenerationV3Transaction(input: {
       selection,
       finalization,
     });
-    const assembly = assembleAiContentFixedInput(source);
+    const baseAssembly = assembleAiContentFixedInput(source);
+    const materializedVisualAssets = await materializeFrozenManualVisualAssets(
+      client,
+      command,
+      frozenVisualSelection,
+    );
+    const selectedInput = parseCanonicalContentGenerationInputV3({
+      ...baseAssembly.input,
+      product: materializedVisualAssets.product,
+      references: {
+        ...baseAssembly.input.references,
+        brandStyleImages: materializedVisualAssets.brandStyleImages,
+        avatarStyleImageId: materializedVisualAssets.avatarStyleImageId,
+      },
+    });
+    if (selectedInput.outputSettings.purpose === "informational" && selectedInput.product !== null) {
+      throw new Error("informational_product_must_be_null");
+    }
+    if (selectedInput.outputSettings.purpose === "marketing"
+      && (selectedInput.product === null
+        || selectedInput.selectedProposal.purposeDetails.kind !== "marketing"
+        || selectedInput.selectedProposal.purposeDetails.productId !== selectedInput.product.id)) {
+      throw new Error("marketing_product_snapshot_mismatch");
+    }
+    assertPlannerPromptBinding(selectedInput, baseAssembly.binding);
+    const assembly = {
+      ...baseAssembly,
+      input: selectedInput,
+      canonicalJson: canonicalProposalJson(selectedInput),
+      contentHash: proposalSha256(selectedInput),
+    };
     const outputCount = assembly.input.outputSettings.outputCount;
 
     await client.query("select pg_advisory_xact_lock(hashtextextended($1,0))", [
@@ -2260,6 +2309,8 @@ async function startAiContentGenerationV3Transaction(input: {
     if (Number(usageResult.rows[0]?.generation_count ?? 0) + outputCount > command.dailyGenerationLimit) {
       throw new Error("ai_content_limit_reached");
     }
+
+    await sealManualVisualSelection(client, command, preparedVisualSelection);
 
     const operationId = randomUUID();
     const reservationId = randomUUID();
@@ -2319,6 +2370,7 @@ async function startAiContentGenerationV3Transaction(input: {
             generationId: command.generationId,
             outputId,
             contentGenerationInput: assembly.input,
+            manualVisualSelection: frozenVisualSelection,
             planningMode: "selected_proposal",
             operationId,
           })],
@@ -2532,6 +2584,12 @@ export function createAiContentRepository(pool: Pool, options: AiContentReposito
             attachmentIds: [],
           },
         };
+        const initialVisualSelection: ManualVisualSelectionV1 = {
+          contractVersion: "manual-visual-selection.v1",
+          product: null,
+          stylePreset: null,
+          avatar: null,
+        };
         const selectionIdentity = `proposal-v2:${proposalBatchId}:${proposalId}:${input.idempotencyKey}`;
         if (proposal.generation_id) {
           const linked = await client.query(
@@ -2552,6 +2610,12 @@ export function createAiContentRepository(pool: Pool, options: AiContentReposito
             || !isDeepStrictEqual(object(existing.draft_json), expectedDraft)) {
             throw new Error("ai_content_proposal_selection_conflict");
           }
+          const visualSelection = await client.query(
+            `select selection_json from manual_ai_content_visual_selections
+              where generation_id=$1 and workspace_id=$2 and brand_id=$3`,
+            [proposal.generation_id, input.workspaceId, input.brandId],
+          );
+          if (!visualSelection.rowCount) throw new Error("ai_content_proposal_selection_conflict");
           await client.query("COMMIT");
           return mapGeneration(existing);
         }
@@ -2585,6 +2649,11 @@ export function createAiContentRepository(pool: Pool, options: AiContentReposito
             where id=$1 and workspace_id=$3 and brand_id=$4 and status='selected'`,
           [input.proposalId, generationId, input.workspaceId, input.brandId],
         );
+        await saveManualVisualSelection(client, {
+          workspaceId: input.workspaceId,
+          brandId: input.brandId,
+          generationId,
+        }, initialVisualSelection);
         await client.query("COMMIT");
         return mapGeneration(created.rows[0]);
       } catch (error) {
@@ -2746,6 +2815,38 @@ export function createAiContentRepository(pool: Pool, options: AiContentReposito
       } finally {
         client.release();
       }
+    },
+
+    async getAiContentManualVisualSelection(input) {
+      const result = await pool.query(
+        `select selection_json from manual_ai_content_visual_selections
+          where generation_id=$1 and workspace_id=$2 and brand_id=$3`,
+        [input.generationId, input.workspaceId, input.brandId],
+      );
+      if (!result.rowCount) return null;
+      return parseManualVisualSelectionV1(result.rows[0].selection_json);
+    },
+
+    async updateAiContentManualVisualSelection(input) {
+      const client = await pool.connect();
+      try {
+        await client.query("BEGIN");
+        await assertAiContentWritable(client);
+        await assertActiveAiContentActor(client, input);
+        const generation = await scopedGeneration(client, input, true);
+        if (!generation) throw new Error("ai_content_generation_not_found");
+        const draft = object(generation.draft_json);
+        if (generation.status !== "draft" || draft.origin !== "proposal-v2"
+          || generation.attachments_locked_at) {
+          throw new Error("manual_visual_selection_locked");
+        }
+        const selection = await saveManualVisualSelection(client, input, input.selection);
+        await client.query("COMMIT");
+        return selection;
+      } catch (error) {
+        await client.query("ROLLBACK");
+        throw error;
+      } finally { client.release(); }
     },
 
     async startAiContentGenerationV3(input, snapshots, now = () => new Date()) {

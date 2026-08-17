@@ -2,6 +2,7 @@ import {
   parseContentGenerationInputV3,
   type ContentGenerationInputV3,
 } from "@brand-pilot/content-contracts";
+import { parseFrozenManualVisualSelectionV1, type FrozenManualVisualSelectionV1 } from "@brand-pilot/content-contracts/manual-visual-selection";
 import {
   compileReelStoryboardDraftV1,
   parseReelStoryboardV1,
@@ -72,6 +73,10 @@ export function parseReelInput(value: unknown, job: ReelJob): ContentGenerationI
   return input;
 }
 
+export function parseReelManualVisualSelection(value: unknown): FrozenManualVisualSelectionV1 {
+  return parseFrozenManualVisualSelectionV1(value);
+}
+
 export function parseReelPlanDraftForInput(value: unknown, input: ContentGenerationInputV3): ReelPlanDraftV1 {
   const draft = parseReelPlanDraftV1(value);
   const hashtags = draft.content.hashtags.map((hashtag) => hashtag.trim());
@@ -128,6 +133,15 @@ export function parseReelStoryboardSubmissionForInput(
 ): ReelStoryboardSubmission {
   try {
     const storyboard = parseReelStoryboardV1(value);
+    const avatarImageIds = new Set(input.references.brandStyleImages
+      .filter(({ tags }) => tags.includes("avatar"))
+      .map(({ referenceItemId }) => referenceItemId));
+    for (const scene of storyboard.scenes) {
+      assertDuplicateFreeSubset(
+        scene.avatarImageAssetIds ?? [], avatarImageIds,
+        "reel_storyboard_avatar_image_id_duplicate", "reel_storyboard_avatar_image_id_unknown",
+      );
+    }
     const planDraft = parseReelPlanDraftForInput(
       compileReelStoryboardDraftV1(storyboard, input.selectedProposal.outline),
       input,
@@ -149,6 +163,8 @@ export function parseReelStoryboardSubmissionForInput(
       "reel_plan_draft_evidence_id_unknown",
       "reel_plan_draft_product_image_id_duplicate",
       "reel_plan_draft_product_image_id_unknown",
+      "reel_storyboard_avatar_image_id_duplicate",
+      "reel_storyboard_avatar_image_id_unknown",
     ].includes(error.message)) throw error;
     throw new Error("reel_structured_draft_invalid");
   }

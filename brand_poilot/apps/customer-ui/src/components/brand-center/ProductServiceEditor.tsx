@@ -6,6 +6,7 @@ import {
   type ProductServiceItem,
   type ProductServiceProfile,
 } from "../../features/libraries/libraryGateway";
+import { ProductServiceImageManager } from "./ProductServiceImageManager";
 
 const emptyProfile = (): ProductServiceProfile => ({
   contractVersion: "product-service.v1",
@@ -176,5 +177,11 @@ export function ProductServiceEditor({
         {dirty ? <span className="brand-center-dirty">저장하지 않은 변경</span> : null}
       </div>
     </form>
+    {item && version ? <ProductServiceImageManager
+      brandId={brandId}
+      productId={item.id}
+      versionId={version.id}
+      gateway={gateway}
+    /> : null}
   </section>;
 }

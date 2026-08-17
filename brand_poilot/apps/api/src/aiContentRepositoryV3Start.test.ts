@@ -73,6 +73,14 @@ const finalization = {
   contractVersion: "content-finalization-draft.v2", avatarStyleImageId: null,
   userImageInstruction: null, attachmentIds: [],
 };
+const manualVisualSelection = {
+  contractVersion: "manual-visual-selection.v1",
+  product: null, stylePreset: null, avatar: null,
+} as const;
+const frozenManualVisualSelection = {
+  contractVersion: "manual-visual-selection-frozen.v1",
+  product: null, stylePreset: null, avatar: null,
+} as const;
 
 async function binding() {
   const catalogPath = new URL(import.meta.resolve("@brand-pilot/content-contracts/generated/content-catalog.json"));
@@ -102,6 +110,8 @@ function harness(options: {
 } = {}) {
   const statements: Array<{ sql: string; params: unknown[] }> = [];
   let replayBinding: Awaited<ReturnType<typeof binding>>;
+  let frozenVisualSelection: typeof frozenManualVisualSelection | null = options.replay
+    ? frozenManualVisualSelection : null;
   const generation = {
     id: id.generation, workspace_id: id.workspace, brand_id: id.brand, output_format: "reel", purpose: "informational",
     title: "릴스", status: options.replay || options.startedWithoutOperationMatch ? "queued" : "draft",
@@ -122,12 +132,27 @@ function harness(options: {
       if (["BEGIN", "COMMIT", "ROLLBACK"].includes(sql)) return { rows: [], rowCount: 0 };
       if (sql === "select assert_ai_content_writable()") return { rows: [{ ok: true }], rowCount: 1 };
       if (sql.includes("from workspace_members member")) return { rows: [{ ok: 1 }], rowCount: 1 };
+      if (sql.includes("from manual_ai_content_visual_selections") && sql.includes("for update")) return { rows: [{
+        selection_json: manualVisualSelection,
+        selection_sha256: proposalSha256(manualVisualSelection),
+        frozen_json: frozenVisualSelection,
+        frozen_sha256: frozenVisualSelection ? proposalSha256(frozenVisualSelection) : null,
+      }], rowCount: 1 };
+      if (sql.startsWith("update manual_ai_content_visual_selections")) {
+        frozenVisualSelection = JSON.parse(String(params[3]));
+        return { rows: [{
+          selection_json: manualVisualSelection,
+          selection_sha256: proposalSha256(manualVisualSelection),
+          frozen_json: frozenVisualSelection,
+          frozen_sha256: proposalSha256(frozenVisualSelection),
+        }], rowCount: 1 };
+      }
       if (sql.startsWith("update ai_content_generations")) return { rows: [{ ...generation, status: "queued", operation_id: id.operation, generation_input_snapshot: frozenInput, attachments_locked_at: NOW }], rowCount: 1 };
       if (sql.includes("from ai_content_generations")) return { rows: [generation], rowCount: 1 };
       if (sql.includes("from ai_content_proposal_batches")) return { rows: [{ id: id.batch, workspace_id: id.workspace, brand_id: id.brand, status: "ready", purpose: "informational", input_snapshot_json: { baseInput, replayFingerprint: HASH, resumeInput: { contractVersion: "content-orchestration.v2", brandId: id.brand, purpose: "informational", seed: { kind: "topic_text", title: "주제" }, contentInstruction: null, productId: null, outputSettings: { outputFormat: "reel", channelTargets: ["instagram"], aspectRatio: "9:16", outputCount: 1 } } }, request_json: {} }], rowCount: 1 };
       if (sql.includes("from ai_content_proposals") && sql.includes("for update")) return { rows: [{ id: id.proposal, batch_id: id.batch, workspace_id: id.workspace, brand_id: id.brand, status: "selected", generation_id: id.generation, proposal_json: selectedProposal, successful_model_attempt_id: id.attempt, successful_proposal_job_id: id.job, final_invocation_ordinal: 1 }], rowCount: 1 };
       if (sql.includes("from ai_content_generation_operations")) {
-        return options.replay ? { rows: [{ id: id.operation, workspace_id: id.workspace, brand_id: id.brand, generation_id: options.operationGenerationId ?? id.generation, request_fingerprint_sha256: options.operationFingerprint ?? proposalSha256({ generationId: id.generation, contractVersion: "content-generation-start.v2", workspaceId: id.workspace, brandId: id.brand, proposalBatchId: id.batch, proposalId: id.proposal, outputFormat: "reel", purpose: "informational", finalization }), status: "started" }], rowCount: 1 } : { rows: [], rowCount: 0 };
+        return options.replay ? { rows: [{ id: id.operation, workspace_id: id.workspace, brand_id: id.brand, generation_id: options.operationGenerationId ?? id.generation, request_fingerprint_sha256: options.operationFingerprint ?? proposalSha256({ generationId: id.generation, contractVersion: "content-generation-start.v2", workspaceId: id.workspace, brandId: id.brand, proposalBatchId: id.batch, proposalId: id.proposal, outputFormat: "reel", purpose: "informational", finalization, manualVisualSelection: frozenManualVisualSelection }), status: "started" }], rowCount: 1 } : { rows: [], rowCount: 0 };
       }
       if (sql.includes("from ai_content_generation_input_snapshots snapshot")) {
         replayBinding = await binding();

@@ -42,6 +42,36 @@ export interface ProductServiceItem {
   draft: ProductServiceVersion | null;
 }
 
+export interface ProductServiceImageAsset {
+  id: string;
+  productServiceId: string;
+  versionId: string;
+  role: "hero" | "detail";
+  position: number;
+  storageUrl: string;
+  mimeType: string;
+  sizeBytes: number;
+}
+
+export interface BrandStylePresetInput {
+  contractVersion: "brand-style-preset.v1";
+  name: string;
+  description: string;
+  visualTokens: { colors: string[]; fonts: string[]; notes: string[] };
+  referenceItemIds: string[];
+  isDefault: boolean;
+}
+
+export interface BrandStylePreset extends Omit<BrandStylePresetInput, "contractVersion"> {
+  id: string;
+  workspaceId: string;
+  brandId: string;
+  status: "active" | "archived";
+  revision: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export type ManualWikiItemType = "faq" | "policy" | "how_to" | "guide";
 export type WikiBuildStatus =
   | "idle"
@@ -212,6 +242,7 @@ export interface Avatar {
   id: string;
   workspaceId: string;
   brandId: string;
+  revision: number;
   name: string;
   description: string;
   isDefault: boolean;
@@ -334,8 +365,115 @@ function validateReferenceFile(file: File) {
   return mimeType;
 }
 
+function validateProductImageFile(file: File) {
+  const mimeType = file.type.toLowerCase();
+  if (!(["image/png", "image/jpeg", "image/webp"] as string[]).includes(mimeType)) {
+    throw new Error("product_image_upload_mime_invalid");
+  }
+  if (file.size <= 0 || file.size > 5 * 1024 * 1024) {
+    throw new Error("product_image_upload_size_invalid");
+  }
+  return mimeType;
+}
+
 export function createLibraryGateway(client: Client = apiClient(), blobPut: typeof putBlob = putBlob) {
   return {
+    listStylePresets(brandId: string) {
+      return client.requestJson<BrandStylePreset[]>(`/brands/${brandId}/style-presets`, { method: "GET" });
+    },
+    createStylePreset(brandId: string, input: BrandStylePresetInput) {
+      return client.requestJson<BrandStylePreset>(`/brands/${brandId}/style-presets`, {
+        method: "POST", body: JSON.stringify(input),
+      });
+    },
+    updateStylePreset(brandId: string, presetId: string, revision: number, input: BrandStylePresetInput) {
+      return client.requestJson<BrandStylePreset>(`/brands/${brandId}/style-presets/${presetId}`, {
+        method: "PATCH", headers: { "if-match": `"${revision}"` }, body: JSON.stringify(input),
+      });
+    },
+    setDefaultStylePreset(brandId: string, presetId: string) {
+      return client.requestJson<BrandStylePreset>(`/brands/${brandId}/style-presets/${presetId}/default`, { method: "POST" });
+    },
+    archiveStylePreset(brandId: string, presetId: string) {
+      return client.requestJson<void>(`/brands/${brandId}/style-presets/${presetId}`, { method: "DELETE" });
+    },
+    listProductImages(brandId: string, productId: string, versionId: string) {
+      return client.requestJson<ProductServiceImageAsset[]>(
+        `/brands/${brandId}/products/${productId}/versions/${versionId}/images`,
+        { method: "GET" },
+      );
+    },
+    async uploadProductImage(
+      brandId: string,
+      productId: string,
+      versionId: string,
+      file: File,
+      options: {
+        role: "hero" | "detail";
+        position: number;
+        checksum?: string;
+        signal?: AbortSignal;
+        onProgress?: (value: number) => void;
+      },
+    ) {
+      const mimeType = validateProductImageFile(file);
+      const onProgress = options.onProgress ?? (() => undefined);
+      const metadata = {
+        versionId,
+        fileName: file.name,
+        mimeType,
+        sizeBytes: file.size,
+        checksum: options.checksum ?? await sha256(file, options.signal),
+      };
+      onProgress(10);
+      const token = await client.requestJson<{
+        pathname: string;
+        clientToken: string;
+        sessionId: string;
+        nonce: string;
+        expiresAt: string;
+      }>(`/brands/${brandId}/products/${productId}/images/upload-token`, {
+        method: "POST",
+        body: JSON.stringify(metadata),
+        ...(options.signal ? { signal: options.signal } : {}),
+      });
+      try {
+        const stored = await blobPut(token.pathname, file, {
+          access: "public", token: token.clientToken, contentType: mimeType, abortSignal: options.signal,
+          onUploadProgress: ({ percentage }) => onProgress(10 + Math.round(percentage * 0.6)),
+        });
+        onProgress(70);
+        const confirmed = await client.requestJson<ProductServiceImageAsset>(
+          `/brands/${brandId}/products/${productId}/images/confirm`,
+          {
+            method: "POST",
+            body: JSON.stringify({
+              ...metadata, sessionId: token.sessionId, nonce: token.nonce,
+              storagePath: token.pathname, storageUrl: stored.url,
+              role: options.role, position: options.position,
+            }),
+            ...(options.signal ? { signal: options.signal } : {}),
+          },
+        );
+        onProgress(100);
+        return confirmed;
+      } catch (error) {
+        await client.requestJson(
+          `/brands/${brandId}/products/${productId}/images/upload-sessions/${token.sessionId}`,
+          { method: "DELETE" },
+        ).catch(() => undefined);
+        throw error;
+      }
+    },
+    deleteProductImage(brandId: string, productId: string, imageId: string) {
+      return client.requestJson<void>(
+        `/brands/${brandId}/products/${productId}/images/${imageId}`,
+        { method: "DELETE" },
+      );
+    },
+    listReferenceItems(brandId: string) {
+      return client.requestJson<ReferenceItem[]>(`/brands/${brandId}/references`, { method: "GET" });
+    },
     getReference(brandId: string, referenceId: string) {
       return client.requestJson<ReferenceDetail>(
         `/brands/${brandId}/references/${referenceId}`,

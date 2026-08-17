@@ -33,10 +33,12 @@ import {
 import {
   confirmAssetLibraryUpload,
   cleanupAssetLibraryUploadPrefix,
+  deleteAssetLibraryBlob,
   issueAssetLibraryUploadToken,
   validateAssetLibraryUpload,
   type AssetLibraryUploadKind,
 } from "./assetLibraryUpload.js";
+import { parseBrandStylePresetInput } from "./manualVisualAssetsContracts.js";
 
 interface BrandCenterRouteOptions {
   repository: ApiRepository;
@@ -89,6 +91,45 @@ function confirmBody(value: unknown) {
     throw new Error("asset_upload_validation_failed:confirm");
   }
   return { row, upload, sessionId: row.sessionId, nonce: row.nonce, storagePath: row.storagePath, storageUrl: row.storageUrl };
+}
+
+function productUploadBody(value: unknown) {
+  const source = record(value, "asset_upload_validation_failed:root");
+  const allowed = ["versionId", "fileName", "mimeType", "sizeBytes", "checksum"];
+  if (Object.keys(source).some((key) => !allowed.includes(key)) || typeof source.versionId !== "string") {
+    throw new Error("asset_upload_validation_failed:product");
+  }
+  return {
+    versionId: source.versionId,
+    upload: parseAssetUploadInput({
+      fileName: source.fileName,
+      mimeType: source.mimeType,
+      sizeBytes: source.sizeBytes,
+      checksum: source.checksum,
+    }),
+  };
+}
+
+function productConfirmBody(value: unknown) {
+  const parsed = confirmBody(value);
+  const allowed = [
+    "sessionId", "nonce", "storagePath", "storageUrl", "fileName", "mimeType", "sizeBytes", "checksum",
+    "versionId", "role", "position",
+  ];
+  if (Object.keys(parsed.row).some((key) => !allowed.includes(key))
+    || typeof parsed.row.versionId !== "string"
+    || (parsed.row.role !== "hero" && parsed.row.role !== "detail")
+    || !Number.isSafeInteger(parsed.row.position)
+    || Number(parsed.row.position) < 1
+    || Number(parsed.row.position) > 5) {
+    throw new Error("manual_product_images_validation_failed:confirm");
+  }
+  return {
+    ...parsed,
+    versionId: parsed.row.versionId,
+    role: parsed.row.role,
+    position: Number(parsed.row.position),
+  } as const;
 }
 
 export function registerBrandCenterRoutes(
@@ -297,6 +338,186 @@ export function registerBrandCenterRoutes(
       if (!repository.listProductServices) throw new Error("product_library_not_configured");
       const include = request.query.include?.split(",").map((value) => value.trim()).filter(Boolean) ?? [];
       return repository.listProductServices(options.scope(request, request.params.brandId), include);
+    },
+  );
+
+  app.get<{ Params: { brandId: string; productId: string; versionId: string } }>(
+    "/brands/:brandId/products/:productId/versions/:versionId/images",
+    async (request) => {
+      if (!repository.listProductServiceImageAssets) throw new Error("product_service_image_not_configured");
+      return repository.listProductServiceImageAssets({
+        ...options.scope(request, request.params.brandId),
+        productServiceId: request.params.productId,
+        versionId: request.params.versionId,
+      });
+    },
+  );
+
+  app.post<{ Params: { brandId: string; productId: string }; Body: unknown }>(
+    "/brands/:brandId/products/:productId/images/upload-token",
+    async (request) => {
+      if (!repository.createUploadSession) throw new Error("asset_library_not_configured");
+      if (!repository.getProductService) throw new Error("product_service_not_configured");
+      if (!options.assetLibraryUpload) throw new Error("asset_library_upload_storage_not_configured");
+      const parsed = productUploadBody(request.body);
+      const scope = options.scope(request, request.params.brandId);
+      const product = await repository.getProductService({ ...scope, itemId: request.params.productId });
+      if (!product || ![product.activeVersion?.id, product.draft?.id].includes(parsed.versionId)) {
+        throw new Error("product_service_version_not_found");
+      }
+      const upload = validateAssetLibraryUpload("product", parsed.upload);
+      const session = await repository.createUploadSession(
+        { ...scope, actorUserId: requireActor(options, request) }, "product", upload, request.params.productId,
+      );
+      const token = await issueAssetLibraryUploadToken({
+        brandId: request.params.brandId, productId: request.params.productId,
+        sessionId: session.id, kind: "product", upload, expiresAt: session.expiresAt,
+      }, {
+        token: options.assetLibraryUpload.readWriteToken,
+        generateClientToken: options.assetLibraryUpload.generateClientToken,
+      });
+      return { ...token, sessionId: session.id, nonce: session.nonce, expiresAt: session.expiresAt };
+    },
+  );
+
+  app.delete<{ Params: { brandId: string; productId: string; sessionId: string } }>(
+    "/brands/:brandId/products/:productId/images/upload-sessions/:sessionId",
+    async (request) => {
+      if (!repository.cancelProductUpload) throw new Error("asset_library_not_configured");
+      if (!options.assetLibraryUpload) throw new Error("asset_library_upload_storage_not_configured");
+      return repository.cancelProductUpload(
+        {
+          ...options.scope(request, request.params.brandId), actorUserId: requireActor(options, request),
+          productId: request.params.productId, sessionId: request.params.sessionId,
+        },
+        (storagePathPrefix, storagePath) => cleanupAssetLibraryUploadPrefix(storagePathPrefix, storagePath, {
+          token: options.assetLibraryUpload!.readWriteToken,
+          deleteBlob: options.assetLibraryUpload!.deleteBlob,
+          listBlobs: options.assetLibraryUpload!.listBlobs,
+        }),
+      );
+    },
+  );
+
+  app.post<{ Params: { brandId: string; productId: string }; Body: unknown }>(
+    "/brands/:brandId/products/:productId/images/confirm",
+    async (request, reply) => {
+      if (!repository.getUploadSession || !repository.confirmProductServiceImageAsset) {
+        throw new Error("product_service_image_not_configured");
+      }
+      if (!options.assetLibraryUpload) throw new Error("asset_library_upload_storage_not_configured");
+      const parsed = productConfirmBody(request.body);
+      const scope = options.scope(request, request.params.brandId);
+      const session = await repository.getUploadSession({ ...scope, sessionId: parsed.sessionId }, parsed.upload.fileName);
+      if (!session || session.kind !== "product" || session.productId !== request.params.productId) {
+        throw new Error("asset_library_upload_session_not_found");
+      }
+      const confirmed = await confirmAssetLibraryUpload({
+        session, nonce: parsed.nonce, storagePath: parsed.storagePath, storageUrl: parsed.storageUrl,
+        mimeType: parsed.upload.mimeType, sizeBytes: parsed.upload.sizeBytes, checksum: parsed.upload.checksum,
+      }, { token: options.assetLibraryUpload.readWriteToken, getBlob: options.assetLibraryUpload.getBlob });
+      const image = await repository.confirmProductServiceImageAsset({
+        ...scope, actorUserId: requireActor(options, request), productServiceId: request.params.productId,
+        versionId: parsed.versionId, sessionId: parsed.sessionId, role: parsed.role, position: parsed.position,
+      }, confirmed);
+      reply.code(201);
+      return image;
+    },
+  );
+
+  app.delete<{ Params: { brandId: string; productId: string; imageId: string } }>(
+    "/brands/:brandId/products/:productId/images/:imageId",
+    async (request, reply) => {
+      if (!repository.getProductServiceImageAsset || !repository.deleteProductServiceImageAsset) {
+        throw new Error("product_service_image_not_configured");
+      }
+      if (!options.assetLibraryUpload) throw new Error("asset_library_upload_storage_not_configured");
+      const scope = options.scope(request, request.params.brandId);
+      const image = await repository.getProductServiceImageAsset({
+        ...scope, productServiceId: request.params.productId, imageId: request.params.imageId,
+      });
+      if (!image) throw new Error("product_service_image_not_found");
+      await repository.deleteProductServiceImageAsset({
+        ...scope, actorUserId: requireActor(options, request), productServiceId: request.params.productId,
+        imageId: request.params.imageId,
+      });
+      try {
+        await deleteAssetLibraryBlob(image.storagePath, {
+          token: options.assetLibraryUpload.readWriteToken,
+          deleteBlob: options.assetLibraryUpload.deleteBlob,
+        });
+      } catch (error) {
+        request.log.warn({
+          error: error instanceof Error ? error.message : "unknown", imageId: request.params.imageId,
+        }, "product image blob cleanup deferred after database deletion");
+      }
+      reply.code(204);
+      return reply.send();
+    },
+  );
+
+  app.get<{ Params: { brandId: string }; Querystring: { include?: string } }>(
+    "/brands/:brandId/style-presets",
+    async (request) => {
+      if (!repository.listBrandStylePresets) throw new Error("brand_style_preset_not_configured");
+      return repository.listBrandStylePresets(
+        options.scope(request, request.params.brandId),
+        request.query.include?.split(",").includes("archived") ?? false,
+      );
+    },
+  );
+
+  app.post<{ Params: { brandId: string }; Body: unknown }>(
+    "/brands/:brandId/style-presets",
+    async (request, reply) => {
+      if (!repository.createBrandStylePreset) throw new Error("brand_style_preset_not_configured");
+      const created = await repository.createBrandStylePreset(
+        { ...options.scope(request, request.params.brandId), actorUserId: requireActor(options, request) },
+        parseBrandStylePresetInput(request.body),
+      );
+      reply.code(201);
+      return created;
+    },
+  );
+
+  app.patch<{ Params: { brandId: string; presetId: string }; Body: unknown }>(
+    "/brands/:brandId/style-presets/:presetId",
+    async (request) => {
+      if (!repository.updateBrandStylePreset) throw new Error("brand_style_preset_not_configured");
+      const revisionHeader = request.headers["if-match"];
+      const revision = Number(typeof revisionHeader === "string" ? revisionHeader.replace(/^W\//, "").replaceAll('"', "") : NaN);
+      if (!Number.isSafeInteger(revision) || revision < 1) throw new Error("brand_style_preset_version_required");
+      return repository.updateBrandStylePreset(
+        {
+          ...options.scope(request, request.params.brandId), actorUserId: requireActor(options, request),
+          presetId: request.params.presetId, expectedRevision: revision,
+        },
+        parseBrandStylePresetInput(request.body),
+      );
+    },
+  );
+
+  app.post<{ Params: { brandId: string; presetId: string } }>(
+    "/brands/:brandId/style-presets/:presetId/default",
+    async (request) => {
+      if (!repository.setDefaultBrandStylePreset) throw new Error("brand_style_preset_not_configured");
+      return repository.setDefaultBrandStylePreset({
+        ...options.scope(request, request.params.brandId), actorUserId: requireActor(options, request),
+        presetId: request.params.presetId,
+      });
+    },
+  );
+
+  app.delete<{ Params: { brandId: string; presetId: string } }>(
+    "/brands/:brandId/style-presets/:presetId",
+    async (request, reply) => {
+      if (!repository.archiveBrandStylePreset) throw new Error("brand_style_preset_not_configured");
+      await repository.archiveBrandStylePreset({
+        ...options.scope(request, request.params.brandId), actorUserId: requireActor(options, request),
+        presetId: request.params.presetId,
+      });
+      reply.code(204);
+      return reply.send();
     },
   );
 

@@ -45,9 +45,13 @@ export function parseCardDeckSubmissionForInput(
   }
   const evidenceIds = new Set(input.researchEvidence.items.map(({ id }) => id));
   const productImageIds = new Set(input.product?.images.map(({ assetId }) => assetId) ?? []);
+  const avatarImageIds = new Set(input.references.brandStyleImages
+    .filter(({ tags }) => tags.includes("avatar"))
+    .map(({ referenceItemId }) => referenceItemId));
   for (const scene of deckPlan.scenes) {
     assertSubset(scene.evidenceIds, evidenceIds, "evidence_id_unknown");
     assertSubset(scene.productImageAssetIds, productImageIds, "product_image_id_unknown");
+    assertSubset(scene.avatarImageAssetIds ?? [], avatarImageIds, "avatar_image_id_unknown");
   }
   let planDraft: CardNewsPlanDraftV1;
   try {

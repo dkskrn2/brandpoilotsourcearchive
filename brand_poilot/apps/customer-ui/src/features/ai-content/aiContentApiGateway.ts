@@ -608,6 +608,18 @@ export function createAiContentApiGateway(client = apiClient(), blobPut: typeof 
         { method: "PATCH", body: JSON.stringify(finalizationDraft) },
       ));
     },
+    getManualVisualSelection(brandId, generationId) {
+      return client.requestJson(
+        `/brands/${brandId}/ai-content/generations/${generationId}/visual-selection`,
+        { method: "GET" },
+      );
+    },
+    updateManualVisualSelection(brandId, generationId, selection) {
+      return client.requestJson(
+        `/brands/${brandId}/ai-content/generations/${generationId}/visual-selection`,
+        { method: "PUT", body: JSON.stringify(selection) },
+      );
+    },
     async startGenerationV2(brandId, generationId, idempotencyKey) {
       return mapGeneration(await client.requestJson<ApiGeneration>(
         `/brands/${brandId}/ai-content/generations/${generationId}/generate`,

@@ -9,6 +9,9 @@ const userId = "33333333-3333-4333-8333-333333333333";
 const avatarId = "44444444-4444-4444-8444-444444444444";
 const referenceId = "55555555-5555-4555-8555-555555555555";
 const sessionId = "66666666-6666-4666-8666-666666666666";
+const presetId = "77777777-7777-4777-8777-777777777777";
+const productId = "88888888-8888-4888-8888-888888888888";
+const versionId = "99999999-9999-4999-8999-999999999999";
 const uploadBytes = Buffer.alloc(100, 7);
 const checksum = createHash("sha256").update(uploadBytes).digest("hex");
 const auth = { cookie: "bp_session=session-1" };
@@ -29,6 +32,7 @@ function setup(overrides: Partial<ApiRepository> = {}) {
     getActive: vi.fn(async () => null), listVersions: vi.fn(async () => []),
     getActiveRules: vi.fn(async () => null), listRuleSets: vi.fn(async () => []),
     listAvatars: vi.fn(async () => [avatar]), getAvatar: vi.fn(async () => avatar),
+    getProductService: vi.fn(async () => ({ id: productId, activeVersion: { id: versionId }, draft: null })),
     createAvatar: vi.fn(async () => avatar), updateAvatar: vi.fn(async () => avatar),
     addAvatarImage: vi.fn(async () => avatar), deleteAvatarImage: vi.fn(async () => undefined),
     setDefaultAvatar: vi.fn(async () => ({ ...avatar, isDefault: true })),
@@ -40,9 +44,12 @@ function setup(overrides: Partial<ApiRepository> = {}) {
     createUploadSession: vi.fn(async (_scope, kind) => ({
       id: sessionId, nonce: "valid-nonce-123456", workspaceId, brandId, kind,
       avatarId: kind === "avatar" ? avatarId : null,
+      productId: kind === "product" ? productId : null,
       fileName: "face.webp", storagePathPrefix: kind === "avatar"
         ? `brands/${brandId}/asset-library/avatars/${avatarId}/${sessionId}/`
-        : `brands/${brandId}/asset-library/references/${sessionId}/`,
+        : kind === "product"
+          ? `brands/${brandId}/asset-library/products/${productId}/${sessionId}/`
+          : `brands/${brandId}/asset-library/references/${sessionId}/`,
       expectedMimeType: "image/webp", expectedSizeBytes: 100, expectedChecksum: checksum,
       expiresAt: new Date(Date.now() + 60_000).toISOString(), confirmedAt: null,
     })),
@@ -63,6 +70,10 @@ function setup(overrides: Partial<ApiRepository> = {}) {
       status: "cleanup_pending" as const,
       immediateCleanup: "succeeded" as const,
     })),
+    cancelProductUpload: vi.fn(async () => ({
+      status: "cleanup_pending" as const,
+      immediateCleanup: "succeeded" as const,
+    })),
     cleanupExpiredReferenceUploads: vi.fn(async () => ({
       scanned: 0, cancelled: 0, preserved: 0, failed: [],
     })),
@@ -73,6 +84,24 @@ function setup(overrides: Partial<ApiRepository> = {}) {
     listReferenceChannels: vi.fn(async () => []),
     resolveReferenceChannel: vi.fn(async () => ({ id: referenceId })),
     listReferenceChannelMedia: vi.fn(async () => ({ items: [], total: 0, refreshedAt: null, cacheState: "pending" as const })),
+    listBrandStylePresets: vi.fn(async () => []),
+    createBrandStylePreset: vi.fn(async (_scope, input) => ({ id: presetId, revision: 1, ...input })),
+    updateBrandStylePreset: vi.fn(async (_scope, input) => ({ id: presetId, revision: 2, ...input })),
+    setDefaultBrandStylePreset: vi.fn(async () => ({ id: presetId, revision: 2, isDefault: true })),
+    archiveBrandStylePreset: vi.fn(async () => undefined),
+    listProductServiceImageAssets: vi.fn(async () => []),
+    confirmProductServiceImageAsset: vi.fn(async (_scope, upload) => ({
+      id: referenceId, workspaceId, brandId, productServiceId: productId, versionId,
+      storageArtifactId: avatarId, role: "hero" as const, position: 1,
+      mimeType: upload.mimeType, sizeBytes: upload.sizeBytes,
+    })),
+    getProductServiceImageAsset: vi.fn(async () => ({
+      id: referenceId, workspaceId, brandId, productServiceId: productId, versionId,
+      storageArtifactId: avatarId, role: "hero" as const, position: 1,
+      mimeType: "image/webp", sizeBytes: 100,
+      storagePath: `brands/${brandId}/asset-library/products/${productId}/${sessionId}/${checksum}-face.webp`,
+    })),
+    deleteProductServiceImageAsset: vi.fn(async () => undefined),
     ...overrides,
   } as unknown as ApiRepository;
   const kakaoAuth = {
@@ -111,6 +140,123 @@ function setup(overrides: Partial<ApiRepository> = {}) {
 }
 
 describe("asset library customer routes", () => {
+  it("manages closed named style presets with explicit revision CAS", async () => {
+    const { app, repository } = setup();
+    const payload = {
+      contractVersion: "brand-style-preset.v1",
+      name: "Editorial Red",
+      description: "Newsroom hierarchy",
+      visualTokens: { colors: ["#ff0000"], fonts: ["Pretendard"], notes: ["Red emphasis"] },
+      referenceItemIds: [referenceId],
+      isDefault: true,
+    };
+    expect((await app.inject({ method: "GET", url: `/brands/${brandId}/style-presets`, headers: auth })).statusCode).toBe(200);
+    expect((await app.inject({ method: "POST", url: `/brands/${brandId}/style-presets`, headers: auth, payload })).statusCode).toBe(201);
+    expect((await app.inject({
+      method: "PATCH", url: `/brands/${brandId}/style-presets/${presetId}`,
+      headers: { ...auth, "if-match": '"1"' }, payload: { ...payload, name: "Updated" },
+    })).statusCode).toBe(200);
+    expect((await app.inject({
+      method: "PATCH", url: `/brands/${brandId}/style-presets/${presetId}`, headers: auth, payload,
+    })).statusCode).toBe(400);
+    expect((await app.inject({ method: "POST", url: `/brands/${brandId}/style-presets/${presetId}/default`, headers: auth })).statusCode).toBe(200);
+    expect((await app.inject({ method: "DELETE", url: `/brands/${brandId}/style-presets/${presetId}`, headers: auth })).statusCode).toBe(204);
+    expect(repository.createBrandStylePreset).toHaveBeenCalledWith({ workspaceId, brandId, actorUserId: userId }, payload);
+    expect(repository.updateBrandStylePreset).toHaveBeenCalledWith(
+      { workspaceId, brandId, actorUserId: userId, presetId, expectedRevision: 1 },
+      { ...payload, name: "Updated" },
+    );
+    await app.close();
+  });
+
+  it("issues, confirms, lists and deletes a scoped optional product image", async () => {
+    const productPath = `brands/${brandId}/asset-library/products/${productId}/${sessionId}/${checksum}-face.webp`;
+    const productUrl = `https://store.blob.vercel-storage.com/${productPath}`;
+    const getUploadSession = vi.fn(async () => ({
+      id: sessionId, nonce: "valid-nonce-123456", workspaceId, brandId, kind: "product" as const,
+      productId, fileName: "face.webp",
+      storagePathPrefix: `brands/${brandId}/asset-library/products/${productId}/${sessionId}/`,
+      expectedMimeType: "image/webp", expectedSizeBytes: 100, expectedChecksum: checksum,
+      expiresAt: new Date(Date.now() + 60_000).toISOString(), confirmedAt: null,
+    }));
+    const { app, repository, getBlob, deleteBlob } = setup({ getUploadSession });
+    getBlob.mockResolvedValueOnce({
+      statusCode: 200 as const,
+      stream: new ReadableStream<Uint8Array>({ start(controller) { controller.enqueue(uploadBytes); controller.close(); } }),
+      headers: new Headers(),
+      blob: {
+        url: productUrl, downloadUrl: `${productUrl}?download=1`, pathname: productPath,
+        size: uploadBytes.length, uploadedAt: new Date(), contentType: "image/webp",
+        contentDisposition: "inline", cacheControl: "public, max-age=0", etag: "etag",
+      },
+    });
+    const token = await app.inject({
+      method: "POST", url: `/brands/${brandId}/products/${productId}/images/upload-token`, headers: auth,
+      payload: { versionId, fileName: "face.webp", mimeType: "image/webp", sizeBytes: 100, checksum },
+    });
+    expect(token.statusCode).toBe(200);
+    expect(token.json().pathname).toBe(productPath);
+    const confirmed = await app.inject({
+      method: "POST", url: `/brands/${brandId}/products/${productId}/images/confirm`, headers: auth,
+      payload: {
+        versionId, role: "hero", position: 1, sessionId, nonce: "valid-nonce-123456",
+        fileName: "face.webp", mimeType: "image/webp", sizeBytes: 100, checksum,
+        storagePath: productPath, storageUrl: productUrl,
+      },
+    });
+    expect(confirmed.statusCode).toBe(201);
+    expect((await app.inject({
+      method: "GET", url: `/brands/${brandId}/products/${productId}/versions/${versionId}/images`, headers: auth,
+    })).statusCode).toBe(200);
+    expect((await app.inject({
+      method: "DELETE", url: `/brands/${brandId}/products/${productId}/images/${referenceId}`, headers: auth,
+    })).statusCode).toBe(204);
+    expect(repository.confirmProductServiceImageAsset).toHaveBeenCalledWith(
+      { workspaceId, brandId, actorUserId: userId, productServiceId: productId, versionId, sessionId, role: "hero", position: 1 },
+      expect.objectContaining({ storagePath: productPath, checksum }),
+    );
+    expect(repository.deleteProductServiceImageAsset).toHaveBeenCalledTimes(1);
+    const databaseDeleteOrder = vi.mocked(repository.deleteProductServiceImageAsset!).mock.invocationCallOrder[0];
+    const blobDeleteOrder = deleteBlob.mock.invocationCallOrder[0];
+    expect(databaseDeleteOrder).toBeDefined();
+    expect(blobDeleteOrder).toBeDefined();
+    expect(databaseDeleteOrder!).toBeLessThan(blobDeleteOrder!);
+    await app.close();
+  });
+
+  it("cancels an unconfirmed product upload using the authenticated product scope", async () => {
+    const { app, repository } = setup();
+    const cancelled = await app.inject({
+      method: "DELETE",
+      url: `/brands/${brandId}/products/${productId}/images/upload-sessions/${sessionId}`,
+      headers: auth,
+    });
+    expect(cancelled.statusCode).toBe(200);
+    expect(repository.cancelProductUpload).toHaveBeenCalledWith(
+      { workspaceId, brandId, actorUserId: userId, productId, sessionId },
+      expect.any(Function),
+    );
+    await app.close();
+  });
+
+  it("keeps a deleted product image removed when provider blob cleanup fails", async () => {
+    const { app, repository, deleteBlob } = setup();
+    deleteBlob.mockRejectedValueOnce(new Error("provider_delete_failed"));
+    const deleted = await app.inject({
+      method: "DELETE",
+      url: `/brands/${brandId}/products/${productId}/images/${referenceId}`,
+      headers: auth,
+    });
+    expect(deleted.statusCode).toBe(204);
+    expect(repository.deleteProductServiceImageAsset).toHaveBeenCalledTimes(1);
+    const databaseDeleteOrder = vi.mocked(repository.deleteProductServiceImageAsset!).mock.invocationCallOrder[0];
+    const blobDeleteOrder = deleteBlob.mock.invocationCallOrder[0];
+    expect(databaseDeleteOrder).toBeDefined();
+    expect(blobDeleteOrder).toBeDefined();
+    expect(databaseDeleteOrder!).toBeLessThan(blobDeleteOrder!);
+    await app.close();
+  });
+
   it("lists, creates, edits, defaults, and archives avatars with the authenticated actor", async () => {
     const { app, repository } = setup();
     expect((await app.inject({ method: "GET", url: `/brands/${brandId}/avatars`, headers: auth })).statusCode).toBe(200);

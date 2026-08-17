@@ -10,7 +10,7 @@ import {
   startJobLeaseGuard,
   type CodexAccountPool,
 } from "@brand-pilot/worker-runtime";
-import { parseBlogInput, parseBlogPlanDraftV1, parseBlogResearchEvidence, type BlogClient, type BlogJob } from "./contracts.js";
+import { parseBlogInput, parseBlogManualVisualSelection, parseBlogPlanDraftV1, parseBlogResearchEvidence, type BlogClient, type BlogJob } from "./contracts.js";
 import { blogPlanSkillVersion, buildBlogPlanPrompt } from "./promptBuilder.js";
 import { createBlogResearch, type BlogResearch } from "./research.js";
 import { withResource } from "./resourceLease.js";
@@ -123,6 +123,7 @@ export async function runOnce({ workerId, client, runner, research, shutdownSign
     const cancellation = (state: "lease_lost" | "cancelled") => ({ status: state, jobId: job.id } as const);
     try {
       const parsedInput = parseBlogInput(job.payload.contentGenerationInput, job);
+      const manualVisualSelection = parseBlogManualVisualSelection(job.payload.manualVisualSelection);
       const activeResearch = research ?? createBlogResearch();
       let supplementalResearch = job.payload.supplementalResearch === undefined
         ? null
@@ -139,7 +140,7 @@ export async function runOnce({ workerId, client, runner, research, shutdownSign
       let repairErrors: string[] | undefined;
       let planDraft: ReturnType<typeof parseBlogPlanDraftV1> | undefined;
       for (let attempt = 0; attempt < 2; attempt += 1) {
-        const current = await runner.run(job, buildBlogPlanPrompt(job, parsedInput, supplementalResearch, repairErrors), lease.signal);
+        const current = await runner.run(job, buildBlogPlanPrompt(job, parsedInput, manualVisualSelection, supplementalResearch, repairErrors), lease.signal);
         planned.push(current);
         try {
           const rawPlan = JSON.parse(await readFile(path.join(current.outputDir, "blog-plan.json"), "utf8"));

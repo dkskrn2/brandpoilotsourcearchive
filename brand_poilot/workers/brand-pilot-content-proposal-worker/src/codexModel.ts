@@ -24,7 +24,11 @@ export type ContentProposalModelResult = {
 };
 
 export interface ContentProposalModelClient {
-  generate(prompt: string, signal?: AbortSignal): Promise<ContentProposalModelResult>;
+  generate(
+    prompt: string,
+    signal?: AbortSignal,
+    executionTier?: "standard" | "fast",
+  ): Promise<ContentProposalModelResult>;
 }
 
 export class ContentProposalModelInvocationError extends Error {
@@ -120,6 +124,7 @@ export function createCodexContentProposalModel({
   const generateAttempt = async (
     prompt: string,
     signal: AbortSignal | undefined,
+    executionTier: "standard" | "fast",
     runtimeDirectory: string,
     profile: CodexAccountProfile,
   ): Promise<ContentProposalModelResult> => new Promise<ContentProposalModelResult>((resolve, reject) => {
@@ -127,6 +132,9 @@ export function createCodexContentProposalModel({
     try {
       child = spawnProcess(command, [
         "exec", "--ignore-user-config", "--strict-config", "-m", MODEL_ID,
+        ...(executionTier === "fast"
+          ? ["--enable", "fast_mode", "-c", 'service_tier="fast"']
+          : []),
         "--output-schema", outputSchemaPath,
         "-c", "default_permissions=\"worker\"",
         "-c", "permissions.worker.filesystem={\":minimal\"=\"deny\",\"/codex\"=\"deny\",\"/codex-accounts\"=\"deny\",\":workspace_roots\"={\".\"=\"deny\"}}",
@@ -272,7 +280,7 @@ export function createCodexContentProposalModel({
   });
 
   return {
-    async generate(prompt, signal) {
+    async generate(prompt, signal, executionTier = "standard") {
       if (signal?.aborted) {
         throw new ContentProposalModelInvocationError("content_proposal_model_aborted", "indeterminate");
       }
@@ -284,7 +292,7 @@ export function createCodexContentProposalModel({
         try {
           const result = await accountPool.run(async (profile) => {
             try {
-              return codexAccountSuccess(await generateAttempt(prompt, signal, runtimeDirectory, profile));
+              return codexAccountSuccess(await generateAttempt(prompt, signal, executionTier, runtimeDirectory, profile));
             } catch (error) {
               if (!(error instanceof ContentProposalModelInvocationError)) throw error;
               return codexAccountFailure(error, error.diagnostic, error.acceptedOutput);

@@ -8,6 +8,7 @@ import sharp from "sharp";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createCodexAccountPool, type CodexAccountPool } from "@brand-pilot/worker-runtime";
 import { createAiContentAssetRenderer, dimensionsForAspectRatio, runAiContentAssetChildProcess } from "./aiContentAssetRenderer.js";
+import { cardDeckEditorialPlanSha256 } from "@brand-pilot/content-contracts/card-deck-editorial-plan/node";
 import type { AiContentImageAssetJob } from "./aiContentRenderClient.js";
 import { cloneCardDeckImageJob, cloneManualBlogImageJobV2, cloneManualImageJobV2, cloneReelStoryboardImageJob } from "../test/fixtures/manualRender.js";
 
@@ -315,6 +316,27 @@ describe("V3 single asset renderer", () => {
         },
       });
     expect(runChild).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not stage an avatar for a card scene that did not select it", async () => {
+    const input: any = cloneCardDeckImageJob();
+    input.payload.cardDeckContract.plan.scenes[1].avatarImageAssetIds = [];
+    const deckSha256 = cardDeckEditorialPlanSha256(input.payload.cardDeckContract.plan);
+    input.payload.cardDeckContract.deckSha256 = deckSha256;
+    input.payload.cardDeckBinding.deckSha256 = deckSha256;
+    input.payload.cardDeckCurrentScene.deckSha256 = deckSha256;
+    input.payload.cardDeckCurrentScene.scene = input.payload.cardDeckContract.plan.scenes[1];
+    const { readOwned } = await bindManualOwnedBytes(input);
+    const rendered = await sharp({ create: { width: 8, height: 8, channels: 4, background: "white" } }).png().toBuffer();
+    const runChild = vi.fn(async ({ outputFile }: { outputFile: string }) => {
+      await mkdir(path.dirname(outputFile), { recursive: true });
+      await writeFile(outputFile, rendered);
+    });
+    const renderer = createAiContentAssetRenderer({ workerRoot: path.resolve("."), readOwned, runChild });
+
+    await expect(renderer.renderAsset(input as AiContentImageAssetJob, new AbortController().signal))
+      .resolves.toMatchObject({ index: 2 });
+    expect(readOwned.mock.calls.map(([storagePath]) => storagePath)).not.toContain("owned/style.png");
   });
 
   it("rejects an oversized declared v2 attachment before reading any owned blob", async () => {

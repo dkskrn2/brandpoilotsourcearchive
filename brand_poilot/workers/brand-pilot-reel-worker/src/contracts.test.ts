@@ -12,6 +12,7 @@ function input() {
     outputSettings: { outputFormat: "reel", purpose: "informational" },
     researchEvidence: { items: [{ id: uid(1) }] },
     product: { images: [{ assetId: uid(2) }] },
+    references: { brandStyleImages: [{ referenceItemId: uid(3), tags: ["avatar"] }] },
     selectedProposal: {
       assetCount: 2,
       outline: [
@@ -59,6 +60,7 @@ function storyboard() {
         layoutArchetype: "vertical_hook",
         evidenceIds: [uid(1)],
         productImageAssetIds: [uid(2)],
+        avatarImageAssetIds: [uid(3)],
       },
       {
         index: 2,
@@ -77,6 +79,7 @@ function storyboard() {
         layoutArchetype: "sequence",
         evidenceIds: [uid(1)],
         productImageAssetIds: [],
+        avatarImageAssetIds: [],
       },
     ],
   };
@@ -171,6 +174,13 @@ describe("reel worker contract", () => {
     expect(() => parseReelPlanDraftForInput({
       ...draft(), assets: [{ ...draft().assets[0], productImageAssetIds: [uid(2), uid(2)] }, draft().assets[1]],
     }, input())).toThrow("reel_plan_draft_product_image_id_duplicate");
+  });
+
+  it("rejects unknown avatar image IDs in the storyboard", () => {
+    const value = storyboard();
+    value.scenes[0].avatarImageAssetIds = [uid(9)];
+    expect(() => parseReelStoryboardSubmissionForInput(value, input()))
+      .toThrow("reel_storyboard_avatar_image_id_unknown");
   });
 
   it.each([

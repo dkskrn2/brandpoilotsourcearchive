@@ -4,20 +4,31 @@ import test from "node:test";
 import { Client } from "pg";
 import * as migrationRunner from "./migrationRunner.mjs";
 
-test("content suggestion 077, FAQ utterance 078, and publish calendar 079 are an ordered sealed post-cutover schema plan", async () => {
+test("post-cutover schemas 077 through 082 are an ordered sealed schema plan", async () => {
   const migrations = await migrationRunner.loadMigrations();
   const migration077 = migrations.find(({ id }) => id === "077_content_suggestion_batches.sql");
   const migration078 = migrations.find(({ id }) => id === "078_faq_utterance_matching.sql");
   const migration079 = migrations.find(({ id }) => id === "079_publish_calendar_runtime.sql");
+  const migration080 = migrations.find(({ id }) => id === "080_reference_channel_archive.sql");
+  const migration081 = migrations.find(({ id }) => id === "081_meta_ad_library_references.sql");
+  const migration082 = migrations.find(({ id }) => id === "082_manual_brand_visual_assets.sql");
   assert.ok(migration077);
   assert.ok(migration078);
   assert.ok(migration079);
+  assert.ok(migration080);
+  assert.ok(migration081);
+  assert.ok(migration082);
   assert.equal(migrationRunner.validatePost075SchemaMigration(migration077), true);
   assert.equal(migrationRunner.validatePost075SchemaMigration(migration078), true);
   assert.equal(migrationRunner.validatePost075SchemaMigration(migration079), true);
+  assert.equal(migrationRunner.validatePost075SchemaMigration(migration080), true);
+  assert.equal(migrationRunner.validatePost075SchemaMigration(migration081), true);
+  assert.equal(migrationRunner.validatePost075SchemaMigration(migration082), true);
+
+  const pendingMigrations = [migration077, migration078, migration079, migration080, migration081, migration082];
 
   const history = migrations
-    .filter(({ id }) => ![migration077.id, migration078.id, migration079.id].includes(id))
+    .filter(({ id }) => !pendingMigrations.some((migration) => migration.id === id))
     .map(({ id, checksum }) => ({ id, checksum }));
   assert.equal(
     migrationRunner.isExactPost075SchemaMigrationPlan(migrations, history),
@@ -109,11 +120,18 @@ test("content suggestion schema runner accepts the exact managed provider sessio
   const migration077 = migrations.find(({ id }) => id === "077_content_suggestion_batches.sql");
   const migration078 = migrations.find(({ id }) => id === "078_faq_utterance_matching.sql");
   const migration079 = migrations.find(({ id }) => id === "079_publish_calendar_runtime.sql");
+  const migration080 = migrations.find(({ id }) => id === "080_reference_channel_archive.sql");
+  const migration081 = migrations.find(({ id }) => id === "081_meta_ad_library_references.sql");
+  const migration082 = migrations.find(({ id }) => id === "082_manual_brand_visual_assets.sql");
   assert.ok(migration077);
   assert.ok(migration078);
   assert.ok(migration079);
+  assert.ok(migration080);
+  assert.ok(migration081);
+  assert.ok(migration082);
+  const pendingMigrations = [migration077, migration078, migration079, migration080, migration081, migration082];
   const history = migrations
-    .filter(({ id }) => ![migration077.id, migration078.id, migration079.id].includes(id))
+    .filter(({ id }) => !pendingMigrations.some((migration) => migration.id === id))
     .map(({ id, checksum }) => ({ id, checksum }));
   const calls = [];
   const client = {
@@ -209,8 +227,38 @@ test("content suggestion schema runner accepts the exact managed provider sessio
           billing_plan_count: 0,
         }] };
       }
+      if (normalized.includes("post_075_manual_visual_assets_catalog_v1")) {
+        return { rows: [{
+          guard_enabled: "O",
+          preset_owner: "content_schema_owner",
+          preset_reference_owner: "content_schema_owner",
+          selection_owner: "content_schema_owner",
+          app_preset_select: true,
+          app_preset_insert: true,
+          app_preset_update: true,
+          app_preset_delete: true,
+          app_reference_select: true,
+          app_reference_insert: true,
+          app_reference_update: true,
+          app_reference_delete: true,
+          app_selection_select: true,
+          app_selection_insert: true,
+          app_selection_update: true,
+          app_product_asset_select: true,
+          app_product_asset_insert: true,
+          app_product_asset_delete: true,
+          app_product_asset_role_update: true,
+          app_product_asset_position_update: true,
+          app_product_asset_storage_update: false,
+          selection_fence_enabled: "A",
+          selection_fence_owner: "content_schema_owner",
+          public_preset_privilege: false,
+          public_reference_privilege: false,
+          public_selection_privilege: false,
+        }] };
+      }
       if (normalized.includes("post_075_schema_migration_marker_v1")) {
-        const migration = [migration077, migration078, migration079].find(({ id }) => id === parameters[0]);
+        const migration = pendingMigrations.find(({ id }) => id === parameters[0]);
         return { rows: migration ? [{ id: migration.id, checksum: migration.checksum }] : [] };
       }
       return { rows: [] };
@@ -223,7 +271,7 @@ test("content suggestion schema runner accepts the exact managed provider sessio
     expectedProviderRoleName: "postgres",
   });
 
-  assert.deepEqual(result.pending, [migration077.id, migration078.id, migration079.id]);
+  assert.deepEqual(result.pending, pendingMigrations.map(({ id }) => id));
   assert.equal(calls.some(({ sql }) => sql === "alter event trigger ai_content_ddl_guard_074 disable"), true);
   assert.equal(calls.some(({ sql }) => sql === "alter event trigger ai_content_ddl_guard_074 enable"), true);
   const disableIndex = calls.findIndex(({ sql }) => sql === "alter event trigger ai_content_ddl_guard_074 disable");
@@ -267,11 +315,18 @@ test("content suggestion schema runner rejects a non-normal DDL guard before mut
   const migration077 = migrations.find(({ id }) => id === "077_content_suggestion_batches.sql");
   const migration078 = migrations.find(({ id }) => id === "078_faq_utterance_matching.sql");
   const migration079 = migrations.find(({ id }) => id === "079_publish_calendar_runtime.sql");
+  const migration080 = migrations.find(({ id }) => id === "080_reference_channel_archive.sql");
+  const migration081 = migrations.find(({ id }) => id === "081_meta_ad_library_references.sql");
+  const migration082 = migrations.find(({ id }) => id === "082_manual_brand_visual_assets.sql");
   assert.ok(migration077);
   assert.ok(migration078);
   assert.ok(migration079);
+  assert.ok(migration080);
+  assert.ok(migration081);
+  assert.ok(migration082);
+  const pendingMigrations = [migration077, migration078, migration079, migration080, migration081, migration082];
   const history = migrations
-    .filter(({ id }) => ![migration077.id, migration078.id, migration079.id].includes(id))
+    .filter(({ id }) => !pendingMigrations.some((migration) => migration.id === id))
     .map(({ id, checksum }) => ({ id, checksum }));
   const calls = [];
   const client = {
@@ -308,7 +363,7 @@ test("content suggestion schema runner rejects a non-normal DDL guard before mut
   assert.equal(calls.includes("begin"), false);
 });
 
-test("ordered 077, 078, and 079 schemas apply and replay against PostgreSQL 16", {
+test("ordered 077 through 082 schemas apply and replay against PostgreSQL 16", {
   skip: process.env.RUN_FAQ_SCHEMA_POSTGRES_INTEGRATION !== "1",
   timeout: 300_000,
 }, async () => {
@@ -359,6 +414,9 @@ test("ordered 077, 078, and 079 schemas apply and replay against PostgreSQL 16",
       "077_content_suggestion_batches.sql",
       "078_faq_utterance_matching.sql",
       "079_publish_calendar_runtime.sql",
+      "080_reference_channel_archive.sql",
+      "081_meta_ad_library_references.sql",
+      "082_manual_brand_visual_assets.sql",
     ]);
     const topicScope = await client.query(
       `select relation.relname as relation_name,constraint_row.conname,

@@ -400,6 +400,9 @@ function selectionHarness(options: {
         };
       }
       if (sql.includes("from ai_content_generations")) return { rows: [linked], rowCount: 1 };
+      if (sql.includes("from manual_ai_content_visual_selections")) return { rows: [{
+        selection_json: { contractVersion: "manual-visual-selection.v1", product: null, stylePreset: null, avatar: null },
+      }], rowCount: 1 };
       return { rows: [], rowCount: 0 };
     }),
     release: vi.fn(),

@@ -1,5 +1,6 @@
 import cors from "@fastify/cors";
 import { createHash, createHmac, randomUUID, timingSafeEqual } from "node:crypto";
+import { parseManualVisualSelectionV1 } from "@brand-pilot/content-contracts/manual-visual-selection";
 import Fastify, { LogController, type FastifyReply } from "fastify";
 import rawBody from "fastify-raw-body";
 import type { FastifyLoggerOptions } from "fastify/types/logger";
@@ -1055,6 +1056,21 @@ export function createServer(
       reply.code(400).send({ error: message });
       return;
     }
+    if (message === "manual_visual_selection_invalid") {
+      reply.code(400).send({ error: message });
+      return;
+    }
+    if (message === "manual_visual_selection_missing"
+      || message === "manual_visual_selection_unavailable") {
+      reply.code(404).send({ error: message });
+      return;
+    }
+    if (message === "manual_visual_selection_stale"
+      || message === "manual_visual_selection_locked"
+      || message === "manual_visual_selection_conflict") {
+      reply.code(409).send({ error: message });
+      return;
+    }
     if (message === "ai_content_contract_version_unsupported"
       || message === "ai_content_v3_contract_required") {
       reply.code(400).send({ error: message });
@@ -1086,7 +1102,9 @@ export function createServer(
       || message.startsWith("reference_validation_failed:")
       || message.startsWith("reference_filter_invalid:")
       || message.startsWith("reference_brand_validation_failed:")
-      || message.startsWith("asset_upload_validation_failed:")) {
+      || message.startsWith("asset_upload_validation_failed:")
+      || message.startsWith("brand_style_preset_validation_failed:")
+      || message.startsWith("manual_product_images_validation_failed:")) {
       const separator = message.indexOf(":");
       reply.code(400).send({ error: message.slice(0, separator), field: message.slice(separator + 1) });
       return;
@@ -1101,6 +1119,34 @@ export function createServer(
     }
     if (["instagram_business_discovery_failed", "instagram_business_discovery_invalid"].includes(message)) {
       reply.code(502).send({ error: message });
+      return;
+    }
+    if (message === "brand_style_preset_version_required") {
+      reply.code(400).send({ error: message });
+      return;
+    }
+    if (message === "brand_style_preset_version_conflict") {
+      reply.code(409).send({ error: message });
+      return;
+    }
+    if (message === "brand_style_preset_admin_required" || message === "brand_style_preset_access_forbidden") {
+      reply.code(403).send({ error: message });
+      return;
+    }
+    if (message === "brand_style_preset_not_configured") {
+      reply.code(503).send({ error: message });
+      return;
+    }
+    if (message === "product_service_image_contract_invalid" || message === "product_service_version_not_found") {
+      reply.code(400).send({ error: message });
+      return;
+    }
+    if (message === "product_service_image_not_found") {
+      reply.code(404).send({ error: message });
+      return;
+    }
+    if (message === "product_service_image_not_configured") {
+      reply.code(503).send({ error: message });
       return;
     }
     if (message === "asset_library_admin_required" || message === "asset_library_access_forbidden") {
@@ -3454,6 +3500,28 @@ export function createServer(
       }
       throw new Error("ai_content_contract_version_unsupported");
     },
+  );
+
+  app.get<{ Params: { brandId: string; generationId: string } }>(
+    "/brands/:brandId/ai-content/generations/:generationId/visual-selection",
+    async (request) => {
+      const selection = await repository.getAiContentManualVisualSelection({
+        ...aiContentScope(request, request.params.brandId),
+        generationId: parseAiContentGenerationId(request.params.generationId),
+      });
+      if (!selection) throw new Error("manual_visual_selection_missing");
+      return selection;
+    },
+  );
+
+  app.put<{ Params: { brandId: string; generationId: string }; Body: unknown }>(
+    "/brands/:brandId/ai-content/generations/:generationId/visual-selection",
+    async (request) => repository.updateAiContentManualVisualSelection({
+      ...aiContentScope(request, request.params.brandId),
+      generationId: parseAiContentGenerationId(request.params.generationId),
+      actorUserId: requiredAiContentActorUserId(request),
+      selection: parseManualVisualSelectionV1(request.body),
+    }),
   );
 
   app.post<{ Params: { brandId: string; generationId: string }; Body: unknown }>(

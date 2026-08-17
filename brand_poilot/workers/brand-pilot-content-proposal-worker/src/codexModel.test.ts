@@ -96,6 +96,23 @@ describe("Proposal V2 Codex model", () => {
     expect(await promise).not.toHaveProperty("transcript");
   });
 
+  it("adds Codex Fast only for an explicitly fast manual composition", async () => {
+    const process = child();
+    const spawnProcess = vi.fn(() => process);
+    const model = createCodexContentProposalModel({
+      accountPool: await testAccountPool(), command: "codex", timeoutMs: 10_000,
+      spawnProcess, ...runtime(),
+    });
+    const promise = model.generate("prompt", undefined, "fast");
+    await Promise.resolve();
+    process.stdout.write(completed("{}"));
+    process.emit("close", 0, null);
+    await promise;
+    expect(spawnProcess.mock.calls[0]?.[1]).toEqual(expect.arrayContaining([
+      "--enable", "fast_mode", "-c", 'service_tier="fast"',
+    ]));
+  });
+
   it("returns invalid JSON as a completed parser-invalid output with stable hashes", async () => {
     const process = child();
     const temp = runtime();

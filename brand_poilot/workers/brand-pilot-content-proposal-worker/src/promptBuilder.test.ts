@@ -36,6 +36,16 @@ describe("Proposal V2 prompt", () => {
     },
   );
 
+  it("preserves the frozen subject identity and required source facts in every proposal", () => {
+    const prompt = buildContentProposalPrompt(compositionJob());
+
+    expect(prompt).toContain("subject와 contentInstruction은 세 안의 주제 정체성과 필수 내용에 대한 권위 원본이다");
+    expect(prompt).toContain("고유명사, 제품·서비스명, 버전, 핵심 수치, 조건, 시점과 적용 대상");
+    expect(prompt).toContain("누락하거나 더 일반적인 표현으로 바꾸지 마라");
+    expect(prompt).toContain("구성안의 차별화를 위해 원문의 핵심 사실을 삭제하거나 다른 주제로 바꾸지 마라");
+    expect(prompt).toContain("원문의 모든 세부사항을 각 안에 억지로 넣지 마라");
+  });
+
   it.each(["blog"] as const)(
     "keeps the identical evidence-set instruction for %s",
     (outputFormat) => {

@@ -199,7 +199,7 @@ describe("AI content worker routes", () => {
         index: 1, editorialRole: "hook", purpose: "결론을 먼저 제시한다.", coreMessage: "핵심", headline: "결론",
         keyVisual: { type: "none", entries: [] }, supportingTexts: [], footnote: null,
         visualThesis: "결론이 가장 먼저 보인다.", layoutArchetype: "vertical_hook",
-        evidenceIds: [], productImageAssetIds: [],
+        evidenceIds: [], productImageAssetIds: [], avatarImageAssetIds: [],
       }],
     };
     const reelStoryboardContract = {
@@ -243,6 +243,7 @@ describe("AI content worker routes", () => {
         index, editorialRole: "scene", purpose: `목적 ${index}`, coreMessage: `핵심 ${index}`,
         headline: `결론 ${index}`, keyVisual: { type: "none", entries: [] }, supportingTexts: [], footnote: null,
         visualThesis: `논지 ${index}`, layoutArchetype: "editorial_freeform", evidenceIds: [], productImageAssetIds: [],
+        avatarImageAssetIds: [],
       })),
     };
     const cardDeckContract = { contractVersion: "card-deck-editorial-plan.v1", deckSha256: "a".repeat(64), plan: deck };

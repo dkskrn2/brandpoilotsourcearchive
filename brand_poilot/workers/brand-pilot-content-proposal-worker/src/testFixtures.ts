@@ -133,6 +133,7 @@ const common = {
   leaseToken: ids.lease,
   leaseExpiresAt: new Date(Date.now() + 180_000).toISOString(),
   availableAt: "2026-08-01T04:00:00.000Z",
+  executionTier: "fast" as const,
   request,
   contract: contract(),
 };

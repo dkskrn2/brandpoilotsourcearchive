@@ -20,6 +20,7 @@ import {
 import { canonicalProposalJson, proposalSha256 } from "./aiContentProposalV2Service.js";
 
 export type ContentProposalClaimStage = "research_required" | "composition_ready";
+export type ContentProposalExecutionTier = "standard" | "fast";
 
 export interface ContentProposalJobContractRecord {
   id: string;
@@ -51,6 +52,7 @@ interface ContentProposalClaimBase {
   leaseToken: string;
   leaseExpiresAt: string;
   availableAt: string;
+  executionTier: ContentProposalExecutionTier;
   request: ContentProposalRequestV2;
   contract: ContentProposalJobContractRecord;
 }
@@ -308,7 +310,7 @@ async function transaction<T>(pool: Pool, work: (client: PoolClient) => Promise<
 }
 
 const claimColumns = `
-  job.*,batch.purpose,batch.request_json,batch.input_snapshot_json,
+  job.*,batch.purpose,batch.origin,batch.request_json,batch.input_snapshot_json,
   contract.id contract_id,contract.request_contract_version,contract.base_input_contract_version,
   contract.research_contract_version,contract.proposal_contract_version,
   contract.proposal_prompt_version,contract.proposal_output_schema_sha256,
@@ -562,6 +564,7 @@ export function createContentProposalJobsRepository(pool: Pool): ContentProposal
           attemptCount: Number(job.attempt_count), maxAttempts: Number(job.max_attempts),
           workerId: String(job.lease_owner), leaseToken: String(job.lease_token),
           leaseExpiresAt: iso(job.lease_expires_at), availableAt: iso(job.available_at),
+          executionTier: initial.origin === "manual" ? "fast" as const : "standard" as const,
           request: boundary.request, contract: boundary.contract,
         };
 

@@ -180,6 +180,7 @@ function claimRow(stage: "research" | "model", overrides: Record<string, unknown
     lease_expires_at: null,
     available_at: new Date("2026-08-05T00:00:00.000Z"),
     purpose: "informational",
+    origin: "manual",
     request_json: request,
     input_snapshot_json: {
       baseInput,
@@ -262,6 +263,7 @@ describe("content proposal job V2 claim protocol", () => {
       baseInput,
       request,
       contract: { id: ids.contract, modelId: "gpt-5.6-terra" },
+      executionTier: "fast",
     });
     const claimUpdate = fixture.statements.find(({ sql }) => sql.includes("set status='processing'"));
     expect(claimUpdate?.sql).toContain("case when $2='model' then 1 else 0 end");
@@ -287,7 +289,16 @@ describe("content proposal job V2 claim protocol", () => {
       composedInputSha256: sha,
       finalInvocationAggregateSha256: sha,
       modelSha256: proposalSha256({ modelId: "gpt-5.6-terra" }),
+      executionTier: "fast",
     });
+  });
+
+  it("keeps scheduled composition on the standard execution tier", async () => {
+    const fixture = claimFixture("model", { origin: "scheduled_crawl" });
+    const claimed = await fixture.repository.claimContentProposalJob({
+      workerId: "proposal-worker-1", leaseSeconds: 180,
+    });
+    expect(claimed).toMatchObject({ stage: "composition_ready", executionTier: "standard" });
   });
 
   it("rejects a tampered frozen request before creating an attempt", async () => {

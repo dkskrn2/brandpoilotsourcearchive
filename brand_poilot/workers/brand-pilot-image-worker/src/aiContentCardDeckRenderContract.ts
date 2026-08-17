@@ -115,8 +115,13 @@ export function parseAiContentCardDeckImageAssetPayloadV1(
     ) invalid();
     const outline = contentGenerationInput.selectedProposal.outline[identity.assetIndex - 1];
     const asset = imagePackage.assets[identity.assetIndex - 1];
+    const avatarImageIds = new Set(contentGenerationInput.references.brandStyleImages
+      .filter(({ tags }) => tags.includes("avatar"))
+      .map(({ referenceItemId }) => referenceItemId));
     if (!outline || !asset || outline.index !== identity.assetIndex
-      || outline.role !== current.compatibilityRole || asset.index !== identity.assetIndex) invalid();
+      || outline.role !== current.compatibilityRole || asset.index !== identity.assetIndex
+      || new Set(currentScene.avatarImageAssetIds ?? []).size !== (currentScene.avatarImageAssetIds ?? []).length
+      || (currentScene.avatarImageAssetIds ?? []).some((id) => !avatarImageIds.has(id))) invalid();
     const compiled = compileCardDeckSceneV1(deck, currentScene, current.compatibilityRole.trim());
     const { attachmentIds: _attachmentIds, ...assetWithoutAttachments } = asset;
     if (!isDeepStrictEqual(compileStructuredScene(compiled), assetWithoutAttachments)) invalid();

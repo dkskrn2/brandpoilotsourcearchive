@@ -39,6 +39,7 @@ import { createBrandIntelligenceProvider } from "./brandIntelligenceProvider.js"
 import { createBrandCoreRepository } from "./brandCoreRepository.js";
 import { createProductLibraryRepository } from "./productLibraryRepository.js";
 import { createAssetLibraryRepository } from "./assetLibraryRepository.js";
+import { createManualVisualAssetsRepository } from "./manualVisualAssetsRepository.js";
 import { createFaqSuggestionRepository } from "./faqSuggestionRepository.js";
 import { effectiveFaqAliases } from "./faqUtterancePolicy.js";
 import { normalizeFaqUtterance } from "./faqUtterancePolicy.js";
@@ -1469,6 +1470,7 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
   const brandCore = createBrandCoreRepository(pool);
   const productLibrary = createProductLibraryRepository(pool);
   const assetLibrary = createAssetLibraryRepository(pool);
+  const manualVisualAssets = createManualVisualAssetsRepository(pool);
   const faqSuggestions = createFaqSuggestionRepository(pool);
   const faqMatching: FaqMatchingRuntimePolicy = options.faqMatching ?? {
     suggestionsEnabled: false,
@@ -2216,6 +2218,7 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
     saveMetaAdLibraryAd: metaAdLibraryRepository.save,
     removeMetaAdLibraryAd: metaAdLibraryRepository.remove,
     runSavedMetaAdPageRefreshes: metaAdLibraryRepository.runSavedPageRefreshes,
+    ...manualVisualAssets,
     ...faqSuggestions,
     ...instagramTrendRepository,
     ...aiContent,

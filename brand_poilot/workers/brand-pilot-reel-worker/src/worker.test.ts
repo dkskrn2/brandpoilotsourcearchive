@@ -7,6 +7,12 @@ import { parseReelStoryboardSubmissionForInput, type ReelClient, type ReelJob } 
 import { runOnce } from "./worker.js";
 
 const uid = (value: number) => `00000000-0000-4000-8000-${String(value).padStart(12, "0")}`;
+const frozenManualVisualSelection = {
+  contractVersion: "manual-visual-selection-frozen.v1",
+  product: null,
+  stylePreset: null,
+  avatar: null,
+} as const;
 
 function reelInput() {
   return {
@@ -27,7 +33,7 @@ function reelInput() {
 }
 
 function job(): ReelJob {
-  return { id: "job-reel", generationId: uid(1), outputId: uid(6), workspaceId: "workspace", brandId: "brand", jobType: "generate", outputFormat: "reel", status: "processing", payload: { contentGenerationInput: reelInput() }, leaseToken: "lease" };
+  return { id: "job-reel", generationId: uid(1), outputId: uid(6), workspaceId: "workspace", brandId: "brand", jobType: "generate", outputFormat: "reel", status: "processing", payload: { contentGenerationInput: reelInput(), manualVisualSelection: frozenManualVisualSelection }, leaseToken: "lease" };
 }
 
 function reelDraft() {
@@ -91,7 +97,7 @@ describe("reel worker", () => {
     expect(client.complete).toHaveBeenCalledWith(item.id, {
       workerId: "worker",
       leaseToken: "lease",
-      skillVersion: "reel-storyboard-skill.v1",
+      skillVersion: "reel-storyboard-skill.v2",
       jobType: "generate",
       planDraft: compiledDraft().planDraft,
       reelStoryboardContract: compiledDraft().reelStoryboardContract,

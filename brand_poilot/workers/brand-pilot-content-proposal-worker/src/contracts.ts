@@ -175,6 +175,7 @@ type ContentProposalJobCommon = {
   leaseToken: string;
   leaseExpiresAt: string;
   availableAt: string;
+  executionTier: "standard" | "fast";
   request: ContentProposalRequestV2;
   contract: ContentProposalJobContract;
 };
@@ -202,7 +203,7 @@ export type ContentProposalJob = ContentProposalResearchJob | ContentProposalCom
 
 const commonKeys = [
   "id", "workspaceId", "brandId", "batchId", "status", "stage", "attemptCount", "maxAttempts",
-  "workerId", "leaseToken", "leaseExpiresAt", "availableAt", "request", "contract",
+  "workerId", "leaseToken", "leaseExpiresAt", "availableAt", "executionTier", "request", "contract",
 ] as const;
 const contractKeys = [
   "id", "requestContractVersion", "baseInputContractVersion", "researchContractVersion",
@@ -263,6 +264,8 @@ function parseCommon(source: Record<string, unknown>): ContentProposalJobCommon 
     attemptCount: nonNegativeInteger(source.attemptCount), maxAttempts: positiveInteger(source.maxAttempts),
     workerId: string(source.workerId), leaseToken: uuid(source.leaseToken),
     leaseExpiresAt: timestamp(source.leaseExpiresAt), availableAt: timestamp(source.availableAt),
+    executionTier: source.executionTier === "standard" || source.executionTier === "fast"
+      ? source.executionTier : fail(),
     request, contract,
   };
   if (common.attemptCount > common.maxAttempts
