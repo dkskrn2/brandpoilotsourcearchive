@@ -224,10 +224,12 @@ const FAQ_UTTERANCE_SCRIPT_PATHS = new Set([
 
 const MANUAL_BRAND_VISUAL_TOOLING_PATHS = new Set([
   ".github/workflows/publish-brand-pilot-server-images.yml",
+  "deploy/scripts/deploy.sh",
   "scripts/ai-content-database-roles.mjs",
   "scripts/ai-content-quality-cases.mjs",
   "scripts/ai-content-quality-cases.test.mjs",
   "scripts/content-suggestion-schema-migration.test.mjs",
+  "scripts/deployment-contract.test.mjs",
   "scripts/incremental-cicd-contract.test.mjs",
   "scripts/manual-visual-assets-contract.test.mjs",
   "scripts/migrationRunner.mjs",

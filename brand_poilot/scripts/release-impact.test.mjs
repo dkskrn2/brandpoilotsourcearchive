@@ -431,6 +431,8 @@ test("manual brand visual assets selects only its exact UI, API, planner workers
     "brand_poilot/workers/brand-pilot-image-worker/src/aiContentCardDeckRenderContract.ts",
     "brand_poilot/workers/brand-pilot-image-worker/src/aiContentReelStoryboardRenderContract.ts",
     "brand_poilot/workers/brand-pilot-image-worker/test/fixtures/manualRender.ts",
+    "brand_poilot/deploy/scripts/deploy.sh",
+    "brand_poilot/scripts/deployment-contract.test.mjs",
     "brand_poilot/scripts/migrationRunner.mjs",
     "brand_poilot/scripts/ai-content-quality-cases.mjs",
     "brand_poilot/scripts/manual-visual-assets-contract.test.mjs",
