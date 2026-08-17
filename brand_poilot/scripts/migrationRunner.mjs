@@ -98,6 +98,7 @@ export const fullSourceMigrationIds = Object.freeze([
   "079_publish_calendar_runtime.sql",
   "080_reference_channel_archive.sql",
   "081_meta_ad_library_references.sql",
+  "082_manual_brand_visual_assets.sql",
 ]);
 const legacyTriggerSearchPathMigrationId = "073a_legacy_trigger_function_search_path.sql";
 export const legacyTriggerSearchPathMigrationChecksum =
@@ -116,6 +117,7 @@ const post075SchemaMigrationIds = Object.freeze([
   "079_publish_calendar_runtime.sql",
   "080_reference_channel_archive.sql",
   "081_meta_ad_library_references.sql",
+  "082_manual_brand_visual_assets.sql",
 ]);
 export const post075SchemaMigrationChecksums = Object.freeze({
   "077_content_suggestion_batches.sql": "3b178464c5ae5c4e220428e0752ab3e79a2ca06b5b2b23f1e89c34e983e63f76",
@@ -123,6 +125,7 @@ export const post075SchemaMigrationChecksums = Object.freeze({
   "079_publish_calendar_runtime.sql": "c46ffafa578f6c1f8bb353f4e7bc94d16033416dd5a6aa730cf81119e6e6ef61",
   "080_reference_channel_archive.sql": "9067430f0e8fbc6d52455ef5fcf712820fe405e4fca0e51835b6cd0552ce7fe0",
   "081_meta_ad_library_references.sql": "232f4ee76b7812b0a9399ee3124b4542e5c6f01c0d5d37ecb786b0b41c25f9ef",
+  "082_manual_brand_visual_assets.sql": "9285dbc36d5dc17d33c0d53545e69bc3deb800679ef2409d2727e83dc5230b1e",
 });
 const post075DeferredMigrationIds = Object.freeze([
   ...post075DataMigrationIds,
@@ -4647,6 +4650,79 @@ async function verifyPublishCalendarSchemaCatalog(client, {
   }
 }
 
+async function verifyManualVisualAssetsSchemaCatalog(client, {
+  schemaOwnerRoleName,
+  applicationRoleName,
+}) {
+  const catalog = await client.query(
+    `/* post_075_manual_visual_assets_catalog_v1 */
+     select event_trigger.evtenabled::text as guard_enabled,
+            preset_owner.rolname::text as preset_owner,
+            preset_reference_owner.rolname::text as preset_reference_owner,
+            selection_owner.rolname::text as selection_owner,
+            has_table_privilege($1,'public.brand_style_presets','SELECT') as app_preset_select,
+            has_table_privilege($1,'public.brand_style_presets','INSERT') as app_preset_insert,
+            has_table_privilege($1,'public.brand_style_presets','UPDATE') as app_preset_update,
+            has_table_privilege($1,'public.brand_style_presets','DELETE') as app_preset_delete,
+            has_table_privilege($1,'public.brand_style_preset_references','SELECT') as app_reference_select,
+            has_table_privilege($1,'public.brand_style_preset_references','INSERT') as app_reference_insert,
+            has_table_privilege($1,'public.brand_style_preset_references','UPDATE') as app_reference_update,
+            has_table_privilege($1,'public.brand_style_preset_references','DELETE') as app_reference_delete,
+            has_table_privilege($1,'public.manual_ai_content_visual_selections','SELECT') as app_selection_select,
+            has_table_privilege($1,'public.manual_ai_content_visual_selections','INSERT') as app_selection_insert,
+            has_table_privilege($1,'public.manual_ai_content_visual_selections','UPDATE') as app_selection_update,
+            has_table_privilege($1,'public.product_service_assets','SELECT') as app_product_asset_select,
+            has_table_privilege($1,'public.product_service_assets','INSERT') as app_product_asset_insert,
+            has_table_privilege($1,'public.product_service_assets','DELETE') as app_product_asset_delete,
+            has_column_privilege($1,'public.product_service_assets','role','UPDATE') as app_product_asset_role_update,
+            has_column_privilege($1,'public.product_service_assets','position','UPDATE') as app_product_asset_position_update,
+            has_column_privilege($1,'public.product_service_assets','storage_artifact_id','UPDATE') as app_product_asset_storage_update,
+            selection_fence.tgenabled::text as selection_fence_enabled,
+            selection_fence_owner.rolname::text as selection_fence_owner,
+            coalesce((select bool_or(acl.grantee=0) from aclexplode(preset.relacl) acl),false) as public_preset_privilege,
+            coalesce((select bool_or(acl.grantee=0) from aclexplode(preset_reference.relacl) acl),false) as public_reference_privilege,
+            coalesce((select bool_or(acl.grantee=0) from aclexplode(selection.relacl) acl),false) as public_selection_privilege
+       from pg_event_trigger event_trigger
+       join pg_class preset on preset.oid='public.brand_style_presets'::regclass
+       join pg_roles preset_owner on preset_owner.oid=preset.relowner
+       join pg_class preset_reference on preset_reference.oid='public.brand_style_preset_references'::regclass
+       join pg_roles preset_reference_owner on preset_reference_owner.oid=preset_reference.relowner
+       join pg_class selection on selection.oid='public.manual_ai_content_visual_selections'::regclass
+       join pg_roles selection_owner on selection_owner.oid=selection.relowner
+       join pg_trigger selection_fence on selection_fence.tgrelid=selection.oid
+         and selection_fence.tgname='manual_ai_content_visual_selections_write_fence'
+         and not selection_fence.tgisinternal
+       join pg_proc selection_fence_function on selection_fence_function.oid=selection_fence.tgfoid
+       join pg_roles selection_fence_owner on selection_fence_owner.oid=selection_fence_function.proowner
+      where event_trigger.evtname='ai_content_ddl_guard_074'`,
+    [applicationRoleName],
+  );
+  const sealed = catalog.rows[0];
+  if (catalog.rows.length !== 1
+    || sealed.guard_enabled !== "O"
+    || sealed.preset_owner !== schemaOwnerRoleName
+    || sealed.preset_reference_owner !== schemaOwnerRoleName
+    || sealed.selection_owner !== schemaOwnerRoleName
+    || sealed.app_preset_select !== true || sealed.app_preset_insert !== true
+    || sealed.app_preset_update !== true || sealed.app_preset_delete !== true
+    || sealed.app_reference_select !== true || sealed.app_reference_insert !== true
+    || sealed.app_reference_update !== true || sealed.app_reference_delete !== true
+    || sealed.app_selection_select !== true || sealed.app_selection_insert !== true
+    || sealed.app_selection_update !== true
+    || sealed.app_product_asset_select !== true || sealed.app_product_asset_insert !== true
+    || sealed.app_product_asset_delete !== true
+    || sealed.app_product_asset_role_update !== true
+    || sealed.app_product_asset_position_update !== true
+    || sealed.app_product_asset_storage_update !== false
+    || sealed.selection_fence_enabled !== "A"
+    || sealed.selection_fence_owner !== schemaOwnerRoleName
+    || sealed.public_preset_privilege !== false
+    || sealed.public_reference_privilege !== false
+    || sealed.public_selection_privilege !== false) {
+    throw new Error(`post_075_schema_catalog_invalid:${JSON.stringify(sealed ?? null)}`);
+  }
+}
+
 export async function runPost075SchemaMigrationsWithClient({
   client,
   migrations,
@@ -4714,6 +4790,10 @@ export async function runPost075SchemaMigrationsWithClient({
         schemaOwnerRoleName: provider.schema_owner_role_name,
         applicationRoleName: provider.application_role_name,
       });
+      await verifyManualVisualAssetsSchemaCatalog(client, {
+        schemaOwnerRoleName: provider.schema_owner_role_name,
+        applicationRoleName: provider.application_role_name,
+      });
       return {
         migrations,
         pending: [],
@@ -4753,6 +4833,10 @@ export async function runPost075SchemaMigrationsWithClient({
         requireEmptyPlanCatalog: pendingSchemaMigrations.some(
           ({ id }) => id === "079_publish_calendar_runtime.sql",
         ),
+      });
+      await verifyManualVisualAssetsSchemaCatalog(client, {
+        schemaOwnerRoleName: provider.schema_owner_role_name,
+        applicationRoleName: provider.application_role_name,
       });
       for (const migration of pendingSchemaMigrations) {
         const marker = await client.query(

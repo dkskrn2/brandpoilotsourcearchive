@@ -4,6 +4,7 @@ import {
   type ContentGenerationInputV3,
   type ResearchEvidenceSnapshotV1,
 } from "@brand-pilot/content-contracts";
+import { parseFrozenManualVisualSelectionV1, type FrozenManualVisualSelectionV1 } from "@brand-pilot/content-contracts/manual-visual-selection";
 import {
   parseBlogPlanDraftV1 as parseCanonicalBlogPlanDraftV1,
   type BlogPlanDraftV1,
@@ -61,6 +62,10 @@ export function parseBlogInput(value: unknown, job: BlogJob): ContentGenerationI
     throw new Error("blog_input_invalid");
   }
   return input;
+}
+
+export function parseBlogManualVisualSelection(value: unknown): FrozenManualVisualSelectionV1 {
+  return parseFrozenManualVisualSelectionV1(value);
 }
 
 export function parseBlogResearchEvidence(value: unknown): ResearchEvidenceSnapshotV1 {

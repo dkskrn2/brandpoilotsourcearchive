@@ -66,8 +66,9 @@ function authoredSourceFiles(directory: string): string[] {
         // Reel storyboards are the equivalent private worker/API sidecar.
         && entry !== "reelStoryboard.ts"
         && entry !== "reelStoryboardNode.ts"
-        // Safe Card/Reel planning projection; private and not a stored canonical contract.
-        && entry !== "editorialVisualContext.ts") files.push(absolute);
+        // Safe Card/Reel planning projection and manual visual selection are private sidecars.
+        && entry !== "editorialVisualContext.ts"
+        && entry !== "manualVisualSelection.ts") files.push(absolute);
     }
   };
   visit(directory);

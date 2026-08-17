@@ -19,6 +19,7 @@ export const AI_CONTENT_THREE_FORMAT_CUTOVER_PROFILE = "ai-content-three-format-
 export const STRUCTURED_SOCIAL_RENDER_SEMANTICS_PROFILE = "structured-social-render-semantics";
 export const CARD_DECK_EDITORIAL_PIPELINE_PROFILE = "card-deck-editorial-pipeline";
 export const FAQ_UTTERANCE_MATCHING_PROFILE = "faq-utterance-matching";
+export const MANUAL_BRAND_VISUAL_ASSETS_PROFILE = "manual-brand-visual-assets";
 const AI_CONTENT_CUTOVER_SERVER_COMPONENTS = Object.freeze([
   "api",
   "contentProposalWorker",
@@ -219,6 +220,31 @@ const FAQ_UTTERANCE_SCRIPT_PATHS = new Set([
   "scripts/release-impact.mjs",
   "scripts/release-impact.test.mjs",
   "scripts/repository-contract.test.mjs",
+]);
+
+const MANUAL_BRAND_VISUAL_TOOLING_PATHS = new Set([
+  ".github/workflows/publish-brand-pilot-server-images.yml",
+  "deploy/scripts/deploy.sh",
+  "scripts/ai-content-database-roles.mjs",
+  "scripts/ai-content-quality-cases.mjs",
+  "scripts/ai-content-quality-cases.test.mjs",
+  "scripts/content-suggestion-schema-migration.test.mjs",
+  "scripts/deployment-contract.test.mjs",
+  "scripts/incremental-cicd-contract.test.mjs",
+  "scripts/manual-visual-assets-contract.test.mjs",
+  "scripts/migrationRunner.mjs",
+  "scripts/migrationRunner.test.mjs",
+  "scripts/release-impact.mjs",
+  "scripts/release-impact.test.mjs",
+  "scripts/repository-contract.test.mjs",
+]);
+
+const MANUAL_BRAND_VISUAL_IMAGE_WORKER_PATHS = new Set([
+  "workers/brand-pilot-image-worker/src/aiContentAssetRenderer.ts",
+  "workers/brand-pilot-image-worker/src/aiContentAssetRenderer.test.ts",
+  "workers/brand-pilot-image-worker/src/aiContentCardDeckRenderContract.ts",
+  "workers/brand-pilot-image-worker/src/aiContentReelStoryboardRenderContract.ts",
+  "workers/brand-pilot-image-worker/test/fixtures/manualRender.ts",
 ]);
 
 const WORKER_PATHS = Object.freeze([
@@ -450,9 +476,65 @@ function classifyFaqUtteranceMatchingPath(path, components) {
   return { known: false };
 }
 
+function classifyManualBrandVisualAssetsPath(path, components) {
+  if (path.startsWith("docs/") || path.endsWith(".md")) {
+    return { known: true, documentation: true };
+  }
+  if (path === "db/migrations/082_manual_brand_visual_assets.sql") {
+    components.api = true;
+    return { known: true, migration: true };
+  }
+  if (path.startsWith("apps/api/")) {
+    components.api = true;
+    return { known: true };
+  }
+  if (path.startsWith("apps/customer-ui/")) {
+    components.customerUi = true;
+    return { known: true };
+  }
+  if (path.startsWith("packages/brand-pilot-content-contracts/")) {
+    for (const component of ["api", "contentProposalWorker", "imageWorker", "cardNewsWorker", "blogWorker", "reelWorker"]) {
+      components[component] = true;
+    }
+    return { known: true };
+  }
+  if (path.startsWith("workers/brand-pilot-content-proposal-worker/")) {
+    components.contentProposalWorker = true;
+    return { known: true };
+  }
+  if (path.startsWith("workers/brand-pilot-card-news-worker/")) {
+    components.cardNewsWorker = true;
+    return { known: true };
+  }
+  if (path.startsWith("workers/brand-pilot-blog-worker/")) {
+    components.blogWorker = true;
+    return { known: true };
+  }
+  if (path.startsWith("workers/brand-pilot-reel-worker/")) {
+    components.reelWorker = true;
+    return { known: true };
+  }
+  if (MANUAL_BRAND_VISUAL_IMAGE_WORKER_PATHS.has(path)) {
+    components.imageWorker = true;
+    return { known: true };
+  }
+  if (MANUAL_BRAND_VISUAL_TOOLING_PATHS.has(path)) {
+    return {
+      known: true,
+      migration: path === "scripts/migrationRunner.mjs",
+      deployBundle: path === "scripts/migrationRunner.mjs"
+        || path === "scripts/release-impact.mjs"
+        || path === ".github/workflows/publish-brand-pilot-server-images.yml",
+    };
+  }
+  return { known: false };
+}
+
 export function classifyChangedPaths(values, options = {}) {
   const profile = options.profile ?? "default";
-  if (!["default", AI_CONTENT_THREE_FORMAT_CUTOVER_PROFILE, STRUCTURED_SOCIAL_RENDER_SEMANTICS_PROFILE, CARD_DECK_EDITORIAL_PIPELINE_PROFILE, FAQ_UTTERANCE_MATCHING_PROFILE].includes(profile)) {
+  if (!["default", AI_CONTENT_THREE_FORMAT_CUTOVER_PROFILE, STRUCTURED_SOCIAL_RENDER_SEMANTICS_PROFILE,
+    CARD_DECK_EDITORIAL_PIPELINE_PROFILE, FAQ_UTTERANCE_MATCHING_PROFILE,
+    MANUAL_BRAND_VISUAL_ASSETS_PROFILE].includes(profile)) {
     throw new Error("release_impact_profile_invalid");
   }
   const originalPaths = [...new Set(values.map((value) => String(value ?? "").trim()).filter(Boolean))];
@@ -475,7 +557,8 @@ export function classifyChangedPaths(values, options = {}) {
   if (profile === AI_CONTENT_THREE_FORMAT_CUTOVER_PROFILE
     || profile === STRUCTURED_SOCIAL_RENDER_SEMANTICS_PROFILE
     || profile === CARD_DECK_EDITORIAL_PIPELINE_PROFILE
-    || profile === FAQ_UTTERANCE_MATCHING_PROFILE) {
+    || profile === FAQ_UTTERANCE_MATCHING_PROFILE
+    || profile === MANUAL_BRAND_VISUAL_ASSETS_PROFILE) {
     for (let index = 0; index < paths.length; index += 1) {
       const path = paths[index];
       const originalPath = originalPaths[index] ?? path;
@@ -485,7 +568,9 @@ export function classifyChangedPaths(values, options = {}) {
           ? classifyStructuredSocialRenderPath(path, components)
           : profile === CARD_DECK_EDITORIAL_PIPELINE_PROFILE
             ? classifyCardDeckEditorialPipelinePath(path, components)
-            : classifyFaqUtteranceMatchingPath(path, components);
+            : profile === FAQ_UTTERANCE_MATCHING_PROFILE
+              ? classifyFaqUtteranceMatchingPath(path, components)
+              : classifyManualBrandVisualAssetsPath(path, components);
       if (result.documentation) continue;
       nonDocumentationChange = true;
       if (result.migration) migrationChanged = true;

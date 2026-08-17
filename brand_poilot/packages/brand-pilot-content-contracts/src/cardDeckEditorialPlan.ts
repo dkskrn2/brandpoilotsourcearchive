@@ -43,6 +43,7 @@ export const CardDeckSceneV1Schema = Type.Object({
   layoutArchetype: CardDeckLayoutArchetypeV1Schema,
   evidenceIds: Type.Array(UuidSchema, { maxItems: 8 }),
   productImageAssetIds: Type.Array(UuidSchema, { maxItems: 20 }),
+  avatarImageAssetIds: Type.Optional(Type.Array(UuidSchema, { maxItems: 5 })),
 }, { additionalProperties: false });
 
 export const CardDeckEditorialPlanV1Schema = Type.Object({
@@ -91,8 +92,10 @@ function normalizeScene(source: CardDeckSceneV1): CardDeckSceneV1 {
     layoutArchetype: source.layoutArchetype,
     evidenceIds: [...source.evidenceIds],
     productImageAssetIds: [...source.productImageAssetIds],
+    avatarImageAssetIds: [...(source.avatarImageAssetIds ?? [])],
   };
-  if (!unique(normalized.evidenceIds) || !unique(normalized.productImageAssetIds)) invalid();
+  if (!unique(normalized.evidenceIds) || !unique(normalized.productImageAssetIds)
+    || !unique(normalized.avatarImageAssetIds ?? [])) invalid();
   try {
     parseStructuredSceneCopyV1({
       index: normalized.index,

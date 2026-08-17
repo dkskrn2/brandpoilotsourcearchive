@@ -12,6 +12,12 @@ afterEach(() => vi.useRealTimers());
 
 const uid = (value: number) => `00000000-0000-4000-8000-${String(value).padStart(12, "0")}`;
 const capturedAt = "2026-07-31T00:00:00.000Z";
+const frozenManualVisualSelection = {
+  contractVersion: "manual-visual-selection-frozen.v1",
+  product: null,
+  stylePreset: null,
+  avatar: null,
+} as const;
 
 function v3Input(purpose: "informational" | "marketing") {
   const marketing = purpose === "marketing";
@@ -47,9 +53,9 @@ function v3Draft(input: ReturnType<typeof v3Input>) {
     deckNarrative: "A useful opening followed by a practical next step.",
     visualSystem: { paletteDirection: "calm green", typographyDirection: "large readable type", graphicLanguage: "editorial cards", imageryDirection: "tea details", invariants: ["same margins"] },
     scenes: [
-      { index: 1, editorialRole: "cover", purpose: "Open", coreMessage: "Open with one useful reason.", headline: "Start with a clear reason and useful context.", keyVisual: { type: "none", entries: [] }, supportingTexts: [], footnote: null, visualThesis: "Readable opening card.", layoutArchetype: "cover_editorial", evidenceIds: [], productImageAssetIds: [] },
-      { index: 2, editorialRole: "action", purpose: "Explain", coreMessage: "Give one practical next step.", headline: "Use the fixed facts to explain a practical next step.", keyVisual: { type: "none", entries: [] }, supportingTexts: [], footnote: null, visualThesis: "Mobile-friendly two-step guide.", layoutArchetype: "checklist", evidenceIds: input.product ? [] : [uid(7)], productImageAssetIds: input.product ? [uid(4)] : [] },
-      { index: 3, editorialRole: "closing", purpose: "Act", coreMessage: "Close with one useful action.", headline: "Save the guide and use it next time.", keyVisual: { type: "none", entries: [] }, supportingTexts: [], footnote: null, visualThesis: "Simple closing action.", layoutArchetype: "editorial_freeform", evidenceIds: [], productImageAssetIds: [] },
+      { index: 1, editorialRole: "cover", purpose: "Open", coreMessage: "Open with one useful reason.", headline: "Start with a clear reason and useful context.", keyVisual: { type: "none", entries: [] }, supportingTexts: [], footnote: null, visualThesis: "Readable opening card.", layoutArchetype: "cover_editorial", evidenceIds: [], productImageAssetIds: [], avatarImageAssetIds: [] },
+      { index: 2, editorialRole: "action", purpose: "Explain", coreMessage: "Give one practical next step.", headline: "Use the fixed facts to explain a practical next step.", keyVisual: { type: "none", entries: [] }, supportingTexts: [], footnote: null, visualThesis: "Mobile-friendly two-step guide.", layoutArchetype: "checklist", evidenceIds: input.product ? [] : [uid(7)], productImageAssetIds: input.product ? [uid(4)] : [], avatarImageAssetIds: [] },
+      { index: 3, editorialRole: "closing", purpose: "Act", coreMessage: "Close with one useful action.", headline: "Save the guide and use it next time.", keyVisual: { type: "none", entries: [] }, supportingTexts: [], footnote: null, visualThesis: "Simple closing action.", layoutArchetype: "editorial_freeform", evidenceIds: [], productImageAssetIds: [], avatarImageAssetIds: [] },
     ],
   };
 }
@@ -74,7 +80,7 @@ function v3Job(purpose: "informational" | "marketing") {
   return {
     id: `job-v3-${purpose}`, generationId: uid(10), outputId: `output-v3-${purpose}`, workspaceId: "w", brandId: "brand-1",
     jobType: "generate", outputFormat: "card_news", status: "processing",
-    payload: { contentGenerationInput: v3Input(purpose) }, leaseToken: "lease-v3",
+    payload: { contentGenerationInput: v3Input(purpose), manualVisualSelection: frozenManualVisualSelection }, leaseToken: "lease-v3",
   } as AiContentJob;
 }
 
@@ -110,7 +116,7 @@ describe("card-news worker", () => {
     expect(planner.run).toHaveBeenCalledOnce();
     expect(api.complete).toHaveBeenCalledWith(item.id, {
       workerId: "worker-1", leaseToken: "lease-v3", jobType: "generate",
-      skillVersion: "card-news-plan-skill.v6", planDraft: compiledV1(v3Input(purpose)),
+      skillVersion: "card-news-plan-skill.v7", planDraft: compiledV1(v3Input(purpose)),
       cardDeckContract: expect.objectContaining({
         contractVersion: "card-deck-editorial-plan.v1",
         deckSha256: expect.stringMatching(/^[0-9a-f]{64}$/),

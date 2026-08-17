@@ -25,7 +25,11 @@ function leaseSafetyMargin(ttlMs: number): number {
 }
 
 export interface ContentProposalRunner {
-  generate(prompt: string, signal?: AbortSignal): Promise<ContentProposalModelResult>;
+  generate(
+    prompt: string,
+    signal?: AbortSignal,
+    executionTier?: "standard" | "fast",
+  ): Promise<ContentProposalModelResult>;
 }
 
 export type ContentProposalJobResult = {
@@ -36,7 +40,7 @@ export type ContentProposalRunResult = ContentProposalJobResult | { status: "idl
 export type ContentProposalIterationResult = ContentProposalRunResult | { status: "retrying" };
 
 export function createContentProposalRunner(model: ContentProposalModelClient): ContentProposalRunner {
-  return { generate: (prompt, signal) => model.generate(prompt, signal) };
+  return { generate: (prompt, signal, executionTier) => model.generate(prompt, signal, executionTier) };
 }
 
 function errorDetails(error: unknown): { code: string; message: string } {
@@ -139,7 +143,7 @@ async function runComposition(
     }
     let result: ContentProposalModelResult;
     try {
-      result = await runner.generate(prompt, signal);
+      result = await runner.generate(prompt, signal, job.executionTier);
     } catch (error) {
       try { await client.recordInvocationTerminal(job, ordinal, modelFailureTerminal(error)); }
       catch (terminalError) {

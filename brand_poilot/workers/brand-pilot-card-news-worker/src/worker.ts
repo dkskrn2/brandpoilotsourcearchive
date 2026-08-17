@@ -10,7 +10,7 @@ import {
   startJobLeaseGuard,
   type CodexAccountPool,
 } from "@brand-pilot/worker-runtime";
-import { parseCardNewsInput, type AiContentJob, type WorkerClient } from "./contracts.js";
+import { parseCardNewsInput, parseCardNewsManualVisualSelection, type AiContentJob, type WorkerClient } from "./contracts.js";
 import { buildCardNewsPlanPrompt, cardNewsPlanSkillVersion } from "./promptBuilder.js";
 import { loadCardDeckSubmission } from "./deckPlan.js";
 import { withResource } from "./resourceLease.js";
@@ -126,10 +126,11 @@ export async function runOnce({ workerId, client, planner, shutdownSignal }: { w
     const cancellation = (state: "lease_lost" | "cancelled") => ({ status: state, jobId: job.id } as const);
     try {
       const parsedInput = parseCardNewsInput(job.payload.contentGenerationInput, job);
+      const manualVisualSelection = parseCardNewsManualVisualSelection(job.payload.manualVisualSelection);
       let repairError: string | undefined;
       let submission: Awaited<ReturnType<typeof loadCardDeckSubmission>> | undefined;
       for (let attempt = 0; attempt < 2; attempt += 1) {
-        const current = await planner.run(job, buildCardNewsPlanPrompt(job, parsedInput, repairError), lease.signal);
+        const current = await planner.run(job, buildCardNewsPlanPrompt(job, parsedInput, manualVisualSelection, repairError), lease.signal);
         planned.push(current);
         try {
           submission = await loadCardDeckSubmission(current.outputDir, parsedInput);

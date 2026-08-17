@@ -1,6 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import type { LibraryGateway } from "../../features/libraries/libraryGateway";
+import type {
+  Avatar,
+  BrandStylePreset,
+  LibraryGateway,
+  ProductServiceImageAsset,
+} from "../../features/libraries/libraryGateway";
 import { libraryGateway } from "../../features/libraries/libraryGateway";
 import {
   createChannelCapabilityGateway,
@@ -26,12 +31,11 @@ import { ContentSubjectStep, isApprovedActiveProduct, type ContentSubjectMode } 
 import { ContentReferenceSeedPicker } from "./ContentReferenceSeedPicker";
 import { ContentStrategyStep } from "./ContentStrategyStep";
 import { ContentProposalComparison } from "./ContentProposalComparison";
-import { ReferenceAvatarStep, type BrandStyleImagePreview } from "./ReferenceAvatarStep";
+import { ManualVisualSelectionStep } from "./ManualVisualSelectionStep";
 import { AiContentAttachmentUploader } from "./AiContentAttachmentUploader";
 import { AiContentPhaseProgress } from "./AiContentPhaseProgress";
 import { PageGuideButton } from "../layout/PageHeader";
 import { api, ApiRequestError } from "../../lib/apiClient";
-import { brandCenterGateway } from "../../features/brand-center/brandCenterGateway";
 import {
   contentSuggestionGateway,
   type ContentSuggestion,
@@ -93,8 +97,7 @@ function validationMessage(error: unknown) {
 type ContentLibraries = Pick<LibraryGateway, "listProductServices">;
 type ChannelCapabilityGateway = ReturnType<typeof createChannelCapabilityGateway>;
 type ReferenceTrendGateway = Pick<typeof api, "searchInstagramTrends" | "saveInstagramTrendSource">;
-type RulesGateway = Pick<typeof brandCenterGateway, "getRules">;
-type StyleAssetGateway = Pick<LibraryGateway, "getReference">;
+type StyleAssetGateway = Pick<LibraryGateway, "listStylePresets" | "listAvatars" | "listProductImages">;
 
 function requestRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value)
@@ -118,7 +121,6 @@ export function ContentProposalFlow({
   initialSeedReferenceId = null,
   onSeedReferenceInvalid,
   assetGateway = libraryGateway,
-  rulesGateway = brandCenterGateway,
   initialAnalyzedSubjectId = null,
   initialSuggestionId = null,
   initialSuggestionView = false,
@@ -135,7 +137,6 @@ export function ContentProposalFlow({
   initialSeedReferenceId?: string | null;
   onSeedReferenceInvalid?(): void;
   assetGateway?: StyleAssetGateway;
-  rulesGateway?: RulesGateway;
   initialAnalyzedSubjectId?: string | null;
   initialSuggestionId?: string | null;
   initialSuggestionView?: boolean;
@@ -182,8 +183,11 @@ export function ContentProposalFlow({
   const [selectedProposal, setSelectedProposal] = useState<ContentProposalRecord | ContentProposalRecordV2 | null>(null);
   const [selectedReferences, setSelectedReferences] = useState<ContentReferenceSelectionV2[]>([]);
   const [selectedGenerationId, setSelectedGenerationId] = useState<string | null>(null);
-  const [styleImages, setStyleImages] = useState<BrandStyleImagePreview[]>([]);
-  const [selectedAvatarStyleImageId, setSelectedAvatarStyleImageId] = useState<string | null>(null);
+  const [stylePresets, setStylePresets] = useState<BrandStylePreset[]>([]);
+  const [avatars, setAvatars] = useState<Avatar[]>([]);
+  const [productImages, setProductImages] = useState<ProductServiceImageAsset[]>([]);
+  const [selectedStylePresetId, setSelectedStylePresetId] = useState<string | null>(null);
+  const [selectedAvatarId, setSelectedAvatarId] = useState<string | null>(null);
   const [userImageInstruction, setUserImageInstruction] = useState("");
   const [attachments, setAttachments] = useState<GenerationAttachment[]>([]);
   const [styleLoadError, setStyleLoadError] = useState<string | null>(null);
@@ -322,8 +326,11 @@ export function ContentProposalFlow({
     setSelectedProposal(null);
     setSelectedReferences([]);
     setSelectedGenerationId(null);
-    setStyleImages([]);
-    setSelectedAvatarStyleImageId(null);
+    setStylePresets([]);
+    setAvatars([]);
+    setProductImages([]);
+    setSelectedStylePresetId(null);
+    setSelectedAvatarId(null);
     setUserImageInstruction("");
     setAttachments([]);
     setStyleLoadError(null);
@@ -494,39 +501,36 @@ export function ContentProposalFlow({
     }
   }
 
-  async function loadApprovedStyleImages(requestedBrandId = brandId) {
+  async function loadManualVisualAssets(requestedBrandId = brandId) {
     setLoadingAssets(true);
     setStyleLoadError(null);
     try {
-      const workspace = await rulesGateway.getRules(requestedBrandId);
+      const approvedProduct = products.find((item) => item.id === selectedProductId && isApprovedActiveProduct(item));
+      const [loadedPresets, loadedAvatars, loadedProductImages] = await Promise.all([
+        assetGateway.listStylePresets(requestedBrandId),
+        assetGateway.listAvatars(requestedBrandId),
+        approvedProduct?.activeVersion
+          ? assetGateway.listProductImages(requestedBrandId, approvedProduct.id, approvedProduct.activeVersion.id)
+          : Promise.resolve([]),
+      ]);
       if (activeBrandId.current !== requestedBrandId) return;
-      const rules = workspace.active?.status === "approved" ? workspace.active.rules : null;
-      const configured = rules?.designRules.referenceImages ?? [];
-      const candidates = await Promise.all(configured.map(async (style): Promise<BrandStyleImagePreview | null> => {
-        const reference = await assetGateway.getReference(requestedBrandId, style.referenceItemId);
-        if (
-          reference.kind !== "upload"
-          || reference.archivedAt !== null
-          || typeof reference.previewUrl !== "string"
-          || !reference.previewUrl.trim()
-        ) return null;
-        return {
-          referenceItemId: style.referenceItemId,
-          title: reference.title,
-          description: style.description,
-          tags: style.tags,
-          previewUrl: reference.previewUrl,
-        };
-      }));
-      const loaded = candidates.filter((image): image is BrandStyleImagePreview => image !== null);
-      if (activeBrandId.current !== requestedBrandId) return;
-      setStyleImages(loaded);
-      setSelectedAvatarStyleImageId((current) => current && loaded.some((image) => image.referenceItemId === current) ? current : null);
+      const activePresets = loadedPresets.filter((preset) => preset.status === "active");
+      const activeAvatars = loadedAvatars.filter((avatar) => avatar.status === "active");
+      setStylePresets(activePresets);
+      setAvatars(activeAvatars);
+      setProductImages(loadedProductImages);
+      setSelectedStylePresetId((current) => activePresets.some(({ id }) => id === current)
+        ? current : activePresets.find(({ isDefault }) => isDefault)?.id ?? null);
+      setSelectedAvatarId((current) => activeAvatars.some(({ id }) => id === current)
+        ? current : activeAvatars.find(({ isDefault }) => isDefault)?.id ?? null);
     } catch {
       if (activeBrandId.current !== requestedBrandId) return;
-      setStyleImages([]);
-      setSelectedAvatarStyleImageId(null);
-      setStyleLoadError("브랜드 스타일 이미지를 불러오지 못했습니다. 다시 시도해 주세요.");
+      setStylePresets([]);
+      setAvatars([]);
+      setProductImages([]);
+      setSelectedStylePresetId(null);
+      setSelectedAvatarId(null);
+      setStyleLoadError("브랜드 제품·스타일·아바타를 불러오지 못했습니다. 다시 시도해 주세요.");
     } finally {
       if (activeBrandId.current === requestedBrandId) setLoadingAssets(false);
     }
@@ -550,12 +554,15 @@ export function ContentProposalFlow({
       }
       setSelectedProposal(item);
       setSelectedGenerationId(generation.id);
-      setStyleImages([]);
-      setSelectedAvatarStyleImageId(null);
+      setStylePresets([]);
+      setAvatars([]);
+      setProductImages([]);
+      setSelectedStylePresetId(null);
+      setSelectedAvatarId(null);
       setUserImageInstruction("");
       setAttachments([]);
       setMachine((current) => transitionContentWizard(current, { type: "select_proposal", proposalId: item.id }));
-      await loadApprovedStyleImages(requestedBrandId);
+      await loadManualVisualAssets(requestedBrandId);
     } catch (caught) {
       if (activeBrandId.current !== requestedBrandId) return;
       setLoadingAssets(false);
@@ -574,9 +581,9 @@ export function ContentProposalFlow({
   ));
 
   async function generate() {
-    if (!selectedProposal || !selectedGenerationId || submitting || !attachmentsReady) return;
+    if (!selectedProposal || !selectedGenerationId || submitting || styleLoadError || !attachmentsReady) return;
     const requestedBrandId = brandId;
-    if (!gateway.updateFinalizationDraft || !gateway.startGenerationV2) {
+    if (!gateway.updateFinalizationDraft || !gateway.updateManualVisualSelection || !gateway.startGenerationV2) {
       setError("최종 생성 API를 사용할 수 없습니다. 잠시 후 다시 시도해 주세요.");
       return;
     }
@@ -586,18 +593,33 @@ export function ContentProposalFlow({
       const attachmentIds = attachments
         .filter((attachment) => finalAttachmentRoles.has(attachment.role))
         .map((attachment) => attachment.id);
+      const selectedPreset = stylePresets.find(({ id }) => id === selectedStylePresetId) ?? null;
+      const selectedAvatar = avatars.find(({ id }) => id === selectedAvatarId) ?? null;
+      const approvedProduct = family === "marketing"
+        ? products.find((item) => item.id === selectedProductId && isApprovedActiveProduct(item)) ?? null
+        : null;
+      const manualVisualSelection = {
+        contractVersion: "manual-visual-selection.v1" as const,
+        product: approvedProduct?.activeVersion
+          ? { productServiceId: approvedProduct.id, versionId: approvedProduct.activeVersion.id }
+          : null,
+        stylePreset: selectedPreset ? { presetId: selectedPreset.id, revision: selectedPreset.revision } : null,
+        avatar: selectedAvatar ? { avatarId: selectedAvatar.id, revision: selectedAvatar.revision } : null,
+      };
       const finalizationDraft = {
         contractVersion: "content-finalization-draft.v2",
-        avatarStyleImageId: selectedAvatarStyleImageId,
+        avatarStyleImageId: null,
         userImageInstruction: userImageInstruction.trim() || null,
         attachmentIds,
       } as const;
+      await gateway.updateManualVisualSelection(requestedBrandId, selectedGenerationId, manualVisualSelection);
+      if (activeBrandId.current !== requestedBrandId) return;
       await gateway.updateFinalizationDraft(requestedBrandId, selectedGenerationId, finalizationDraft);
       if (activeBrandId.current !== requestedBrandId) return;
       await gateway.startGenerationV2(
         requestedBrandId,
         selectedGenerationId,
-        keyForRequest(generationStartKey, { generationId: selectedGenerationId, finalizationDraft }),
+        keyForRequest(generationStartKey, { generationId: selectedGenerationId, finalizationDraft, manualVisualSelection }),
       );
       if (activeBrandId.current !== requestedBrandId) return;
       setMachine((current) => transitionContentWizard(current, { type: "start_generation" }));
@@ -736,11 +758,14 @@ export function ContentProposalFlow({
           disabled={loadingAssets || submitting || Boolean(selectedGenerationId)}
           onSelect={(item) => void chooseProposal(item)}
         /></div>
-        {selectedProposal ? <ReferenceAvatarStep
-          styleImages={styleImages}
-          selectedAvatarStyleImageId={selectedAvatarStyleImageId}
+        {selectedProposal ? <ManualVisualSelectionStep
+          product={family === "marketing" ? selectedProduct ?? null : null}
+          productImages={productImages}
+          stylePresets={stylePresets}
+          avatars={avatars}
+          selectedStylePresetId={selectedStylePresetId}
+          selectedAvatarId={selectedAvatarId}
           userImageInstruction={userImageInstruction}
-          outputFormat={"conceptKey" in selectedProposal.proposal ? selectedProposal.proposal.outputFormat : format}
           loading={loadingAssets}
           loadError={styleLoadError}
           submitting={submitting}
@@ -757,9 +782,10 @@ export function ContentProposalFlow({
             disabled={submitting || !selectedGenerationId}
             onChange={setAttachments}
           />}
-          onAvatarStyleImageChange={setSelectedAvatarStyleImageId}
+          onStylePresetChange={setSelectedStylePresetId}
+          onAvatarChange={setSelectedAvatarId}
           onUserImageInstructionChange={setUserImageInstruction}
-          onRetry={() => void loadApprovedStyleImages()}
+          onRetry={() => void loadManualVisualAssets()}
           onGenerate={() => void generate()}
         /> : null}</>
       : null}

@@ -21,7 +21,7 @@ export function manualImageJobV2() {
     text: "동결된 참고 내용", image: { storageUrl: "https://owned.example/reference.png", storagePath: "owned/reference.png", mimeType: "image/png", checksum: sha("d") },
   };
   const style = {
-    referenceItemId: uid(30), description: "따뜻한 스타일", tags: ["warm"], storageUrl: "https://owned.example/style.png",
+    referenceItemId: uid(30), description: "브랜드 아바타", tags: ["avatar"], storageUrl: "https://owned.example/style.png",
     storagePath: "owned/style.png", mimeType: "image/png", checksum: sha("e"),
   };
   const attachments = [
@@ -158,6 +158,7 @@ export function cardDeckImageJob() {
       layoutArchetype: index === 2 ? "before_after" as const : "editorial_freeform" as const,
       evidenceIds: [] as string[],
       productImageAssetIds: index === 2 ? [uid(10)] : [] as string[],
+      avatarImageAssetIds: index === 2 ? [uid(30)] : [] as string[],
     })),
   };
   const structuredScene = {
@@ -264,6 +265,7 @@ export function reelStoryboardImageJob() {
       layoutArchetype: index === 2 ? "before_after" as const : "editorial_freeform" as const,
       evidenceIds: [] as string[],
       productImageAssetIds: index === 2 ? [uid(10)] : [] as string[],
+      avatarImageAssetIds: index === 2 ? [uid(30)] : [] as string[],
     })),
   };
   const planDraft = compileReelStoryboardDraftV1(storyboard, outline);

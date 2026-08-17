@@ -10,7 +10,7 @@ import {
   startJobLeaseGuard,
   type CodexAccountPool,
 } from "@brand-pilot/worker-runtime";
-import { parseReelInput, parseReelStoryboardSubmissionForInput, type ReelClient, type ReelJob, type ReelStoryboardSubmission } from "./contracts.js";
+import { parseReelInput, parseReelManualVisualSelection, parseReelStoryboardSubmissionForInput, type ReelClient, type ReelJob, type ReelStoryboardSubmission } from "./contracts.js";
 import { buildReelPlanPrompt, reelPlanSkillVersion } from "./promptBuilder.js";
 
 export interface ReelPlanner {
@@ -74,10 +74,11 @@ export async function runOnce(input: { workerId: string; client: ReelClient; pla
   const cancellation = (state: "lease_lost" | "cancelled") => ({ status: state, jobId: job.id } as const);
   try {
     const finalInput = parseReelInput(job.payload.contentGenerationInput, job);
+    const manualVisualSelection = parseReelManualVisualSelection(job.payload.manualVisualSelection);
     let repairError: string | undefined;
     let submission: ReelStoryboardSubmission | undefined;
     for (let attempt = 0; attempt < 2; attempt += 1) {
-      const run = await input.planner.run(job, buildReelPlanPrompt(finalInput, repairError), lease.signal);
+      const run = await input.planner.run(job, buildReelPlanPrompt(finalInput, manualVisualSelection, repairError), lease.signal);
       runs.push(run);
       try {
         submission = parseReelStoryboardSubmissionForInput(

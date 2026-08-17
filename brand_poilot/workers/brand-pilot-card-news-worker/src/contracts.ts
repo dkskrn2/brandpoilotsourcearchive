@@ -1,4 +1,8 @@
-import { parseContentGenerationInputV3, type ContentGenerationInputV3 } from "@brand-pilot/content-contracts";
+import {
+  parseContentGenerationInputV3,
+  type ContentGenerationInputV3,
+} from "@brand-pilot/content-contracts";
+import { parseFrozenManualVisualSelectionV1, type FrozenManualVisualSelectionV1 } from "@brand-pilot/content-contracts/manual-visual-selection";
 
 export interface AiContentJob {
   id: string;
@@ -50,4 +54,8 @@ export function parseCardNewsInput(value: unknown, job: AiContentJob): ContentGe
     throw new Error("card_news_input_invalid");
   }
   return input;
+}
+
+export function parseCardNewsManualVisualSelection(value: unknown): FrozenManualVisualSelectionV1 {
+  return parseFrozenManualVisualSelectionV1(value);
 }

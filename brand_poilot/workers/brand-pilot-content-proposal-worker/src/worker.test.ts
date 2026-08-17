@@ -79,6 +79,7 @@ describe("Proposal V2 staged worker", () => {
     })).resolves.toEqual({ status: "completed", jobId: job.id });
     expect(order).toEqual(["start:1", "model:1", "complete"]);
     expect(client.recordInvocationTerminal).not.toHaveBeenCalled();
+    expect(model.generate).toHaveBeenCalledWith(expect.any(String), expect.any(AbortSignal), job.executionTier);
     expect(client.complete).toHaveBeenCalledWith(job, 1, {
       transcriptSha256: "e".repeat(64),
       outputSha256: "f".repeat(64),

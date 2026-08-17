@@ -8,6 +8,7 @@ import test from "node:test";
 import {
   CARD_DECK_EDITORIAL_PIPELINE_PROFILE,
   FAQ_UTTERANCE_MATCHING_PROFILE,
+  MANUAL_BRAND_VISUAL_ASSETS_PROFILE,
   SERVER_COMPONENTS,
   STRUCTURED_SOCIAL_RENDER_SEMANTICS_PROFILE,
   classifyChangedPaths,
@@ -415,6 +416,49 @@ test("FAQ utterance profile selects only API, customer UI, and the shared DM ima
   assert.deepEqual(impact.unknownPaths, []);
 });
 
+test("manual brand visual assets selects only its exact UI, API, planner workers, and image renderer", () => {
+  const impact = classifyChangedPaths([
+    "brand_poilot/db/migrations/082_manual_brand_visual_assets.sql",
+    "brand_poilot/apps/api/src/manualVisualAssetsRepository.ts",
+    "brand_poilot/apps/customer-ui/src/components/brand-center/BrandStylePresetPanel.tsx",
+    "brand_poilot/packages/brand-pilot-content-contracts/src/manualVisualSelection.ts",
+    "brand_poilot/workers/brand-pilot-content-proposal-worker/src/codexModel.ts",
+    "brand_poilot/workers/brand-pilot-card-news-worker/src/promptBuilder.ts",
+    "brand_poilot/workers/brand-pilot-reel-worker/src/promptBuilder.ts",
+    "brand_poilot/workers/brand-pilot-blog-worker/src/promptBuilder.ts",
+    "brand_poilot/workers/brand-pilot-image-worker/src/aiContentAssetRenderer.ts",
+    "brand_poilot/workers/brand-pilot-image-worker/src/aiContentAssetRenderer.test.ts",
+    "brand_poilot/workers/brand-pilot-image-worker/src/aiContentCardDeckRenderContract.ts",
+    "brand_poilot/workers/brand-pilot-image-worker/src/aiContentReelStoryboardRenderContract.ts",
+    "brand_poilot/workers/brand-pilot-image-worker/test/fixtures/manualRender.ts",
+    "brand_poilot/deploy/scripts/deploy.sh",
+    "brand_poilot/scripts/deployment-contract.test.mjs",
+    "brand_poilot/scripts/migrationRunner.mjs",
+    "brand_poilot/scripts/ai-content-quality-cases.mjs",
+    "brand_poilot/scripts/manual-visual-assets-contract.test.mjs",
+    "brand_poilot/docs/operations/manual-ai-content-visual-quality.md",
+    ".github/workflows/publish-brand-pilot-server-images.yml",
+    "brand_poilot/scripts/incremental-cicd-contract.test.mjs",
+    "brand_poilot/scripts/release-impact.mjs",
+    "brand_poilot/scripts/release-impact.test.mjs",
+  ], { profile: MANUAL_BRAND_VISUAL_ASSETS_PROFILE });
+
+  assert.deepEqual(enabled(impact), [
+    "api",
+    "blogWorker",
+    "cardNewsWorker",
+    "contentProposalWorker",
+    "customerUi",
+    "imageWorker",
+    "reelWorker",
+  ]);
+  assert.equal(impact.buildAllServer, false);
+  assert.equal(impact.migrationChanged, true);
+  assert.equal(impact.productionDeployAllowed, false);
+  assert.equal(impact.verifiedScope, true);
+  assert.deepEqual(impact.unknownPaths, []);
+});
+
 test("FAQ utterance profile rejects unrelated workers and migrations without widening", () => {
   for (const path of [
     "brand_poilot/workers/brand-pilot-blog-worker/src/worker.ts",
@@ -425,6 +469,25 @@ test("FAQ utterance profile rejects unrelated workers and migrations without wid
       "brand_poilot/apps/api/src/faqMatcher.ts",
       path,
     ], { profile: FAQ_UTTERANCE_MATCHING_PROFILE });
+    assert.deepEqual(enabled(impact), ["api"], path);
+    assert.equal(impact.buildAllServer, false, path);
+    assert.equal(impact.productionDeployAllowed, false, path);
+    assert.equal(impact.verifiedScope, false, path);
+    assert.deepEqual(impact.unknownPaths, [path], path);
+  }
+});
+
+test("manual brand visual assets rejects unrelated workers and migrations without widening", () => {
+  for (const path of [
+    "brand_poilot/workers/brand-pilot-image-worker/src/worker.ts",
+    "brand_poilot/workers/brand-pilot-dm-worker/src/worker.ts",
+    "brand_poilot/db/migrations/080_unrelated.sql",
+    "brand_poilot/scripts/unrelated-runtime.mjs",
+  ]) {
+    const impact = classifyChangedPaths([
+      "brand_poilot/apps/api/src/manualVisualAssetsRepository.ts",
+      path,
+    ], { profile: MANUAL_BRAND_VISUAL_ASSETS_PROFILE });
     assert.deepEqual(enabled(impact), ["api"], path);
     assert.equal(impact.buildAllServer, false, path);
     assert.equal(impact.productionDeployAllowed, false, path);

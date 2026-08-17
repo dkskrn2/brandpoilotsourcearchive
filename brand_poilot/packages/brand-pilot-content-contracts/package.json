@@ -10,6 +10,7 @@
     "./reel-storyboard": "./dist/reelStoryboard.js",
     "./reel-storyboard/node": "./dist/reelStoryboardNode.js",
     "./editorial-visual-context": "./dist/editorialVisualContext.js",
+    "./manual-visual-selection": "./dist/manualVisualSelection.js",
     "./planner-drafts": "./dist/plannerDrafts.js",
     "./structured-scene-copy": "./dist/structuredSceneCopy.js",
     "./generated/*": "./generated/*"

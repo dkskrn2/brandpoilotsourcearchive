@@ -138,6 +138,11 @@ function setup(overrides: SetupOverrides = {}) {
     createAiContentAnalysis: legacyDirectCreate,
     listAiContentReferenceSeeds,
     updateAiContentFinalizationDraft: vi.fn(async (input) => ({ id: input.generationId, status: "draft" })),
+    getAiContentManualVisualSelection: vi.fn(async () => ({
+      contractVersion: "manual-visual-selection.v1" as const,
+      product: null, stylePreset: null, avatar: null,
+    })),
+    updateAiContentManualVisualSelection: vi.fn(async (input) => input.selection),
     startAiContentGenerationV3: vi.fn(async (input) => ({ id: input.generationId, status: "queued" })),
     retryAiContentOutput: vi.fn(async () => ({ id: childGenerationId, status: "queued" })),
     getAiContentGeneration: vi.fn(async (input) => ({
@@ -659,6 +664,51 @@ describe("V2 finalization customer boundary", () => {
       generationId,
       draft: body,
     });
+    await harness.app.close();
+  });
+
+  it("stores and reads an exact manual visual selection before generation starts", async () => {
+    const harness = setup();
+    const selection = {
+      contractVersion: "manual-visual-selection.v1" as const,
+      product: null,
+      stylePreset: null,
+      avatar: null,
+    };
+    const put = await harness.app.inject({
+      method: "PUT",
+      url: `/brands/${brandId}/ai-content/generations/${generationId}/visual-selection`,
+      headers: auth,
+      payload: selection,
+    });
+    expect(put.statusCode).toBe(200);
+    expect(harness.repository.updateAiContentManualVisualSelection).toHaveBeenCalledWith({
+      workspaceId, brandId, generationId, actorUserId, selection,
+    });
+    const get = await harness.app.inject({
+      method: "GET",
+      url: `/brands/${brandId}/ai-content/generations/${generationId}/visual-selection`,
+      headers: auth,
+    });
+    expect(get.statusCode).toBe(200);
+    expect(get.json()).toEqual(selection);
+    await harness.app.close();
+  });
+
+  it("rejects unknown visual selection fields before repository mutation", async () => {
+    const harness = setup();
+    const response = await harness.app.inject({
+      method: "PUT",
+      url: `/brands/${brandId}/ai-content/generations/${generationId}/visual-selection`,
+      headers: auth,
+      payload: {
+        contractVersion: "manual-visual-selection.v1",
+        product: null, stylePreset: null, avatar: null, legacyStyleImageIds: [],
+      },
+    });
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toEqual({ error: "manual_visual_selection_invalid" });
+    expect(harness.repository.updateAiContentManualVisualSelection).not.toHaveBeenCalled();
     await harness.app.close();
   });
 

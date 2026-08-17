@@ -3,7 +3,7 @@ import { generateClientTokenFromReadWriteToken } from "@vercel/blob/client";
 import { del, get, list } from "@vercel/blob";
 import { parseAssetUploadInput, type AssetUploadInput } from "./assetLibraryContracts.js";
 
-export type AssetLibraryUploadKind = "avatar" | "reference";
+export type AssetLibraryUploadKind = "avatar" | "reference" | "product";
 export const ASSET_LIBRARY_AVATAR_POLICY = Object.freeze({
   "image/png": 5 * 1024 * 1024,
   "image/jpeg": 5 * 1024 * 1024,
@@ -23,6 +23,7 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-
 const policy = {
   avatar: ASSET_LIBRARY_AVATAR_POLICY,
   reference: ASSET_LIBRARY_REFERENCE_POLICY,
+  product: ASSET_LIBRARY_AVATAR_POLICY,
 } as const;
 
 function fail(code: string): never { throw new Error(code); }
@@ -68,6 +69,7 @@ export function validateAssetLibraryUpload(
 export function buildAssetLibraryPath(input: {
   brandId: string;
   avatarId?: string;
+  productId?: string;
   sessionId: string;
   kind: AssetLibraryUploadKind;
   checksum: string;
@@ -79,10 +81,17 @@ export function buildAssetLibraryPath(input: {
     sizeBytes: 1,
     checksum: input.checksum,
   });
-  const namespace = input.kind === "avatar" ? "avatars" : "references";
-  const target = input.kind === "avatar"
-    ? `${uuid(input.avatarId ?? "")}/${uuid(input.sessionId)}`
-    : uuid(input.sessionId);
+  const namespace = input.kind === "avatar"
+    ? "avatars"
+    : input.kind === "reference"
+      ? "references"
+      : "products";
+  const ownerId = input.kind === "avatar"
+    ? input.avatarId
+    : input.productId;
+  const target = input.kind === "reference"
+    ? uuid(input.sessionId)
+    : `${uuid(ownerId ?? "")}/${uuid(input.sessionId)}`;
   return `brands/${uuid(input.brandId)}/asset-library/${namespace}/${target}/${upload.checksum}-${upload.fileName.replace(/ +/g, "-")}`;
 }
 
@@ -92,6 +101,7 @@ export interface AssetLibraryUploadSession {
   brandId: string;
   kind: AssetLibraryUploadKind;
   avatarId?: string | null;
+  productId?: string | null;
   nonce: string;
   fileName: string;
   storagePathPrefix: string;
@@ -146,7 +156,12 @@ export async function cleanupAssetLibraryUploadPrefix(
     `^brands/${uuidPart}/asset-library/references/${uuidPart}/$`,
     "i",
   );
-  if (!(scopedAvatarPrefix.test(storagePathPrefix) || scopedReferencePrefix.test(storagePathPrefix))
+  const scopedProductPrefix = new RegExp(
+    `^brands/${uuidPart}/asset-library/products/${uuidPart}/${uuidPart}/$`,
+    "i",
+  );
+  if (!(scopedAvatarPrefix.test(storagePathPrefix) || scopedReferencePrefix.test(storagePathPrefix)
+      || scopedProductPrefix.test(storagePathPrefix))
     || (storagePath !== undefined && !storagePath.startsWith(storagePathPrefix))) {
     fail("asset_library_upload_path_mismatch");
   }
@@ -186,6 +201,7 @@ export async function issueAssetLibraryUploadToken(input: {
   brandId: string;
   sessionId: string;
   avatarId?: string;
+  productId?: string;
   kind: AssetLibraryUploadKind;
   upload: AssetUploadInput;
   expiresAt?: string;
@@ -236,6 +252,7 @@ export async function confirmAssetLibraryUpload(input: {
   const expectedPath = buildAssetLibraryPath({
     brandId: input.session.brandId,
     avatarId: input.session.avatarId ?? undefined,
+    productId: input.session.productId ?? undefined,
     sessionId: input.session.id,
     kind: input.session.kind,
     checksum: expected.checksum,

@@ -9,6 +9,7 @@ import { BrandRulesPanel } from "../components/brand-center/BrandRulesPanel";
 import { KnowledgeCategoryEditorPanel } from "../components/brand-center/KnowledgeCategoryEditorPanel";
 import { ProductServiceLibraryPanel } from "../components/brand-center/ProductServiceLibraryPanel";
 import { StyleReferenceImageBoard } from "../components/brand-center/StyleReferenceImageBoard";
+import { BrandStylePresetPanel } from "../components/brand-center/BrandStylePresetPanel";
 import { brandCenterGateway } from "../features/brand-center/brandCenterGateway";
 import { brandIntelligenceGateway } from "../features/brand-intelligence/brandIntelligenceGateway";
 import type {
@@ -917,13 +918,16 @@ export function BrandCenterPage() {
           </section>
         ) : null}
         {tab === "style" && !rulesLoadError ? (
-          <StyleReferenceImageBoard
-            brandId={DEMO_BRAND_ID}
-            gateway={libraryGateway}
-            rules={visibleRules}
-            onSave={saveStyle}
-            onDirtyChange={setChildDirty}
-          />
+          <>
+            <BrandStylePresetPanel brandId={DEMO_BRAND_ID} gateway={libraryGateway} />
+            <StyleReferenceImageBoard
+              brandId={DEMO_BRAND_ID}
+              gateway={libraryGateway}
+              rules={visibleRules}
+              onSave={saveStyle}
+              onDirtyChange={setChildDirty}
+            />
+          </>
         ) : null}
       </div>
         </>

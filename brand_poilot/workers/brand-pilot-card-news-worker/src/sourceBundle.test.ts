@@ -2,6 +2,12 @@ import { describe, expect, it } from "vitest";
 import { buildCardDeckSourceBundle } from "./sourceBundle.js";
 
 const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
+const selection = {
+  contractVersion: "manual-visual-selection-frozen.v1",
+  product: null,
+  stylePreset: null,
+  avatar: null,
+} as const;
 
 function input(subject: unknown) {
   return {
@@ -41,7 +47,7 @@ describe("card deck source bundle", () => {
     { kind: "reference", referenceIds: [id(5)] },
   ])("preserves complete frozen $kind input in role-specific exact sections", (subject) => {
     const source = input(subject);
-    const bundle = buildCardDeckSourceBundle(source);
+    const bundle = buildCardDeckSourceBundle(source, selection);
 
     expect(Object.keys(bundle)).toEqual([
       "intent", "subject", "factualSources", "editorialReferences", "visualReferences", "brandContext",
@@ -53,10 +59,8 @@ describe("card deck source bundle", () => {
     })));
     expect(bundle.visualReferences).toEqual({
       explicitUserDirection: source.userImageInstruction,
-      brandStyleImages: source.references.brandStyleImages.map(({ referenceItemId, description, tags }) => ({
-        referenceItemId, description, tags,
-      })),
-      avatarStyleImageId: source.references.avatarStyleImageId,
+      stylePreset: null,
+      avatar: null,
       attachments: source.references.attachments.map(({ id, role, fileName }) => ({ id, role, fileName })),
     });
     expect(JSON.stringify(bundle)).not.toContain("storageUrl");

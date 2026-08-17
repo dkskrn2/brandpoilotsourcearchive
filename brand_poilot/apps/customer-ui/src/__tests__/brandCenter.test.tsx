@@ -277,6 +277,9 @@ async function renderPage(
     updateProductServiceDraft: vi.fn(),
     approveProductService: vi.fn(),
     archiveProductService: vi.fn(),
+    listProductImages: vi.fn(async () => []),
+    uploadProductImage: vi.fn(),
+    deleteProductImage: vi.fn(),
     listWikiItems: vi.fn(async () => [faqItem]),
     createWikiItem: vi.fn(async (_brandId, input) => ({
       ...faqItem,

@@ -133,7 +133,7 @@ describe("generated content contract artifacts", () => {
           && name !== "plannerDrafts.ts" && name !== "structuredSceneCopy.ts"
           && name !== "cardDeckEditorialPlan.ts" && name !== "cardDeckEditorialPlanNode.ts"
           && name !== "reelStoryboard.ts" && name !== "reelStoryboardNode.ts"
-          && name !== "editorialVisualContext.ts") files.push(absolute);
+          && name !== "editorialVisualContext.ts" && name !== "manualVisualSelection.ts") files.push(absolute);
       }
     };
     visit(sourceDirectory);

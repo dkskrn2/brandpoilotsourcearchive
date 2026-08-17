@@ -7,6 +7,12 @@ import type { BlogClient, BlogJob } from "./contracts.js";
 import { runOnce } from "./worker.js";
 
 const uid = (n: number) => `10000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
+const frozenManualVisualSelection = {
+  contractVersion: "manual-visual-selection-frozen.v1",
+  product: null,
+  stylePreset: null,
+  avatar: null,
+} as const;
 const v3Input = {
   contractVersion: "content-generation-input.v3", generationId: uid(1),
   brandCore: { versionId: uid(2), companyOverview: "Overview", businessDescription: "Business", primaryCategory: "Category", detailedCategory: "Detail", primaryTarget: "Reader", differentiator: "Clear", coreAppeal: "Useful" },
@@ -37,7 +43,7 @@ function plan(htmlTemplate = html()) {
 }
 
 function v3Job(extraPayload: Record<string, unknown> = {}): BlogJob {
-  return { id: "job-v3", generationId: uid(1), outputId: uid(9), workspaceId: "w", brandId: "b", jobType: "generate", outputFormat: "blog", status: "processing", payload: { contentGenerationInput: v3Input, ...extraPayload }, leaseToken: "lease" };
+  return { id: "job-v3", generationId: uid(1), outputId: uid(9), workspaceId: "w", brandId: "b", jobType: "generate", outputFormat: "blog", status: "processing", payload: { contentGenerationInput: v3Input, manualVisualSelection: frozenManualVisualSelection, ...extraPayload }, leaseToken: "lease" };
 }
 
 function clientFor(job: BlogJob, order: string[] = []) {

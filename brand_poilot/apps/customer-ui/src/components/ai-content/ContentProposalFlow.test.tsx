@@ -115,8 +115,7 @@ function renderFlow(options: {
   onSeedReferenceInvalid?: () => void;
   productResponses?: ProductServiceItem[][];
   productLoader?: (brandId: string) => Promise<ProductServiceItem[]>;
-  rulesLoader?: (brandId: string) => Promise<unknown>;
-  styleReferenceLoader?: (brandId: string, referenceId: string) => Promise<unknown>;
+  stylePresetLoader?: (brandId: string) => Promise<unknown[]>;
   strictMode?: boolean;
   abortFirstBatchLoad?: boolean;
   suggestionList?: ContentSuggestionList;
@@ -160,9 +159,10 @@ function renderFlow(options: {
     checkedAt: "2026-07-28T00:00:00.000Z",
   }]);
   const selectProposal = vi.spyOn(gateway, "selectProposal");
+  const updateManualVisualSelection = vi.fn(async () => ({} as never));
   const updateFinalizationDraft = vi.fn(async () => ({} as never));
   const startGenerationV2 = vi.fn(async () => ({} as never));
-  Object.assign(gateway, { updateFinalizationDraft, startGenerationV2 });
+  Object.assign(gateway, { updateManualVisualSelection, updateFinalizationDraft, startGenerationV2 });
   const uploadAttachment = vi.spyOn(gateway, "uploadAttachment").mockImplementation(async (_brandId, _generationId, attachment) => ({
     ...attachment,
     id: "one-time-receipt-1",
@@ -182,56 +182,31 @@ function renderFlow(options: {
     listAvatars: vi.fn().mockResolvedValue([
       {
         id: "avatar-1", workspaceId: "workspace-1", brandId: "brand-demo", name: "브랜드 모델",
+        revision: 1,
         description: "대표 모델", isDefault: true, status: "active", createdByUserId: "user-1",
         createdAt: "2026-07-28T00:00:00.000Z", updatedAt: "2026-07-28T00:00:00.000Z",
         images: [{ id: "image-1", position: 0, representative: true, storagePath: "avatar.jpg", storageUrl: "https://example.com/avatar.jpg", mimeType: "image/jpeg", sizeBytes: 1, checksum: "a" }],
       },
     ]),
   };
-  const approvedRules = {
-    active: {
-      id: "rules-1", version: 1, status: "approved",
-      rules: {
-        contractVersion: "brand-rules.v1", requiredPhrases: [], forbiddenPhrases: [], exaggerationRules: [],
-        ctaRules: { defaultCta: "", allowed: [] }, channelRules: {},
-        designRules: {
-          colors: [], fonts: [], notes: [],
-          referenceImages: [{ referenceItemId: "style-1", description: "차분한 스타일", tags: ["차분함"] }],
-        },
-        autoApprovalRules: { enabled: false, conditions: [] },
-      },
-      approvedAt: "2026-08-01T00:00:00.000Z", updatedAt: "2026-08-01T00:00:00.000Z",
-    },
-    draft: null,
-    versions: [],
-  };
-  const getRules = vi.fn().mockImplementation((requestedBrandId: string) =>
-    options.rulesLoader ? options.rulesLoader(requestedBrandId) : Promise.resolve(approvedRules));
-  const getReference = vi.fn().mockImplementation((requestedBrandId: string, referenceId: string) => (
-    options.styleReferenceLoader
-      ? options.styleReferenceLoader(requestedBrandId, referenceId)
-      : Promise.resolve({
-        id: referenceId,
-        workspaceId: "workspace-1",
-        brandId: requestedBrandId,
-        kind: "upload",
-        contentPurpose: "both",
-        origin: "Upload",
-        title: "차분한 스타일",
-        previewUrl: "https://example.com/style.jpg",
-        sourceUrl: null,
-        format: "image/png",
-        metadata: {},
-        favorite: false,
-        archivedAt: null,
-        referenceBrandId: null,
-        createdAt: "2026-08-01T00:00:00.000Z",
-        updatedAt: "2026-08-01T00:00:00.000Z",
-        description: null,
-        body: null,
-        snapshot: null,
-      })
-  ));
+  const defaultStylePreset = {
+    id: "style-preset-1",
+    workspaceId: "workspace-1",
+    brandId: "brand-demo",
+    revision: 1,
+    name: "차분한 스타일",
+    description: "정돈된 편집 디자인",
+    visualTokens: { colors: ["#143D2C"], fonts: ["Pretendard"], notes: ["차분한 여백 중심"] },
+    referenceItemIds: ["style-1"],
+    isDefault: true,
+    status: "active",
+    createdAt: "2026-08-01T00:00:00.000Z",
+    updatedAt: "2026-08-01T00:00:00.000Z",
+  } as const;
+  const listStylePresets = vi.fn().mockImplementation((requestedBrandId: string) =>
+    options.stylePresetLoader ? options.stylePresetLoader(requestedBrandId) : Promise.resolve([defaultStylePreset]));
+  const listAvatars = vi.fn().mockImplementation(libraries.listAvatars);
+  const listProductImages = vi.fn().mockResolvedValue([]);
   const channelCapabilities = createChannelCapabilityGateway(async () => capabilities);
   const referenceTrendGateway = {
     searchInstagramTrends: vi.fn(),
@@ -263,7 +238,7 @@ function renderFlow(options: {
     suggestionGateway={suggestionGateway}
     onSeedReferenceInvalid={options.onSeedReferenceInvalid}
     referenceTrendGateway={referenceTrendGateway}
-    {...({ rulesGateway: { getRules }, assetGateway: { getReference } } as object)}
+    {...({ assetGateway: { listStylePresets, listAvatars, listProductImages } } as object)}
   /></MemoryRouter>;
   const view = (brandId: string) => options.strictMode
     ? <StrictMode>{flow(brandId)}</StrictMode>
@@ -272,7 +247,8 @@ function renderFlow(options: {
   return {
     gateway, create, getBatch, listReferences, listReferenceSeeds, libraries,
     selectProposal, uploadAttachment,
-    updateFinalizationDraft, startGenerationV2, getRules, getReference, suggestionGateway,
+    updateManualVisualSelection, updateFinalizationDraft, startGenerationV2,
+    listStylePresets, listAvatars, listProductImages, suggestionGateway,
     rerenderBrand: (brandId: string) => rendered.rerender(view(brandId)),
   };
 }
@@ -453,7 +429,7 @@ describe("ContentProposalFlow", () => {
 
   it("serializes the selected reference before proposal creation and loads styles only after proposal selection", async () => {
     const user = userEvent.setup();
-    const { create, listReferences, listReferenceSeeds, getRules } = renderFlow();
+    const { create, listReferences, listReferenceSeeds, listStylePresets } = renderFlow();
 
     expect(screen.getByRole("heading", { name: "어떤 콘텐츠를 만들까요?" })).toBeVisible();
     expect(screen.getAllByRole("listitem").slice(0, 4).map((item) => item.textContent)).toEqual([
@@ -468,7 +444,7 @@ describe("ContentProposalFlow", () => {
     expect(screen.getByRole("button", { name: "3. 채널·형식" })).toBeVisible();
     expect(screen.queryByText(/Wiki/i)).not.toBeInTheDocument();
     expect(listReferences).not.toHaveBeenCalled();
-    expect(getRules).not.toHaveBeenCalled();
+    expect(listStylePresets).not.toHaveBeenCalled();
 
     await user.click(screen.getByRole("radio", { name: /^정보성/ }));
     await user.click(screen.getByRole("button", { name: "목적 완료" }));
@@ -513,9 +489,9 @@ describe("ContentProposalFlow", () => {
 
     await user.click(screen.getByRole("button", { name: "구성안 선택: 여름 피부 3단계 관리" }));
 
-    expect(await screen.findByRole("heading", { name: "스타일과 참고 이미지를 확인하세요" })).toBeVisible();
-    expect(getRules).toHaveBeenCalledTimes(1);
-    expect(screen.getByRole("img", { name: "차분한 스타일" })).toBeVisible();
+    expect(await screen.findByRole("heading", { name: "제품 정보와 스타일을 확인하세요" })).toBeVisible();
+    expect(listStylePresets).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole("radio", { name: /차분한 스타일/ })).toBeChecked();
     expect(listReferences).not.toHaveBeenCalled();
   });
 
@@ -676,7 +652,7 @@ describe("ContentProposalFlow", () => {
       errorCode: "RESOURCE_NOT_AVAILABLE",
       fieldPath: "references",
     }));
-    await user.click(await screen.findByRole("button", { name: "최종 콘텐츠 1개 생성" }));
+    await user.click(await screen.findByRole("button", { name: "콘텐츠 생성 시작" }));
 
     expect(await screen.findByRole("alert")).toHaveTextContent("레퍼런스 입력을 확인해 주세요");
     expect(selectProposal).toHaveBeenCalledTimes(1);
@@ -707,7 +683,7 @@ describe("ContentProposalFlow", () => {
       expect.objectContaining({ role: "product_image", fileName: "campaign-product.png" }),
       expect.any(Function),
     ));
-    await user.click(screen.getByRole("button", { name: "최종 콘텐츠 1개 생성" }));
+    await user.click(screen.getByRole("button", { name: "콘텐츠 생성 시작" }));
     expect(updateFinalizationDraft).toHaveBeenCalledWith(
       "brand-demo",
       expect.any(String),
@@ -724,24 +700,25 @@ describe("ContentProposalFlow", () => {
     );
 
     await user.click(await screen.findByRole("button", { name: "구성안 선택: 여름 피부 3단계 관리" }));
-    await user.click(await screen.findByRole("button", { name: "최종 콘텐츠 1개 생성" }));
+    await user.click(await screen.findByRole("button", { name: "콘텐츠 생성 시작" }));
 
     expect(await screen.findByRole("alert")).toHaveTextContent("오늘 AI 콘텐츠 생성 10회를 모두 사용했습니다");
     expect(screen.getAllByText("여름 피부 3단계 관리")[0]).toBeVisible();
-    expect(screen.getByRole("heading", { name: "스타일과 참고 이미지를 확인하세요" })).toBeVisible();
+    expect(screen.getByRole("heading", { name: "제품 정보와 스타일을 확인하세요" })).toBeVisible();
   });
 
-  it("seals the selected proposal before loading approved style previews", async () => {
+  it("seals the selected proposal before loading current visual selections", async () => {
     const user = userEvent.setup();
-    const { selectProposal, getRules, getReference } = renderFlow({ initialBatchId: "batch-1" });
+    const { selectProposal, listStylePresets, listAvatars, listProductImages } = renderFlow({ initialBatchId: "batch-1" });
 
     await user.click(await screen.findByRole("button", { name: "구성안 선택: 여름 피부 3단계 관리" }));
 
-    await waitFor(() => expect(getReference).toHaveBeenCalledWith("brand-demo", "style-1"));
+    await waitFor(() => expect(listStylePresets).toHaveBeenCalledWith("brand-demo"));
     expect(selectProposal).toHaveBeenCalledWith("brand-demo", "proposal-1", expect.any(String));
-    expect(selectProposal.mock.invocationCallOrder[0]).toBeLessThan(getRules.mock.invocationCallOrder[0]!);
-    expect(getRules.mock.invocationCallOrder[0]).toBeLessThan(getReference.mock.invocationCallOrder[0]!);
-    expect(screen.getByRole("img", { name: "차분한 스타일" })).toHaveAttribute("src", "https://example.com/style.jpg");
+    expect(selectProposal.mock.invocationCallOrder[0]).toBeLessThan(listStylePresets.mock.invocationCallOrder[0]!);
+    expect(listAvatars).toHaveBeenCalledWith("brand-demo");
+    expect(listProductImages).not.toHaveBeenCalled();
+    expect(screen.getByRole("radio", { name: /차분한 스타일/ })).toBeChecked();
     expect(screen.queryByText(/샘플 스타일/)).not.toBeInTheDocument();
   });
 
@@ -757,7 +734,7 @@ describe("ContentProposalFlow", () => {
     await user.click(first);
 
     expect(first).not.toBePressed();
-    expect(screen.queryByRole("heading", { name: "스타일과 참고 이미지를 확인하세요" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "제품 정보와 스타일을 확인하세요" })).not.toBeInTheDocument();
 
     await act(async () => { resolveSelection({ id: "generation-sealed" }); });
     await waitFor(() => expect(first).toBePressed());
@@ -778,66 +755,64 @@ describe("ContentProposalFlow", () => {
 
     expect(await screen.findByRole("alert")).toHaveTextContent("구성안을 선택하지 못했습니다");
     expect(first).not.toBePressed();
-    expect(screen.queryByRole("heading", { name: "스타일과 참고 이미지를 확인하세요" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "제품 정보와 스타일을 확인하세요" })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "구성안 선택: 흔한 실수 체크리스트" })).toBeEnabled();
   });
 
-  it.each([
-    ["archived", { archivedAt: "2026-08-01T00:00:00.000Z" }],
-    ["non-upload", { kind: "external_url" }],
-    ["missing-preview", { previewUrl: null, sourceUrl: "https://example.com/source-only.jpg" }],
-  ])("excludes an invalid %s Brand Rules style instead of using it", async (_case, invalidFields) => {
+  it("excludes inactive named style presets from manual generation", async () => {
     const user = userEvent.setup();
     renderFlow({
       initialBatchId: "batch-1",
-      styleReferenceLoader: async (requestedBrandId, referenceId) => ({
-        id: referenceId,
+      stylePresetLoader: async (requestedBrandId) => [{
+        id: "archived-style",
         workspaceId: "workspace-1",
         brandId: requestedBrandId,
-        kind: "upload",
-        contentPurpose: "both",
-        origin: "Upload",
-        title: "사용할 수 없는 스타일",
-        previewUrl: "https://example.com/style.jpg",
-        sourceUrl: "https://example.com/source.jpg",
-        format: "image/png",
-        metadata: {},
-        favorite: false,
-        archivedAt: null,
-        referenceBrandId: null,
+        revision: 2,
+        name: "사용할 수 없는 스타일",
+        description: "보관됨",
+        visualTokens: { colors: [], fonts: [], notes: [] },
+        referenceItemIds: ["style-1"],
+        isDefault: false,
+        status: "archived",
         createdAt: "2026-08-01T00:00:00.000Z",
         updatedAt: "2026-08-01T00:00:00.000Z",
-        description: null,
-        body: null,
-        snapshot: null,
-        ...invalidFields,
-      }),
+      }],
     });
 
     await user.click(await screen.findByRole("button", { name: "구성안 선택: 여름 피부 3단계 관리" }));
 
-    expect(await screen.findByText("등록된 브랜드 스타일 이미지 없이 생성합니다")).toBeVisible();
-    expect(screen.queryByRole("img", { name: "사용할 수 없는 스타일" })).not.toBeInTheDocument();
-    expect(screen.queryByText("브랜드 스타일 이미지를 불러오지 못했습니다. 다시 시도해 주세요.")).not.toBeInTheDocument();
+    expect(await screen.findByRole("radio", { name: "스타일 사용 안 함" })).toBeChecked();
+    expect(screen.queryByRole("radio", { name: /사용할 수 없는 스타일/ })).not.toBeInTheDocument();
   });
 
   it("updates only the V2 finalization draft and starts one sealed package", async () => {
     const user = userEvent.setup();
     const {
-      updateFinalizationDraft, startGenerationV2,
+      updateManualVisualSelection, updateFinalizationDraft, startGenerationV2,
     } = renderFlow({ initialBatchId: "batch-1" });
 
     await user.click(await screen.findByRole("button", { name: "구성안 선택: 여름 피부 3단계 관리" }));
     await user.click(await screen.findByRole("radio", { name: /차분한 스타일/ }));
     await user.type(screen.getByLabelText("이미지 추가 요청 (선택)"), "밝고 정돈된 편집 디자인");
-    await user.click(screen.getByRole("button", { name: "최종 콘텐츠 1개 생성" }));
+    await user.click(screen.getByRole("button", { name: "콘텐츠 생성 시작" }));
+
+    await waitFor(() => expect(updateManualVisualSelection).toHaveBeenCalledWith(
+      "brand-demo",
+      expect.any(String),
+      {
+        contractVersion: "manual-visual-selection.v1",
+        product: null,
+        stylePreset: { presetId: "style-preset-1", revision: 1 },
+        avatar: { avatarId: "avatar-1", revision: 1 },
+      },
+    ));
 
     await waitFor(() => expect(updateFinalizationDraft).toHaveBeenCalledWith(
       "brand-demo",
       expect.any(String),
       {
         contractVersion: "content-finalization-draft.v2",
-        avatarStyleImageId: "style-1",
+        avatarStyleImageId: null,
         userImageInstruction: "밝고 정돈된 편집 디자인",
         attachmentIds: [],
       },
@@ -846,28 +821,24 @@ describe("ContentProposalFlow", () => {
     expect(JSON.stringify(startGenerationV2.mock.calls)).not.toMatch(/outputCount|wiki|faq|logo|avatarSnapshot|referenceIds|product|proposal/i);
   });
 
-  it("shows and retries a real Brand Rules load failure without inventing sample styles", async () => {
+  it("shows and retries a real manual visual asset load failure", async () => {
     let attempts = 0;
     const user = userEvent.setup();
-    const { getRules } = renderFlow({
+    const { listStylePresets } = renderFlow({
       initialBatchId: "batch-1",
-      rulesLoader: async () => {
+      stylePresetLoader: async () => {
         attempts += 1;
-        if (attempts === 1) throw new Error("rules_unavailable");
-        return {
-          active: null,
-          draft: null,
-          versions: [],
-        };
+        if (attempts === 1) throw new Error("style_presets_unavailable");
+        return [];
       },
     });
 
     await user.click(await screen.findByRole("button", { name: "구성안 선택: 여름 피부 3단계 관리" }));
-    expect(await screen.findByRole("alert")).toHaveTextContent("브랜드 스타일 이미지를 불러오지 못했습니다");
-    expect(screen.queryByRole("img")).not.toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "브랜드 스타일 다시 불러오기" }));
+    expect(await screen.findByText("브랜드 제품·스타일·아바타를 불러오지 못했습니다. 다시 시도해 주세요.")).toBeVisible();
+    expect(screen.getByRole("button", { name: "콘텐츠 생성 시작" })).toBeDisabled();
+    await user.click(screen.getByRole("button", { name: "다시 시도" }));
 
-    await waitFor(() => expect(getRules).toHaveBeenCalledTimes(2));
-    expect(await screen.findByText("등록된 브랜드 스타일 이미지 없이 생성합니다")).toBeVisible();
+    await waitFor(() => expect(listStylePresets).toHaveBeenCalledTimes(2));
+    expect(await screen.findByRole("radio", { name: "스타일 사용 안 함" })).toBeChecked();
   });
 });

@@ -79,6 +79,8 @@ function createRepository(): ApiRepository {
     })),
     getAiContentBrandContext: vi.fn(async () => ({ ready: true, brandName: "Growthline", ownedUrl: "https://example.com", sourceStatus: "crawled", lastCrawledAt: null, wikiVersionId: "wiki-1", wikiUpdatedAt: null, summary: "자사 분석", pageCount: 1, context: {} })),
     updateAiContentFinalizationDraft: vi.fn(async () => { throw new Error("not_implemented"); }),
+    getAiContentManualVisualSelection: vi.fn(async () => null),
+    updateAiContentManualVisualSelection: vi.fn(async () => { throw new Error("not_implemented"); }),
     startAiContentGenerationV3: vi.fn(async () => { throw new Error("not_implemented"); }),
     listAiContentGenerations: vi.fn(async () => []),
     getAiContentGeneration: vi.fn(async () => null),

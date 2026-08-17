@@ -920,6 +920,25 @@ describe("createAiContentApiGateway", () => {
     expect(JSON.stringify(startBody)).not.toMatch(/outputCount|wiki|faq|logo|avatarSnapshot|referenceIds|product|proposal/i);
   });
 
+  it("reads and updates the closed manual visual selection sidecar", async () => {
+    const selection = {
+      contractVersion: "manual-visual-selection.v1" as const,
+      product: null,
+      stylePreset: { presetId: "preset-1", revision: 3 },
+      avatar: { avatarId: "avatar-1", revision: 2 },
+    };
+    const requestJson = vi.fn().mockResolvedValue(selection);
+    const gateway = createAiContentApiGateway(clientWith(requestJson));
+
+    await expect(gateway.getManualVisualSelection!("brand-1", "generation-1")).resolves.toEqual(selection);
+    await expect(gateway.updateManualVisualSelection!("brand-1", "generation-1", selection)).resolves.toEqual(selection);
+
+    expect(requestJson).toHaveBeenNthCalledWith(1, "/brands/brand-1/ai-content/generations/generation-1/visual-selection", { method: "GET" });
+    expect(requestJson).toHaveBeenNthCalledWith(2, "/brands/brand-1/ai-content/generations/generation-1/visual-selection", {
+      method: "PUT", body: JSON.stringify(selection),
+    });
+  });
+
   it("marks V3 image attachment token requests with the exact finalization role", async () => {
     if (!globalThis.crypto?.subtle) Object.defineProperty(globalThis, "crypto", { value: webcrypto });
     const requestJson = vi.fn()

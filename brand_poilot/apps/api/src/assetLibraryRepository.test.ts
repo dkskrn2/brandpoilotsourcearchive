@@ -442,6 +442,37 @@ describe("asset library repository", () => {
     expect(statements.some((sql) => sql.includes("delete from reference_upload_sessions"))).toBe(false);
   });
 
+  it("cancels a product reservation with an exact product prefix and durable receipt", async () => {
+    const productId = "66666666-6666-4666-8666-666666666666";
+    const prefix = `brands/${scope.brandId}/asset-library/products/${productId}/${imageId}/`;
+    const storagePath = `${prefix}${checksum}-product.webp`;
+    const fake = fakePool((sql) => {
+      const access = member(sql);
+      if (access) return access;
+      if (sql.includes("from reference_upload_cancellation_receipts")) return { rows: [] };
+      if (sql.includes("from reference_upload_sessions")) return { rows: [{
+        id: imageId, workspace_id: scope.workspaceId, brand_id: scope.brandId,
+        created_by_user_id: scope.actorUserId, storage_path_prefix: prefix, storage_path: storagePath,
+        expires_at: new Date(Date.now() + 60_000), confirmed_at: null, cancelled_at: null,
+      }] };
+      if (sql.includes("update reference_upload_sessions") && sql.includes("returning")) {
+        return { rows: [{ id: imageId }] };
+      }
+      return {};
+    });
+    const cleanupBlobs = vi.fn(async () => undefined);
+
+    await expect(createAssetLibraryRepository(fake.pool).cancelProductUpload(
+      { ...scope, productId, sessionId: imageId },
+      cleanupBlobs,
+    )).resolves.toEqual({ status: "cleanup_pending", immediateCleanup: "succeeded" });
+    expect(cleanupBlobs).toHaveBeenCalledWith(prefix, storagePath);
+    const statements = fake.query.mock.calls.map(([sql]) => String(sql));
+    expect(statements.some((sql) => sql.includes("pg_advisory_xact_lock"))).toBe(true);
+    expect(statements.some((sql) => sql.includes("insert into reference_upload_cancellation_receipts"))).toBe(true);
+    expect(statements.some((sql) => sql.includes("delete from reference_upload_sessions"))).toBe(false);
+  });
+
   it("rejects reference cancellation by a different actor without touching storage", async () => {
     const prefix = `brands/${scope.brandId}/asset-library/references/${imageId}/`;
     const fake = fakePool((sql) => {
@@ -503,6 +534,42 @@ describe("asset library repository", () => {
       sql.includes("update reference_upload_cancellation_receipts")
         && sql.includes("next_attempt_at") && sql.includes("returning"),
     )).toBe(true);
+  });
+
+  it("cleans an expired product receipt without running reference preservation lookup", async () => {
+    const productId = "66666666-6666-4666-8666-666666666666";
+    const prefix = `brands/${scope.brandId}/asset-library/products/${productId}/${imageId}/`;
+    const storagePath = `${prefix}${checksum}-product.webp`;
+    const expired = {
+      id: imageId, workspace_id: scope.workspaceId, brand_id: scope.brandId,
+      created_by_user_id: scope.actorUserId, storage_path_prefix: prefix, storage_path: storagePath,
+      expires_at: new Date(Date.now() - 60_000), receipt_status: "pending",
+    };
+    const fake = fakePool((sql) => {
+      if (sql.includes("left join reference_upload_cancellation_receipts")) return { rows: [expired] };
+      if (sql.includes("from reference_upload_cancellation_receipts") && sql.includes("for update")) {
+        return { rows: [{
+          session_id: imageId, workspace_id: scope.workspaceId, brand_id: scope.brandId,
+          created_by_user_id: scope.actorUserId, status: "pending",
+        }] };
+      }
+      if (sql.includes("from reference_upload_sessions") && sql.includes("for update")) {
+        return { rows: [expired] };
+      }
+      if (sql.includes("update reference_upload_cancellation_receipts")
+        && sql.includes("next_attempt_at") && sql.includes("returning")) {
+        return { rows: [{ session_id: imageId }] };
+      }
+      return {};
+    });
+    const cleanupBlobs = vi.fn(async () => undefined);
+
+    await expect(createAssetLibraryRepository(fake.pool).cleanupExpiredReferenceUploads(cleanupBlobs, 1))
+      .resolves.toEqual({ scanned: 1, cancelled: 1, preserved: 0, failed: [] });
+    expect(cleanupBlobs).toHaveBeenCalledWith(prefix, storagePath);
+    expect(fake.query.mock.calls.some(([sql]) =>
+      String(sql).includes("from reference_items") && String(sql).includes("storage_artifacts"),
+    )).toBe(false);
   });
 
   it("preserves an upload artifact that a confirmed reference already consumes", async () => {
@@ -981,7 +1048,9 @@ describe("asset library repository", () => {
     const fake = fakePool((sql) => {
       const access = member(sql);
       if (access) return access;
-      if (sql.includes("from brands") && sql.includes("for update")) return { rows: [{ id: scope.brandId }] };
+      if (sql.includes("from brands") && sql.includes("for update")) {
+        return { rows: [{ id: scope.brandId }] };
+      }
       if (sql.includes("count(*)") && sql.includes("source_urls")) return { rows: [{ count: 10 }] };
       return {};
     });
@@ -1006,7 +1075,9 @@ describe("asset library repository", () => {
     const fake = fakePool((sql) => {
       const access = member(sql, "admin");
       if (access) return access;
-      if (sql.includes("from brand_profiles") && sql.includes("for update")) return { rows: [{ brand_id: scope.brandId }] };
+      if (sql.includes("from brand_profiles") && sql.includes("for update")) {
+        return { rows: [{ id: scope.brandId, brand_id: scope.brandId }] };
+      }
       if (sql.includes("from reference_items") && sql.includes("for update")) {
         return { rows: [row()] };
       }
@@ -1058,7 +1129,9 @@ describe("asset library repository", () => {
     const fake = fakePool((sql) => {
       const access = member(sql, "admin");
       if (access) return access;
-      if (sql.includes("from brand_profiles") && sql.includes("for update")) return { rows: [{ brand_id: scope.brandId }] };
+      if (sql.includes("from brand_profiles") && sql.includes("for update")) {
+        return { rows: [{ id: scope.brandId, brand_id: scope.brandId }] };
+      }
       if (sql.includes("from reference_items")) {
         return { rows: [{
           id: imageId, kind: "trend", source_url_id: null,
@@ -1091,7 +1164,9 @@ describe("asset library repository", () => {
     const fake = fakePool((sql) => {
       const access = member(sql, "admin");
       if (access) return access;
-      if (sql.includes("from brand_profiles") && sql.includes("for update")) return { rows: [{ brand_id: scope.brandId }] };
+      if (sql.includes("from brand_profiles") && sql.includes("for update")) {
+        return { rows: [{ id: scope.brandId, brand_id: scope.brandId }] };
+      }
       if (sql.includes("from reference_items") && !sql.includes("for update")) {
         return { rows: [{
           id: imageId, kind: "trend", source_url_id: null, saved_trend_id: savedId,
@@ -1189,9 +1264,10 @@ describe("asset library repository", () => {
               return { rows: [{ workspace_id: scope.workspaceId }], rowCount: 1 };
             }
             if (sql.includes("from brand_profiles") && sql.includes("for update")) {
-              return { rows: [{ brand_id: scope.brandId }], rowCount: 1 };
+              return { rows: [{ id: scope.brandId, brand_id: scope.brandId }], rowCount: 1 };
             }
-            if (sql.includes("from brand_profiles profile") && sql.includes("brand_rule_sets")) {
+            if ((sql.includes("from brand_profiles profile") && sql.includes("brand_rule_sets"))
+              || (sql.includes("join brand_rule_sets") && sql.includes("referenceImages"))) {
               return { rows: [], rowCount: 0 };
             }
             if (sql.includes("from instagram_trend_media media")) {

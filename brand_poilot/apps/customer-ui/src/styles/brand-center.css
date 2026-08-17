@@ -824,6 +824,38 @@
   text-align: center;
 }
 
+.brand-style-preset-panel { margin-bottom: 20px; }
+.brand-style-preset-layout { display: grid; grid-template-columns: minmax(220px, .75fr) minmax(0, 1.6fr); gap: 18px; margin-top: 20px; }
+.brand-style-preset-list { display: grid; align-content: start; gap: 10px; }
+.brand-style-preset-list article { padding: 10px; border: 1px solid #dfe7e3; border-radius: 12px; background: #f8faf9; }
+.brand-style-preset-list article.is-selected { border-color: #247455; background: #edf7f2; }
+.brand-style-preset-list article > button { width: 100%; padding: 4px; border: 0; text-align: left; background: transparent; }
+.brand-style-preset-list article > button strong,
+.brand-style-preset-list article > button span { display: block; }
+.brand-style-preset-list article > button span { margin-top: 4px; color: #68776f; font-size: 12px; }
+.brand-style-preset-list article > div { display: flex; gap: 6px; margin-top: 8px; }
+.brand-style-preset-form { align-self: start; }
+.style-reference-picker { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+.style-reference-picker legend { margin-bottom: 8px; font-weight: 750; }
+.style-reference-picker label { display: grid; grid-template-columns: auto 52px minmax(0, 1fr); align-items: center; gap: 8px; padding: 8px; border: 1px solid #dfe7e3; border-radius: 10px; }
+.style-reference-picker img { width: 52px; height: 52px; border-radius: 8px; object-fit: cover; }
+
+.product-image-manager { margin-top: 22px; padding-top: 20px; border-top: 1px solid #dde5e1; }
+.product-image-manager > header { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
+.product-image-manager > header h3 { margin: 0; }
+.product-image-manager > header p { margin: 4px 0 0; }
+.product-image-manager .button.is-disabled { pointer-events: none; opacity: .55; }
+.product-image-grid { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 10px; margin-top: 14px; }
+.product-image-grid figure { margin: 0; overflow: hidden; border: 1px solid #dfe7e3; border-radius: 12px; background: #f8faf9; }
+.product-image-grid img { width: 100%; aspect-ratio: 1; object-fit: cover; }
+.product-image-grid figcaption { display: flex; align-items: center; justify-content: space-between; gap: 6px; padding: 8px; font-size: 12px; }
+
+@media (max-width: 900px) {
+  .brand-style-preset-layout { grid-template-columns: 1fr; }
+  .style-reference-picker { grid-template-columns: 1fr 1fr; }
+  .product-image-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
 .stable-item-id {
   display: block;
   margin-top: 8px;

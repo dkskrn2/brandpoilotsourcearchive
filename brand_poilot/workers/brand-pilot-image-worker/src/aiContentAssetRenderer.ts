@@ -459,8 +459,17 @@ export function createAiContentAssetRenderer({
         for (const [offset, image] of (imagePackage.product?.images ?? []).filter((item) => selectedProductIds.has(item.assetId)).entries()) {
           staged.productImages.push({ id: image.assetId, path: await stage(image.storagePath, image.checksum, `product-${String(offset + 1).padStart(2, "0")}${extension(image.mimeType)}`) });
         }
-        for (const [offset, image] of imagePackage.brandStyleImages.entries()) {
-          staged.styleImages.push({ id: image.referenceItemId, path: await stage(image.storagePath, image.checksum, `style-${String(offset + 1).padStart(2, "0")}${extension(image.mimeType)}`), avatar: image.referenceItemId === imagePackage.avatarStyleImageId });
+        const selectedAvatarIds = job.payload.contractVersion === "ai-content-card-deck-render-job.v1"
+          ? new Set(job.payload.cardDeckCurrentScene.scene.avatarImageAssetIds ?? [])
+          : job.payload.contractVersion === "ai-content-reel-storyboard-render-job.v1"
+            ? new Set(job.payload.reelStoryboardCurrentScene.scene.avatarImageAssetIds ?? [])
+            : null;
+        const selectedStyleImages = imagePackage.brandStyleImages.filter((image) => {
+          const avatar = image.tags.includes("avatar");
+          return selectedAvatarIds === null || !avatar || selectedAvatarIds.has(image.referenceItemId);
+        });
+        for (const [offset, image] of selectedStyleImages.entries()) {
+          staged.styleImages.push({ id: image.referenceItemId, path: await stage(image.storagePath, image.checksum, `style-${String(offset + 1).padStart(2, "0")}${extension(image.mimeType)}`), avatar: image.tags.includes("avatar") || image.referenceItemId === imagePackage.avatarStyleImageId });
         }
         for (const [offset, reference] of imagePackage.references.entries()) {
           staged.references.push({
@@ -495,7 +504,14 @@ export function createAiContentAssetRenderer({
           staged.productImages.length !== selectedProductIds.size
           || (manualHydrated ? staged.attachments.length !== imagePackage.attachments.length : staged.attachments.length !== selectedAttachmentIds.size)
         ) throw new Error("ai_content_asset_binding_invalid");
-        if (imagePackage.avatarStyleImageId !== null && staged.styleImages.filter((item) => item.avatar).length !== 1) throw new Error("ai_content_avatar_stage_invalid");
+        if (selectedAvatarIds === null) {
+          if (imagePackage.avatarStyleImageId !== null
+            && !staged.styleImages.some((item) => item.id === imagePackage.avatarStyleImageId && item.avatar)) {
+            throw new Error("ai_content_avatar_stage_invalid");
+          }
+        } else if (staged.styleImages.filter((item) => item.avatar).length !== selectedAvatarIds.size) {
+          throw new Error("ai_content_avatar_stage_invalid");
+        }
 
         if (manualHydrated) {
           await writeReadOnlyJson(path.join(inputDir, "attachments", "index.json"), {

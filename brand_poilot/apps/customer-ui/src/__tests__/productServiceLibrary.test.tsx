@@ -92,6 +92,9 @@ function gateway(overrides: Record<string, unknown> = {}) {
       draft: null,
     })),
     archiveProductService: vi.fn(async () => undefined),
+    listProductImages: vi.fn(async () => []),
+    uploadProductImage: vi.fn(),
+    deleteProductImage: vi.fn(),
     ...overrides,
   };
 }
