@@ -40,6 +40,19 @@ async function readonly(file: string): Promise<void> { await chmod(file, 0o444);
 async function writeJson(file: string, value: unknown): Promise<void> { await writeFile(file, `${JSON.stringify(value, null, 2)}\n`, { encoding: "utf8", mode: 0o444 }); await readonly(file); }
 function commandArgument(value: string): string { return `"${value.replaceAll('"', '\\"')}"`; }
 
+function safeVisualSessionDiagnosticCode(error: unknown): string | undefined {
+  const record = typeof error === "object" && error !== null ? error as Record<string, unknown> : {};
+  const message = error instanceof Error ? error.message : "";
+  const diagnostic = typeof record.diagnostic === "string" ? record.diagnostic : "";
+  const matches = `${message}\n${diagnostic}`.match(/\b(?:ai_content|codex|visual_session)_[a-z0-9_]{1,108}\b/g);
+  const generic = new Set([
+    "ai_content_asset_render_failed",
+    "ai_content_visual_session_failed",
+    "codex_ai_content_asset_failed",
+  ]);
+  return matches ? [...matches].reverse().find((code) => !generic.has(code)) ?? matches.at(-1) : undefined;
+}
+
 function visualSessionHooks(workerRoot: string) {
   const command = `${commandArgument(process.execPath)} ${commandArgument(path.join(workerRoot, "scripts", "audit-codex-visual-session-image.mjs"))}`;
   const handler = { type: "command", command, timeout: 10 };
@@ -162,7 +175,18 @@ export function createAiContentVisualSessionRenderer(input: {
         } }) as AiContentVisualSessionRenderedAssets;
       } catch (error) {
         const wrapped = new Error(error instanceof Error ? error.message : "ai_content_visual_session_failed") as Error & { code?: string; retryable?: boolean };
-        wrapped.code = "ai_content_visual_session_failed"; wrapped.retryable = false; throw wrapped;
+        wrapped.code = "ai_content_visual_session_failed";
+        wrapped.retryable = false;
+        const diagnosticCode = safeVisualSessionDiagnosticCode(error);
+        if (diagnosticCode) {
+          Object.defineProperty(wrapped, "diagnostic", {
+            configurable: false,
+            enumerable: false,
+            value: diagnosticCode,
+            writable: false,
+          });
+        }
+        throw wrapped;
       } finally { await rm(workDir, { recursive: true, force: true }); }
     },
   };
