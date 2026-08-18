@@ -99,6 +99,7 @@ export const fullSourceMigrationIds = Object.freeze([
   "080_reference_channel_archive.sql",
   "081_meta_ad_library_references.sql",
   "082_manual_brand_visual_assets.sql",
+  "083_manual_visual_selection_write_fence_invoker.sql",
 ]);
 const legacyTriggerSearchPathMigrationId = "073a_legacy_trigger_function_search_path.sql";
 export const legacyTriggerSearchPathMigrationChecksum =
@@ -118,6 +119,7 @@ const post075SchemaMigrationIds = Object.freeze([
   "080_reference_channel_archive.sql",
   "081_meta_ad_library_references.sql",
   "082_manual_brand_visual_assets.sql",
+  "083_manual_visual_selection_write_fence_invoker.sql",
 ]);
 export const post075SchemaMigrationChecksums = Object.freeze({
   "077_content_suggestion_batches.sql": "3b178464c5ae5c4e220428e0752ab3e79a2ca06b5b2b23f1e89c34e983e63f76",
@@ -126,6 +128,7 @@ export const post075SchemaMigrationChecksums = Object.freeze({
   "080_reference_channel_archive.sql": "9067430f0e8fbc6d52455ef5fcf712820fe405e4fca0e51835b6cd0552ce7fe0",
   "081_meta_ad_library_references.sql": "232f4ee76b7812b0a9399ee3124b4542e5c6f01c0d5d37ecb786b0b41c25f9ef",
   "082_manual_brand_visual_assets.sql": "9285dbc36d5dc17d33c0d53545e69bc3deb800679ef2409d2727e83dc5230b1e",
+  "083_manual_visual_selection_write_fence_invoker.sql": "d2a788802e460ab1815f4e859616dc0e9a702f6cb45d0f6578b7fba4a6a74296",
 });
 const post075DeferredMigrationIds = Object.freeze([
   ...post075DataMigrationIds,
@@ -4677,7 +4680,9 @@ async function verifyManualVisualAssetsSchemaCatalog(client, {
             has_column_privilege($1,'public.product_service_assets','role','UPDATE') as app_product_asset_role_update,
             has_column_privilege($1,'public.product_service_assets','position','UPDATE') as app_product_asset_position_update,
             has_column_privilege($1,'public.product_service_assets','storage_artifact_id','UPDATE') as app_product_asset_storage_update,
+            has_function_privilege($1,'public.assert_ai_content_writable()','EXECUTE') as app_writable_assert_execute,
             selection_fence.tgenabled::text as selection_fence_enabled,
+            selection_fence_function.prosecdef as selection_fence_security_definer,
             selection_fence_owner.rolname::text as selection_fence_owner,
             coalesce((select bool_or(acl.grantee=0) from aclexplode(preset.relacl) acl),false) as public_preset_privilege,
             coalesce((select bool_or(acl.grantee=0) from aclexplode(preset_reference.relacl) acl),false) as public_reference_privilege,
@@ -4714,7 +4719,9 @@ async function verifyManualVisualAssetsSchemaCatalog(client, {
     || sealed.app_product_asset_role_update !== true
     || sealed.app_product_asset_position_update !== true
     || sealed.app_product_asset_storage_update !== false
+    || sealed.app_writable_assert_execute !== true
     || sealed.selection_fence_enabled !== "A"
+    || sealed.selection_fence_security_definer !== false
     || sealed.selection_fence_owner !== schemaOwnerRoleName
     || sealed.public_preset_privilege !== false
     || sealed.public_reference_privilege !== false

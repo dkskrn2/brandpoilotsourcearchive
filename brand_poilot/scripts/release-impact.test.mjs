@@ -419,6 +419,7 @@ test("FAQ utterance profile selects only API, customer UI, and the shared DM ima
 test("manual brand visual assets selects only its exact UI, API, planner workers, and image renderer", () => {
   const impact = classifyChangedPaths([
     "brand_poilot/db/migrations/082_manual_brand_visual_assets.sql",
+    "brand_poilot/db/migrations/083_manual_visual_selection_write_fence_invoker.sql",
     "brand_poilot/apps/api/src/manualVisualAssetsRepository.ts",
     "brand_poilot/apps/customer-ui/src/components/brand-center/BrandStylePresetPanel.tsx",
     "brand_poilot/packages/brand-pilot-content-contracts/src/manualVisualSelection.ts",
@@ -453,6 +454,23 @@ test("manual brand visual assets selects only its exact UI, API, planner workers
     "reelWorker",
   ]);
   assert.equal(impact.buildAllServer, false);
+  assert.equal(impact.migrationChanged, true);
+  assert.equal(impact.productionDeployAllowed, false);
+  assert.equal(impact.verifiedScope, true);
+  assert.deepEqual(impact.unknownPaths, []);
+});
+
+test("manual visual write-fence repair selects only API and the explicit migration gate", () => {
+  const impact = classifyChangedPaths([
+    "brand_poilot/db/migrations/083_manual_visual_selection_write_fence_invoker.sql",
+  ], { profile: "manual-brand-visual-assets" });
+
+  assert.deepEqual(
+    Object.entries(impact.components)
+      .filter(([, enabled]) => enabled)
+      .map(([component]) => component),
+    ["api"],
+  );
   assert.equal(impact.migrationChanged, true);
   assert.equal(impact.productionDeployAllowed, false);
   assert.equal(impact.verifiedScope, true);

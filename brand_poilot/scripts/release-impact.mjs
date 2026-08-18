@@ -480,7 +480,8 @@ function classifyManualBrandVisualAssetsPath(path, components) {
   if (path.startsWith("docs/") || path.endsWith(".md")) {
     return { known: true, documentation: true };
   }
-  if (path === "db/migrations/082_manual_brand_visual_assets.sql") {
+  if (path === "db/migrations/082_manual_brand_visual_assets.sql"
+    || path === "db/migrations/083_manual_visual_selection_write_fence_invoker.sql") {
     components.api = true;
     return { known: true, migration: true };
   }

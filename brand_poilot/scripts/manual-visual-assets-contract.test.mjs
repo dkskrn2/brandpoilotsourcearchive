@@ -5,9 +5,14 @@ import { applicationRuntimeRelationSecurityCatalog } from "./ai-content-database
 import { loadMigrations, validatePost075SchemaMigration } from "./migrationRunner.mjs";
 
 const migrationPath = "db/migrations/082_manual_brand_visual_assets.sql";
+const writeFenceRepairPath = "db/migrations/083_manual_visual_selection_write_fence_invoker.sql";
 
 async function migrationSql() {
   return readFile(migrationPath, "utf8").catch(() => "");
+}
+
+async function writeFenceRepairSql() {
+  return readFile(writeFenceRepairPath, "utf8").catch(() => "");
 }
 
 test("migration 082 defines tenant-owned named style presets and immutable manual selections", async () => {
@@ -59,17 +64,39 @@ test("new manual visual relations are protected by application ACL declarations"
 
 test("migration runner registers 082 after the sealed 081 migration", async () => {
   const migrations = await loadMigrations();
-  const migration = migrations.at(-1);
-  assert.equal(migration?.id, "082_manual_brand_visual_assets.sql");
+  const ids = migrations.map(({ id }) => id);
+  const migration = migrations.find(({ id }) => id === "082_manual_brand_visual_assets.sql");
+  assert.equal(ids.indexOf("082_manual_brand_visual_assets.sql"), ids.indexOf("081_meta_ad_library_references.sql") + 1);
   assert.equal(validatePost075SchemaMigration(migration), true);
 });
 
-test("post-075 schema runner applies pending 082 without replaying applied 077 through 081", async () => {
+test("migration 083 makes the manual selection fence use the application role's sealed writable assertion grant", async () => {
+  const originalSql = await migrationSql();
+  const sql = await writeFenceRepairSql();
+  assert.match(originalSql, /perform public\.assert_ai_content_writable\(\)/i);
+  assert.match(sql, /enforce_manual_visual_selection_write_fence\(\)/i);
+  assert.match(sql, /alter function public\.enforce_manual_visual_selection_write_fence\(\) security invoker/i);
+  assert.doesNotMatch(sql, /create\s+or\s+replace\s+function/i);
+  assert.doesNotMatch(sql, /grant\s+execute\s+on\s+function\s+public\.assert_ai_content_writable/i);
+
   const migrations = await loadMigrations();
-  const migration082 = migrations.find(({ id }) => id === "082_manual_brand_visual_assets.sql");
-  assert.ok(migration082);
+  const migration = migrations.at(-1);
+  assert.equal(migration?.id, "083_manual_visual_selection_write_fence_invoker.sql");
+  assert.equal(validatePost075SchemaMigration(migration), true);
+
+  const runner = await readFile("scripts/migrationRunner.mjs", "utf8");
+  assert.match(runner, /selection_fence_security_definer/);
+  assert.match(runner, /sealed\.selection_fence_security_definer !== false/);
+  assert.match(runner, /has_function_privilege\(\$1,'public\.assert_ai_content_writable\(\)','EXECUTE'\) as app_writable_assert_execute/);
+  assert.match(runner, /sealed\.app_writable_assert_execute !== true/);
+});
+
+test("post-075 schema runner applies pending 083 without replaying applied 077 through 082", async () => {
+  const migrations = await loadMigrations();
+  const migration083 = migrations.find(({ id }) => id === "083_manual_visual_selection_write_fence_invoker.sql");
+  assert.ok(migration083);
   const history = migrations
-    .filter(({ id }) => id !== migration082.id)
+    .filter(({ id }) => id !== migration083.id)
     .map(({ id, checksum }) => ({ id, checksum }));
   const calls = [];
   const client = {
@@ -111,7 +138,9 @@ test("post-075 schema runner applies pending 082 without replaying applied 077 t
           app_product_asset_role_update: true,
           app_product_asset_position_update: true,
           app_product_asset_storage_update: false,
+          app_writable_assert_execute: true,
           selection_fence_enabled: "A",
+          selection_fence_security_definer: false,
           selection_fence_owner: "content_schema_owner",
           public_preset_privilege: false,
           public_reference_privilege: false,
@@ -193,7 +222,7 @@ test("post-075 schema runner applies pending 082 without replaying applied 077 t
         }] };
       }
       if (normalized.includes("post_075_schema_migration_marker_v1")) {
-        return { rows: [{ id: migration082.id, checksum: migration082.checksum }] };
+        return { rows: [{ id: migration083.id, checksum: migration083.checksum }] };
       }
       return { rows: [] };
     },
@@ -204,7 +233,8 @@ test("post-075 schema runner applies pending 082 without replaying applied 077 t
     migrations,
     expectedProviderRoleName: "postgres",
   });
-  assert.deepEqual(result.pending, [migration082.id]);
-  assert.equal(calls.some((sql) => sql.includes("create table if not exists brand_style_presets")), true);
+  assert.deepEqual(result.pending, [migration083.id]);
+  assert.equal(calls.some((sql) => sql.includes("alter function public.enforce_manual_visual_selection_write_fence() security invoker")), true);
+  assert.equal(calls.some((sql) => sql.includes("create table if not exists brand_style_presets")), false);
   assert.equal(calls.some((sql) => sql.includes("create table content_suggestion_batches")), false);
 });
