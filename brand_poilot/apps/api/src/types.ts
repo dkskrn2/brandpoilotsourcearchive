@@ -1267,8 +1267,11 @@ export interface ApiRepository
   heartbeatAiContentJob(input: { jobId: string; workerId: string; leaseToken: string; leaseSeconds: number }): Promise<boolean>;
   completeAiContentJob(input: CompleteAiContentJobInput): Promise<AiContentGenerationRecord>;
   failAiContentJob(input: FailAiContentJobInput): Promise<AiContentGenerationRecord>;
-  claimAiContentRenderJob?(input: { workerId: string; leaseSeconds: number }): Promise<import("./aiContentRenderJobs.js").AiContentRenderJob | null>;
+  claimAiContentRenderJob?(input: { workerId: string; leaseSeconds: number; capabilities?: string[] }): Promise<import("./aiContentRenderJobs.js").AiContentRenderClaim | null>;
   heartbeatAiContentRenderJob?(input: import("./aiContentRenderJobs.js").RenderLeaseInput): Promise<boolean>;
+  heartbeatAiContentVisualSession?(input: import("./aiContentRenderJobs.js").VisualSessionLeaseInput): Promise<boolean>;
+  completeAiContentVisualSession?(input: import("./aiContentRenderJobs.js").VisualSessionCompletion): Promise<void>;
+  failAiContentVisualSession?(input: import("./aiContentRenderJobs.js").VisualSessionFailure): Promise<void>;
   completeAiContentRenderAsset?(input: import("./aiContentRenderJobs.js").RenderAssetCompletion): Promise<void>;
   completeAiContentRenderPackage?(input: import("./aiContentRenderJobs.js").RenderPackageCompletion): Promise<AiContentGenerationRecord>;
   failAiContentRenderJob?(input: import("./aiContentRenderJobs.js").RenderFailure): Promise<void>;

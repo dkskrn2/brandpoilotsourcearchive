@@ -62,7 +62,7 @@ describe("production image worker runtime", () => {
     expect(indexSource).toMatch(/process\.removeListener\("SIGINT"/);
   });
 
-  it("ships a single-asset built-in image_generation runner with no network or fixture fallback", async () => {
+  it("ships the shared-session and blog image_generation runner with no network or fixture fallback", async () => {
     const [packageSource, runnerSource, skillSource, dockerfile] = await Promise.all([
       readFile(path.join(workerRoot, "package.json"), "utf8"),
       readFile(path.join(workerRoot, "scripts", "run-codex-ai-content-asset.mjs"), "utf8"),
@@ -75,26 +75,31 @@ describe("production image worker runtime", () => {
     expect(runnerSource).toContain("../dist/codexImageOutput.mjs");
     expect(runnerSource).toContain('readFile(path.join(workspaceDir, "AGENTS.md"');
     expect(runnerSource).toContain('image-render", "SKILL.md"');
-    expect(runnerSource).toMatch(/selectedAssetCount:\s*1/);
+    expect(runnerSource).toContain("selectedAssetCount: expectedCount");
     expect(runnerSource).toContain("image_generation");
     expect(runnerSource).toContain("permissions.worker.network.enabled=false");
+    expect(runnerSource).toContain("assertCompleteVisualSessionImageAudit");
+    expect(runnerSource).toContain("visual-session-hook-audit.json");
+    expect(runnerSource).toContain("${toolUseId}.png");
+    expect(runnerSource).not.toContain("createCodexImageGenerationAudit");
     expect(runnerSource).toContain("ai-content-editorial-tool-observation.v1");
     expect(runnerSource).not.toMatch(/fixture|OPENAI_API_KEY|external image api/i);
     expect(runnerSource).toContain("rm(path.join(imagegenOutputDir, ownedSessionId)");
-    expect(skillSource).toContain("작업 하나당 정확히 PNG 한 장");
+    expect(skillSource).toContain("ai-content-visual-session-render.v1");
     expect(skillSource).toContain("gpt-image-2");
     expect(skillSource).toContain("1:1");
     expect(skillSource).toContain("9:16");
     expect(skillSource).toContain("콜라주");
     expect(skillSource).toContain("ai-content-render-job.v2");
-    expect(skillSource).toContain("ai-content-card-deck-render-job.v1");
-    expect(skillSource).toContain("ai-content-reel-storyboard-render-job.v1");
-    expect(skillSource).toContain("inputs/reel-storyboard.json");
+    expect(skillSource).toContain("inputs/visual-session.json");
+    expect(skillSource).toContain("장면당 정확히 한 번");
     expect(skillSource).toMatch(/최종 픽셀/);
     expect(skillSource).toMatch(/배경.*이미지만.*만들지/);
     expect(skillSource).toMatch(/서버.*텍스트.*합성.*없/);
     expect(skillSource).toContain("ai-content-asset-render.v2");
     expect(dockerfile).toContain("run-codex-ai-content-asset.mjs");
+    expect(dockerfile).toContain("audit-codex-visual-session-image.mjs");
+    expect(dockerfile).toContain("visualSessionImageAudit.mjs");
   });
 
   it("packages the pinned Codex CLI and native render dependencies as a non-root image", async () => {

@@ -22,6 +22,15 @@ const ids = {
 };
 const sha = "a".repeat(64);
 
+const researchSourceAcquisition = {
+  contractVersion: "research-source-acquisition.v1" as const,
+  status: "not_applicable" as const,
+  requestedUrl: null,
+  canonicalUrl: null,
+  contentHash: null,
+  capturedAt: "2026-08-05T00:00:00.000Z",
+};
+
 const request = {
   contractVersion: "content-proposal-request.v2" as const,
   purpose: "informational" as const,
@@ -185,6 +194,7 @@ function claimRow(stage: "research" | "model", overrides: Record<string, unknown
     input_snapshot_json: {
       baseInput,
       replayFingerprint: request.requestFingerprint,
+      researchSourceAcquisition,
       resumeInput: {},
     },
     composition_id: stage === "model" ? ids.composition : null,
@@ -261,6 +271,7 @@ describe("content proposal job V2 claim protocol", () => {
       researchAttemptId: ids.researchAttempt,
       researchAttemptNumber: 1,
       baseInput,
+      researchSourceAcquisition,
       request,
       contract: { id: ids.contract, modelId: "gpt-5.6-terra" },
       executionTier: "fast",
@@ -268,6 +279,49 @@ describe("content proposal job V2 claim protocol", () => {
     const claimUpdate = fixture.statements.find(({ sql }) => sql.includes("set status='processing'"));
     expect(claimUpdate?.sql).toContain("case when $2='model' then 1 else 0 end");
     expect(claimUpdate?.sql).toContain("least($5::integer,300)");
+  });
+
+  it("keeps a scheduled markerless claim on the existing three-field envelope", async () => {
+    const fixture = claimFixture("research", {
+      origin: "scheduled_crawl",
+      input_snapshot_json: {
+        baseInput,
+        replayFingerprint: request.requestFingerprint,
+        resumeInput: {},
+      },
+    });
+
+    const claimed = await fixture.repository.claimContentProposalJob({
+      workerId: "proposal-worker-1",
+      leaseSeconds: 180,
+    });
+
+    expect(claimed).toMatchObject({ stage: "research_required", baseInput });
+    expect(claimed).not.toHaveProperty("researchSourceAcquisition");
+  });
+
+  it("fails closed when a new manual Reel claim is missing acquisition evidence", async () => {
+    const fixture = claimFixture("research", {
+      input_snapshot_json: {
+        baseInput,
+        replayFingerprint: request.requestFingerprint,
+        resumeInput: {},
+      },
+    });
+
+    await expect(fixture.repository.claimContentProposalJob({
+      workerId: "proposal-worker-1",
+      leaseSeconds: 180,
+    })).rejects.toThrow("content_proposal_input_envelope_invalid");
+  });
+
+  it("fails closed when a scheduled claim carries the manual acquisition sidecar", async () => {
+    const fixture = claimFixture("research", { origin: "scheduled_crawl" });
+
+    await expect(fixture.repository.claimContentProposalJob({
+      workerId: "proposal-worker-1",
+      leaseSeconds: 180,
+    })).rejects.toThrow("content_proposal_input_envelope_invalid");
   });
 
   it("claims a sealed composition as a model attempt with all aggregate hashes", async () => {
@@ -294,7 +348,14 @@ describe("content proposal job V2 claim protocol", () => {
   });
 
   it("keeps scheduled composition on the standard execution tier", async () => {
-    const fixture = claimFixture("model", { origin: "scheduled_crawl" });
+    const fixture = claimFixture("model", {
+      origin: "scheduled_crawl",
+      input_snapshot_json: {
+        baseInput,
+        replayFingerprint: request.requestFingerprint,
+        resumeInput: {},
+      },
+    });
     const claimed = await fixture.repository.claimContentProposalJob({
       workerId: "proposal-worker-1", leaseSeconds: 180,
     });

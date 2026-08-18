@@ -13,6 +13,14 @@ import {
 const workspaceId = "00000000-0000-4000-8000-000000000001";
 const brandId = "00000000-0000-4000-8000-000000000002";
 const actorUserId = "00000000-0000-4000-8000-000000000003";
+const researchSourceAcquisition = {
+  contractVersion: "research-source-acquisition.v1" as const,
+  status: "not_applicable" as const,
+  requestedUrl: null,
+  canonicalUrl: null,
+  contentHash: null,
+  capturedAt: "2026-08-05T00:00:00.000Z",
+};
 
 function request(): ContentOrchestrationV2 {
   return {
@@ -87,9 +95,14 @@ function ports(overrides: Partial<ProposalV2CreationPorts> = {}) {
       events.push("locked-replay");
       return null;
     }),
-    resolve: vi.fn(async () => {
+    resolve: vi.fn(async (command) => {
       events.push("resolve");
-      return { request: request(), baseInput: baseInput(), sourceSnapshots: [] };
+      return {
+        request: request(),
+        baseInput: baseInput(),
+        sourceSnapshots: [],
+        ...(command.source === "manual" ? { researchSourceAcquisition } : {}),
+      };
     }),
     enqueue: vi.fn(async () => {
       events.push("enqueue");
@@ -134,8 +147,42 @@ describe("Proposal V2 creation service", () => {
         actorUserId,
         request: request(),
         baseInput: baseInput(),
+        researchSourceAcquisition,
       }),
     );
+  });
+
+  it("rejects a new manual Reel before enqueue when acquisition evidence is missing", async () => {
+    const fixture = ports({
+      resolve: vi.fn(async () => ({ request: request(), baseInput: baseInput(), sourceSnapshots: [] })),
+    });
+
+    await expect(createAiContentProposalV2Service(fixture.ports).create(manualCommand()))
+      .rejects.toThrow("proposal_v2_research_source_acquisition_required");
+    expect(fixture.ports.enqueue).not.toHaveBeenCalled();
+  });
+
+  it("rejects the private acquisition sidecar on scheduled work", async () => {
+    const fixture = ports({
+      resolve: vi.fn(async () => ({
+        request: request(),
+        baseInput: baseInput(),
+        sourceSnapshots: [],
+        researchSourceAcquisition,
+      })),
+    });
+
+    await expect(createAiContentProposalV2Service(fixture.ports).create({
+      source: "scheduled_crawl",
+      workspaceId,
+      brandId,
+      callerOperationKey: "scheduled-operation-sidecar",
+      contentTopicId: "00000000-0000-4000-8000-000000000030",
+      sourceSnapshotIds: ["00000000-0000-4000-8000-000000000031"],
+      legacySourceOutputId: null,
+      request: request(),
+    }, { tx: fixture.tx })).rejects.toThrow("proposal_v2_research_source_acquisition_forbidden");
+    expect(fixture.ports.enqueue).not.toHaveBeenCalled();
   });
 
   it("returns exact committed replay before readiness or mutable source resolution", async () => {

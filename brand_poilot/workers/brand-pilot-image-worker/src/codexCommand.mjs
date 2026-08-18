@@ -16,9 +16,13 @@ export function resolveCodexInvocation({
   return { command: "codex", argsPrefix: [] };
 }
 
-export function buildCodexExecArguments({ rootDir }) {
+export function buildCodexExecArguments({ rootDir, enableHooks = false }) {
+  const hookArguments = enableHooks
+    ? ["--enable", "codex_hooks", "--dangerously-bypass-hook-trust"]
+    : [];
   return [
     "--model", "gpt-5.6-terra",
+    ...hookArguments,
     "exec",
     "--ignore-user-config",
     "--strict-config",

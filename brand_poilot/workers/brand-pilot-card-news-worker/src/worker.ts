@@ -12,7 +12,7 @@ import {
 } from "@brand-pilot/worker-runtime";
 import { parseCardNewsInput, parseCardNewsManualVisualSelection, type AiContentJob, type WorkerClient } from "./contracts.js";
 import { buildCardNewsPlanPrompt, cardNewsPlanSkillVersion } from "./promptBuilder.js";
-import { loadCardDeckSubmission } from "./deckPlan.js";
+import { loadCardManuscriptSubmission } from "./manuscriptPlan.js";
 import { withResource } from "./resourceLease.js";
 
 export interface CodexRunner {
@@ -81,7 +81,7 @@ export function createCommandRunner(
               return {
                 command: await prepareAttempt(attemptOutput),
                 value: attemptOutput,
-                acceptedOutput: () => access(path.join(attemptOutput, "card-deck-editorial-plan.json"))
+                acceptedOutput: () => access(path.join(attemptOutput, "card-manuscript-plan.json"))
                   .then(() => true, () => false),
               };
             },
@@ -128,12 +128,12 @@ export async function runOnce({ workerId, client, planner, shutdownSignal }: { w
       const parsedInput = parseCardNewsInput(job.payload.contentGenerationInput, job);
       const manualVisualSelection = parseCardNewsManualVisualSelection(job.payload.manualVisualSelection);
       let repairError: string | undefined;
-      let submission: Awaited<ReturnType<typeof loadCardDeckSubmission>> | undefined;
+      let submission: Awaited<ReturnType<typeof loadCardManuscriptSubmission>> | undefined;
       for (let attempt = 0; attempt < 2; attempt += 1) {
         const current = await planner.run(job, buildCardNewsPlanPrompt(job, parsedInput, manualVisualSelection, repairError), lease.signal);
         planned.push(current);
         try {
-          submission = await loadCardDeckSubmission(current.outputDir, parsedInput);
+          submission = await loadCardManuscriptSubmission(current.outputDir, parsedInput);
           break;
         } catch (error) {
           if (attempt === 1) throw error;
@@ -147,7 +147,7 @@ export async function runOnce({ workerId, client, planner, shutdownSignal }: { w
         skillVersion: cardNewsPlanSkillVersion,
         jobType: "generate",
         planDraft: submission.planDraft,
-        cardDeckContract: submission.cardDeckContract,
+        cardManuscriptContract: submission.cardManuscriptContract,
       };
       const completion = await replayContentWorkerCompletion({
         body: completionBody,

@@ -5,6 +5,9 @@ import type { ApiRepository } from "./types.js";
 function setup() {
   const repository = {
     claimAiContentRenderJob: vi.fn(async () => ({ id: "render-1", jobKind: "image_asset", leaseToken: "lease-1" })),
+    heartbeatAiContentVisualSession: vi.fn(async () => true),
+    completeAiContentVisualSession: vi.fn(async () => undefined),
+    failAiContentVisualSession: vi.fn(async () => undefined),
     heartbeatAiContentRenderJob: vi.fn(async () => true),
     completeAiContentRenderAsset: vi.fn(async () => undefined),
     appendAiContentEditorialRenderDiagnostic: vi.fn(async () => undefined),
@@ -47,6 +50,9 @@ describe("AI content render worker routes", () => {
     const headers = { authorization: "Bearer worker-token" };
     const requests = [
       { url: "/worker/ai-content-render-jobs/claim", payload: { workerId: "worker-1", leaseSeconds: 180 } },
+      { url: "/worker/ai-content-render-jobs/visual-session/heartbeat", payload: { outputId: "output-1", workerId: "worker-1", leaseSeconds: 180, jobs: [] } },
+      { url: "/worker/ai-content-render-jobs/visual-session/complete", payload: { outputId: "output-1", workerId: "worker-1", jobs: [], assets: [], diagnostics: [], bodySha256: "a".repeat(64) } },
+      { url: "/worker/ai-content-render-jobs/visual-session/fail", payload: { outputId: "output-1", workerId: "worker-1", jobs: [], errorCode: "failed", errorMessage: "failed" } },
       { url: "/worker/ai-content-render-jobs/render-1/heartbeat", payload: { workerId: "worker-1", leaseToken: "lease-1", leaseSeconds: 180 } },
       { url: "/worker/ai-content-render-jobs/render-1/complete", payload: { workerId: "worker-1", leaseToken: "lease-1", jobKind: "image_asset", asset: {} } },
       { url: "/worker/ai-content-render-jobs/render-1/diagnostic", payload: { workerId: "worker-1", leaseToken: "lease-1", diagnostic: {} } },
@@ -75,6 +81,41 @@ describe("AI content render worker routes", () => {
     await app.close();
   });
 
+  it("forwards the exact shared visual-session capability and group lease operations", async () => {
+    const { app, repository } = setup();
+    const headers = { authorization: "Bearer worker-token" };
+    const jobs = [{ jobId: "render-1", assetIndex: 1, leaseToken: "lease-1" }];
+    const claim = await app.inject({
+      method: "POST", url: "/worker/ai-content-render-jobs/claim", headers,
+      payload: { workerId: "worker-1", leaseSeconds: 180, capabilities: ["ai-content-visual-session.v1"] },
+    });
+    expect(claim.statusCode).toBe(200);
+    expect(repository.claimAiContentRenderJob).toHaveBeenLastCalledWith({
+      workerId: "worker-1", leaseSeconds: 180, capabilities: ["ai-content-visual-session.v1"],
+    });
+
+    const heartbeat = await app.inject({
+      method: "POST", url: "/worker/ai-content-render-jobs/visual-session/heartbeat", headers,
+      payload: { outputId: "output-1", workerId: "worker-1", leaseSeconds: 180, jobs },
+    });
+    expect(heartbeat.statusCode).toBe(200);
+    expect(repository.heartbeatAiContentVisualSession).toHaveBeenCalledWith({
+      outputId: "output-1", workerId: "worker-1", leaseSeconds: 180, jobs,
+    });
+
+    const completion = {
+      outputId: "output-1", workerId: "worker-1", jobs,
+      assets: [{ index: 1 }], diagnostics: [{ sceneIndex: 1 }], bodySha256: "a".repeat(64),
+    };
+    expect((await app.inject({ method: "POST", url: "/worker/ai-content-render-jobs/visual-session/complete", headers, payload: completion })).statusCode).toBe(200);
+    expect(repository.completeAiContentVisualSession).toHaveBeenCalledWith(completion);
+
+    const failure = { outputId: "output-1", workerId: "worker-1", jobs, errorCode: "render_failed", errorMessage: "scene failed" };
+    expect((await app.inject({ method: "POST", url: "/worker/ai-content-render-jobs/visual-session/fail", headers, payload: failure })).statusCode).toBe(200);
+    expect(repository.failAiContentVisualSession).toHaveBeenCalledWith(failure);
+    await app.close();
+  });
+
   it("dispatches image and finalizer completions by the literal job kind", async () => {
     const { app, repository } = setup();
     const headers = { authorization: "Bearer worker-token" };
@@ -94,8 +135,8 @@ describe("AI content render worker routes", () => {
     const headers = { authorization: "Bearer worker-token" };
     const diagnostic = {
       contractVersion: "ai-content-editorial-render-diagnostic.v1",
-      sourceContractVersion: "card-deck-editorial-plan.v1", sourceSha256: "a".repeat(64), sceneIndex: 1,
-      compiledPromptVersion: "image-card-deck.v1", compiledPromptSha256: "b".repeat(64),
+      sourceContractVersion: "card-manuscript-plan.v1", sourceSha256: "a".repeat(64), sceneIndex: 1,
+      compiledPromptVersion: "image-visual-session.v1", compiledPromptSha256: "b".repeat(64),
       actualToolArgumentsObservation: "not_emitted_by_runner", actualToolArgumentsSha256: null,
     };
     const response = await app.inject({

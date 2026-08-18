@@ -424,9 +424,17 @@ function v2Harness() {
     seed: ContentSeedV2,
   ): Promise<ResolvedAiContentSubjectV2> => {
     events.push("resolve");
-    if (seed.kind === "topic_text") return { kind: "topic_text", title: seed.title.trim() };
+    const researchSourceAcquisition = {
+      contractVersion: "research-source-acquisition.v1" as const,
+      status: "not_applicable" as const,
+      requestedUrl: null,
+      canonicalUrl: null,
+      contentHash: null,
+      capturedAt: "2026-08-01T03:00:00.000Z",
+    };
+    if (seed.kind === "topic_text") return { kind: "topic_text", title: seed.title.trim(), researchSourceAcquisition };
     if (seed.kind === "reference") {
-      return { kind: "reference", referenceIds: seed.items.map((item) => item.referenceId) };
+      return { kind: "reference", referenceIds: seed.items.map((item) => item.referenceId), researchSourceAcquisition };
     }
     throw new Error("URL_RESOLVER_NOT_STUBBED");
   });
@@ -503,6 +511,14 @@ describe("V2 proposal input resolver", () => {
       },
       capturedAt: "2026-08-01T03:00:00.000Z",
     });
+    expect(result.researchSourceAcquisition).toEqual({
+      contractVersion: "research-source-acquisition.v1",
+      status: "not_applicable",
+      requestedUrl: null,
+      canonicalUrl: null,
+      contentHash: null,
+      capturedAt: "2026-08-01T03:00:00.000Z",
+    });
   });
 
   it("resolves a URL seed once and persists the exact frozen URL subject", async () => {
@@ -515,6 +531,14 @@ describe("V2 proposal input resolver", () => {
       text: "수집 본문",
       contentHash: "c".repeat(64),
       capturedAt: "2026-08-01T02:30:00.000Z",
+      researchSourceAcquisition: {
+        contractVersion: "research-source-acquisition.v1",
+        status: "complete_body",
+        requestedUrl: "https://example.test/requested",
+        canonicalUrl: "https://example.test/canonical",
+        contentHash: "c".repeat(64),
+        capturedAt: "2026-08-01T02:30:00.000Z",
+      },
     };
     harness.deps.resolveAiContentSeed.mockResolvedValueOnce(subject);
     const body = orchestrationV2({
@@ -525,7 +549,16 @@ describe("V2 proposal input resolver", () => {
 
     expect(harness.deps.resolveAiContentSeed).toHaveBeenCalledOnce();
     expect(harness.deps.resolveAiContentSeed).toHaveBeenCalledWith(body.seed);
-    expect(result.inputSnapshot.subject).toEqual(subject);
+    expect(result.inputSnapshot.subject).toEqual({
+      kind: "topic_url",
+      requestedUrl: subject.requestedUrl,
+      canonicalUrl: subject.canonicalUrl,
+      title: subject.title,
+      text: subject.text,
+      contentHash: subject.contentHash,
+      capturedAt: subject.capturedAt,
+    });
+    expect(result.researchSourceAcquisition).toEqual(subject.researchSourceAcquisition);
     expect(harness.deps.freezeReferences).not.toHaveBeenCalled();
   });
 

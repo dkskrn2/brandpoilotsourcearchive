@@ -40,6 +40,15 @@ export const evidence: ResearchEvidenceSnapshotV1 = {
   }],
 };
 
+export const researchSourceAcquisition = {
+  contractVersion: "research-source-acquisition.v1" as const,
+  status: "not_applicable" as const,
+  requestedUrl: null,
+  canonicalUrl: null,
+  contentHash: null,
+  capturedAt: "2026-08-01T03:00:00.000Z",
+};
+
 export const baseInput: ProposalBaseInputSnapshotV2 = {
   contractVersion: "proposal-base-input.v2",
   brandCore: {
@@ -146,6 +155,7 @@ export function researchJob(): ContentProposalResearchJob {
     researchAttemptId: ids.researchAttempt,
     researchAttemptNumber: 1,
     baseInput: structuredClone(baseInput),
+    researchSourceAcquisition: structuredClone(researchSourceAcquisition),
   };
 }
 

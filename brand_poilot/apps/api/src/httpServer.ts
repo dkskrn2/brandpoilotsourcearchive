@@ -44,7 +44,7 @@ import {
   parseConfirmAttachmentInput,
   parseContentGenerationRetryV1,
   parseReelStoryboardContractV1,
-  parseCardDeckContractV1,
+  parseCardManuscriptContractV1,
   parseV3AttachmentUploadTokenInput,
   type AiContentType,
   type CompleteAiContentJobInput,
@@ -5041,14 +5041,14 @@ export function createServer(
       const hasPlan = Object.prototype.hasOwnProperty.call(body, "plan");
       const hasPlanDraft = Object.prototype.hasOwnProperty.call(body, "planDraft");
       const hasReelStoryboardContract = Object.prototype.hasOwnProperty.call(body, "reelStoryboardContract");
-      const hasCardDeckContract = Object.prototype.hasOwnProperty.call(body, "cardDeckContract");
+      const hasCardManuscriptContract = Object.prototype.hasOwnProperty.call(body, "cardManuscriptContract");
       if (hasPlan === hasPlanDraft) throw new Error("ai_content_plan_completion_invalid");
       assertExactAiContentWorkerBody(
         body,
         [
           "workerId", "leaseToken", "skillVersion", "jobType", hasPlan ? "plan" : "planDraft",
           ...(hasReelStoryboardContract ? ["reelStoryboardContract"] : []),
-          ...(hasCardDeckContract ? ["cardDeckContract"] : []),
+          ...(hasCardManuscriptContract ? ["cardManuscriptContract"] : []),
         ],
         "ai_content_plan_completion_invalid",
       );
@@ -5061,14 +5061,14 @@ export function createServer(
         throw new Error("ai_content_plan_completion_invalid");
       }
       const submittedVersion = String(submittedPlan.contractVersion);
-      if ((submittedVersion === "card-news-plan-draft.v1") !== hasCardDeckContract
-        || (hasCardDeckContract && (hasPlan || hasReelStoryboardContract))
+      if ((submittedVersion === "card-news-plan-draft.v1") !== hasCardManuscriptContract
+        || (hasCardManuscriptContract && (hasPlan || hasReelStoryboardContract))
         || ((submittedVersion === "reel-plan-draft.v1") !== hasReelStoryboardContract)
         || (hasReelStoryboardContract && hasPlan)) {
         throw new Error("ai_content_plan_completion_invalid");
       }
-      const cardDeckContract = hasCardDeckContract
-        ? parseCardDeckContractV1(body.cardDeckContract)
+      const cardManuscriptContract = hasCardManuscriptContract
+        ? parseCardManuscriptContractV1(body.cardManuscriptContract)
         : undefined;
       const reelStoryboardContract = hasReelStoryboardContract
         ? parseReelStoryboardContractV1(body.reelStoryboardContract)
@@ -5077,12 +5077,12 @@ export function createServer(
         ? {
             ...common, jobType: "generate", plan: submittedPlan as never,
             ...(reelStoryboardContract ? { reelStoryboardContract } : {}),
-            ...(cardDeckContract ? { cardDeckContract } : {}),
+            ...(cardManuscriptContract ? { cardManuscriptContract } : {}),
           }
         : {
             ...common, jobType: "generate", planDraft: submittedPlan as never,
             ...(reelStoryboardContract ? { reelStoryboardContract } : {}),
-            ...(cardDeckContract ? { cardDeckContract } : {}),
+            ...(cardManuscriptContract ? { cardManuscriptContract } : {}),
           };
       return repository.completeAiContentJob(completion);
     },
@@ -5093,11 +5093,77 @@ export function createServer(
     async (request, reply) => {
       if (!authenticateAiContentWorker(request.headers.authorization, reply)) return;
       const renderRepository = requireAiContentRenderWorkerRepository(repository);
-      assertExactAiContentWorkerBody(request.body ?? {}, ["workerId", "leaseSeconds"], "ai_content_render_claim_invalid");
+      const claimBody = request.body ?? {};
+      const hasCapabilities = Object.prototype.hasOwnProperty.call(claimBody, "capabilities");
+      assertExactAiContentWorkerBody(claimBody, hasCapabilities ? ["workerId", "leaseSeconds", "capabilities"] : ["workerId", "leaseSeconds"], "ai_content_render_claim_invalid");
+      const capabilities = hasCapabilities && Array.isArray(claimBody.capabilities)
+        && claimBody.capabilities.length === 1 && claimBody.capabilities[0] === "ai-content-visual-session.v1"
+        ? ["ai-content-visual-session.v1"] : hasCapabilities ? null : undefined;
+      if (capabilities === null) throw new Error("ai_content_render_claim_invalid");
       const workerId = requiredAiContentField(request.body?.workerId, "ai_content_worker_id_required", 200);
       const leaseSeconds = Number(request.body?.leaseSeconds ?? 180);
       if (!Number.isSafeInteger(leaseSeconds) || leaseSeconds < 30 || leaseSeconds > 300) throw new Error("ai_content_lease_seconds_invalid");
-      return { job: await renderRepository.claimAiContentRenderJob({ workerId, leaseSeconds }) };
+      return { job: capabilities
+        ? await renderRepository.claimAiContentRenderJob({ workerId, leaseSeconds, capabilities })
+        : await renderRepository.claimAiContentRenderJob({ workerId, leaseSeconds }) };
+    },
+  );
+
+  app.post<{ Body: Record<string, unknown> }>(
+    "/worker/ai-content-render-jobs/visual-session/heartbeat",
+    async (request, reply) => {
+      if (!authenticateAiContentWorker(request.headers.authorization, reply)) return;
+      const renderRepository = requireAiContentRenderWorkerRepository(repository);
+      const body = request.body ?? {};
+      assertExactAiContentWorkerBody(body, ["outputId", "workerId", "leaseSeconds", "jobs"], "ai_content_visual_session_heartbeat_invalid");
+      if (!Array.isArray(body.jobs)) throw new Error("ai_content_visual_session_heartbeat_invalid");
+      if (typeof repository.heartbeatAiContentVisualSession !== "function") throw new Error("ai_content_render_repository_not_configured");
+      const alive = await repository.heartbeatAiContentVisualSession({
+        outputId: requiredAiContentField(body.outputId, "ai_content_output_id_required", 200),
+        workerId: requiredAiContentField(body.workerId, "ai_content_worker_id_required", 200),
+        leaseSeconds: Number(body.leaseSeconds), jobs: body.jobs as never,
+      });
+      if (!alive) { reply.code(409); return { error: "ai_content_visual_session_lease_invalid" }; }
+      return { outputId: body.outputId, status: "processing" };
+    },
+  );
+
+  app.post<{ Body: Record<string, unknown> }>(
+    "/worker/ai-content-render-jobs/visual-session/complete",
+    async (request, reply) => {
+      if (!authenticateAiContentWorker(request.headers.authorization, reply)) return;
+      requireAiContentRenderWorkerRepository(repository);
+      const body = request.body ?? {};
+      assertExactAiContentWorkerBody(body, ["outputId", "workerId", "jobs", "assets", "diagnostics", "bodySha256"], "ai_content_visual_session_completion_invalid");
+      if (!Array.isArray(body.jobs) || !Array.isArray(body.assets) || !Array.isArray(body.diagnostics)) throw new Error("ai_content_visual_session_completion_invalid");
+      if (typeof repository.completeAiContentVisualSession !== "function") throw new Error("ai_content_render_repository_not_configured");
+      await repository.completeAiContentVisualSession({
+        outputId: requiredAiContentField(body.outputId, "ai_content_output_id_required", 200),
+        workerId: requiredAiContentField(body.workerId, "ai_content_worker_id_required", 200),
+        jobs: body.jobs as never, assets: body.assets as never, diagnostics: body.diagnostics as never,
+        bodySha256: requiredAiContentField(body.bodySha256, "ai_content_visual_session_completion_invalid", 64),
+      });
+      return { outputId: body.outputId, status: "succeeded" };
+    },
+  );
+
+  app.post<{ Body: Record<string, unknown> }>(
+    "/worker/ai-content-render-jobs/visual-session/fail",
+    async (request, reply) => {
+      if (!authenticateAiContentWorker(request.headers.authorization, reply)) return;
+      requireAiContentRenderWorkerRepository(repository);
+      const body = request.body ?? {};
+      assertExactAiContentWorkerBody(body, ["outputId", "workerId", "jobs", "errorCode", "errorMessage"], "ai_content_visual_session_failure_invalid");
+      if (!Array.isArray(body.jobs)) throw new Error("ai_content_visual_session_failure_invalid");
+      if (typeof repository.failAiContentVisualSession !== "function") throw new Error("ai_content_render_repository_not_configured");
+      await repository.failAiContentVisualSession({
+        outputId: requiredAiContentField(body.outputId, "ai_content_output_id_required", 200),
+        workerId: requiredAiContentField(body.workerId, "ai_content_worker_id_required", 200),
+        jobs: body.jobs as never,
+        errorCode: requiredAiContentField(body.errorCode, "ai_content_error_code_invalid", 120),
+        errorMessage: requiredAiContentField(body.errorMessage, "ai_content_error_message_invalid", 2_000),
+      });
+      return { outputId: body.outputId, status: "accepted" };
     },
   );
 

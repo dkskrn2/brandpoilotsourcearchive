@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { createContentProposalResearch } from "./research.js";
-import { evidence, researchJob, researchJobWithBase } from "./testFixtures.js";
+import { evidence, researchJob, researchJobWithBase, researchSourceAcquisition } from "./testFixtures.js";
 
 describe("Proposal V2 research", () => {
   it("searches only from the research arm base input and a public allowlist", async () => {
@@ -11,6 +11,8 @@ describe("Proposal V2 research", () => {
     expect(search).toHaveBeenCalledWith({
       purpose: "informational",
       mode: "required",
+      evidenceGranularity: "independent_claim",
+      sourceAcquisition: researchSourceAcquisition,
       publicResearchContext: {
         purpose: "informational",
         subjectKind: "topic_text",

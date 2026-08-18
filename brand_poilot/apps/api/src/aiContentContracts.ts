@@ -2,9 +2,10 @@ import { parseContentOrchestrationV1 } from "./contentOrchestration.js";
 import type { ApprovedBrandRulesSnapshotV1 } from "@brand-pilot/content-contracts";
 import type { ContentPlanDraftV1 } from "@brand-pilot/content-contracts/planner-drafts";
 import {
-  parseCardDeckEditorialPlanV1,
-  type CardDeckEditorialPlanV1,
-} from "@brand-pilot/content-contracts/card-deck-editorial-plan";
+  CardManuscriptPlanV1Schema,
+  type CardManuscriptPlanV1,
+} from "@brand-pilot/content-contracts/card-manuscript-plan";
+import { Value } from "@sinclair/typebox/value";
 import {
   parseReelStoryboardV1,
   type ReelStoryboardV1,
@@ -520,10 +521,10 @@ interface CompleteAiContentJobBase {
   skillVersion: string;
 }
 
-export interface CardDeckContractV1 {
-  contractVersion: "card-deck-editorial-plan.v1";
-  deckSha256: string;
-  plan: CardDeckEditorialPlanV1;
+export interface CardManuscriptContractV1 {
+  contractVersion: "card-manuscript-plan.v1";
+  manuscriptSha256: string;
+  plan: CardManuscriptPlanV1;
 }
 
 export interface ReelStoryboardContractV1 {
@@ -546,14 +547,14 @@ export interface CompleteAiContentGenerationJobInput extends CompleteAiContentJo
 export interface CompleteAiContentCanonicalPlanningJobInput extends CompleteAiContentJobBase {
   jobType: "generate";
   plan: import("./aiContentPlanContracts.js").ContentPlanResultV2;
-  cardDeckContract?: CardDeckContractV1;
+  cardManuscriptContract?: CardManuscriptContractV1;
   reelStoryboardContract?: ReelStoryboardContractV1;
 }
 
 export interface CompleteAiContentDraftPlanningJobInput extends CompleteAiContentJobBase {
   jobType: "generate";
   planDraft: ContentPlanDraftV1;
-  cardDeckContract?: CardDeckContractV1;
+  cardManuscriptContract?: CardManuscriptContractV1;
   reelStoryboardContract?: ReelStoryboardContractV1;
 }
 
@@ -588,23 +589,20 @@ function requiredString(value: unknown, code: string, maxLength = 500): string {
   return normalized;
 }
 
-export function parseCardDeckContractV1(value: unknown): CardDeckContractV1 {
-  const source = inputObject(value, "ai_content_card_deck_contract_invalid");
-  const keys = ["contractVersion", "deckSha256", "plan"];
+export function parseCardManuscriptContractV1(value: unknown): CardManuscriptContractV1 {
+  const source = inputObject(value, "ai_content_card_manuscript_contract_invalid");
+  const keys = ["contractVersion", "manuscriptSha256", "plan"];
   if (Object.keys(source).length !== keys.length || keys.some((key) => !(key in source))
-    || source.contractVersion !== "card-deck-editorial-plan.v1"
-    || typeof source.deckSha256 !== "string" || !/^[0-9a-f]{64}$/.test(source.deckSha256)) {
-    fail("ai_content_card_deck_contract_invalid");
+    || source.contractVersion !== "card-manuscript-plan.v1"
+    || typeof source.manuscriptSha256 !== "string" || !/^[0-9a-f]{64}$/.test(source.manuscriptSha256)) {
+    fail("ai_content_card_manuscript_contract_invalid");
   }
-  try {
-    return {
-      contractVersion: "card-deck-editorial-plan.v1",
-      deckSha256: source.deckSha256,
-      plan: parseCardDeckEditorialPlanV1(source.plan),
-    };
-  } catch {
-    return fail("ai_content_card_deck_contract_invalid");
-  }
+  if (!Value.Check(CardManuscriptPlanV1Schema, source.plan)) fail("ai_content_card_manuscript_contract_invalid");
+  return {
+    contractVersion: "card-manuscript-plan.v1",
+    manuscriptSha256: source.manuscriptSha256,
+    plan: source.plan as CardManuscriptPlanV1,
+  };
 }
 
 export function parseReelStoryboardContractV1(value: unknown): ReelStoryboardContractV1 {

@@ -10,7 +10,7 @@ const CUSTOMER_UI_GATEWAY_FILE = "apps/customer-ui/src/features/ai-content/aiCon
 const HTTP_SERVER_FILE = "apps/api/src/httpServer.ts";
 
 const RUNTIME_MODEL_FILES = Object.freeze({
-  card_news: "workers/brand-pilot-card-news-worker/scripts/run-codex-card-deck-plan.mjs",
+  card_news: "workers/brand-pilot-card-news-worker/scripts/run-codex-card-manuscript-plan.mjs",
   blog: "workers/brand-pilot-blog-worker/scripts/run-codex-blog-v2-plan.mjs",
   reel: "workers/brand-pilot-reel-worker/scripts/run-codex-reel-plan.mjs",
   controlled_search: "workers/brand-pilot-worker-runtime/src/controlledSearch.ts",
@@ -23,13 +23,13 @@ const PLANNER_ENV_CONTRACTS = Object.freeze([
     id: "card_news_deploy",
     file: "deploy/env/card-news-worker.env.example",
     key: "CARD_NEWS_CODEX_PLAN_COMMAND",
-    runner: "run-codex-card-deck-plan.mjs",
+    runner: "run-codex-card-manuscript-plan.mjs",
   },
   {
     id: "card_news_worker",
     file: "workers/brand-pilot-card-news-worker/.env.example",
     key: "CARD_NEWS_CODEX_PLAN_COMMAND",
-    runner: "run-codex-card-deck-plan.mjs",
+    runner: "run-codex-card-manuscript-plan.mjs",
   },
   {
     id: "blog_deploy",
@@ -95,8 +95,8 @@ const CANONICAL_CONSUMER_FILES = Object.freeze([
   "workers/brand-pilot-card-news-worker/src/contracts.ts",
   "workers/brand-pilot-blog-worker/src/contracts.ts",
   "workers/brand-pilot-reel-worker/src/contracts.ts",
-  "workers/brand-pilot-image-worker/src/aiContentCardDeckRenderContract.ts",
-  "workers/brand-pilot-image-worker/src/aiContentReelStoryboardRenderContract.ts",
+  "workers/brand-pilot-image-worker/src/aiContentVisualSessionPromptCompiler.ts",
+  "workers/brand-pilot-image-worker/src/aiContentRenderClient.ts",
 ]);
 
 export const AUTOMATED_CARD_NEWS_DEFERRED_FILES = Object.freeze([
@@ -221,7 +221,7 @@ function checkGenerateOnlyPlannerWorkers(files, violations) {
 
 function checkCanonicalWorkerConsumers(files, violations) {
   for (const file of CANONICAL_CONSUMER_FILES) {
-    if (!/from\s*["']@brand-pilot\/content-contracts["']/.test(files.get(file) ?? "")) {
+    if (!/from\s*["']@brand-pilot\/content-contracts(?:\/[^"']+)?["']/.test(files.get(file) ?? "")) {
       violations.push(violation("missing_canonical_worker_contract", file, "active V3 workers must import canonical content contracts directly"));
     }
   }

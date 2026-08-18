@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { parseCardDeckEditorialPlanV1, type CardDeckEditorialPlanV1 } from "./cardDeckEditorialPlan.js";
+import type { CardManuscriptPlanV1 } from "./cardManuscriptPlan.js";
 
 function canonicalJson(value: unknown): string {
   const normalize = (item: unknown): unknown => {
@@ -12,6 +12,6 @@ function canonicalJson(value: unknown): string {
   return JSON.stringify(normalize(value));
 }
 
-export function cardDeckEditorialPlanSha256(plan: CardDeckEditorialPlanV1): string {
-  return createHash("sha256").update(canonicalJson(parseCardDeckEditorialPlanV1(plan)), "utf8").digest("hex");
+export function cardManuscriptPlanSha256(plan: CardManuscriptPlanV1): string {
+  return createHash("sha256").update(canonicalJson(plan), "utf8").digest("hex");
 }

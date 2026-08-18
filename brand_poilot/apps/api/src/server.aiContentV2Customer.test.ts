@@ -487,14 +487,21 @@ describe("V2 customer proposal batches", () => {
     await harness.app.close();
   });
 
-  it("returns a stable crawl error without creating a batch", async () => {
+  it("queues an indeterminate URL for audited supplemental research without exposing the crawler error", async () => {
     const harness = setup({ crawlUrl: async () => { throw new Error("private crawler failure"); } });
     const response = await postV2(harness.app, v2Body({ seed: { kind: "topic_url", url: "https://example.test/topic" } }));
 
-    expect(response.statusCode).toBe(400);
-    expect(response.json()).toEqual({ error: "ai_content_seed_resolution_failed" });
+    expect(response.statusCode).toBe(202);
+    expect(harness.recordResolvedProposal).toHaveBeenCalledWith(expect.objectContaining({
+      inputSnapshot: expect.objectContaining({
+        subject: expect.objectContaining({
+          kind: "topic_url",
+          requestedUrl: "https://example.test/topic",
+          canonicalUrl: "https://example.test/topic",
+        }),
+      }),
+    }));
     expect(response.body).not.toContain("private crawler failure");
-    expect(harness.recordResolvedProposal).not.toHaveBeenCalled();
     await harness.app.close();
   });
 

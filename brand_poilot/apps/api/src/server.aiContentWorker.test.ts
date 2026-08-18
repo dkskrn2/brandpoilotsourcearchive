@@ -221,7 +221,7 @@ describe("AI content worker routes", () => {
     await app.close();
   });
 
-  it("forwards a card deck sidecar with its deterministically derived planning draft", async () => {
+  it("forwards a card manuscript sidecar with its deterministically derived planning draft", async () => {
     const { app, repository } = setup();
     const planDraft = {
       contractVersion: "card-news-plan-draft.v1",
@@ -231,37 +231,34 @@ describe("AI content worker routes", () => {
         evidenceIds: [], productImageAssetIds: [],
       })),
     };
-    const deck = {
-      contractVersion: "card-deck-editorial-plan.v1",
+    const manuscript = {
+      contractVersion: "card-manuscript-plan.v1",
       content: planDraft.content,
       deckNarrative: "발표에서 행동으로 이어진다.",
-      visualSystem: {
-        paletteDirection: "white red black", typographyDirection: "large type",
-        graphicLanguage: "editorial", imageryDirection: "numbers first", invariants: ["same margins"],
-      },
+      evidenceSelection: { selectedEvidenceIds: [], excludedEvidenceIds: [] },
       scenes: [1, 2, 3].map((index) => ({
         index, editorialRole: "scene", purpose: `목적 ${index}`, coreMessage: `핵심 ${index}`,
-        headline: `결론 ${index}`, keyVisual: { type: "none", entries: [] }, supportingTexts: [], footnote: null,
-        visualThesis: `논지 ${index}`, layoutArchetype: "editorial_freeform", evidenceIds: [], productImageAssetIds: [],
+        headline: `결론 ${index}`, informationRelation: { type: "none", entries: [] }, supportingTexts: [], footnote: null,
+        evidenceIds: [], productImageAssetIds: [],
         avatarImageAssetIds: [],
       })),
     };
-    const cardDeckContract = { contractVersion: "card-deck-editorial-plan.v1", deckSha256: "a".repeat(64), plan: deck };
+    const cardManuscriptContract = { contractVersion: "card-manuscript-plan.v1", manuscriptSha256: "a".repeat(64), plan: manuscript };
     const response = await app.inject({
       method: "POST", url: "/worker/ai-content-jobs/job-1/complete",
       headers: { authorization: "Bearer worker-token" },
       payload: {
         workerId: "worker-1", leaseToken: "lease-1", skillVersion: "card-news-plan-skill.v6",
-        jobType: "generate", planDraft, cardDeckContract,
+        jobType: "generate", planDraft, cardManuscriptContract,
       },
     });
 
     expect(response.statusCode).toBe(200);
-    expect(repository.completeAiContentJob).toHaveBeenCalledWith(expect.objectContaining({ planDraft, cardDeckContract }));
+    expect(repository.completeAiContentJob).toHaveBeenCalledWith(expect.objectContaining({ planDraft, cardManuscriptContract }));
     await app.close();
   });
 
-  it("rejects a card draft without its deck and a deck on non-card ingress", async () => {
+  it("rejects a card draft without its manuscript and a manuscript on non-card ingress", async () => {
     const { app, repository } = setup();
     const common = { workerId: "worker-1", leaseToken: "lease-1", skillVersion: "skill", jobType: "generate" };
     const missing = await app.inject({
@@ -274,7 +271,7 @@ describe("AI content worker routes", () => {
       headers: { authorization: "Bearer worker-token" },
       payload: {
         ...common, planDraft: { contractVersion: "blog-plan-draft.v1" },
-        cardDeckContract: { contractVersion: "card-deck-editorial-plan.v1", deckSha256: "a".repeat(64), plan: {} },
+        cardManuscriptContract: { contractVersion: "card-manuscript-plan.v1", manuscriptSha256: "a".repeat(64), plan: {} },
       },
     });
 

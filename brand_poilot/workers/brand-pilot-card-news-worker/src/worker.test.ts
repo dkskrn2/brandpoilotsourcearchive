@@ -47,15 +47,16 @@ function v3Input(purpose: "informational" | "marketing") {
 }
 
 function v3Draft(input: ReturnType<typeof v3Input>) {
+  const evidenceIds = input.product ? [] : [uid(7)];
   return {
-    contractVersion: "card-deck-editorial-plan.v1",
+    contractVersion: "card-manuscript-plan.v1",
     content: { caption: "Tea guide", hashtags: ["tea"], cta: "Save this" },
     deckNarrative: "A useful opening followed by a practical next step.",
-    visualSystem: { paletteDirection: "calm green", typographyDirection: "large readable type", graphicLanguage: "editorial cards", imageryDirection: "tea details", invariants: ["same margins"] },
+    evidenceSelection: { selectedEvidenceIds: evidenceIds, excludedEvidenceIds: [] },
     scenes: [
-      { index: 1, editorialRole: "cover", purpose: "Open", coreMessage: "Open with one useful reason.", headline: "Start with a clear reason and useful context.", keyVisual: { type: "none", entries: [] }, supportingTexts: [], footnote: null, visualThesis: "Readable opening card.", layoutArchetype: "cover_editorial", evidenceIds: [], productImageAssetIds: [], avatarImageAssetIds: [] },
-      { index: 2, editorialRole: "action", purpose: "Explain", coreMessage: "Give one practical next step.", headline: "Use the fixed facts to explain a practical next step.", keyVisual: { type: "none", entries: [] }, supportingTexts: [], footnote: null, visualThesis: "Mobile-friendly two-step guide.", layoutArchetype: "checklist", evidenceIds: input.product ? [] : [uid(7)], productImageAssetIds: input.product ? [uid(4)] : [], avatarImageAssetIds: [] },
-      { index: 3, editorialRole: "closing", purpose: "Act", coreMessage: "Close with one useful action.", headline: "Save the guide and use it next time.", keyVisual: { type: "none", entries: [] }, supportingTexts: [], footnote: null, visualThesis: "Simple closing action.", layoutArchetype: "editorial_freeform", evidenceIds: [], productImageAssetIds: [], avatarImageAssetIds: [] },
+      { index: 1, editorialRole: input.product ? "cover" : "hook", purpose: "Open", coreMessage: "Open with one useful reason.", headline: "Start with a clear reason and useful context.", informationRelation: { type: "none", entries: [] }, supportingTexts: [], footnote: null, evidenceIds, productImageAssetIds: [], avatarImageAssetIds: [] },
+      { index: 2, editorialRole: input.product ? "action" : "explanation", purpose: "Explain", coreMessage: "Give one practical next step.", headline: "Use the fixed facts to explain a practical next step.", informationRelation: { type: "none", entries: [] }, supportingTexts: [], footnote: null, evidenceIds, productImageAssetIds: input.product ? [uid(4)] : [], avatarImageAssetIds: [] },
+      { index: 3, editorialRole: input.product ? "closing" : "analysis", purpose: "Act", coreMessage: "Close with one useful action.", headline: "Save the guide and use it next time.", informationRelation: { type: "none", entries: [] }, supportingTexts: [], footnote: null, evidenceIds, productImageAssetIds: [], avatarImageAssetIds: [] },
     ],
   };
 }
@@ -109,33 +110,33 @@ describe("card-news worker", () => {
     const api = client(item);
     const dir = await mkdtemp(path.join(os.tmpdir(), "card-v3-plan-"));
     const structuredDraft = v3Draft(v3Input(purpose));
-    await writeFile(path.join(dir, "card-deck-editorial-plan.json"), JSON.stringify(structuredDraft));
+    await writeFile(path.join(dir, "card-manuscript-plan.json"), JSON.stringify(structuredDraft));
     const planner = { run: vi.fn(async () => ({ outputDir: dir, cleanup: vi.fn() })) };
     await runOnce({ workerId: "worker-1", client: api, planner });
 
     expect(planner.run).toHaveBeenCalledOnce();
     expect(api.complete).toHaveBeenCalledWith(item.id, {
       workerId: "worker-1", leaseToken: "lease-v3", jobType: "generate",
-      skillVersion: "card-news-plan-skill.v7", planDraft: compiledV1(v3Input(purpose)),
-      cardDeckContract: expect.objectContaining({
-        contractVersion: "card-deck-editorial-plan.v1",
-        deckSha256: expect.stringMatching(/^[0-9a-f]{64}$/),
+      skillVersion: "card-manuscript-plan-skill.v1", planDraft: compiledV1(v3Input(purpose)),
+      cardManuscriptContract: expect.objectContaining({
+        contractVersion: "card-manuscript-plan.v1",
+        manuscriptSha256: expect.stringMatching(/^[0-9a-f]{64}$/),
         plan: structuredDraft,
       }),
     });
   });
 
   it.each([
-    ["empty count", "card_deck_editorial_plan_invalid", (plan: ReturnType<typeof v3Draft>) => { plan.scenes = []; }],
-    ["index", "card_deck_editorial_plan_invalid", (plan: ReturnType<typeof v3Draft>) => { plan.scenes[0]!.index = 2; }],
-    ["unknown evidence", "evidence_id_unknown", (plan: ReturnType<typeof v3Draft>) => { plan.scenes[0]!.evidenceIds = [uid(99)]; }],
-    ["duplicate evidence", "card_deck_editorial_plan_invalid", (plan: ReturnType<typeof v3Draft>) => { plan.scenes[1]!.evidenceIds = [uid(7), uid(7)]; }],
-    ["malformed evidence", "card_deck_editorial_plan_invalid", (plan: ReturnType<typeof v3Draft>) => { plan.scenes[0]!.evidenceIds = ["not-a-uuid"]; }],
+    ["empty count", "card_manuscript_plan_v1_invalid", (plan: ReturnType<typeof v3Draft>) => { plan.scenes = []; }],
+    ["index", "card_manuscript_plan_v1_invalid", (plan: ReturnType<typeof v3Draft>) => { plan.scenes[0]!.index = 2; }],
+    ["unknown evidence", "card_manuscript_evidence_partition_invalid", (plan: ReturnType<typeof v3Draft>) => { plan.scenes[0]!.evidenceIds = [uid(99)]; }],
+    ["duplicate evidence", "card_manuscript_plan_v1_invalid", (plan: ReturnType<typeof v3Draft>) => { plan.scenes[1]!.evidenceIds = [uid(7), uid(7)]; }],
+    ["malformed evidence", "card_manuscript_plan_v1_invalid", (plan: ReturnType<typeof v3Draft>) => { plan.scenes[0]!.evidenceIds = ["not-a-uuid"]; }],
     ["unknown product image", "product_image_id_unknown", (plan: ReturnType<typeof v3Draft>) => { plan.scenes[0]!.productImageAssetIds = [uid(99)]; }],
-    ["duplicate hashtag", "card_deck_editorial_plan_invalid", (plan: ReturnType<typeof v3Draft>) => { plan.content.hashtags = ["tea", "tea"]; }],
-    ["blank caption", "card_deck_editorial_plan_invalid", (plan: ReturnType<typeof v3Draft>) => { plan.content.caption = "   "; }],
-    ["immutable generation field", "card_deck_editorial_plan_invalid", (plan: ReturnType<typeof v3Draft>) => { Object.assign(plan, { generationId: uid(10) }); }],
-    ["attachment selection", "card_deck_editorial_plan_invalid", (plan: ReturnType<typeof v3Draft>) => { Object.assign(plan.scenes[0]!, { attachmentIds: [uid(8)] }); }],
+    ["duplicate hashtag", "card_manuscript_plan_v1_invalid", (plan: ReturnType<typeof v3Draft>) => { plan.content.hashtags = ["tea", "tea"]; }],
+    ["blank caption", "card_manuscript_plan_v1_invalid", (plan: ReturnType<typeof v3Draft>) => { plan.content.caption = "   "; }],
+    ["immutable generation field", "card_manuscript_plan_v1_invalid", (plan: ReturnType<typeof v3Draft>) => { Object.assign(plan, { generationId: uid(10) }); }],
+    ["attachment selection", "card_manuscript_plan_v1_invalid", (plan: ReturnType<typeof v3Draft>) => { Object.assign(plan.scenes[0]!, { attachmentIds: [uid(8)] }); }],
   ])("repairs one invalid v3 %s plan with the validator error", async (_name, expectedError, mutate) => {
     const item = v3Job("informational");
     const api = client(item);
@@ -144,8 +145,8 @@ describe("card-news worker", () => {
     const invalid = v3Draft(v3Input("informational"));
     const valid = v3Draft(v3Input("informational"));
     mutate(invalid);
-    await writeFile(path.join(invalidDir, "card-deck-editorial-plan.json"), JSON.stringify(invalid));
-    await writeFile(path.join(validDir, "card-deck-editorial-plan.json"), JSON.stringify(valid));
+    await writeFile(path.join(invalidDir, "card-manuscript-plan.json"), JSON.stringify(invalid));
+    await writeFile(path.join(validDir, "card-manuscript-plan.json"), JSON.stringify(valid));
     const planner = { run: vi.fn()
       .mockResolvedValueOnce({ outputDir: invalidDir, cleanup: vi.fn() })
       .mockResolvedValueOnce({ outputDir: validDir, cleanup: vi.fn() }) };
@@ -163,8 +164,8 @@ describe("card-news worker", () => {
     const secondDir = await mkdtemp(path.join(os.tmpdir(), "card-v3-invalid-"));
     const invalid = v3Draft(v3Input("informational"));
     invalid.scenes.pop();
-    await writeFile(path.join(firstDir, "card-deck-editorial-plan.json"), JSON.stringify(invalid));
-    await writeFile(path.join(secondDir, "card-deck-editorial-plan.json"), JSON.stringify(invalid));
+    await writeFile(path.join(firstDir, "card-manuscript-plan.json"), JSON.stringify(invalid));
+    await writeFile(path.join(secondDir, "card-manuscript-plan.json"), JSON.stringify(invalid));
     const planner = { run: vi.fn()
       .mockResolvedValueOnce({ outputDir: firstDir, cleanup: vi.fn() })
       .mockResolvedValueOnce({ outputDir: secondDir, cleanup: vi.fn() }) };
@@ -182,7 +183,7 @@ describe("card-news worker", () => {
       throw new ContentWorkerApiError(400, "ai_content_plan_invalid");
     });
     const dir = await mkdtemp(path.join(os.tmpdir(), "card-v3-plan-"));
-    await writeFile(path.join(dir, "card-deck-editorial-plan.json"), JSON.stringify(v3Draft(v3Input("informational"))));
+    await writeFile(path.join(dir, "card-manuscript-plan.json"), JSON.stringify(v3Draft(v3Input("informational"))));
     const planner = { run: vi.fn(async () => ({ outputDir: dir, cleanup: vi.fn() })) };
 
     const result = await runOnce({ workerId: "worker-1", client: api, planner });

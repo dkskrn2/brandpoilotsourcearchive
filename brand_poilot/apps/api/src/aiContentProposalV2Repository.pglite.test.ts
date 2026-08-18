@@ -86,6 +86,14 @@ function enqueueInput(overrides: Partial<EnqueueProposalV2Input> = {}): EnqueueP
       capturedAt: "2026-08-05T00:00:00.000Z",
     },
     sourceSnapshots: [],
+    researchSourceAcquisition: {
+      contractVersion: "research-source-acquisition.v1",
+      status: "not_applicable",
+      requestedUrl: null,
+      canonicalUrl: null,
+      contentHash: null,
+      capturedAt: "2026-08-05T00:00:00.000Z",
+    },
     proposalRunId: null,
     performanceAudit: null,
     ...overrides,
@@ -202,7 +210,14 @@ describe("Proposal V2 repository on the final purpose/job-contract schema", () =
       replayFingerprint: enqueueInput().replayFingerprint,
       baseInput: enqueueInput().baseInput,
       resumeInput: enqueueInput().request,
+      researchSourceAcquisition: enqueueInput().researchSourceAcquisition,
     });
+    expect(Object.keys(row.input_snapshot_json as object).sort()).toEqual([
+      "baseInput",
+      "replayFingerprint",
+      "researchSourceAcquisition",
+      "resumeInput",
+    ]);
     for (const field of [
       "command_descriptor_sha256", "request_sha256", "base_input_sha256", "enqueue_contract_sha256",
     ]) {
@@ -217,8 +232,18 @@ describe("Proposal V2 repository on the final purpose/job-contract schema", () =
       idempotencyKey: "scheduled-v2-pglite",
       replayFingerprint: "b".repeat(64),
       workerRequest: { ...enqueueInput().workerRequest, requestFingerprint: "b".repeat(64) },
+      researchSourceAcquisition: undefined,
     });
     await repository.withTransaction((tx) => repository.enqueue(tx, input));
+
+    const scheduled = await database.query(
+      "select input_snapshot_json from ai_content_proposal_batches where idempotency_key='scheduled-v2-pglite'",
+    );
+    expect(Object.keys((scheduled.rows[0] as Record<string, unknown>).input_snapshot_json as object).sort()).toEqual([
+      "baseInput",
+      "replayFingerprint",
+      "resumeInput",
+    ]);
 
     await expect(repository.findCommittedReplay(input)).resolves.toMatchObject({
       disposition: "replayed",

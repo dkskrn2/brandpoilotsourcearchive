@@ -15,6 +15,14 @@ const ids = {
 
 const NOW = "2026-08-06T00:00:00.000Z";
 const scope = { workspaceId: ids.workspace, brandId: ids.brand };
+const researchSourceAcquisition = {
+  contractVersion: "research-source-acquisition.v1",
+  status: "not_applicable",
+  requestedUrl: null,
+  canonicalUrl: null,
+  contentHash: null,
+  capturedAt: NOW,
+};
 
 function generationRow(overrides: Record<string, unknown> = {}) {
   return {
@@ -398,6 +406,7 @@ function selectionHarness(options: {
             input_snapshot_json: {
               baseInput: proposalBaseInput,
               replayFingerprint: "a".repeat(64),
+              researchSourceAcquisition,
               resumeInput,
             },
           }],
@@ -444,6 +453,7 @@ describe("AI content repository V3 proposal selection", () => {
               input_snapshot_json: {
                 baseInput: proposalBaseInput,
                 replayFingerprint: "a".repeat(64),
+                researchSourceAcquisition,
                 resumeInput,
               },
             }],

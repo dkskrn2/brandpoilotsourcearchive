@@ -1,11 +1,8 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
 import type { ReelPlanV2 } from "@brand-pilot/content-contracts";
-import {
-  compileCardDeckPlanDraftV1,
-  parseCardDeckEditorialPlanV1,
-} from "@brand-pilot/content-contracts/card-deck-editorial-plan";
-import { cardDeckEditorialPlanSha256 } from "@brand-pilot/content-contracts/card-deck-editorial-plan/node";
+import { compileCardManuscriptPlanDraftV1, parseCardManuscriptPlanV1 } from "@brand-pilot/content-contracts/card-manuscript-plan";
+import { cardManuscriptPlanSha256 } from "@brand-pilot/content-contracts/card-manuscript-plan/node";
 import {
   compileReelStoryboardDraftV1,
   parseReelStoryboardV1,
@@ -110,33 +107,29 @@ const cardInput = {
   },
   outputSettings: { ...structuredClone(finalInput.outputSettings), outputFormat: "card_news", aspectRatio: "1:1" },
 } as const;
-const cardDeck = parseCardDeckEditorialPlanV1({
-  contractVersion: "card-deck-editorial-plan.v1",
+const cardManuscript = parseCardManuscriptPlanV1({
+  contractVersion: "card-manuscript-plan.v1",
   content: { caption: "새 기준", hashtags: ["youtube"], cta: "저장하세요" },
   deckNarrative: "발표에서 비교와 행동으로 이어진다.",
-  visualSystem: {
-    paletteDirection: "white red black", typographyDirection: "large type",
-    graphicLanguage: "editorial", imageryDirection: "numbers first", invariants: ["same margins"],
-  },
+  evidenceSelection: { selectedEvidenceIds: [uid(4)], excludedEvidenceIds: [] },
   scenes: [1, 2, 3].map((index) => ({
     index, editorialRole: index === 1 ? "cover" : "detail", purpose: `목적 ${index}`,
     coreMessage: `핵심 ${index}`, headline: `결론 ${index}`,
-    keyVisual: { type: "none", entries: [] }, supportingTexts: [], footnote: null,
-    visualThesis: `논지 ${index}`, layoutArchetype: "editorial_freeform",
-    evidenceIds: [uid(4)], productImageAssetIds: [],
+    informationRelation: { type: "none", entries: [] }, supportingTexts: [], footnote: null,
+    evidenceIds: [uid(4)], productImageAssetIds: [], avatarImageAssetIds: [],
   })),
-});
-const cardPlanDraft = compileCardDeckPlanDraftV1(cardDeck, cardInput.selectedProposal.outline);
-const cardDeckContract = {
-  contractVersion: "card-deck-editorial-plan.v1" as const,
-  deckSha256: cardDeckEditorialPlanSha256(cardDeck),
-  plan: cardDeck,
+}, cardInput as never);
+const cardPlanDraft = compileCardManuscriptPlanDraftV1(cardManuscript, cardInput.selectedProposal.outline);
+const cardManuscriptContract = {
+  contractVersion: "card-manuscript-plan.v1" as const,
+  manuscriptSha256: cardManuscriptPlanSha256(cardManuscript),
+  plan: cardManuscript,
 };
 
 function runtimeHarness(
   initialStatus: "queued" | "processing" | "succeeded",
   lineageOrigin: "manual" | "scheduled_crawl" | null = null,
-  stored: { plan?: unknown; reelStoryboardContract?: typeof reelStoryboardContract; cardDeckContract?: typeof cardDeckContract } = {},
+  stored: { plan?: unknown; reelStoryboardContract?: typeof reelStoryboardContract; cardManuscriptContract?: typeof cardManuscriptContract } = {},
   fault: { renderInsert?: boolean } = {},
   fixture: { input: unknown; outputFormat: "reel" | "card_news" } = { input: finalInput, outputFormat: "reel" },
 ) {
@@ -150,7 +143,7 @@ function runtimeHarness(
       generationId: uid(1), outputId: uid(7), contentGenerationInput: fixture.input,
       planningMode: "selected_proposal", operationId: uid(10),
       ...(stored.reelStoryboardContract ? { reelStoryboardContract: stored.reelStoryboardContract } : {}),
-      ...(stored.cardDeckContract ? { cardDeckContract: stored.cardDeckContract } : {}),
+      ...(stored.cardManuscriptContract ? { cardManuscriptContract: stored.cardManuscriptContract } : {}),
     },
     attempt_count: 1, max_attempts: 3, worker_id: initialStatus === "queued" ? null : "worker-1",
     lease_token: initialStatus === "queued" ? null : "lease-1",
@@ -290,8 +283,8 @@ describe("V3 generation runtime contract", () => {
     expect(JSON.parse(String(jobWrite?.params[3]))).toEqual(reelStoryboardContract);
     const renderWrite = run.statements.find(({ sql: statement }) => statement.includes("insert into ai_content_generation_render_jobs"));
     expect(JSON.parse(String(renderWrite?.params[5]))).toMatchObject({
-      contractVersion: "ai-content-reel-storyboard-render-job.v1",
-      rendererPromptVersion: "image-reel-storyboard.v1",
+      contractVersion: "ai-content-visual-session-render-job.v1",
+      rendererPromptVersion: "image-visual-session.v1",
     });
     expect(run.statements.at(-1)?.sql).toBe("COMMIT");
   });
@@ -374,57 +367,57 @@ describe("V3 generation runtime contract", () => {
 
     await run.repository.completeAiContentJob({
       jobId: uid(6), workerId: "worker-1", leaseToken: "lease-1", skillVersion: "card-news-plan-skill.v6",
-      jobType: "generate", planDraft: cardPlanDraft, cardDeckContract,
+      jobType: "generate", planDraft: cardPlanDraft, cardManuscriptContract,
     } as never);
 
     const jobWrite = run.statements.find(({ sql }) => sql.includes("update ai_content_generation_jobs") && sql.includes("status = 'succeeded'"));
-    expect(jobWrite?.sql).toContain("cardDeckContract");
-    expect(JSON.parse(String(jobWrite?.params[2]))).toEqual(cardDeckContract);
+    expect(jobWrite?.sql).toContain("cardManuscriptContract");
+    expect(JSON.parse(String(jobWrite?.params[2]))).toEqual(cardManuscriptContract);
     expect(run.statements.map(({ sql }) => sql).join("\n"))
-      .toMatch(/set plan_json=coalesce[\s\S]*insert into ai_content_generation_render_jobs[\s\S]*cardDeckContract/i);
+      .toMatch(/set plan_json=coalesce[\s\S]*insert into ai_content_generation_render_jobs[\s\S]*cardManuscriptContract/i);
     expect(run.statements.at(-1)?.sql).toBe("COMMIT");
   });
 
   it.each([
-    ["hash", { ...cardDeckContract, deckSha256: "f".repeat(64) }, cardPlanDraft, "ai_content_card_deck_hash_mismatch"],
-    ["compiled draft", cardDeckContract, { ...cardPlanDraft, content: { ...cardPlanDraft.content, caption: "Changed" } }, "ai_content_card_deck_compilation_mismatch"],
-  ])("rejects a card deck %s mismatch before any write", async (_name, submittedDeck, submittedDraft, code) => {
+    ["hash", { ...cardManuscriptContract, manuscriptSha256: "f".repeat(64) }, cardPlanDraft, "ai_content_card_manuscript_hash_mismatch"],
+    ["compiled draft", cardManuscriptContract, { ...cardPlanDraft, content: { ...cardPlanDraft.content, caption: "Changed" } }, "ai_content_card_manuscript_projection_mismatch"],
+  ])("rejects a card manuscript %s mismatch before any write", async (_name, submittedManuscript, submittedDraft, code) => {
     const run = runtimeHarness("processing", "manual", {}, {}, { input: cardInput, outputFormat: "card_news" });
     await expect(run.repository.completeAiContentJob({
       jobId: uid(6), workerId: "worker-1", leaseToken: "lease-1", skillVersion: "card-news-plan-skill.v6",
-      jobType: "generate", planDraft: submittedDraft, cardDeckContract: submittedDeck,
+      jobType: "generate", planDraft: submittedDraft, cardManuscriptContract: submittedManuscript,
     } as never)).rejects.toThrow(code);
     expect(run.statements.map(({ sql }) => sql).join("\n"))
       .not.toMatch(/set plan_json=coalesce|insert into ai_content_generation_render_jobs/i);
     expect(run.statements.at(-1)?.sql).toBe("ROLLBACK");
   });
 
-  it("replays only the identical stored card deck even when the flattened plan stays equal", async () => {
+  it("replays only the identical stored card manuscript even when the flattened plan stays equal", async () => {
     const storedPlan = await import("./aiContentPlanContracts.js").then(({ assembleContentPlanResultV2 }) =>
       assembleContentPlanResultV2(cardPlanDraft, cardInput as never, evidence));
     const identical = runtimeHarness(
-      "succeeded", "manual", { plan: storedPlan, cardDeckContract }, {},
+      "succeeded", "manual", { plan: storedPlan, cardManuscriptContract }, {},
       { input: cardInput, outputFormat: "card_news" },
     );
     await expect(identical.repository.completeAiContentJob({
       jobId: uid(6), workerId: "worker-1", leaseToken: "lease-1", skillVersion: "card-news-plan-skill.v6",
-      jobType: "generate", planDraft: cardPlanDraft, cardDeckContract,
+      jobType: "generate", planDraft: cardPlanDraft, cardManuscriptContract,
     } as never)).resolves.toMatchObject({ id: uid(1) });
 
-    const changedPlan = structuredClone(cardDeck);
-    changedPlan.scenes[0]!.coreMessage = "같은 출력 문구지만 다른 내부 Deck 판단";
+    const changedPlan = structuredClone(cardManuscript);
+    changedPlan.scenes[0]!.coreMessage = "같은 출력 문구지만 다른 내부 원고 판단";
     const changedContract = {
-      ...cardDeckContract,
-      deckSha256: cardDeckEditorialPlanSha256(changedPlan),
+      ...cardManuscriptContract,
+      manuscriptSha256: cardManuscriptPlanSha256(changedPlan),
       plan: changedPlan,
     };
     const changed = runtimeHarness(
-      "succeeded", "manual", { plan: storedPlan, cardDeckContract }, {},
+      "succeeded", "manual", { plan: storedPlan, cardManuscriptContract }, {},
       { input: cardInput, outputFormat: "card_news" },
     );
     await expect(changed.repository.completeAiContentJob({
       jobId: uid(6), workerId: "worker-1", leaseToken: "lease-1", skillVersion: "card-news-plan-skill.v6",
-      jobType: "generate", planDraft: cardPlanDraft, cardDeckContract: changedContract,
+      jobType: "generate", planDraft: cardPlanDraft, cardManuscriptContract: changedContract,
     } as never)).rejects.toThrow("ai_content_plan_completion_conflict");
   });
 

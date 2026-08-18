@@ -18,6 +18,10 @@ import {
   type ProposalInputSnapshotV2,
   type ResearchEvidenceSnapshotV1,
 } from "@brand-pilot/content-contracts";
+import {
+  parseResearchSourceAcquisitionV1,
+  type ResearchSourceAcquisitionV1,
+} from "@brand-pilot/content-contracts/research-source-acquisition";
 
 export type {
   ContentProposalRequestV2,
@@ -185,6 +189,7 @@ export type ContentProposalResearchJob = ContentProposalJobCommon & {
   researchAttemptId: string;
   researchAttemptNumber: number;
   baseInput: ProposalBaseInputSnapshotV2;
+  researchSourceAcquisition?: ResearchSourceAcquisitionV1;
 };
 
 export type ContentProposalCompositionJob = ContentProposalJobCommon & {
@@ -315,16 +320,30 @@ function assertInputBinding(
 export function parseContentProposalJob(value: unknown): ContentProposalJob {
   const initial = record(value);
   if (initial.stage === "research_required") {
-    const source = exact(initial, [...commonKeys, "researchAttemptId", "researchAttemptNumber", "baseInput"]);
+    const hasAcquisition = Object.hasOwn(initial, "researchSourceAcquisition");
+    const source = exact(initial, [
+      ...commonKeys,
+      "researchAttemptId",
+      "researchAttemptNumber",
+      "baseInput",
+      ...(hasAcquisition ? ["researchSourceAcquisition"] : []),
+    ]);
     const common = parseCommon(source);
     let baseInput: ProposalBaseInputSnapshotV2;
     try { baseInput = parseProposalBaseInputSnapshotV2(source.baseInput); }
     catch { fail(); }
     assertInputBinding(common.request, baseInput);
     if (proposalSha256(baseInput) !== common.contract.baseInputSha256) fail("content_proposal_claim_contract_mismatch");
+    let researchSourceAcquisition: ResearchSourceAcquisitionV1 | undefined;
+    if (hasAcquisition) {
+      if (common.request.outputFormat !== "card_news" && common.request.outputFormat !== "reel") fail();
+      try { researchSourceAcquisition = parseResearchSourceAcquisitionV1(source.researchSourceAcquisition); }
+      catch { fail(); }
+    }
     return {
       ...common, stage: "research_required", researchAttemptId: uuid(source.researchAttemptId),
       researchAttemptNumber: positiveInteger(source.researchAttemptNumber), baseInput,
+      ...(researchSourceAcquisition === undefined ? {} : { researchSourceAcquisition }),
     };
   }
   if (initial.stage === "composition_ready") {

@@ -6,7 +6,7 @@ import { join, resolve } from "node:path";
 import test from "node:test";
 
 import {
-  CARD_DECK_EDITORIAL_PIPELINE_PROFILE,
+  CARD_MANUSCRIPT_VISUAL_SESSION_PROFILE,
   FAQ_UTTERANCE_MATCHING_PROFILE,
   MANUAL_BRAND_VISUAL_ASSETS_PROFILE,
   SERVER_COMPONENTS,
@@ -309,18 +309,21 @@ test("structured social render profile rejects any extra path without widening d
   assert.deepEqual(impact.unknownPaths, ["brand_poilot/workers/brand-pilot-blog-worker/src/worker.ts"]);
 });
 
-test("editorial pipeline selects exactly its five Card and Reel server consumers", () => {
+test("Card Manuscript visual session selects exactly its four coordinated server consumers", () => {
   const impact = classifyChangedPaths([
+    "brand_poilot/packages/brand-pilot-content-contracts/src/cardManuscriptPlan.ts",
     "brand_poilot/packages/brand-pilot-content-contracts/src/cardDeckEditorialPlan.ts",
+    "brand_poilot/packages/brand-pilot-content-contracts/src/researchSourceAcquisition.ts",
+    "brand_poilot/packages/brand-pilot-content-contracts/src/visualRenderSession.ts",
     "brand_poilot/apps/api/src/aiContentRenderJobs.ts",
     "brand_poilot/workers/brand-pilot-content-proposal-worker/src/contracts.ts",
-    "brand_poilot/workers/brand-pilot-card-news-worker/src/deckPlan.ts",
-    "brand_poilot/workers/brand-pilot-reel-worker/src/contracts.ts",
-    "brand_poilot/workers/brand-pilot-image-worker/src/aiContentCardDeckPromptCompiler.ts",
-    "brand_poilot/docs/superpowers/plans/2026-08-12-card-deck-editorial-pipeline.md",
-  ], { profile: CARD_DECK_EDITORIAL_PIPELINE_PROFILE });
+    "brand_poilot/workers/brand-pilot-worker-runtime/src/controlledSearch.ts",
+    "brand_poilot/workers/brand-pilot-card-news-worker/src/manuscriptPlan.ts",
+    "brand_poilot/workers/brand-pilot-image-worker/src/aiContentVisualSessionPromptCompiler.ts",
+    "brand_poilot/docs/superpowers/plans/2026-08-18-card-manuscript-shared-visual-session.md",
+  ], { profile: CARD_MANUSCRIPT_VISUAL_SESSION_PROFILE });
 
-  assert.deepEqual(enabled(impact), ["api", "cardNewsWorker", "contentProposalWorker", "imageWorker", "reelWorker"]);
+  assert.deepEqual(enabled(impact), ["api", "cardNewsWorker", "contentProposalWorker", "imageWorker"]);
   assert.equal(impact.buildAllServer, false);
   assert.equal(impact.migrationChanged, false);
   assert.equal(impact.productionDeployAllowed, true);
@@ -328,33 +331,10 @@ test("editorial pipeline selects exactly its five Card and Reel server consumers
   assert.deepEqual(impact.unknownPaths, []);
 });
 
-test("editorial pipeline accepts the unified result UI without widening unrelated UI scope", () => {
-  const impact = classifyChangedPaths([
-    "brand_poilot/apps/api/src/aiContentPublish.ts",
-    "brand_poilot/apps/customer-ui/src/pages/AiContentGenerationPage.tsx",
-    "brand_poilot/apps/customer-ui/src/components/ai-content/AiContentPublishPanel.tsx",
-    "brand_poilot/apps/customer-ui/src/styles/ai-content-flow.css",
-    "brand_poilot/docs/superpowers/plans/2026-08-13-unified-results-and-reel-publishing.md",
-    "brand_poilot/docs/superpowers/specs/2026-08-13-ai-content-reel-direct-publishing-design.md",
-  ], { profile: CARD_DECK_EDITORIAL_PIPELINE_PROFILE });
-
-  assert.deepEqual(enabled(impact), ["api", "customerUi"]);
-  assert.equal(impact.buildAllServer, false);
-  assert.equal(impact.migrationChanged, false);
-  assert.equal(impact.productionDeployAllowed, true);
-  assert.equal(impact.verifiedScope, true);
-  assert.deepEqual(impact.unknownPaths, []);
-
-  const unrelated = classifyChangedPaths([
-    "brand_poilot/apps/customer-ui/src/App.tsx",
-  ], { profile: CARD_DECK_EDITORIAL_PIPELINE_PROFILE });
-  assert.equal(unrelated.productionDeployAllowed, false);
-  assert.deepEqual(unrelated.unknownPaths, ["brand_poilot/apps/customer-ui/src/App.tsx"]);
-});
-
-test("editorial pipeline rejects unrelated UI, Blog, marketing, and migration paths", () => {
+test("Card Manuscript visual session rejects UI, Reel Worker, Blog, marketing, and migrations", () => {
   for (const path of [
     "brand_poilot/apps/customer-ui/src/App.tsx",
+    "brand_poilot/workers/brand-pilot-reel-worker/src/worker.ts",
     "brand_poilot/workers/brand-pilot-blog-worker/src/worker.ts",
     "brand_poilot/workers/brand-pilot-marketing-worker/src/worker.ts",
     "brand_poilot/db/migrations/077_unrelated.sql",
@@ -362,7 +342,7 @@ test("editorial pipeline rejects unrelated UI, Blog, marketing, and migration pa
     const impact = classifyChangedPaths([
       "brand_poilot/apps/api/src/aiContentRenderJobs.ts",
       path,
-    ], { profile: CARD_DECK_EDITORIAL_PIPELINE_PROFILE });
+    ], { profile: CARD_MANUSCRIPT_VISUAL_SESSION_PROFILE });
     assert.deepEqual(enabled(impact), ["api"], path);
     assert.equal(impact.buildAllServer, false, path);
     assert.equal(impact.productionDeployAllowed, false, path);
@@ -370,7 +350,7 @@ test("editorial pipeline rejects unrelated UI, Blog, marketing, and migration pa
   }
 });
 
-test("editorial pipeline accepts its exact deployment tooling without widening runtime images", () => {
+test("Card Manuscript visual session accepts exact deployment tooling without widening runtime images", () => {
   const impact = classifyChangedPaths([
     ".github/workflows/publish-brand-pilot-server-images.yml",
     "brand_poilot/deploy/env/card-news-worker.env.example",
@@ -382,7 +362,7 @@ test("editorial pipeline accepts its exact deployment tooling without widening r
     "brand_poilot/scripts/release-impact.test.mjs",
     "brand_poilot/scripts/three-format-cutover-static-check.mjs",
     "brand_poilot/scripts/three-format-cutover-static-check.test.mjs",
-  ], { profile: CARD_DECK_EDITORIAL_PIPELINE_PROFILE });
+  ], { profile: CARD_MANUSCRIPT_VISUAL_SESSION_PROFILE });
 
   assert.deepEqual(enabled(impact), []);
   assert.equal(impact.buildAllServer, false);

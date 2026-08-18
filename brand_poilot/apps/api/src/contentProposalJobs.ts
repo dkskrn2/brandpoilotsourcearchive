@@ -18,6 +18,10 @@ import {
   parseResearchEvidenceSnapshotV1,
 } from "./aiContentGenerationInputV3.js";
 import { canonicalProposalJson, proposalSha256 } from "./aiContentProposalV2Service.js";
+import {
+  parseResearchSourceAcquisitionV1,
+  type ResearchSourceAcquisitionV1,
+} from "@brand-pilot/content-contracts/research-source-acquisition";
 
 export type ContentProposalClaimStage = "research_required" | "composition_ready";
 export type ContentProposalExecutionTier = "standard" | "fast";
@@ -62,6 +66,7 @@ export interface ContentProposalResearchClaim extends ContentProposalClaimBase {
   researchAttemptId: string;
   researchAttemptNumber: number;
   baseInput: ProposalBaseInputSnapshotV2;
+  researchSourceAcquisition?: ResearchSourceAcquisitionV1;
 }
 
 export interface ContentProposalModelClaim extends ContentProposalClaimBase {
@@ -175,21 +180,43 @@ function contractFromRow(row: Record<string, unknown>): ContentProposalJobContra
   };
 }
 
-function frozenBaseInput(row: Record<string, unknown>): ProposalBaseInputSnapshotV2 {
+function frozenInputEnvelope(
+  row: Record<string, unknown>,
+  request: ContentProposalRequestV2,
+): {
+  baseInput: ProposalBaseInputSnapshotV2;
+  researchSourceAcquisition?: ResearchSourceAcquisitionV1;
+} {
   const envelope = object(row.input_snapshot_json);
-  if (Object.keys(envelope).sort().join("\0") !== ["baseInput", "replayFingerprint", "resumeInput"].sort().join("\0")) {
+  const requiresAcquisition = row.origin === "manual"
+    && (request.outputFormat === "card_news" || request.outputFormat === "reel");
+  const expectedKeys = requiresAcquisition
+    ? ["baseInput", "replayFingerprint", "researchSourceAcquisition", "resumeInput"]
+    : ["baseInput", "replayFingerprint", "resumeInput"];
+  if (Object.keys(envelope).sort().join("\0") !== expectedKeys.sort().join("\0")) {
     throw new Error("content_proposal_input_envelope_invalid");
   }
-  return parseProposalBaseInputSnapshotV2(envelope.baseInput);
+  try {
+    return {
+      baseInput: parseProposalBaseInputSnapshotV2(envelope.baseInput),
+      ...(requiresAcquisition
+        ? { researchSourceAcquisition: parseResearchSourceAcquisitionV1(envelope.researchSourceAcquisition) }
+        : {}),
+    };
+  } catch {
+    throw new Error("content_proposal_input_envelope_invalid");
+  }
 }
 
 function validatedClaimBoundary(row: Record<string, unknown>): {
   request: ContentProposalRequestV2;
   baseInput: ProposalBaseInputSnapshotV2;
   contract: ContentProposalJobContractRecord;
+  researchSourceAcquisition?: ResearchSourceAcquisitionV1;
 } {
   const request = parseContentProposalRequestV2(row.request_json);
-  const baseInput = frozenBaseInput(row);
+  const frozen = frozenInputEnvelope(row, request);
+  const baseInput = frozen.baseInput;
   const contract = contractFromRow(row);
   if (proposalSha256(request) !== contract.requestSha256
     || proposalSha256(baseInput) !== contract.baseInputSha256
@@ -201,7 +228,14 @@ function validatedClaimBoundary(row: Record<string, unknown>): {
     || row.purpose !== request.purpose) {
     throw new Error("content_proposal_claim_contract_mismatch");
   }
-  return { request, baseInput, contract };
+  return {
+    request,
+    baseInput,
+    contract,
+    ...(frozen.researchSourceAcquisition === undefined
+      ? {}
+      : { researchSourceAcquisition: frozen.researchSourceAcquisition }),
+  };
 }
 
 function validateResearchEvidence(value: unknown): ResearchEvidenceSnapshotV1 {
@@ -590,6 +624,9 @@ export function createContentProposalJobsRepository(pool: Pool): ContentProposal
           return {
             ...common, stage: "research_required", researchAttemptId: String(row.id),
             researchAttemptNumber: Number(row.attempt_number), baseInput: boundary.baseInput,
+            ...(boundary.researchSourceAcquisition === undefined
+              ? {}
+              : { researchSourceAcquisition: boundary.researchSourceAcquisition }),
           };
         }
 

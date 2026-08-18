@@ -14,6 +14,7 @@ import { createBlobStorage } from "./storage.js";
 import { createAiContentBlobStorage } from "./storage.js";
 import { createAiContentRenderClient } from "./aiContentRenderClient.js";
 import { createAiContentAssetRenderer } from "./aiContentAssetRenderer.js";
+import { createAiContentVisualSessionRenderer } from "./aiContentVisualSessionRenderer.js";
 import { finalizeAiContentPackage } from "./aiContentFinalizer.js";
 import { createAiContentShutdownCoordinator, type AiContentWorkerExitSignal } from "./aiContentShutdown.js";
 import { runTextOnce } from "./textWorker.js";
@@ -86,6 +87,12 @@ async function main() {
     readOwned: (storagePath, constraints) => aiContentStorage.readOwned(storagePath, constraints),
     timeoutMs: Math.max(1000, Number(process.env.AI_CONTENT_ASSET_TIMEOUT_MS ?? "1200000")),
   });
+  const aiContentVisualRenderer = createAiContentVisualSessionRenderer({
+    accountPool,
+    workerRoot,
+    readOwned: (storagePath, constraints) => aiContentStorage.readOwned(storagePath, constraints),
+    timeoutMs: Math.max(1000, Number(process.env.AI_CONTENT_ASSET_TIMEOUT_MS ?? "1200000")),
+  });
   const renderer = createConfiguredRenderer({
     provider: process.env.IMAGE_PROVIDER ?? "command",
     commandTemplate: process.env.IMAGE_RENDER_COMMAND,
@@ -107,12 +114,14 @@ async function main() {
       storage,
       aiContentClient,
       aiContentRenderer,
+      aiContentVisualRenderer,
       aiContentStorage,
       aiContentFinalizer: (job, signal) => finalizeAiContentPackage(job, aiContentStorage, undefined, signal),
       aiContentHeartbeatIntervalMs: aiContentLeaseTiming.heartbeatIntervalMs,
       aiContentLeaseSeconds: aiContentLeaseTiming.leaseSeconds,
       signal: shutdown.signal,
       onAiContentActivityChange: shutdown.onAiContentActivityChange,
+      onVisualSessionTiming: (timing) => process.stdout.write(`${JSON.stringify({ type: "ai_content_visual_session_timing", ...timing })}\n`),
       runTextJob: () => runTextOnce({
         workerId,
         client: textClient,

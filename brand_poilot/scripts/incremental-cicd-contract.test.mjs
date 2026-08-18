@@ -30,13 +30,13 @@ test("workflow detects production impact and builds an affected image matrix", (
   assert.doesNotMatch(prImpactBranch, /base_sha="\$PRODUCTION_RELEASE_SHA"/);
   assert.match(prImpactBranch, /--profile manual-brand-visual-assets/);
   assert.match(prImpactBranch, /--profile faq-utterance-matching/);
-  assert.match(prImpactBranch, /--profile card-deck-editorial-pipeline/);
+  assert.match(prImpactBranch, /--profile card-manuscript-visual-session/);
   assert.match(prImpactBranch, /impact\.verifiedScope && impact\.productionDeployAllowed/);
   assert.match(prImpactBranch, /else[\s\S]*release-impact\.mjs --base "\$base_sha" --head "\$GITHUB_SHA"/);
   const productionImpactBranch = workflow.match(/else\n([\s\S]*?)bootstrap=false\n\s*fi/)?.[1] ?? "";
   assert.match(productionImpactBranch, /release-impact\.mjs --base "\$PRODUCTION_RELEASE_SHA" --head "\$GITHUB_SHA" --profile manual-brand-visual-assets/);
   assert.match(productionImpactBranch, /release-impact\.mjs --base "\$PRODUCTION_RELEASE_SHA" --head "\$GITHUB_SHA" --profile faq-utterance-matching/);
-  assert.match(productionImpactBranch, /release-impact\.mjs --base "\$PRODUCTION_RELEASE_SHA" --head "\$GITHUB_SHA" --profile card-deck-editorial-pipeline/);
+  assert.match(productionImpactBranch, /release-impact\.mjs --base "\$PRODUCTION_RELEASE_SHA" --head "\$GITHUB_SHA" --profile card-manuscript-visual-session/);
   assert.match(productionImpactBranch, /impact\.verifiedScope && impact\.productionDeployAllowed/);
   assert.match(productionImpactBranch, /else[\s\S]*release-impact\.mjs --base "\$PRODUCTION_RELEASE_SHA" --head "\$GITHUB_SHA"/);
   assert.match(workflow, /strategy:[\s\S]*matrix:[\s\S]*fromJSON/);

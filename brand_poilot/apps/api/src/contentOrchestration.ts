@@ -22,6 +22,7 @@ import type { BrandScope } from "./aiContentRepository.js";
 import type {
   ResolvedAiContentSubjectV2,
 } from "./aiContentSeedResolver.js";
+import type { ResearchSourceAcquisitionV1 } from "@brand-pilot/content-contracts/research-source-acquisition";
 import type { AiContentSnapshotRepository } from "./aiContentSnapshotRepository.js";
 import type { DeliveryFormat } from "./types.js";
 
@@ -55,10 +56,16 @@ const referenceRoles = new Set([
   "visual_composition",
 ]);
 
+type ResolvedProposalSubjectV2 = ResolvedAiContentSubjectV2 extends infer Subject
+  ? Subject extends { researchSourceAcquisition: ResearchSourceAcquisitionV1 }
+    ? Omit<Subject, "researchSourceAcquisition">
+    : never
+  : never;
+
 export interface ProposalBaseInputSnapshotV2 {
   contractVersion: "proposal-base-input.v2";
   brandCore: ApprovedBrandCoreSnapshotV2;
-  subject: ResolvedAiContentSubjectV2;
+  subject: ResolvedProposalSubjectV2;
   contentInstruction: string | null;
   product: ApprovedProductSnapshotV2 | null;
   references: FrozenReferenceSnapshotV2[];
@@ -300,6 +307,7 @@ export async function resolveContentProposalV2Input(
 ): Promise<{
   channelTarget: ContentOrchestrationV2["outputSettings"]["channelTargets"][number];
   inputSnapshot: ProposalBaseInputSnapshotV2;
+  researchSourceAcquisition: ResearchSourceAcquisitionV1;
 }> {
 
   const channelTarget = request.outputSettings.channelTargets[0];
@@ -320,6 +328,7 @@ export async function resolveContentProposalV2Input(
     ? await dependencies.snapshotRepository.loadApprovedProduct(scope, request.productId!)
     : null;
   const subject = await dependencies.resolveAiContentSeed(request.seed);
+  const { researchSourceAcquisition, ...canonicalSubject } = subject;
   let references: FrozenReferenceSnapshotV2[] = [];
   if (request.seed.kind === "reference") {
     const referenceSeed = request.seed;
@@ -338,7 +347,7 @@ export async function resolveContentProposalV2Input(
   const inputSnapshot: ProposalBaseInputSnapshotV2 = {
     contractVersion: "proposal-base-input.v2",
     brandCore,
-    subject,
+    subject: canonicalSubject,
     contentInstruction: request.contentInstruction,
     product,
     references,
@@ -350,5 +359,5 @@ export async function resolveContentProposalV2Input(
     capturedAt: dependencies.now().toISOString(),
   };
 
-  return { channelTarget, inputSnapshot };
+  return { channelTarget, inputSnapshot, researchSourceAcquisition };
 }

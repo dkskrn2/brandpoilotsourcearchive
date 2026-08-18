@@ -34,6 +34,8 @@ COPY --from=build --chown=node:node /app/workers/brand-pilot-image-worker/packag
 COPY --from=build --chown=node:node /app/workers/brand-pilot-image-worker/dist ./workers/brand-pilot-image-worker/dist
 COPY --from=build --chown=node:node /app/workers/brand-pilot-image-worker/scripts/run-codex-image-render.mjs ./workers/brand-pilot-image-worker/scripts/run-codex-image-render.mjs
 COPY --from=build --chown=node:node /app/workers/brand-pilot-image-worker/scripts/run-codex-ai-content-asset.mjs ./workers/brand-pilot-image-worker/scripts/run-codex-ai-content-asset.mjs
+COPY --from=build --chown=node:node /app/workers/brand-pilot-image-worker/scripts/audit-codex-visual-session-image.mjs ./workers/brand-pilot-image-worker/scripts/audit-codex-visual-session-image.mjs
+COPY --from=build --chown=node:node /app/workers/brand-pilot-image-worker/scripts/visualSessionImageAudit.mjs ./workers/brand-pilot-image-worker/scripts/visualSessionImageAudit.mjs
 COPY --from=build --chown=node:node /app/workers/brand-pilot-image-worker/scripts/render-reel.py ./workers/brand-pilot-image-worker/scripts/render-reel.py
 COPY --from=build --chown=node:node /app/workers/brand-pilot-image-worker/AGENTS.md ./workers/brand-pilot-image-worker/AGENTS.md
 COPY --from=build --chown=node:node /app/workers/brand-pilot-image-worker/.codex/skills/image-render/SKILL.md ./workers/brand-pilot-image-worker/.codex/skills/image-render/SKILL.md

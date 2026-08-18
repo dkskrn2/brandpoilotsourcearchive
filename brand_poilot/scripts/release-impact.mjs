@@ -17,7 +17,7 @@ const COMPONENTS = Object.freeze(["customerUi", ...SERVER_COMPONENTS]);
 
 export const AI_CONTENT_THREE_FORMAT_CUTOVER_PROFILE = "ai-content-three-format-cutover";
 export const STRUCTURED_SOCIAL_RENDER_SEMANTICS_PROFILE = "structured-social-render-semantics";
-export const CARD_DECK_EDITORIAL_PIPELINE_PROFILE = "card-deck-editorial-pipeline";
+export const CARD_MANUSCRIPT_VISUAL_SESSION_PROFILE = "card-manuscript-visual-session";
 export const FAQ_UTTERANCE_MATCHING_PROFILE = "faq-utterance-matching";
 export const MANUAL_BRAND_VISUAL_ASSETS_PROFILE = "manual-brand-visual-assets";
 const AI_CONTENT_CUTOVER_SERVER_COMPONENTS = Object.freeze([
@@ -141,47 +141,31 @@ const STRUCTURED_SOCIAL_DOC_PATHS = new Set([
   "docs/superpowers/specs/2026-08-11-structured-social-scene-copy-design.md",
 ]);
 
-const CARD_DECK_CONTRACT_PATHS = new Set([
+const CARD_MANUSCRIPT_CONTRACT_PATHS = new Set([
   "packages/brand-pilot-content-contracts/package.json",
+  "packages/brand-pilot-content-contracts/src/cardManuscriptPlan.test.ts",
+  "packages/brand-pilot-content-contracts/src/cardManuscriptPlan.ts",
+  "packages/brand-pilot-content-contracts/src/cardManuscriptPlanNode.ts",
+  "packages/brand-pilot-content-contracts/src/generateArtifacts.ts",
+  "packages/brand-pilot-content-contracts/src/generatedArtifacts.test.ts",
+  "packages/brand-pilot-content-contracts/src/researchSourceAcquisition.test.ts",
+  "packages/brand-pilot-content-contracts/src/researchSourceAcquisition.ts",
+  "packages/brand-pilot-content-contracts/src/visualRenderSession.test.ts",
+  "packages/brand-pilot-content-contracts/src/visualRenderSession.ts",
+]);
+
+const RETIRED_CARD_DECK_CONTRACT_PATHS = new Set([
   "packages/brand-pilot-content-contracts/src/cardDeckEditorialPlan.test.ts",
   "packages/brand-pilot-content-contracts/src/cardDeckEditorialPlan.ts",
   "packages/brand-pilot-content-contracts/src/cardDeckEditorialPlanNode.ts",
-  "packages/brand-pilot-content-contracts/src/editorialVisualContext.ts",
-  "packages/brand-pilot-content-contracts/src/reelStoryboard.test.ts",
-  "packages/brand-pilot-content-contracts/src/reelStoryboard.ts",
-  "packages/brand-pilot-content-contracts/src/reelStoryboardNode.ts",
-  "packages/brand-pilot-content-contracts/src/generateArtifacts.ts",
-  "packages/brand-pilot-content-contracts/src/generatedArtifacts.test.ts",
 ]);
 
-const CARD_DECK_DOC_PATHS = new Set([
-  "docs/superpowers/plans/2026-08-12-card-deck-editorial-pipeline.md",
-  "docs/superpowers/plans/2026-08-13-unified-results-and-reel-publishing.md",
-  "docs/superpowers/specs/2026-08-12-card-deck-editorial-pipeline-design.md",
-  "docs/superpowers/specs/2026-08-12-editorial-render-contracts-final.md",
-  "docs/superpowers/specs/2026-08-13-ai-content-reel-direct-publishing-design.md",
+const CARD_MANUSCRIPT_DOC_PATHS = new Set([
+  "docs/superpowers/plans/2026-08-18-card-manuscript-shared-visual-session.md",
+  "docs/superpowers/specs/2026-08-18-card-manuscript-plan-design.md",
 ]);
 
-const CARD_DECK_CUSTOMER_UI_PATHS = new Set([
-  "apps/customer-ui/src/__tests__/aiContentGeneration.test.tsx",
-  "apps/customer-ui/src/__tests__/helpGuidance.test.tsx",
-  "apps/customer-ui/src/components/ai-content/AiContentArtifactPreview.test.tsx",
-  "apps/customer-ui/src/components/ai-content/AiContentArtifactPreview.tsx",
-  "apps/customer-ui/src/components/ai-content/AiContentPublishPanel.test.tsx",
-  "apps/customer-ui/src/components/ai-content/AiContentPublishPanel.tsx",
-  "apps/customer-ui/src/components/ai-content/AiGenerationOutputList.test.tsx",
-  "apps/customer-ui/src/features/ai-content/aiContentApiGateway.test.ts",
-  "apps/customer-ui/src/features/ai-content/aiContentApiGateway.ts",
-  "apps/customer-ui/src/features/ai-content/aiContentPublishTargets.test.ts",
-  "apps/customer-ui/src/features/ai-content/aiContentPublishTargets.ts",
-  "apps/customer-ui/src/features/ai-content/mockAiContentGateway.ts",
-  "apps/customer-ui/src/features/ai-content/types.ts",
-  "apps/customer-ui/src/features/help/helpGuides.ts",
-  "apps/customer-ui/src/pages/AiContentGenerationPage.tsx",
-  "apps/customer-ui/src/styles/ai-content-flow.css",
-]);
-
-const CARD_DECK_TOOLING_PATHS = new Set([
+const CARD_MANUSCRIPT_TOOLING_PATHS = new Set([
   "deploy/env/card-news-worker.env.example",
   "scripts/canonical-format-schema-runtime.test.mjs",
   "scripts/content-account-pool-deployment.test.mjs",
@@ -404,14 +388,10 @@ function classifyStructuredSocialRenderPath(path, components) {
   return { known: false };
 }
 
-function classifyCardDeckEditorialPipelinePath(path, components) {
-  if (CARD_DECK_DOC_PATHS.has(path)) return { known: true, documentation: true };
-  if (CARD_DECK_CUSTOMER_UI_PATHS.has(path)) {
-    components.customerUi = true;
-    return { known: true };
-  }
-  if (CARD_DECK_CONTRACT_PATHS.has(path)) {
-    for (const component of ["api", "contentProposalWorker", "cardNewsWorker", "imageWorker", "reelWorker"]) {
+function classifyCardManuscriptVisualSessionPath(path, components) {
+  if (CARD_MANUSCRIPT_DOC_PATHS.has(path)) return { known: true, documentation: true };
+  if (CARD_MANUSCRIPT_CONTRACT_PATHS.has(path) || RETIRED_CARD_DECK_CONTRACT_PATHS.has(path)) {
+    for (const component of ["api", "contentProposalWorker", "cardNewsWorker", "imageWorker"]) {
       components[component] = true;
     }
     return { known: true };
@@ -428,15 +408,15 @@ function classifyCardDeckEditorialPipelinePath(path, components) {
     components.cardNewsWorker = true;
     return { known: true };
   }
-  if (path.startsWith("workers/brand-pilot-reel-worker/")) {
-    components.reelWorker = true;
-    return { known: true };
-  }
   if (path.startsWith("workers/brand-pilot-image-worker/")) {
     components.imageWorker = true;
     return { known: true };
   }
-  if (CARD_DECK_TOOLING_PATHS.has(path)) {
+  if (AI_CONTENT_CONTROLLED_SEARCH_RUNTIME_PATHS.has(path)) {
+    components.contentProposalWorker = true;
+    return { known: true };
+  }
+  if (CARD_MANUSCRIPT_TOOLING_PATHS.has(path)) {
     return { known: true, deployBundle: path === "scripts/release-impact.mjs" };
   }
   return { known: false };
@@ -534,7 +514,7 @@ function classifyManualBrandVisualAssetsPath(path, components) {
 export function classifyChangedPaths(values, options = {}) {
   const profile = options.profile ?? "default";
   if (!["default", AI_CONTENT_THREE_FORMAT_CUTOVER_PROFILE, STRUCTURED_SOCIAL_RENDER_SEMANTICS_PROFILE,
-    CARD_DECK_EDITORIAL_PIPELINE_PROFILE, FAQ_UTTERANCE_MATCHING_PROFILE,
+    CARD_MANUSCRIPT_VISUAL_SESSION_PROFILE, FAQ_UTTERANCE_MATCHING_PROFILE,
     MANUAL_BRAND_VISUAL_ASSETS_PROFILE].includes(profile)) {
     throw new Error("release_impact_profile_invalid");
   }
@@ -557,7 +537,7 @@ export function classifyChangedPaths(values, options = {}) {
 
   if (profile === AI_CONTENT_THREE_FORMAT_CUTOVER_PROFILE
     || profile === STRUCTURED_SOCIAL_RENDER_SEMANTICS_PROFILE
-    || profile === CARD_DECK_EDITORIAL_PIPELINE_PROFILE
+    || profile === CARD_MANUSCRIPT_VISUAL_SESSION_PROFILE
     || profile === FAQ_UTTERANCE_MATCHING_PROFILE
     || profile === MANUAL_BRAND_VISUAL_ASSETS_PROFILE) {
     for (let index = 0; index < paths.length; index += 1) {
@@ -567,8 +547,8 @@ export function classifyChangedPaths(values, options = {}) {
         ? classifyAiContentCutoverPath(path, components)
         : profile === STRUCTURED_SOCIAL_RENDER_SEMANTICS_PROFILE
           ? classifyStructuredSocialRenderPath(path, components)
-          : profile === CARD_DECK_EDITORIAL_PIPELINE_PROFILE
-            ? classifyCardDeckEditorialPipelinePath(path, components)
+          : profile === CARD_MANUSCRIPT_VISUAL_SESSION_PROFILE
+            ? classifyCardManuscriptVisualSessionPath(path, components)
             : profile === FAQ_UTTERANCE_MATCHING_PROFILE
               ? classifyFaqUtteranceMatchingPath(path, components)
               : classifyManualBrandVisualAssetsPath(path, components);

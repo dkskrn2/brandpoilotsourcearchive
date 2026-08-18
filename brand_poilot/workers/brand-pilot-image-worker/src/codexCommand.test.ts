@@ -29,11 +29,14 @@ describe("resolveCodexInvocation", () => {
   });
 
   it("pins the image renderer to the strict read-only worker profile", () => {
-    const args = buildCodexExecArguments({ rootDir: "C:\\worker" });
+    const args = buildCodexExecArguments({ rootDir: "C:\\worker", enableHooks: true });
 
     expect(args).toEqual([
       "--model",
       "gpt-5.6-terra",
+      "--enable",
+      "codex_hooks",
+      "--dangerously-bypass-hook-trust",
       "exec",
       "--ignore-user-config",
       "--strict-config",
@@ -59,6 +62,12 @@ describe("resolveCodexInvocation", () => {
     expect(args).not.toContain("--sandbox");
     expect(args.indexOf("gpt-5.6-terra")).toBeLessThan(args.indexOf("exec"));
     expect(args.join(" ")).not.toContain("creative brief");
+  });
+
+  it("does not bypass hook trust for the markerless Blog renderer", () => {
+    const args = buildCodexExecArguments({ rootDir: "C:\\worker" });
+    expect(args).not.toContain("codex_hooks");
+    expect(args).not.toContain("--dangerously-bypass-hook-trust");
   });
 
   it("pins Threads text to the strict read-only worker profile with image tools disabled", () => {

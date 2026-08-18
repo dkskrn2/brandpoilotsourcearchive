@@ -12,8 +12,8 @@ export function buildCodexPrompt(prompt) {
 }
 
 export function buildCodexArgs(outputDir) {
-  const schemaFile = path.resolve(import.meta.dirname, "card-deck-editorial-plan-v1.schema.json");
-  const outputFile = path.join(outputDir, "card-deck-editorial-plan.json");
+  const schemaFile = path.resolve(import.meta.dirname, "card-manuscript-plan-v1.schema.json");
+  const outputFile = path.join(outputDir, "card-manuscript-plan.json");
   return [
     "--model", "gpt-5.6-terra", "--strict-config",
     "-c", 'default_permissions="planner"',
@@ -42,7 +42,7 @@ export async function main() {
     child.once("error", reject);
     child.once("exit", (code) => resolve(code ?? 1));
   });
-  if (exitCode !== 0) throw new Error(`codex_card_deck_plan_failed:${exitCode}`);
+  if (exitCode !== 0) throw new Error(`codex_card_manuscript_plan_failed:${exitCode}`);
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

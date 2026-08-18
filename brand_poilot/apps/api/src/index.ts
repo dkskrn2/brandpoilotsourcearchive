@@ -164,7 +164,7 @@ const proposalV2Resolution = {
   }),
   now: () => new Date(),
 };
-const resolveProposalBaseInput = async (
+const resolveProposalInput = async (
   rawRequest: unknown,
   scope: { workspaceId: string; brandId: string },
   tx: Parameters<typeof createAiContentSnapshotRepository>[0],
@@ -178,8 +178,16 @@ const resolveProposalBaseInput = async (
       snapshotRepository: createAiContentSnapshotRepository(tx, aiContentSnapshotBlob),
     },
   );
-  return parseProposalBaseInputSnapshotV2(resolved.inputSnapshot);
+  return {
+    baseInput: parseProposalBaseInputSnapshotV2(resolved.inputSnapshot),
+    researchSourceAcquisition: resolved.researchSourceAcquisition,
+  };
 };
+const resolveProposalBaseInput = async (
+  rawRequest: unknown,
+  scope: { workspaceId: string; brandId: string },
+  tx: Parameters<typeof createAiContentSnapshotRepository>[0],
+) => (await resolveProposalInput(rawRequest, scope, tx)).baseInput;
 const performanceProposalAdapter = createPerformanceProposalAdapter({
   loadSnapshots: (scope, tx) => loadPerformanceInsightSnapshots(tx, scope),
   resolveBaseInput: (request, scope, tx) => resolveProposalBaseInput(request, scope, tx),
@@ -200,14 +208,17 @@ const aiContentProposalV2Service = createAiContentProposalV2Service({
       return performanceProposalAdapter.resolve(command, tx);
     }
     const request = parseContentOrchestrationV2(command.request);
-    const baseInput = await resolveProposalBaseInput(
+    const resolvedInput = await resolveProposalInput(
       request,
       { workspaceId: command.workspaceId, brandId: command.brandId },
       tx,
     );
     return {
       request: command.request,
-      baseInput,
+      baseInput: resolvedInput.baseInput,
+      ...((request.outputSettings.outputFormat === "card_news" || request.outputSettings.outputFormat === "reel")
+        ? { researchSourceAcquisition: resolvedInput.researchSourceAcquisition }
+        : {}),
       sourceSnapshots: [],
     };
   },
