@@ -1,4 +1,5 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
+import path from "node:path";
 import { fileURLToPath } from "node:url";
 import sharp from "sharp";
 import { describe, expect, it, vi } from "vitest";
@@ -22,7 +23,7 @@ describe("visual session renderer", () => {
       const hooks = JSON.parse(await readFile(`${workspaceDir}/.codex/hooks.json`, "utf8"));
       expect(hooks.hooks.PreToolUse[0].matcher).toBe(".*");
       expect(hooks.hooks.PostToolUse[0].hooks[0].command).toContain("audit-codex-visual-session-image.mjs");
-      for (const output of outputFiles) { await mkdir(output.slice(0, output.lastIndexOf("\\") + 1), { recursive: true }); await writeFile(output, await sharp({ create: { width: 1080, height: 1080, channels: 4, background: "white" } }).png().toBuffer()); }
+      for (const output of outputFiles) { await mkdir(path.dirname(output), { recursive: true }); await writeFile(output, await sharp({ create: { width: 1080, height: 1080, channels: 4, background: "white" } }).png().toBuffer()); }
     });
     const renderer = createAiContentVisualSessionRenderer({ workerRoot, readOwned: vi.fn(), runChild: runChild as never });
     const result = await renderer.renderSession(batch() as never, new AbortController().signal);
