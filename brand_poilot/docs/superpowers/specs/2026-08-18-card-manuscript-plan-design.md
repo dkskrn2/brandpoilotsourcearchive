@@ -234,6 +234,12 @@ This deliberately favors grounding over a special evidence-free question hook. M
 their existing product-fact authority and are not forced to invent Research Evidence IDs when the
 pool is empty.
 
+For `cover`, evidence binds only the factual claim actually present in the cover headline or promise.
+It does not require every detail from that evidence item to appear on the cover, and it must not be
+used as a reason to overload the cover with body-scene facts. For example, a cover claim equivalent to
+"10명 중 8명이 사용한다" requires the supporting 80% evidence, while the remaining methodology,
+segments, caveats, and comparisons stay available for the appropriate later scenes.
+
 ### Evidence information-value priority
 
 The manuscript prompt instructs the planner to prioritize evidence containing:
@@ -495,6 +501,75 @@ extra LLM judge is added.
 Network call count and render parallelism remain unchanged. The manuscript response becomes smaller
 because design fields are removed. Local parsing, set validation, hashing, and deterministic
 projection add negligible time relative to image generation.
+
+## Pre-implementation experiment
+
+Formal contract, worker, API, or render-path implementation must not start until this experiment is
+complete and the user has approved its results. The experiment uses isolated files and one-off model
+and image runs; it does not mutate the production contract, queue, database schema, active worker
+configuration, or customer-visible result.
+
+### TEST 0 — inspect the actual Evidence Pool
+
+For the chosen existing production generation:
+
+1. read the exact frozen generation input and Research Evidence Pool used by that generation;
+2. output every evidence item's ID, title, URL, publisher, published time, and complete claim summary;
+3. separately output the frozen subject and selected Proposal lens;
+4. verify whether the strongest expected discoveries, contrasts, changes, effects, gaps, and concrete
+   figures exist in the pool before evaluating the manuscript planner;
+5. stop for user review.
+
+Missing facts at this stage are a Research/Evidence collection limitation. The manuscript experiment
+must not be credited with recovering facts that are absent from the frozen pool and must not fetch or
+invent substitute facts during the manuscript run.
+
+### TEST 1 — one-off manuscript planner
+
+Without changing any production contract or worker path:
+
+1. run the new manuscript prompt rules once against the exact frozen TEST 0 input;
+2. write a one-off `card-manuscript-plan.v1` JSON artifact outside the production queue;
+3. validate the proposed evidence partition, scene evidence union, role requirements, and information
+   relations with an experiment-only validator;
+4. compare the existing stored Deck Plan with the one-off Manuscript Plan, including evidence
+   selection, information retained or lost, narrative progression, copy density, and repeated facts;
+5. stop for user review and manuscript approval.
+
+The production Deck Plan, canonical plan, job payload, database row, and generated images remain
+unchanged. TEST 1 does not authorize schema implementation.
+
+### TEST 2 — controlled image comparison
+
+Only after the user approves the TEST 1 manuscript, create five isolated experimental images using
+the approved source generation and its frozen brand-style references. Compare:
+
+1. existing Deck manuscript plus existing Deck design instructions;
+2. existing Deck manuscript with free image-model design and direct brand-style references;
+3. approved new Manuscript with free image-model design and direct brand-style references.
+
+All three variants must use the same scene count, image model, aspect ratio, owned reference bytes,
+and generation settings wherever the existing runtime permits. Store the exact input JSON, compiled
+prompt, output image, elapsed time, and model/tool result for every scene. Present aligned screenshots
+and downloadable artifacts to the user. Do not publish, attach the images to the production
+generation, or mutate production render jobs.
+
+If the existing baseline cannot be reproduced exactly because the original provider output is
+nondeterministic, use the existing stored image as baseline A and clearly label which comparisons are
+new runs rather than claiming byte-equivalent regeneration.
+
+### TEST 3 — implementation gate
+
+Formal `CardManuscriptPlanV1` implementation begins only after the user approves:
+
+- the sufficiency of the actual TEST 0 Evidence Pool;
+- the TEST 1 manuscript and evidence decisions;
+- the TEST 2 image quality and brand-style behavior;
+- the intended hard-cutover trade-offs documented here.
+
+If any stage is rejected, revise only the relevant experiment prompt or design section and rerun from
+that stage. Do not hide a rejected result behind a compatibility route or proceed with the hard
+cutover.
 
 ## Verification plan
 
