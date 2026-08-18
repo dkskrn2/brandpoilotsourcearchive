@@ -722,12 +722,14 @@ describe("ContentProposalFlow", () => {
     expect(screen.queryByText(/샘플 스타일/)).not.toBeInTheDocument();
   });
 
-  it("commits a proposal only after sealing succeeds and disables every alternative afterwards", async () => {
+  it("commits each proposal change after sealing and keeps alternatives selectable before generation starts", async () => {
     let resolveSelection!: (value: { id: string }) => void;
     const pendingSelection = new Promise<{ id: string }>((resolve) => { resolveSelection = resolve; });
     const user = userEvent.setup();
     const { selectProposal } = renderFlow({ initialBatchId: "batch-1" });
-    selectProposal.mockImplementationOnce(async () => pendingSelection as never);
+    selectProposal
+      .mockImplementationOnce(async () => pendingSelection as never)
+      .mockResolvedValueOnce({ id: "generation-sealed" } as never);
 
     const first = await screen.findByRole("button", { name: "구성안 선택: 여름 피부 3단계 관리" });
     const second = screen.getByRole("button", { name: "구성안 선택: 흔한 실수 체크리스트" });
@@ -738,11 +740,15 @@ describe("ContentProposalFlow", () => {
 
     await act(async () => { resolveSelection({ id: "generation-sealed" }); });
     await waitFor(() => expect(first).toBePressed());
-    expect(second).toBeDisabled();
+    await user.type(screen.getByLabelText("이미지 추가 요청 (선택)"), "기존 이미지 지시 유지");
+    expect(second).toBeEnabled();
     await user.click(second);
 
-    expect(selectProposal).toHaveBeenCalledTimes(1);
-    expect(first).toBePressed();
+    await waitFor(() => expect(selectProposal).toHaveBeenCalledTimes(2));
+    expect(selectProposal.mock.calls.map((call) => call[1])).toEqual(["proposal-1", "proposal-2"]);
+    expect(second).toBePressed();
+    expect(first).not.toBePressed();
+    expect(screen.getByLabelText("이미지 추가 요청 (선택)")).toHaveValue("기존 이미지 지시 유지");
   });
 
   it("keeps proposal selection state unchanged when sealing fails", async () => {

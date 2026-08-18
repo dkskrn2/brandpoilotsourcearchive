@@ -47,6 +47,28 @@ const callbacks = {
 };
 
 describe("AiGenerationOutputList V3 capabilities", () => {
+  it("hides the empty image preview area while an output is still generating", () => {
+    const output = {
+      id: "output-generating",
+      generationId: "generation-1",
+      title: "생성 중인 릴스",
+      status: "generating",
+      artifact: null,
+      outputFormat: "reel",
+      manifestVersion: null,
+      publishSupported: false,
+      failureReason: null,
+      downloadedAt: null,
+    } satisfies AiGenerationOutput;
+    const generation = { ...generationWith(output), status: "generating" as const };
+
+    const { container } = render(<AiGenerationOutputList generation={generation} downloadedKeys={new Set()} selectedForZip={new Set()} channels={[]} retryingOutputId={null} publishingOutputIds={new Set()} publishResults={{}} {...callbacks} />);
+
+    expect(screen.getAllByText("생성 중").length).toBeGreaterThan(0);
+    expect(screen.queryByText("결과를 생성하고 있습니다.")).not.toBeInTheDocument();
+    expect(container.querySelector(".ai-generation-output-list__preview")).not.toBeInTheDocument();
+  });
+
   it("keeps V3 reel download visible and exposes direct Reel publishing", () => {
     const output = {
       id: "output-reel",

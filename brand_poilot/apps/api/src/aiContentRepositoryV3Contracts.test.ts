@@ -356,6 +356,8 @@ const expectedSelectionDraft = {
   },
 };
 
+const alternateProposalId = "20000000-0000-4000-8000-000000000001";
+
 function selectionHarness(options: {
   status?: string;
   identity?: string;
@@ -377,6 +379,9 @@ function selectionHarness(options: {
       if (["BEGIN", "COMMIT", "ROLLBACK"].includes(sql)) return { rows: [], rowCount: 0 };
       if (sql === "select assert_ai_content_writable()") return { rows: [{ ok: true }], rowCount: 1 };
       if (sql.includes("from workspace_members member")) return { rows: [{ ok: 1 }], rowCount: 1 };
+      if (sql.includes("from ai_content_proposals target")) {
+        return { rows: [{ batch_id: ids.batch, current_selected_id: ids.proposal }], rowCount: 1 };
+      }
       if (sql.includes("select select_ai_content_proposal")) return { rows: [{ selected: ids.proposal }], rowCount: 1 };
       if (sql.includes("from ai_content_proposals proposal") && sql.includes("join ai_content_proposal_batches")) {
         return {
@@ -414,6 +419,115 @@ function selectionHarness(options: {
 }
 
 describe("AI content repository V3 proposal selection", () => {
+  it("moves an unstarted draft to another proposal without creating a second generation", async () => {
+    const linked = generationRow({
+      analysis_idempotency_key: `proposal-v2:${ids.batch}:${ids.proposal}:select-1`,
+      draft_json: expectedSelectionDraft,
+    });
+    const statements: Array<{ sql: string; params: unknown[] }> = [];
+    const client = {
+      query: vi.fn(async (sql: string, params: unknown[] = []) => {
+        statements.push({ sql, params });
+        if (["BEGIN", "COMMIT", "ROLLBACK"].includes(sql)) return { rows: [], rowCount: 0 };
+        if (sql === "select assert_ai_content_writable()") return { rows: [{ ok: true }], rowCount: 1 };
+        if (sql.includes("from workspace_members member")) return { rows: [{ ok: 1 }], rowCount: 1 };
+        if (sql.includes("from ai_content_proposals target")) {
+          return { rows: [{ batch_id: ids.batch, current_selected_id: ids.proposal }], rowCount: 1 };
+        }
+        if (sql.includes("select select_ai_content_proposal")) throw new Error("proposal_already_selected");
+        if (sql.includes("from ai_content_proposal_batches batch") && sql.includes("for update of batch")) {
+          return {
+            rows: [{
+              batch_id: ids.batch,
+              origin: "manual",
+              purpose: "informational",
+              input_snapshot_json: {
+                baseInput: proposalBaseInput,
+                replayFingerprint: "a".repeat(64),
+                resumeInput,
+              },
+            }],
+            rowCount: 1,
+          };
+        }
+        if (sql.includes("from ai_content_proposals proposal") && sql.includes("order by proposal.id") && sql.includes("for update")) {
+          return {
+            rows: [{
+              id: ids.proposal,
+              batch_id: ids.batch,
+              status: "selected",
+              generation_id: ids.generation,
+              successful_model_attempt_id: "30000000-0000-4000-8000-000000000001",
+              successful_proposal_job_id: "30000000-0000-4000-8000-000000000002",
+              final_invocation_ordinal: 1,
+              proposal_json: {
+                title: "기존 선택",
+                outputFormat: "reel",
+                purposeDetails: { kind: "informational" },
+              },
+            }, {
+              id: alternateProposalId,
+              batch_id: ids.batch,
+              status: "dismissed",
+              generation_id: null,
+              successful_model_attempt_id: null,
+              successful_proposal_job_id: null,
+              final_invocation_ordinal: null,
+              proposal_json: {
+                title: "변경한 선택",
+                outputFormat: "reel",
+                purposeDetails: { kind: "informational" },
+              },
+            }],
+            rowCount: 2,
+          };
+        }
+        if (sql.includes("from ai_content_generations") && sql.includes("for update")) {
+          return { rows: [linked], rowCount: 1 };
+        }
+        if (sql.includes("update ai_content_proposals") && sql.includes("status='dismissed'")) {
+          return { rows: [], rowCount: 1 };
+        }
+        if (sql.includes("update ai_content_proposals") && sql.includes("status='selected'")) {
+          return { rows: [], rowCount: 1 };
+        }
+        if (sql.includes("update ai_content_generations")) {
+          return {
+            rows: [generationRow({
+              title: "변경한 선택",
+              analysis_idempotency_key: `proposal-v2:${ids.batch}:${alternateProposalId}:select-2`,
+              draft_json: { ...expectedSelectionDraft, proposalId: alternateProposalId },
+            })],
+            rowCount: 1,
+          };
+        }
+        if (sql.includes("from manual_ai_content_visual_selections")) {
+          return { rows: [{ selection_json: { contractVersion: "manual-visual-selection.v1" } }], rowCount: 1 };
+        }
+        return { rows: [], rowCount: 0 };
+      }),
+      release: vi.fn(),
+    };
+    const repository = createAiContentRepository({ connect: async () => client, query: client.query } as never);
+
+    await expect(repository.selectAiContentProposal({
+      ...scope,
+      actorUserId: ids.actor,
+      proposalId: alternateProposalId,
+      idempotencyKey: "select-2",
+    })).resolves.toMatchObject({
+      id: ids.generation,
+      title: "변경한 선택",
+      status: "draft",
+    });
+
+    expect(statements.some(({ sql }) => sql.includes("insert into ai_content_generations"))).toBe(false);
+    expect(statements.some(({ sql }) => sql.includes("update ai_content_proposals") && sql.includes("status='dismissed'"))).toBe(true);
+    expect(statements.some(({ sql }) => sql.includes("update ai_content_proposals") && sql.includes("status='selected'"))).toBe(true);
+    expect(statements.some(({ sql }) => sql.includes("update ai_content_generations"))).toBe(true);
+    expect(statements.at(-1)?.sql).toBe("COMMIT");
+  });
+
   it("replays only the same locked draft for the same idempotency key", async () => {
     const run = selectionHarness();
 

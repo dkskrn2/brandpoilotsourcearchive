@@ -166,9 +166,11 @@ export function AiGenerationOutputList({
 
             {output.failureReason ? <p className="muted small">실패 사유: {output.failureReason}</p> : null}
 
-            <div className="ai-generation-output-list__preview">
-              <AiContentArtifactPreview output={output} />
-            </div>
+            {output.artifact || output.status === "failed" ? (
+              <div className="ai-generation-output-list__preview">
+                <AiContentArtifactPreview output={output} />
+              </div>
+            ) : null}
 
             {output.status === "completed"
               && output.publishSupported ? (

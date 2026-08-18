@@ -537,8 +537,9 @@ export function ContentProposalFlow({
   }
 
   async function chooseProposal(item: ContentProposalRecord | ContentProposalRecordV2) {
-    if (submitting || loadingAssets || selectedGenerationId) return;
+    if (submitting || loadingAssets || selectedProposal?.id === item.id) return;
     const requestedBrandId = brandId;
+    const previousGenerationId = selectedGenerationId;
     setError(null);
     setLoadingAssets(true);
     try {
@@ -548,12 +549,18 @@ export function ContentProposalFlow({
         keyForRequest(selectionKey, { brandId: requestedBrandId, proposalId: item.id }),
       );
       if (activeBrandId.current !== requestedBrandId) return;
-      if (onGenerationDraftReady && (format === "card_news" || format === "reel")) {
+      const reusedDraft = Boolean(previousGenerationId && generation.id === previousGenerationId);
+      if (!reusedDraft && onGenerationDraftReady && (format === "card_news" || format === "reel")) {
         await onGenerationDraftReady({ generationId: generation.id, contentFormat: format });
         if (activeBrandId.current !== requestedBrandId) return;
       }
       setSelectedProposal(item);
       setSelectedGenerationId(generation.id);
+      setMachine((current) => transitionContentWizard(current, { type: "select_proposal", proposalId: item.id }));
+      if (reusedDraft) {
+        setLoadingAssets(false);
+        return;
+      }
       setStylePresets([]);
       setAvatars([]);
       setProductImages([]);
@@ -561,7 +568,6 @@ export function ContentProposalFlow({
       setSelectedAvatarId(null);
       setUserImageInstruction("");
       setAttachments([]);
-      setMachine((current) => transitionContentWizard(current, { type: "select_proposal", proposalId: item.id }));
       await loadManualVisualAssets(requestedBrandId);
     } catch (caught) {
       if (activeBrandId.current !== requestedBrandId) return;
@@ -755,7 +761,7 @@ export function ContentProposalFlow({
           selectedId={selectedProposal?.id ?? null}
           evidence={batch?.researchEvidence?.items ?? []}
           references={batch?.selectedReferences ?? []}
-          disabled={loadingAssets || submitting || Boolean(selectedGenerationId)}
+          disabled={loadingAssets || submitting}
           onSelect={(item) => void chooseProposal(item)}
         /></div>
         {selectedProposal ? <ManualVisualSelectionStep
