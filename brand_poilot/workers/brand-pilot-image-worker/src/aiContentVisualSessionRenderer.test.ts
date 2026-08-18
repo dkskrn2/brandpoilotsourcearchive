@@ -38,4 +38,28 @@ describe("visual session renderer", () => {
     const renderer = createAiContentVisualSessionRenderer({ workerRoot, readOwned: vi.fn(), runChild: vi.fn(async () => { throw new Error("scene_2_failed"); }) });
     await expect(renderer.renderSession(batch() as never, new AbortController().signal)).rejects.toMatchObject({ code: "ai_content_visual_session_failed", retryable: false });
   });
+
+  it("preserves only a safe child diagnostic code on a terminal session failure", async () => {
+    const childError = new Error("ai_content_asset_render_failed:1");
+    Object.defineProperty(childError, "diagnostic", {
+      enumerable: false,
+      value: "provider response\ncodex_image_generation_internal_error\ncodex_ai_content_asset_failed:1\nSECRET_TOKEN=do-not-store",
+    });
+    const renderer = createAiContentVisualSessionRenderer({
+      workerRoot,
+      readOwned: vi.fn(),
+      runChild: vi.fn(async () => { throw childError; }),
+    });
+
+    const failure = await renderer.renderSession(batch() as never, new AbortController().signal)
+      .then(() => null, (error: unknown) => error as Error & { diagnostic?: string });
+
+    expect(failure).toMatchObject({
+      message: "ai_content_asset_render_failed:1",
+      code: "ai_content_visual_session_failed",
+      retryable: false,
+      diagnostic: "codex_image_generation_internal_error",
+    });
+    expect(JSON.stringify(failure)).not.toContain("SECRET_TOKEN");
+  });
 });

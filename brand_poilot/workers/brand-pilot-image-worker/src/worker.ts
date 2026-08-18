@@ -323,9 +323,10 @@ async function runVisualSessionOnce(input: {
   } catch (error) {
     if (!leaseLost && !(error instanceof AiContentLeaseLostError) && !(controller.signal.reason instanceof AiContentLeaseLostError)
       && !(error instanceof AiContentShutdownError) && !(controller.signal.reason instanceof AiContentShutdownError)) {
+      const diagnosticCode = safeAiContentDiagnosticCode(error);
       await input.client.failBatch(input.batch, input.workerId, {
         errorCode: "ai_content_visual_session_failed",
-        errorMessage: (error instanceof Error ? error.message : "ai_content_visual_session_failed").slice(0, 2_000),
+        errorMessage: (diagnosticCode ?? (error instanceof Error ? error.message : "ai_content_visual_session_failed")).slice(0, 2_000),
       }).catch(() => undefined);
     }
     return { status: "failed", jobId: input.batch.outputId };

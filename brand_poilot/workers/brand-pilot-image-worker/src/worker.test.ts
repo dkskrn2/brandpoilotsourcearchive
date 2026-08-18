@@ -498,6 +498,35 @@ describe("V3 AI content render priority", () => {
     expect(onVisualSessionTiming).toHaveBeenCalledWith(expect.objectContaining({ outputFormat, stageReferencesMs: 2, codexStartupMs: 3, sceneGenerationMs: [4, 5, 6, 7, 8], uploadMs: expect.any(Number), completeMs: expect.any(Number) }));
   });
 
+  it("stores the safe visual-session diagnostic code without retrying the session", async () => {
+    const batch = visualBatch("reel");
+    const aiContentClient = v3Client(batch);
+    const failure = new Error("ai_content_asset_render_failed:1");
+    Object.defineProperty(failure, "diagnostic", {
+      enumerable: false,
+      value: "codex_image_generation_internal_error",
+    });
+    const aiContentVisualRenderer = { renderSession: vi.fn(async () => { throw failure; }) };
+
+    await expect(runOnce({
+      workerId: "worker",
+      aiContentClient,
+      aiContentRenderer: { renderAsset: vi.fn() },
+      aiContentVisualRenderer,
+      aiContentStorage: { uploadAsset: vi.fn() },
+      aiContentFinalizer: vi.fn(),
+      client: workerClient(), renderer: { renderJob: vi.fn() }, storage: { upload: vi.fn() },
+    })).resolves.toEqual({ status: "failed", jobId: batch.outputId });
+
+    expect(aiContentVisualRenderer.renderSession).toHaveBeenCalledTimes(1);
+    expect(aiContentClient.failBatch).toHaveBeenCalledTimes(1);
+    expect(aiContentClient.failBatch).toHaveBeenCalledWith(batch, "worker", {
+      errorCode: "ai_content_visual_session_failed",
+      errorMessage: "codex_image_generation_internal_error",
+    });
+    expect(aiContentClient.completeBatch).not.toHaveBeenCalled();
+  });
+
   it("falls through unchanged to the legacy image queue when V3 is empty", async () => {
     const aiContentClient = v3Client(null);
     const client = workerClient();
