@@ -147,7 +147,14 @@ type CardEditorialRoleV1 =
   | "closing";
 
 type CardInformationRelationV1 = {
-  type: "none" | "number" | "before_after" | "comparison" | "steps" | "quote";
+  type:
+    | "none"
+    | "number"
+    | "before_after"
+    | "comparison"
+    | "related_facts"
+    | "steps"
+    | "quote";
   entries: Array<{
     role: string;
     label: string | null;
@@ -193,8 +200,32 @@ The contract contains no design fields. Specifically, it has no `visualSystem`,
 relationship between locked pieces of information. It never specifies a chart, component, layout,
 orientation, position, size, or rendering technique.
 
-No new relationship type is added in this project. Future additions require an explicit contract
-version.
+The relationship type is selected by meaning, not by the number of entries or the desired visual
+arrangement:
+
+- `before_after` is allowed only for a real earlier/later or prior/subsequent state of the same
+  subject and the same metric, under compatible measurement conditions;
+- `comparison` is allowed only when the entries are directly comparable values in the same semantic
+  dimension, with compatible populations, denominators, time windows, and units where those
+  conditions apply;
+- `related_facts` is used when independently grounded claims belong in one editorial scene because
+  together they explain a topic, mechanism, consequence, or gap, but treating their values as a
+  direct comparison or temporal transition would be misleading;
+- `number` expresses one primary quantitative fact and its necessary scope or denominator;
+- `steps` requires an actual ordered process or sequence supported by the manuscript authority;
+- `quote` requires one attributable quoted statement;
+- `none` is used when no structured semantic relation is necessary.
+
+The planner must decide among these types from the evidence semantics. It must not infer
+`before_after`, `comparison`, or `related_facts` from a fixed scene index, editorial role, topic,
+keyword, number count, or preferred layout. The validator enforces structural shape and exact
+evidence binding; semantic misuse remains a prompt rule and stored quality-review signal without an
+additional model judge.
+
+`related_facts` is a new candidate in `card-manuscript-plan.v1`; it does not change or alias the
+existing canonical image-plan relationship types. Its deterministic projection must preserve the
+entries and their roles without converting the relation into a direct numeric comparison or a
+before/after claim. Future relationship additions require an explicit contract version.
 
 ## Evidence selection and validation
 
@@ -255,6 +286,14 @@ The planner must not exclude stronger source evidence in order to fill space wit
 background advice, a checklist, or a CTA. A CTA cannot displace a substantive source-backed scene.
 When the subject's defining change is present in the evidence, it must not be generalized into advice
 that loses the change.
+
+This priority rule does not prohibit editorial framing. Questions, implications, self-check prompts,
+and action language derived from the selected Proposal's Editorial Lens remain allowed, including in
+grounded scenes and the CTA. They do not require a separate Evidence item when they are clearly
+presented as editorial guidance rather than as a factual claim. They must not add a new external fact,
+number, causal claim, product capability, policy condition, or source attribution that is absent from
+the frozen authority, and they must not displace stronger source-backed information from the fixed
+scene count.
 
 The simple audit structure records only selected and excluded IDs. It does not store exclusion
 reasons. This is intentional and accepted; semantic selection quality remains observable through the
@@ -351,6 +390,12 @@ becoming a shared design system. The image prompt states that:
 - they are not design, palette, typography, layout, or composition instructions;
 - only the current scene's locked display fields may appear as text;
 - `informationRelation.type` describes meaning only;
+- `before_after` never means a visual left/right split and is valid only for the same subject and
+  metric across a real state or time transition;
+- `comparison` never authorizes visual comparison of values that differ in dimension, denominator,
+  population, time window, or unit;
+- `related_facts` preserves the association between independently grounded claims without implying
+  that their values are directly comparable or temporally ordered;
 - the model chooses whether that relation is expressed through typography, illustration, spatial
   grouping, symbolic objects, or another visual technique;
 - the model must not infer a mandated chart, left/right split, sequence component, or template from
@@ -627,6 +672,11 @@ cutover.
 - Proposal evidence can be excluded;
 - defining discoveries, contrasts, changes, effects, gaps, and numbers receive priority over generic
   advice and CTA filler;
+- relation selection is meaning-based: true same-metric transitions use `before_after`, directly
+  comparable same-dimension values use `comparison`, and associated but non-comparable claims use
+  `related_facts`;
+- fixtures vary subjects, scene indices, roles, and number counts so relation types cannot be selected
+  by hardcoded scene or keyword rules;
 - `deckNarrative` is composed after the complete pool is partitioned;
 - repeated evidence must advance the manuscript rather than restate it;
 - no brand-style design interpretation or removed design output field appears;
