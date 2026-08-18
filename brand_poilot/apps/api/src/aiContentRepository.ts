@@ -2533,6 +2533,167 @@ export function createAiContentRepository(pool: Pool, options: AiContentReposito
         await client.query("BEGIN");
         await assertAiContentWritable(client);
         await assertActiveAiContentActor(client, input);
+        const selectionState = await client.query(
+          `select target.batch_id,current.id current_selected_id
+             from ai_content_proposals target
+             left join ai_content_proposals current
+               on current.batch_id=target.batch_id
+              and current.workspace_id=target.workspace_id
+              and current.brand_id=target.brand_id
+              and current.status='selected'
+            where target.id=$1 and target.workspace_id=$2 and target.brand_id=$3`,
+          [input.proposalId, input.workspaceId, input.brandId],
+        );
+        const observedSelection = selectionState.rows[0] as Record<string, unknown> | undefined;
+        if (!observedSelection) throw new Error("ai_content_proposal_not_found");
+        if (observedSelection.current_selected_id
+          && observedSelection.current_selected_id !== input.proposalId) {
+          const lockedBatch = await client.query(
+            `select batch.id batch_id,batch.origin,batch.purpose,batch.input_snapshot_json
+               from ai_content_proposal_batches batch
+              where batch.id=$1 and batch.workspace_id=$2 and batch.brand_id=$3 and batch.status='ready'
+              for update of batch`,
+            [observedSelection.batch_id, input.workspaceId, input.brandId],
+          );
+          const batch = lockedBatch.rows[0] as Record<string, unknown> | undefined;
+          if (!batch || batch.origin !== "manual") throw new Error("ai_content_proposal_selection_conflict");
+          const lockedProposals = await client.query(
+            `select proposal.id,proposal.batch_id,proposal.status,proposal.generation_id,
+                    proposal.successful_model_attempt_id,proposal.successful_proposal_job_id,
+                    proposal.final_invocation_ordinal,proposal.proposal_json
+               from ai_content_proposals proposal
+              where proposal.batch_id=$1 and proposal.workspace_id=$2 and proposal.brand_id=$3
+              order by proposal.id
+              for update`,
+            [batch.batch_id, input.workspaceId, input.brandId],
+          );
+          const proposalRows = lockedProposals.rows as Record<string, unknown>[];
+          const targetProposal = proposalRows.find(({ id }) => id === input.proposalId);
+          const currentProposal = proposalRows.find(({ status }) => status === "selected");
+          if (!targetProposal || !currentProposal
+            || currentProposal.id === targetProposal.id
+            || targetProposal.status !== "dismissed"
+            || targetProposal.generation_id
+            || !currentProposal.generation_id
+            || !currentProposal.successful_model_attempt_id
+            || !currentProposal.successful_proposal_job_id
+            || !currentProposal.final_invocation_ordinal
+            || targetProposal.successful_model_attempt_id
+            || targetProposal.successful_proposal_job_id
+            || targetProposal.final_invocation_ordinal) {
+            throw new Error("ai_content_proposal_selection_conflict");
+          }
+          const batchInputSnapshot = object(batch.input_snapshot_json);
+          if (!isDeepStrictEqual(Object.keys(batchInputSnapshot).sort(), [
+            "baseInput", "replayFingerprint", "resumeInput",
+          ]) || !/^[0-9a-f]{64}$/.test(String(batchInputSnapshot.replayFingerprint ?? ""))) {
+            throw new Error("ai_content_proposal_selection_conflict");
+          }
+          const baseInput = parseCanonicalProposalBaseInputSnapshotV2(batchInputSnapshot.baseInput);
+          const resumeInput = parseCanonicalContentOrchestrationV2(batchInputSnapshot.resumeInput);
+          const targetProposalJson = object(targetProposal.proposal_json);
+          const outputFormat = String(targetProposalJson.outputFormat) as ContentOutputFormatV2;
+          const purpose = String(object(targetProposalJson.purposeDetails).kind) as ContentPurposeV2;
+          if (outputFormat !== baseInput.outputSettings.outputFormat
+            || purpose !== baseInput.outputSettings.purpose
+            || resumeInput.brandId !== input.brandId
+            || resumeInput.outputSettings.outputFormat !== outputFormat
+            || resumeInput.purpose !== purpose
+            || purpose !== batch.purpose) {
+            throw new Error("ai_content_proposal_selection_conflict");
+          }
+          const linked = await client.query(
+            `select id,workspace_id,brand_id,output_format,purpose,title,status,current_stage,draft_json,analysis_json,
+                    analysis_idempotency_key,attachments_locked_at,terminal_at,retryable_until,
+                    error_code,error_message,created_at,updated_at,completed_at
+               from ai_content_generations
+              where id=$1 and workspace_id=$2 and brand_id=$3
+              for update`,
+            [currentProposal.generation_id, input.workspaceId, input.brandId],
+          );
+          const existing = linked.rows[0] as Record<string, unknown> | undefined;
+          const currentDraft = existing ? object(existing.draft_json) : {};
+          const expectedIdentityPrefix = `proposal-v2:${batch.batch_id}:${currentProposal.id}:`;
+          if (!existing
+            || existing.status !== "draft"
+            || existing.current_stage !== "draft"
+            || existing.attachments_locked_at
+            || existing.output_format !== outputFormat
+            || existing.purpose !== purpose
+            || currentDraft.origin !== "proposal-v2"
+            || currentDraft.proposalBatchId !== batch.batch_id
+            || currentDraft.proposalId !== currentProposal.id
+            || object(currentDraft.finalization).contractVersion !== "content-finalization-draft.v2"
+            || !String(existing.analysis_idempotency_key ?? "").startsWith(expectedIdentityPrefix)) {
+            throw new Error("ai_content_proposal_selection_conflict");
+          }
+          const visualSelection = await client.query(
+            `select selection_json from manual_ai_content_visual_selections
+              where generation_id=$1 and workspace_id=$2 and brand_id=$3
+              for update`,
+            [currentProposal.generation_id, input.workspaceId, input.brandId],
+          );
+          if (!visualSelection.rowCount) throw new Error("ai_content_proposal_selection_conflict");
+          const selectionIdentity = `proposal-v2:${batch.batch_id}:${targetProposal.id}:${input.idempotencyKey}`;
+          const nextDraft = { ...currentDraft, proposalId: targetProposal.id };
+          const dismissed = await client.query(
+            `update ai_content_proposals
+                set status='dismissed',generation_id=null,
+                    successful_model_attempt_id=null,successful_proposal_job_id=null,final_invocation_ordinal=null,
+                    selected_by_user_id=null,selected_at=null,
+                    dismissed_by_user_id=$4,dismissed_at=now(),updated_at=now()
+              where id=$1 and workspace_id=$2 and brand_id=$3
+                and status='selected' and generation_id=$5`,
+            [currentProposal.id, input.workspaceId, input.brandId, input.actorUserId, currentProposal.generation_id],
+          );
+          if (dismissed.rowCount !== 1) throw new Error("ai_content_proposal_selection_conflict");
+          const promoted = await client.query(
+            `update ai_content_proposals
+                set status='selected',generation_id=$5,
+                    successful_model_attempt_id=$6,successful_proposal_job_id=$7,final_invocation_ordinal=$8,
+                    selected_by_user_id=$4,selected_at=now(),
+                    dismissed_by_user_id=null,dismissed_at=null,updated_at=now()
+              where id=$1 and workspace_id=$2 and brand_id=$3
+                and status='dismissed' and generation_id is null`,
+            [
+              targetProposal.id,
+              input.workspaceId,
+              input.brandId,
+              input.actorUserId,
+              currentProposal.generation_id,
+              currentProposal.successful_model_attempt_id,
+              currentProposal.successful_proposal_job_id,
+              currentProposal.final_invocation_ordinal,
+            ],
+          );
+          if (promoted.rowCount !== 1) throw new Error("ai_content_proposal_selection_conflict");
+          const updated = await client.query(
+            `update ai_content_generations
+                set title=$4,draft_json=$5::jsonb,analysis_idempotency_key=$6,
+                    updated_by_user_id=$7,updated_at=now()
+              where id=$1 and workspace_id=$2 and brand_id=$3
+                and status='draft' and current_stage='draft'
+                and not exists (
+                  select 1 from ai_content_generation_prompt_bindings binding
+                   where binding.generation_id=ai_content_generations.id
+                )
+              returning id,workspace_id,brand_id,output_format,purpose,title,status,current_stage,draft_json,analysis_json,
+                        attachments_locked_at,terminal_at,retryable_until,error_code,error_message,
+                        created_at,updated_at,completed_at`,
+            [
+              currentProposal.generation_id,
+              input.workspaceId,
+              input.brandId,
+              String(targetProposalJson.title ?? "콘텐츠 제안"),
+              JSON.stringify(nextDraft),
+              selectionIdentity,
+              input.actorUserId,
+            ],
+          );
+          if (updated.rowCount !== 1) throw new Error("ai_content_proposal_selection_conflict");
+          await client.query("COMMIT");
+          return mapGeneration(updated.rows[0]);
+        }
         await client.query(
           "select select_ai_content_proposal($1,$2,$3,$4) selected",
           [input.proposalId, input.workspaceId, input.brandId, input.actorUserId],
