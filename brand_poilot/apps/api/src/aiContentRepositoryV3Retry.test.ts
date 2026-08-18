@@ -22,6 +22,13 @@ const frozenInput = {
   capturedAt: "2026-08-06T00:00:00.000Z",
 };
 
+const frozenManualVisualSelection = {
+  contractVersion: "manual-visual-selection-frozen.v1",
+  product: null,
+  stylePreset: null,
+  avatar: null,
+} as const;
+
 const promptBinding = {
   contractVersion: "content-prompt-binding.v1",
   outputFormat: "reel",
@@ -51,6 +58,7 @@ function harness(options: {
   retryable?: boolean;
   reversed?: boolean;
   corruptParentBinding?: boolean;
+  missingManualVisualSelection?: boolean;
 } = {}) {
   const statements: Array<{ sql: string; params: unknown[] }> = [];
   let childId = "";
@@ -79,6 +87,7 @@ function harness(options: {
     binding_sha256: proposalSha256(binding), binding_hash_matches: true, selected_proposal_id: UUID.proposal,
     proposal_job_id: "10000000-0000-4000-8000-00000000000c", proposal_contract_id: "10000000-0000-4000-8000-00000000000d",
     successful_model_attempt_id: "10000000-0000-4000-8000-00000000000e",
+    manual_visual_selection: options.missingManualVisualSelection ? null : frozenManualVisualSelection,
     attachments_locked_at: "2026-08-06T00:00:00.000Z", terminal_at: "2026-08-06T00:00:00.000Z",
     error_code: "failed", error_message: "failed", created_at: "2026-08-06T00:00:00.000Z", updated_at: "2026-08-06T00:00:00.000Z", completed_at: "2026-08-06T00:00:00.000Z",
   };
@@ -111,6 +120,7 @@ function harness(options: {
           proposal_job_id: "10000000-0000-4000-8000-00000000000c",
           proposal_contract_id: "10000000-0000-4000-8000-00000000000d",
           successful_model_attempt_id: "10000000-0000-4000-8000-00000000000e",
+          manual_visual_selection: frozenManualVisualSelection,
           reservation_quantity: 1,
           output_count: options.replayGraphDrift ? 0 : 1,
           job_count: 1,
@@ -145,7 +155,20 @@ describe("V3 permanent-failure retry lineage", () => {
     expect(childGeneration?.params).toContain(UUID.parent);
     const childOperation = run.statements.find(({ sql: value }) => value.includes("insert into ai_content_generation_operations"));
     expect(childOperation?.params).toContain(UUID.operation);
+    const childJob = run.statements.find(({ sql: value }) => value.includes("insert into ai_content_generation_jobs"));
+    expect(JSON.parse(String(childJob?.params.at(-1)))).toMatchObject({
+      manualVisualSelection: frozenManualVisualSelection,
+    });
     expect(sql.at(-1)).toBe("COMMIT");
+  });
+
+  it("fails closed before creating a child when the parent job has no frozen manual visual selection", async () => {
+    const run = harness({ missingManualVisualSelection: true });
+    await expect(run.repository.retryAiContentOutput(run.command))
+      .rejects.toThrow("ai_content_generation_retry_parent_invalid");
+    expect(run.statements.map(({ sql }) => sql).filter((sql) => /^(?:insert|update|delete)\b/i.test(sql.trim())))
+      .toEqual([]);
+    expect(run.statements.at(-1)?.sql).toBe("ROLLBACK");
   });
 
   it("returns an exact idempotent child replay without new writes", async () => {

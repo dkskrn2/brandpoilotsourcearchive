@@ -58,6 +58,7 @@ import {
 import {
   type FrozenManualVisualSelectionV1,
   type ManualVisualSelectionV1,
+  parseFrozenManualVisualSelectionV1,
   parseManualVisualSelectionV1,
 } from "@brand-pilot/content-contracts/manual-visual-selection";
 import { parseResearchSourceAcquisitionV1 } from "@brand-pilot/content-contracts/research-source-acquisition";
@@ -3780,7 +3781,14 @@ export function createAiContentRepository(pool: Pool, options: AiContentReposito
                   binding.binding_sha256,
                   binding.binding_sha256=encode(digest(binding.binding_json::text,'sha256'),'hex') binding_hash_matches,
                   binding.selected_proposal_id,binding.proposal_job_id,binding.proposal_contract_id,
-                  binding.successful_model_attempt_id
+                  binding.successful_model_attempt_id,
+                  (select parent_job.payload_json->'manualVisualSelection'
+                     from ai_content_generation_jobs parent_job
+                    where parent_job.generation_id=generation.id and parent_job.output_id=$4
+                      and parent_job.workspace_id=generation.workspace_id
+                      and parent_job.brand_id=generation.brand_id
+                      and parent_job.job_type='generate'
+                      and parent_job.output_format=generation.output_format) manual_visual_selection
              from ai_content_generations generation
              join ai_content_generation_operations operation on operation.id=generation.operation_id
              join ai_content_usage_ledger reservation
@@ -3798,7 +3806,7 @@ export function createAiContentRepository(pool: Pool, options: AiContentReposito
               and binding.brand_id=generation.brand_id
             where generation.id=$1 and generation.workspace_id=$2 and generation.brand_id=$3
              for update of generation,operation`,
-          [parentGenerationId, input.workspaceId, input.brandId],
+          [parentGenerationId, input.workspaceId, input.brandId, input.outputId],
         );
         const parent = parentResult.rows[0] as Record<string, unknown> | undefined;
         if (!parent) throw new Error("ai_content_generation_retry_parent_invalid");
@@ -3816,9 +3824,11 @@ export function createAiContentRepository(pool: Pool, options: AiContentReposito
         }
         let parentInput: ReturnType<typeof parseCanonicalContentGenerationInputV3>;
         let parentBinding: ReturnType<typeof parseContentPromptBinding>;
+        let parentManualVisualSelection: FrozenManualVisualSelectionV1;
         try {
           parentInput = parseCanonicalContentGenerationInputV3(parent.input_json);
           parentBinding = parseContentPromptBinding(parent.binding_json);
+          parentManualVisualSelection = parseFrozenManualVisualSelectionV1(parent.manual_visual_selection);
           assertPlannerPromptBinding(parentInput, parentBinding);
         } catch {
           throw new Error("ai_content_generation_retry_parent_invalid");
@@ -3848,6 +3858,13 @@ export function createAiContentRepository(pool: Pool, options: AiContentReposito
                    binding.binding_sha256=encode(digest(binding.binding_json::text,'sha256'),'hex') binding_hash_matches,
                   binding.selected_proposal_id,binding.proposal_job_id,binding.proposal_contract_id,
                   binding.successful_model_attempt_id,reservation.quantity reservation_quantity,
+                  (select child_job.payload_json->'manualVisualSelection'
+                     from ai_content_generation_jobs child_job
+                    where child_job.generation_id=generation.id
+                      and child_job.workspace_id=generation.workspace_id
+                      and child_job.brand_id=generation.brand_id
+                      and child_job.job_type='generate'
+                      and child_job.output_format=generation.output_format) manual_visual_selection,
                   (select count(*)::integer from ai_content_generation_outputs output
                     where output.generation_id=generation.id) output_count,
                   (select count(*)::integer from ai_content_generation_jobs job
@@ -3871,8 +3888,10 @@ export function createAiContentRepository(pool: Pool, options: AiContentReposito
         const replay = existing.rows[0] as Record<string, unknown> | undefined;
         if (replay) {
           let replayInput: ReturnType<typeof parseCanonicalContentGenerationInputV3>;
+          let replayManualVisualSelection: FrozenManualVisualSelectionV1;
           try {
             replayInput = parseCanonicalContentGenerationInputV3(replay.input_json);
+            replayManualVisualSelection = parseFrozenManualVisualSelectionV1(replay.manual_visual_selection);
             const replayBinding = parseContentPromptBinding(replay.binding_json);
             assertPlannerPromptBinding(replayInput, replayBinding);
           } catch {
@@ -3895,6 +3914,7 @@ export function createAiContentRepository(pool: Pool, options: AiContentReposito
             || String(replay.proposal_job_id) !== String(parent.proposal_job_id)
             || String(replay.proposal_contract_id) !== String(parent.proposal_contract_id)
             || String(replay.successful_model_attempt_id) !== String(parent.successful_model_attempt_id)
+            || !isDeepStrictEqual(replayManualVisualSelection, parentManualVisualSelection)
             || String(replay.output_format) !== parentInput.outputSettings.outputFormat
             || String(replay.purpose) !== parentInput.outputSettings.purpose
             || Number(replay.reservation_quantity) !== replayInput.outputSettings.outputCount
@@ -3993,6 +4013,7 @@ export function createAiContentRepository(pool: Pool, options: AiContentReposito
             parentInput.outputSettings.outputFormat, JSON.stringify({
               generationId, outputId, contentGenerationInput: retriedInput,
               planningMode: "selected_proposal", operationId,
+              manualVisualSelection: parentManualVisualSelection,
             })],
         );
         await client.query(
