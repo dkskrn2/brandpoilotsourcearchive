@@ -9,6 +9,10 @@ import {
 } from "@brand-pilot/content-contracts";
 import { parseContentOrchestrationV2 as parseApiContentOrchestrationV2 } from "./aiContentGenerationInputV3.js";
 import type { ProposalInputSnapshotV2, ResearchEvidenceSnapshotV1 } from "./aiContentContracts.js";
+import {
+  parseResearchSourceAcquisitionV1,
+  type ResearchSourceAcquisitionV1,
+} from "@brand-pilot/content-contracts/research-source-acquisition";
 
 export type CreateProposalBatchV2Command = {
   workspaceId: string;
@@ -57,6 +61,7 @@ export interface ResolvedProposalV2Creation {
   request: ContentOrchestrationV2;
   baseInput: ProposalBaseInputSnapshotV2;
   sourceSnapshots: Record<string, unknown>[];
+  researchSourceAcquisition?: ResearchSourceAcquisitionV1;
   proposalRunId?: string | null;
   performanceAudit?: {
     experimentId: string;
@@ -77,6 +82,7 @@ export interface EnqueueProposalV2Input extends ProposalV2ReplayIdentity {
   workerRequest: ContentProposalRequestV2;
   baseInput: ProposalBaseInputSnapshotV2;
   sourceSnapshots: Record<string, unknown>[];
+  researchSourceAcquisition?: ResearchSourceAcquisitionV1;
   proposalRunId: string | null;
   performanceAudit: ResolvedProposalV2Creation["performanceAudit"];
 }
@@ -234,7 +240,18 @@ function assertResolvedCommand(
     throw new Error("proposal_v2_resolved_request_mismatch");
   }
   if (!Array.isArray(resolved.sourceSnapshots)) throw new Error("proposal_v2_source_snapshots_invalid");
-  return { ...resolved, request, baseInput };
+  const requiresAcquisition = command.source === "manual"
+    && (request.outputSettings.outputFormat === "card_news" || request.outputSettings.outputFormat === "reel");
+  if (requiresAcquisition && resolved.researchSourceAcquisition === undefined) {
+    throw new Error("proposal_v2_research_source_acquisition_required");
+  }
+  if (!requiresAcquisition && resolved.researchSourceAcquisition !== undefined) {
+    throw new Error("proposal_v2_research_source_acquisition_forbidden");
+  }
+  const researchSourceAcquisition = resolved.researchSourceAcquisition === undefined
+    ? undefined
+    : parseResearchSourceAcquisitionV1(resolved.researchSourceAcquisition);
+  return { ...resolved, request, baseInput, researchSourceAcquisition };
 }
 
 export function createAiContentProposalV2Service(
@@ -273,6 +290,9 @@ export function createAiContentProposalV2Service(
           workerRequest,
           baseInput: resolved.baseInput,
           sourceSnapshots: resolved.sourceSnapshots.map((item) => structuredClone(item)),
+          ...(resolved.researchSourceAcquisition === undefined
+            ? {}
+            : { researchSourceAcquisition: structuredClone(resolved.researchSourceAcquisition) }),
           proposalRunId: resolved.proposalRunId ?? null,
           performanceAudit: resolved.performanceAudit ?? null,
         });

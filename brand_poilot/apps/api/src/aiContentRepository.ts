@@ -6,7 +6,7 @@ import { isDeepStrictEqual } from "node:util";
 import {
   type AiContentManifest,
   type CompleteAiContentJobInput,
-  type CardDeckContractV1,
+  type CardManuscriptContractV1,
   type ReelStoryboardContractV1,
   type ContentChannelV2,
   type ContentFinalizationDraftV2,
@@ -60,6 +60,7 @@ import {
   type ManualVisualSelectionV1,
   parseManualVisualSelectionV1,
 } from "@brand-pilot/content-contracts/manual-visual-selection";
+import { parseResearchSourceAcquisitionV1 } from "@brand-pilot/content-contracts/research-source-acquisition";
 import {
   materializeFrozenManualVisualAssets,
   prepareManualVisualSelection,
@@ -67,10 +68,10 @@ import {
   sealManualVisualSelection,
 } from "./aiContentManualVisualSelection.js";
 import {
-  compileCardDeckPlanDraftV1,
-  parseCardDeckEditorialPlanV1,
-} from "@brand-pilot/content-contracts/card-deck-editorial-plan";
-import { cardDeckEditorialPlanSha256 } from "@brand-pilot/content-contracts/card-deck-editorial-plan/node";
+  compileCardManuscriptPlanDraftV1,
+  parseCardManuscriptPlanV1,
+} from "@brand-pilot/content-contracts/card-manuscript-plan";
+import { cardManuscriptPlanSha256 } from "@brand-pilot/content-contracts/card-manuscript-plan/node";
 import { compileReelStoryboardDraftV1, parseReelStoryboardV1 } from "@brand-pilot/content-contracts/reel-storyboard";
 import { reelStoryboardSha256 } from "@brand-pilot/content-contracts/reel-storyboard/node";
 import {
@@ -382,8 +383,11 @@ export interface AiContentRepository extends AiContentAttachmentLifecycleReposit
   heartbeatAiContentJob(input: { jobId: string; workerId: string; leaseToken: string; leaseSeconds: number }): Promise<boolean>;
   completeAiContentJob(input: CompleteAiContentJobInput): Promise<AiContentGenerationRecord>;
   failAiContentJob(input: FailAiContentJobInput): Promise<AiContentGenerationRecord>;
-  claimAiContentRenderJob(input: { workerId: string; leaseSeconds: number }): ReturnType<ReturnType<typeof createAiContentRenderJobsRepository>["claim"]>;
+  claimAiContentRenderJob(input: { workerId: string; leaseSeconds: number; capabilities?: string[] }): ReturnType<ReturnType<typeof createAiContentRenderJobsRepository>["claim"]>;
   heartbeatAiContentRenderJob(input: import("./aiContentRenderJobs.js").RenderLeaseInput): Promise<boolean>;
+  heartbeatAiContentVisualSession(input: import("./aiContentRenderJobs.js").VisualSessionLeaseInput): Promise<boolean>;
+  completeAiContentVisualSession(input: import("./aiContentRenderJobs.js").VisualSessionCompletion): Promise<void>;
+  failAiContentVisualSession(input: import("./aiContentRenderJobs.js").VisualSessionFailure): Promise<void>;
   completeAiContentRenderAsset(input: import("./aiContentRenderJobs.js").RenderAssetCompletion): Promise<void>;
   completeAiContentRenderPackage(input: import("./aiContentRenderJobs.js").RenderPackageCompletion): Promise<AiContentGenerationRecord>;
   failAiContentRenderJob(input: import("./aiContentRenderJobs.js").RenderFailure): Promise<void>;
@@ -454,6 +458,38 @@ function object(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
 }
 
+function parseManualProposalBatchEnvelope(value: unknown, requireFingerprint = true): {
+  baseInput: ReturnType<typeof parseCanonicalProposalBaseInputSnapshotV2>;
+  resumeInput: CanonicalContentOrchestrationV2;
+} {
+  const envelope = object(value);
+  let baseInput: ReturnType<typeof parseCanonicalProposalBaseInputSnapshotV2>;
+  let resumeInput: CanonicalContentOrchestrationV2;
+  try {
+    baseInput = parseCanonicalProposalBaseInputSnapshotV2(envelope.baseInput);
+    resumeInput = parseCanonicalContentOrchestrationV2(envelope.resumeInput);
+  } catch {
+    throw new Error("manual_proposal_batch_envelope_invalid");
+  }
+  const requiresAcquisition = baseInput.outputSettings.outputFormat === "card_news"
+    || baseInput.outputSettings.outputFormat === "reel";
+  const expectedKeys = requiresAcquisition
+    ? ["baseInput", "replayFingerprint", "researchSourceAcquisition", "resumeInput"]
+    : ["baseInput", "replayFingerprint", "resumeInput"];
+  if (!isDeepStrictEqual(Object.keys(envelope).sort(), expectedKeys.sort())
+    || (requireFingerprint && !/^[0-9a-f]{64}$/.test(String(envelope.replayFingerprint ?? "")))) {
+    throw new Error("manual_proposal_batch_envelope_invalid");
+  }
+  if (requiresAcquisition) {
+    try {
+      parseResearchSourceAcquisitionV1(envelope.researchSourceAcquisition);
+    } catch {
+      throw new Error("manual_proposal_batch_envelope_invalid");
+    }
+  }
+  return { baseInput, resumeInput };
+}
+
 function canonicalJson(value: unknown): string {
   const normalize = (current: unknown): unknown => {
     if (Array.isArray(current)) return current.map(normalize);
@@ -467,29 +503,29 @@ function canonicalJson(value: unknown): string {
   return JSON.stringify(normalize(value));
 }
 
-function validateCardDeckContract(
+function validateCardManuscriptContract(
   input: CompleteAiContentJobInput,
   finalInput: ReturnType<typeof parseCanonicalContentGenerationInputV3>,
-): CardDeckContractV1 | null {
+): CardManuscriptContractV1 | null {
   if (finalInput.outputSettings.outputFormat !== "card_news") {
-    if (input.cardDeckContract !== undefined) throw new Error("ai_content_card_deck_contract_invalid");
+    if (input.cardManuscriptContract !== undefined) throw new Error("ai_content_card_manuscript_contract_invalid");
     return null;
   }
-  if (!("planDraft" in input) || input.cardDeckContract === undefined
+  if (!("planDraft" in input) || input.cardManuscriptContract === undefined
     || input.reelStoryboardContract !== undefined) {
-    throw new Error("ai_content_card_deck_contract_invalid");
+    throw new Error("ai_content_card_manuscript_contract_invalid");
   }
-  const deck = parseCardDeckEditorialPlanV1(input.cardDeckContract.plan);
-  if (input.cardDeckContract.contractVersion !== "card-deck-editorial-plan.v1"
-    || !/^[0-9a-f]{64}$/.test(input.cardDeckContract.deckSha256)
-    || cardDeckEditorialPlanSha256(deck) !== input.cardDeckContract.deckSha256) {
-    throw new Error("ai_content_card_deck_hash_mismatch");
+  const manuscript = parseCardManuscriptPlanV1(input.cardManuscriptContract.plan, finalInput);
+  if (input.cardManuscriptContract.contractVersion !== "card-manuscript-plan.v1"
+    || !/^[0-9a-f]{64}$/.test(input.cardManuscriptContract.manuscriptSha256)
+    || cardManuscriptPlanSha256(manuscript) !== input.cardManuscriptContract.manuscriptSha256) {
+    throw new Error("ai_content_card_manuscript_hash_mismatch");
   }
-  const compiled = compileCardDeckPlanDraftV1(deck, finalInput.selectedProposal.outline);
+  const compiled = compileCardManuscriptPlanDraftV1(manuscript, finalInput.selectedProposal.outline);
   if (canonicalJson(compiled) !== canonicalJson(input.planDraft)) {
-    throw new Error("ai_content_card_deck_compilation_mismatch");
+    throw new Error("ai_content_card_manuscript_projection_mismatch");
   }
-  return { contractVersion: "card-deck-editorial-plan.v1", deckSha256: input.cardDeckContract.deckSha256, plan: deck };
+  return { contractVersion: "card-manuscript-plan.v1", manuscriptSha256: input.cardManuscriptContract.manuscriptSha256, plan: manuscript };
 }
 
 function validateReelStoryboardContract(
@@ -501,7 +537,7 @@ function validateReelStoryboardContract(
     return null;
   }
   if (!("planDraft" in input) || input.reelStoryboardContract === undefined
-    || input.cardDeckContract !== undefined) {
+    || input.cardManuscriptContract !== undefined) {
     throw new Error("ai_content_reel_storyboard_contract_invalid");
   }
   const storyboard = parseReelStoryboardV1(input.reelStoryboardContract.storyboard);
@@ -532,15 +568,15 @@ function assertStoredReelStoryboardContract(payload: unknown, storyboard: ReelSt
   if (canonicalJson(stored) !== canonicalJson(storyboard)) throw new Error("ai_content_plan_completion_conflict");
 }
 
-function assertStoredCardDeckContract(payload: unknown, deck: CardDeckContractV1 | null): void {
+function assertStoredCardManuscriptContract(payload: unknown, manuscript: CardManuscriptContractV1 | null): void {
   const stored = payload && typeof payload === "object" && !Array.isArray(payload)
-    ? (payload as Record<string, unknown>).cardDeckContract
+    ? (payload as Record<string, unknown>).cardManuscriptContract
     : undefined;
-  if (deck === null) {
+  if (manuscript === null) {
     if (stored !== undefined) throw new Error("ai_content_plan_completion_conflict");
     return;
   }
-  if (canonicalJson(stored) !== canonicalJson(deck)) throw new Error("ai_content_plan_completion_conflict");
+  if (canonicalJson(stored) !== canonicalJson(manuscript)) throw new Error("ai_content_plan_completion_conflict");
 }
 
 const EXPECTED_PROPOSAL_CATALOG_SHA256 = "41ac04e76adf0fd9746ea7535b36f6c1ea314ec4890253a2cd56a9f215f7cdbe";
@@ -676,6 +712,9 @@ export function createAiContentProposalV2Repository(pool: Pool): ProposalV2Repos
         replayFingerprint: input.replayFingerprint,
         baseInput: input.baseInput,
         resumeInput: input.request,
+        ...(input.researchSourceAcquisition === undefined
+          ? {}
+          : { researchSourceAcquisition: input.researchSourceAcquisition }),
       });
       const requestSha256 = proposalSha256(input.workerRequest);
       const baseInputSha256 = proposalSha256(input.baseInput);
@@ -1779,11 +1818,12 @@ async function loadAiContentFixedInputSource(input: {
   finalization: ContentFinalizationDraftV2;
 }): Promise<AiContentFixedInputSource> {
   const { client, scope, generation, batch, selection, finalization, snapshots } = input;
-  const batchInputSnapshot = object(batch.input_snapshot_json);
-  if (!isDeepStrictEqual(Object.keys(batchInputSnapshot).sort(), [
-    "baseInput", "replayFingerprint", "resumeInput",
-  ])) throw new Error("fixed_input_batch_contract_invalid");
-  const baseInput = parseCanonicalProposalBaseInputSnapshotV2(batchInputSnapshot.baseInput);
+  let baseInput: ReturnType<typeof parseCanonicalProposalBaseInputSnapshotV2>;
+  try {
+    ({ baseInput } = parseManualProposalBatchEnvelope(batch.input_snapshot_json, false));
+  } catch {
+    throw new Error("fixed_input_batch_contract_invalid");
+  }
   const proposalId = String(selection.id);
   const batchId = String(batch.id);
   const generationId = String(generation.id);
@@ -2422,6 +2462,9 @@ export function createAiContentRepository(pool: Pool, options: AiContentReposito
     ...proposalJobs,
     claimAiContentRenderJob: renderJobs.claim,
     heartbeatAiContentRenderJob: renderJobs.heartbeat,
+    heartbeatAiContentVisualSession: renderJobs.heartbeatVisualSession,
+    completeAiContentVisualSession: renderJobs.completeVisualSession,
+    failAiContentVisualSession: renderJobs.failVisualSession,
     completeAiContentRenderAsset: renderJobs.completeAsset,
     completeAiContentRenderPackage: renderJobs.completePackage,
     failAiContentRenderJob: renderJobs.fail,
@@ -2583,14 +2626,13 @@ export function createAiContentRepository(pool: Pool, options: AiContentReposito
             || targetProposal.final_invocation_ordinal) {
             throw new Error("ai_content_proposal_selection_conflict");
           }
-          const batchInputSnapshot = object(batch.input_snapshot_json);
-          if (!isDeepStrictEqual(Object.keys(batchInputSnapshot).sort(), [
-            "baseInput", "replayFingerprint", "resumeInput",
-          ]) || !/^[0-9a-f]{64}$/.test(String(batchInputSnapshot.replayFingerprint ?? ""))) {
+          let baseInput: ReturnType<typeof parseCanonicalProposalBaseInputSnapshotV2>;
+          let resumeInput: CanonicalContentOrchestrationV2;
+          try {
+            ({ baseInput, resumeInput } = parseManualProposalBatchEnvelope(batch.input_snapshot_json));
+          } catch {
             throw new Error("ai_content_proposal_selection_conflict");
           }
-          const baseInput = parseCanonicalProposalBaseInputSnapshotV2(batchInputSnapshot.baseInput);
-          const resumeInput = parseCanonicalContentOrchestrationV2(batchInputSnapshot.resumeInput);
           const targetProposalJson = object(targetProposal.proposal_json);
           const outputFormat = String(targetProposalJson.outputFormat) as ContentOutputFormatV2;
           const purpose = String(object(targetProposalJson.purposeDetails).kind) as ContentPurposeV2;
@@ -2712,14 +2754,13 @@ export function createAiContentRepository(pool: Pool, options: AiContentReposito
         );
         const proposal = selected.rows[0] as Record<string, unknown> | undefined;
         if (!proposal) throw new Error("ai_content_proposal_not_found");
-        const batchInputSnapshot = object(proposal.input_snapshot_json);
-        if (!isDeepStrictEqual(Object.keys(batchInputSnapshot).sort(), [
-          "baseInput", "replayFingerprint", "resumeInput",
-        ]) || !/^[0-9a-f]{64}$/.test(String(batchInputSnapshot.replayFingerprint ?? ""))) {
+        let baseInput: ReturnType<typeof parseCanonicalProposalBaseInputSnapshotV2>;
+        let resumeInput: CanonicalContentOrchestrationV2;
+        try {
+          ({ baseInput, resumeInput } = parseManualProposalBatchEnvelope(proposal.input_snapshot_json));
+        } catch {
           throw new Error("ai_content_proposal_selection_conflict");
         }
-        const baseInput = parseCanonicalProposalBaseInputSnapshotV2(batchInputSnapshot.baseInput);
-        const resumeInput = parseCanonicalContentOrchestrationV2(batchInputSnapshot.resumeInput);
         const proposalJson = object(proposal.proposal_json);
         const proposalId = String(proposal.id);
         const proposalBatchId = String(proposal.batch_id);
@@ -3557,7 +3598,7 @@ export function createAiContentRepository(pool: Pool, options: AiContentReposito
           || finalInput.outputSettings.outputFormat !== job.output_format) {
           throw new Error("ai_content_generation_input_mismatch");
         }
-        const cardDeckContract = validateCardDeckContract(input, finalInput);
+        const cardManuscriptContract = validateCardManuscriptContract(input, finalInput);
         const reelStoryboardContract = validateReelStoryboardContract(input, finalInput);
         const plan = hasPlan
           ? parseContentPlanResultV2(input.plan, finalInput, snapshot.rows[0].evidence_json)
@@ -3571,7 +3612,7 @@ export function createAiContentRepository(pool: Pool, options: AiContentReposito
           if (!stored.rows[0]?.plan_json || canonicalJson(stored.rows[0].plan_json) !== canonicalJson(plan)) {
             throw new Error("ai_content_plan_completion_conflict");
           }
-          assertStoredCardDeckContract(job.payload_json, cardDeckContract);
+          assertStoredCardManuscriptContract(job.payload_json, cardManuscriptContract);
           assertStoredReelStoryboardContract(job.payload_json, reelStoryboardContract);
           const generation = await generationById(client, String(job.generation_id));
           await client.query("COMMIT");
@@ -3605,7 +3646,7 @@ export function createAiContentRepository(pool: Pool, options: AiContentReposito
         await enqueueAiContentRenderJobs(client, {
           workspaceId: String(job.workspace_id), brandId: String(job.brand_id),
           generationId: String(job.generation_id), outputId: String(job.output_id), plan, finalInput,
-          cardDeckContract, reelStoryboardContract,
+          cardManuscriptContract, reelStoryboardContract,
         });
         await client.query(
           "update ai_content_generations set status='generating',current_stage='generation',error_code=null,error_message=null,updated_at=now() where id=$1",
@@ -3615,7 +3656,7 @@ export function createAiContentRepository(pool: Pool, options: AiContentReposito
           `update ai_content_generation_jobs
               set status = 'succeeded', skill_version = $2, completed_at = coalesce(completed_at, now()),
                   payload_json = case
-                    when $3::jsonb is not null then jsonb_set(payload_json, '{cardDeckContract}', $3::jsonb, true)
+                    when $3::jsonb is not null then jsonb_set(payload_json, '{cardManuscriptContract}', $3::jsonb, true)
                     when $4::jsonb is not null then jsonb_set(payload_json, '{reelStoryboardContract}', $4::jsonb, true)
                     else payload_json end,
                   lease_expires_at = null, error_code = null, error_message = null, updated_at = now()
@@ -3623,7 +3664,7 @@ export function createAiContentRepository(pool: Pool, options: AiContentReposito
           [
             input.jobId,
             input.skillVersion,
-            cardDeckContract === null ? null : JSON.stringify(cardDeckContract),
+            cardManuscriptContract === null ? null : JSON.stringify(cardManuscriptContract),
             reelStoryboardContract === null ? null : JSON.stringify(reelStoryboardContract),
           ],
         );

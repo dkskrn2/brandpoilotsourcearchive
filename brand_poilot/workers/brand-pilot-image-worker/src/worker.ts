@@ -26,8 +26,16 @@ import type {
   AiContentPackageFinalizeJob,
   AiContentRenderClient,
   AiContentRenderedAsset,
+  AiContentVisualSessionLease,
 } from "./aiContentRenderClient.js";
 import { AiContentFinalizerError } from "./aiContentFinalizer.js";
+import type { AiContentVisualSessionRenderer, AiContentVisualSessionTiming } from "./aiContentVisualSessionRenderer.js";
+
+export interface AiContentVisualSessionTimingEvent extends AiContentVisualSessionTiming {
+  contractVersion: "ai-content-visual-session-timing.v1";
+  outputId: string;
+  outputFormat: "card_news" | "reel";
+}
 
 export interface RenderedImage {
   index: number;
@@ -183,15 +191,21 @@ async function runAiContentOnce(input: {
   workerId: string;
   client: AiContentRenderClient;
   renderer: AiContentAssetRenderer;
+  visualRenderer?: AiContentVisualSessionRenderer;
   storage: AiContentAssetStorage;
   finalizer: AiContentFinalizer;
   heartbeatIntervalMs: number;
   leaseSeconds: number;
   signal?: AbortSignal;
   onAiContentActivityChange?: (active: boolean) => void;
+  onVisualSessionTiming?: (event: AiContentVisualSessionTimingEvent) => void;
 }): Promise<WorkerRunResult | null> {
   const job = await input.client.claim(input.workerId, input.leaseSeconds);
   if (!job) return null;
+  if ("kind" in job) {
+    if (!input.visualRenderer) throw new Error("ai_content_visual_session_renderer_required");
+    return runVisualSessionOnce({ ...input, visualRenderer: input.visualRenderer, batch: job });
+  }
   input.onAiContentActivityChange?.(true);
   const controller = new AbortController();
   const requestShutdown = () => controller.abort(new AiContentShutdownError());
@@ -242,6 +256,83 @@ async function runAiContentOnce(input: {
     } finally {
       input.onAiContentActivityChange?.(false);
     }
+  }
+}
+
+async function runVisualSessionOnce(input: {
+  batch: AiContentVisualSessionLease;
+  workerId: string;
+  client: AiContentRenderClient;
+  visualRenderer: AiContentVisualSessionRenderer;
+  storage: AiContentAssetStorage;
+  heartbeatIntervalMs: number;
+  leaseSeconds: number;
+  signal?: AbortSignal;
+  onAiContentActivityChange?: (active: boolean) => void;
+  onVisualSessionTiming?: (event: AiContentVisualSessionTimingEvent) => void;
+}): Promise<WorkerRunResult> {
+  input.onAiContentActivityChange?.(true);
+  const controller = new AbortController();
+  const shutdown = () => controller.abort(new AiContentShutdownError());
+  input.signal?.addEventListener("abort", shutdown, { once: true });
+  if (input.signal?.aborted) shutdown();
+  let leaseLost = false;
+  let stopped = false;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let active = Promise.resolve();
+  const schedule = () => {
+    timer = setTimeout(() => {
+      if (stopped) return;
+      active = input.client.heartbeatBatch(input.batch, input.workerId, input.leaseSeconds)
+        .then((alive) => {
+          if (!alive) { leaseLost = true; controller.abort(new AiContentLeaseLostError()); }
+        })
+        .catch(() => { leaseLost = true; controller.abort(new AiContentLeaseLostError()); })
+        .then(() => { if (!stopped && !controller.signal.aborted) schedule(); });
+    }, input.heartbeatIntervalMs);
+  };
+  schedule();
+  try {
+    const rendered = await input.visualRenderer.renderSession(input.batch, controller.signal);
+    if (controller.signal.aborted) throw controller.signal.reason;
+    const assets: AiContentRenderedAsset[] = [];
+    const diagnostics = [];
+    const uploadStartedAt = Date.now();
+    for (const item of rendered) {
+      const { renderDiagnostic, ...asset } = item;
+      const job = input.batch.jobs[item.index - 1];
+      if (!job || job.assetIndex !== item.index) throw new Error("ai_content_visual_session_output_invalid");
+      const uploaded = await input.storage.uploadAsset({ ...asset, path: job.payload.storagePath });
+      if (uploaded.index !== item.index || uploaded.storagePath !== job.payload.storagePath) throw new Error("ai_content_asset_upload_invalid");
+      assets.push(uploaded); diagnostics.push(renderDiagnostic);
+    }
+    const uploadMs = Date.now() - uploadStartedAt;
+    if (controller.signal.aborted) throw controller.signal.reason;
+    const completeStartedAt = Date.now();
+    await input.client.completeBatch(input.batch, input.workerId, { assets, diagnostics });
+    const completeMs = Date.now() - completeStartedAt;
+    input.onVisualSessionTiming?.({
+      contractVersion: "ai-content-visual-session-timing.v1",
+      outputId: input.batch.outputId,
+      outputFormat: input.batch.outputFormat,
+      ...rendered.timing,
+      uploadMs,
+      completeMs,
+    });
+    return { status: "completed", jobId: input.batch.outputId };
+  } catch (error) {
+    if (!leaseLost && !(error instanceof AiContentLeaseLostError) && !(controller.signal.reason instanceof AiContentLeaseLostError)
+      && !(error instanceof AiContentShutdownError) && !(controller.signal.reason instanceof AiContentShutdownError)) {
+      await input.client.failBatch(input.batch, input.workerId, {
+        errorCode: "ai_content_visual_session_failed",
+        errorMessage: (error instanceof Error ? error.message : "ai_content_visual_session_failed").slice(0, 2_000),
+      }).catch(() => undefined);
+    }
+    return { status: "failed", jobId: input.batch.outputId };
+  } finally {
+    stopped = true; if (timer) clearTimeout(timer); await active;
+    input.signal?.removeEventListener("abort", shutdown);
+    input.onAiContentActivityChange?.(false);
   }
 }
 
@@ -401,12 +492,14 @@ export async function runOnce({
   runTextJob,
   aiContentClient,
   aiContentRenderer,
+  aiContentVisualRenderer,
   aiContentStorage,
   aiContentFinalizer,
   aiContentHeartbeatIntervalMs = 60_000,
   aiContentLeaseSeconds = 180,
   signal,
   onAiContentActivityChange,
+  onVisualSessionTiming,
   heartbeatIntervalMs = 5 * 60 * 1000,
   retryDelayMs = 5 * 60 * 1000
 }: {
@@ -420,12 +513,14 @@ export async function runOnce({
   runTextJob?: () => Promise<WorkerRunResult>;
   aiContentClient?: AiContentRenderClient;
   aiContentRenderer?: AiContentAssetRenderer;
+  aiContentVisualRenderer?: AiContentVisualSessionRenderer;
   aiContentStorage?: AiContentAssetStorage;
   aiContentFinalizer?: AiContentFinalizer;
   aiContentHeartbeatIntervalMs?: number;
   aiContentLeaseSeconds?: number;
   signal?: AbortSignal;
   onAiContentActivityChange?: (active: boolean) => void;
+  onVisualSessionTiming?: (event: AiContentVisualSessionTimingEvent) => void;
   heartbeatIntervalMs?: number;
   retryDelayMs?: number;
 }): Promise<WorkerRunResult> {
@@ -437,9 +532,10 @@ export async function runOnce({
       heartbeatIntervalMs: aiContentHeartbeatIntervalMs,
     });
     const result = await runAiContentOnce({
-      workerId, client: aiContentClient, renderer: aiContentRenderer, storage: aiContentStorage,
+      workerId, client: aiContentClient, renderer: aiContentRenderer, visualRenderer: aiContentVisualRenderer, storage: aiContentStorage,
       finalizer: aiContentFinalizer, heartbeatIntervalMs: aiContentLeaseTiming.heartbeatIntervalMs,
       leaseSeconds: aiContentLeaseTiming.leaseSeconds, signal, onAiContentActivityChange,
+      onVisualSessionTiming,
     });
     if (result) return result;
   }

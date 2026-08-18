@@ -10,10 +10,16 @@ import type {
   ImageGenerationPackageV1,
 } from "@brand-pilot/content-contracts";
 import {
-  compileCardDeckSceneV1,
-  parseCardDeckEditorialPlanV1,
-} from "@brand-pilot/content-contracts/card-deck-editorial-plan";
-import { cardDeckEditorialPlanSha256 } from "@brand-pilot/content-contracts/card-deck-editorial-plan/node";
+  compileCardManuscriptPlanDraftV1,
+  parseCardManuscriptPlanV1,
+} from "@brand-pilot/content-contracts/card-manuscript-plan";
+import { cardManuscriptPlanSha256 } from "@brand-pilot/content-contracts/card-manuscript-plan/node";
+import {
+  parseAiContentVisualSessionV1,
+  projectCardVisualRenderSession,
+  projectReelVisualRenderSession,
+  type AiContentVisualSessionV1,
+} from "@brand-pilot/content-contracts/visual-render-session";
 import {
   compileReelStoryboardSceneV1,
   parseReelStoryboardV1,
@@ -21,9 +27,9 @@ import {
 import { reelStoryboardSha256 } from "@brand-pilot/content-contracts/reel-storyboard/node";
 import type { AiContentGenerationRecord } from "./aiContentRepository.js";
 import {
-  parseCardDeckContractV1,
+  parseCardManuscriptContractV1,
   parseReelStoryboardContractV1,
-  type CardDeckContractV1,
+  type CardManuscriptContractV1,
   type ReelStoryboardContractV1,
 } from "./aiContentContracts.js";
 import {
@@ -90,6 +96,16 @@ export interface AiContentRenderJob {
   payload: Record<string, unknown>;
 }
 
+export interface AiContentVisualSessionLease {
+  kind: "visual_session";
+  outputId: string;
+  outputFormat: "card_news" | "reel";
+  visualSession: AiContentVisualSessionV1;
+  jobs: AiContentRenderJob[];
+}
+
+export type AiContentRenderClaim = AiContentRenderJob | AiContentVisualSessionLease;
+
 export interface RenderLeaseInput {
   jobId: string;
   workerId: string;
@@ -130,19 +146,47 @@ export interface EditorialRenderDiagnosticAppend {
   leaseToken: string;
   diagnostic: {
     contractVersion: "ai-content-editorial-render-diagnostic.v1";
-    sourceContractVersion: "card-deck-editorial-plan.v1" | "reel-storyboard.v1";
+    sourceContractVersion: "card-manuscript-plan.v1" | "reel-storyboard.v1";
     sourceSha256: string;
     sceneIndex: number;
-    compiledPromptVersion: "image-card-deck.v1" | "image-reel-storyboard.v1";
+    compiledPromptVersion: "image-visual-session.v1";
     compiledPromptSha256: string;
     actualToolArgumentsObservation: "observed" | "not_emitted_by_runner";
     actualToolArgumentsSha256: string | null;
   };
 }
 
+export interface VisualSessionLeaseInput {
+  outputId: string;
+  workerId: string;
+  leaseSeconds: number;
+  jobs: Array<{ jobId: string; assetIndex: number; leaseToken: string }>;
+}
+
+export interface VisualSessionCompletion {
+  outputId: string;
+  workerId: string;
+  jobs: Array<{ jobId: string; assetIndex: number; leaseToken: string }>;
+  assets: AiContentRenderedAsset[];
+  diagnostics: EditorialRenderDiagnosticAppend["diagnostic"][];
+  bodySha256: string;
+}
+
+export interface VisualSessionFailure {
+  outputId: string;
+  workerId: string;
+  jobs: Array<{ jobId: string; assetIndex: number; leaseToken: string }>;
+  errorCode: string;
+  errorMessage: string;
+}
+
 export interface AiContentRenderJobsRepository {
   claim(input: { workerId: string; leaseSeconds: number }): Promise<AiContentRenderJob | null>;
+  claim(input: { workerId: string; leaseSeconds: number; capabilities: string[] }): Promise<AiContentRenderClaim | null>;
   heartbeat(input: RenderLeaseInput): Promise<boolean>;
+  heartbeatVisualSession(input: VisualSessionLeaseInput): Promise<boolean>;
+  completeVisualSession(input: VisualSessionCompletion): Promise<void>;
+  failVisualSession(input: VisualSessionFailure): Promise<void>;
   completeAsset(input: RenderAssetCompletion): Promise<void>;
   completePackage(input: RenderPackageCompletion): Promise<AiContentGenerationRecord>;
   fail(input: RenderFailure): Promise<void>;
@@ -263,16 +307,16 @@ export async function enqueueAiContentRenderJobs(client: Queryable, input: {
   outputId: string;
   plan: ContentPlanResultV2;
   finalInput: ContentGenerationInputV3;
-  cardDeckContract?: CardDeckContractV1 | null;
+  cardManuscriptContract?: CardManuscriptContractV1 | null;
   reelStoryboardContract?: ReelStoryboardContractV1 | null;
 }): Promise<void> {
   const imagePackage = input.plan.imagePackage;
   if (imagePackage) {
-    const cardDeck = imagePackage.outputFormat === "card_news" && input.cardDeckContract
-      ? parseCardDeckContractV1(input.cardDeckContract)
+    const cardManuscript = imagePackage.outputFormat === "card_news" && input.cardManuscriptContract
+      ? parseCardManuscriptContractV1(input.cardManuscriptContract)
       : null;
-    if (input.cardDeckContract && imagePackage.outputFormat !== "card_news") {
-      throw new Error("ai_content_card_deck_contract_invalid");
+    if (input.cardManuscriptContract && imagePackage.outputFormat !== "card_news") {
+      throw new Error("ai_content_card_manuscript_contract_invalid");
     }
     const reelStoryboard = imagePackage.outputFormat === "reel" && input.reelStoryboardContract
       ? parseReelStoryboardContractV1(input.reelStoryboardContract)
@@ -280,24 +324,15 @@ export async function enqueueAiContentRenderJobs(client: Queryable, input: {
     if (input.reelStoryboardContract && imagePackage.outputFormat !== "reel") {
       throw new Error("ai_content_reel_storyboard_contract_invalid");
     }
-    if (imagePackage.outputFormat === "card_news" && !cardDeck) {
-      throw new Error("ai_content_card_deck_contract_invalid");
+    if (imagePackage.outputFormat === "card_news" && !cardManuscript) {
+      throw new Error("ai_content_card_manuscript_contract_invalid");
     }
-    if (cardDeck) {
-      if (cardDeckEditorialPlanSha256(cardDeck.plan) !== cardDeck.deckSha256
-        || cardDeck.plan.scenes.length !== imagePackage.assets.length
-        || input.finalInput.selectedProposal.outline.length !== cardDeck.plan.scenes.length) {
-        throw new Error("ai_content_card_deck_compilation_mismatch");
-      }
-      for (const [offset, scene] of cardDeck.plan.scenes.entries()) {
-        const asset = imagePackage.assets[offset];
-        const outline = input.finalInput.selectedProposal.outline[offset];
-        if (!asset || !outline) throw new Error("ai_content_card_deck_compilation_mismatch");
-        const compiled = compileCardDeckSceneV1(cardDeck.plan, scene, outline.role);
-        const { attachmentIds: _attachmentIds, ...assetWithoutAttachments } = asset;
-        if (canonicalJson(compileStructuredScene(compiled)) !== canonicalJson(assetWithoutAttachments)) {
-          throw new Error("ai_content_card_deck_compilation_mismatch");
-        }
+    if (cardManuscript) {
+      const plan = parseCardManuscriptPlanV1(cardManuscript.plan, input.finalInput);
+      const compiled = compileCardManuscriptPlanDraftV1(plan, input.finalInput.selectedProposal.outline);
+      if (cardManuscriptPlanSha256(plan) !== cardManuscript.manuscriptSha256
+        || canonicalJson(compiled.assets) !== canonicalJson(imagePackage.assets.map(({ attachmentIds: _attachments, ...asset }) => asset))) {
+        throw new Error("ai_content_card_manuscript_projection_mismatch");
       }
     }
     if (imagePackage.outputFormat === "reel" && !reelStoryboard) {
@@ -321,10 +356,8 @@ export async function enqueueAiContentRenderJobs(client: Queryable, input: {
     }
     for (const asset of imagePackage.assets) {
       const payload = {
-        contractVersion: cardDeck
-          ? "ai-content-card-deck-render-job.v1"
-          : reelStoryboard
-          ? "ai-content-reel-storyboard-render-job.v1"
+        contractVersion: cardManuscript || reelStoryboard
+          ? "ai-content-visual-session-render-job.v1"
           : "ai-content-render-job.v2",
         jobKind: "image_asset",
         generationId: input.generationId,
@@ -333,21 +366,21 @@ export async function enqueueAiContentRenderJobs(client: Queryable, input: {
         assetIndex: asset.index,
         assetKey: `${input.generationId}:${asset.index}`,
         storagePath: expectedAiContentAssetStoragePath({ ...input, assetIndex: asset.index }),
-        ...(cardDeck
+        ...(cardManuscript
           ? {
-              rendererPromptVersion: "image-card-deck.v1",
-              cardDeckBinding: {
-                contractVersion: "card-deck-editorial-plan.v1",
-                deckSha256: cardDeck.deckSha256,
+              rendererPromptVersion: "image-visual-session.v1",
+              visualSessionBinding: {
+                sourceContractVersion: "card-manuscript-plan.v1",
+                sourceSha256: cardManuscript.manuscriptSha256,
                 sceneIndex: asset.index,
               },
             }
           : reelStoryboard
           ? {
-              rendererPromptVersion: "image-reel-storyboard.v1",
-              reelStoryboardBinding: {
-                contractVersion: "reel-storyboard.v1",
-                storyboardSha256: reelStoryboard.storyboardSha256,
+              rendererPromptVersion: "image-visual-session.v1",
+              visualSessionBinding: {
+                sourceContractVersion: "reel-storyboard.v1",
+                sourceSha256: reelStoryboard.storyboardSha256,
                 sceneIndex: asset.index,
               },
             }
@@ -472,22 +505,22 @@ async function manualImageAssetPayloadV2(
   };
 }
 
-async function reelStoryboardImageAssetPayloadV1(
+async function visualSessionImageAssetPayloadV1(
   client: Queryable,
   row: Record<string, unknown>,
 ): Promise<Record<string, unknown>> {
   const storedPayload = record(row.payload_json);
   requireExactObjectKeys(storedPayload, [
     "contractVersion", "jobKind", "generationId", "outputId", "imagePackage",
-    "assetIndex", "assetKey", "storagePath", "rendererPromptVersion", "reelStoryboardBinding",
+    "assetIndex", "assetKey", "storagePath", "rendererPromptVersion", "visualSessionBinding",
   ]);
-  const binding = record(storedPayload.reelStoryboardBinding);
-  requireExactObjectKeys(binding, ["contractVersion", "storyboardSha256", "sceneIndex"]);
+  const binding = record(storedPayload.visualSessionBinding);
+  requireExactObjectKeys(binding, ["sourceContractVersion", "sourceSha256", "sceneIndex"]);
   const assetIndex = Number(row.asset_index);
   if (
     row.job_kind !== "image_asset"
     || !Number.isSafeInteger(assetIndex)
-    || storedPayload.contractVersion !== "ai-content-reel-storyboard-render-job.v1"
+    || storedPayload.contractVersion !== "ai-content-visual-session-render-job.v1"
     || storedPayload.jobKind !== "image_asset"
     || storedPayload.generationId !== String(row.generation_id)
     || storedPayload.outputId !== String(row.output_id)
@@ -497,11 +530,11 @@ async function reelStoryboardImageAssetPayloadV1(
       brandId: String(row.brand_id), generationId: String(row.generation_id),
       outputId: String(row.output_id), assetIndex,
     })
-    || storedPayload.rendererPromptVersion !== "image-reel-storyboard.v1"
-    || binding.contractVersion !== "reel-storyboard.v1"
+    || storedPayload.rendererPromptVersion !== "image-visual-session.v1"
+    || !["card-manuscript-plan.v1", "reel-storyboard.v1"].includes(String(binding.sourceContractVersion))
     || binding.sceneIndex !== assetIndex
-    || typeof binding.storyboardSha256 !== "string"
-    || !/^[0-9a-f]{64}$/.test(binding.storyboardSha256)
+    || typeof binding.sourceSha256 !== "string"
+    || !/^[0-9a-f]{64}$/.test(binding.sourceSha256)
   ) throw new Error("ai_content_render_snapshot_mismatch");
 
   const state = await client.query(
@@ -554,148 +587,30 @@ async function reelStoryboardImageAssetPayloadV1(
     throw new Error("ai_content_render_snapshot_mismatch");
   }
   const generationPayload = record(state.rows[0].generation_job_payload);
-  const storyboardContract = parseReelStoryboardContractV1(generationPayload.reelStoryboardContract);
-  const storyboard = parseReelStoryboardV1(storyboardContract.storyboard);
-  if (contentPlan.imagePackage.outputFormat !== "reel"
-    || reelStoryboardSha256(storyboard) !== storyboardContract.storyboardSha256
-    || storyboardContract.storyboardSha256 !== binding.storyboardSha256) {
-    throw new Error("ai_content_render_snapshot_mismatch");
+  let visualSession: AiContentVisualSessionV1;
+  if (binding.sourceContractVersion === "reel-storyboard.v1") {
+    const contract = parseReelStoryboardContractV1(generationPayload.reelStoryboardContract);
+    const storyboard = parseReelStoryboardV1(contract.storyboard);
+    if (contentPlan.imagePackage.outputFormat !== "reel"
+      || reelStoryboardSha256(storyboard) !== contract.storyboardSha256
+      || contract.storyboardSha256 !== binding.sourceSha256) throw new Error("ai_content_render_snapshot_mismatch");
+    visualSession = projectReelVisualRenderSession({ sourceSha256: contract.storyboardSha256, references: contentGenerationInput.references, storyboard });
+  } else {
+    const contract = parseCardManuscriptContractV1(generationPayload.cardManuscriptContract);
+    const manuscript = parseCardManuscriptPlanV1(contract.plan, contentGenerationInput);
+    if (contentPlan.imagePackage.outputFormat !== "card_news"
+      || cardManuscriptPlanSha256(manuscript) !== contract.manuscriptSha256
+      || contract.manuscriptSha256 !== binding.sourceSha256) throw new Error("ai_content_render_snapshot_mismatch");
+    visualSession = projectCardVisualRenderSession({ sourceSha256: contract.manuscriptSha256, references: contentGenerationInput.references, plan: manuscript });
   }
-  const scene = storyboard.scenes.find((candidate) => candidate.index === assetIndex);
-  const outline = contentGenerationInput.selectedProposal.outline.find((candidate) => candidate.index === assetIndex);
-  const asset = contentPlan.imagePackage.assets.find((candidate) => candidate.index === assetIndex);
-  if (!scene || !outline || !asset) throw new Error("ai_content_render_snapshot_mismatch");
-  const compiledScene = compileReelStoryboardSceneV1(storyboard, scene, outline.role);
-  const { attachmentIds: _attachmentIds, ...assetWithoutAttachments } = asset;
-  if (canonicalJson(compileStructuredScene(compiledScene)) !== canonicalJson(assetWithoutAttachments)) {
-    throw new Error("ai_content_render_snapshot_mismatch");
-  }
+  if (visualSession.scenes.length !== contentPlan.imagePackage.assets.length
+    || !visualSession.scenes.some(({ index }) => index === assetIndex)) throw new Error("ai_content_render_snapshot_mismatch");
 
   return {
     ...storedPayload,
     contentGenerationInput,
     contentPlan,
-    reelStoryboardContract: storyboardContract,
-    reelStoryboardCurrentScene: {
-      contractVersion: "reel-storyboard-current-scene.v1",
-      storyboardSha256: storyboardContract.storyboardSha256,
-      sceneIndex: assetIndex,
-      compatibilityRole: outline.role,
-      scene,
-    },
-  };
-}
-
-async function cardDeckImageAssetPayloadV1(
-  client: Queryable,
-  row: Record<string, unknown>,
-): Promise<Record<string, unknown>> {
-  const storedPayload = record(row.payload_json);
-  requireExactObjectKeys(storedPayload, [
-    "contractVersion", "jobKind", "generationId", "outputId", "imagePackage",
-    "assetIndex", "assetKey", "storagePath", "rendererPromptVersion", "cardDeckBinding",
-  ]);
-  const binding = record(storedPayload.cardDeckBinding);
-  requireExactObjectKeys(binding, ["contractVersion", "deckSha256", "sceneIndex"]);
-  const assetIndex = Number(row.asset_index);
-  if (
-    row.job_kind !== "image_asset"
-    || !Number.isSafeInteger(assetIndex)
-    || storedPayload.contractVersion !== "ai-content-card-deck-render-job.v1"
-    || storedPayload.jobKind !== "image_asset"
-    || storedPayload.generationId !== String(row.generation_id)
-    || storedPayload.outputId !== String(row.output_id)
-    || storedPayload.assetIndex !== assetIndex
-    || storedPayload.assetKey !== `${String(row.generation_id)}:${assetIndex}`
-    || storedPayload.storagePath !== expectedAiContentAssetStoragePath({
-      brandId: String(row.brand_id), generationId: String(row.generation_id),
-      outputId: String(row.output_id), assetIndex,
-    })
-    || storedPayload.rendererPromptVersion !== "image-card-deck.v1"
-    || binding.contractVersion !== "card-deck-editorial-plan.v1"
-    || binding.sceneIndex !== assetIndex
-    || typeof binding.deckSha256 !== "string"
-    || !/^[0-9a-f]{64}$/.test(binding.deckSha256)
-  ) throw new Error("ai_content_render_snapshot_mismatch");
-
-  const state = await client.query(
-    `select output.plan_json,input.input_json,research.evidence_json,
-            binding.selected_proposal_id,batch.origin,
-            generation_job.payload_json as generation_job_payload
-       from ai_content_generation_outputs output
-       join ai_content_generations generation
-         on generation.id=output.generation_id
-        and generation.workspace_id=output.workspace_id and generation.brand_id=output.brand_id
-       join ai_content_generation_input_snapshots input
-         on input.generation_id=output.generation_id
-        and input.workspace_id=output.workspace_id and input.brand_id=output.brand_id
-       join ai_content_generation_prompt_bindings binding
-         on binding.generation_id=output.generation_id
-        and binding.workspace_id=output.workspace_id and binding.brand_id=output.brand_id
-       join ai_content_proposals proposal
-         on proposal.id=binding.selected_proposal_id
-        and proposal.workspace_id=binding.workspace_id and proposal.brand_id=binding.brand_id
-       join ai_content_proposal_batches batch
-         on batch.id=proposal.batch_id
-        and batch.workspace_id=proposal.workspace_id and batch.brand_id=proposal.brand_id
-       join ai_content_generation_jobs generation_job
-         on generation_job.generation_id=output.generation_id and generation_job.output_id=output.id
-        and generation_job.workspace_id=output.workspace_id and generation_job.brand_id=output.brand_id
-        and generation_job.job_type='generate' and generation_job.status='succeeded'
-       left join ai_content_output_research_snapshots research
-         on research.output_id=output.id and research.generation_id=output.generation_id
-        and research.workspace_id=output.workspace_id and research.brand_id=output.brand_id
-      where output.id=$1 and output.generation_id=$2
-        and output.workspace_id=$3 and output.brand_id=$4
-      for share of generation,output`,
-    [row.output_id, row.generation_id, row.workspace_id, row.brand_id],
-  );
-  if (state.rows.length !== 1 || !["manual", "scheduled_crawl"].includes(String(state.rows[0]?.origin))) {
-    throw new Error("ai_content_render_lineage_mismatch");
-  }
-  const contentGenerationInput = parseContentGenerationInputV3(state.rows[0].input_json);
-  if (contentGenerationInput.generationId !== String(row.generation_id)
-    || contentGenerationInput.selectedProposal.id !== String(state.rows[0].selected_proposal_id)) {
-    throw new Error("ai_content_render_lineage_mismatch");
-  }
-  const contentPlan = parseContentPlanResultV2(
-    state.rows[0].plan_json,
-    contentGenerationInput,
-    state.rows[0].evidence_json,
-  );
-  if (contentPlan.contractVersion !== "card-news-plan.v2" || contentPlan.imagePackage === null
-    || !isDeepStrictEqual(contentPlan.imagePackage, storedPayload.imagePackage)) {
-    throw new Error("ai_content_render_snapshot_mismatch");
-  }
-  const generationPayload = record(state.rows[0].generation_job_payload);
-  const cardDeckContract = parseCardDeckContractV1(generationPayload.cardDeckContract);
-  const deck = parseCardDeckEditorialPlanV1(cardDeckContract.plan);
-  if (cardDeckEditorialPlanSha256(deck) !== cardDeckContract.deckSha256
-    || cardDeckContract.deckSha256 !== binding.deckSha256) {
-    throw new Error("ai_content_render_snapshot_mismatch");
-  }
-  const scene = deck.scenes.find((candidate) => candidate.index === assetIndex);
-  const outline = contentGenerationInput.selectedProposal.outline.find((candidate) => candidate.index === assetIndex);
-  const asset = contentPlan.imagePackage.assets.find((candidate) => candidate.index === assetIndex);
-  if (!scene || !outline || !asset) throw new Error("ai_content_render_snapshot_mismatch");
-  const compiledScene = compileCardDeckSceneV1(deck, scene, outline.role);
-  const { attachmentIds: _attachmentIds, ...assetWithoutAttachments } = asset;
-  if (canonicalJson(compileStructuredScene(compiledScene)) !== canonicalJson(assetWithoutAttachments)) {
-    throw new Error("ai_content_render_snapshot_mismatch");
-  }
-
-  return {
-    ...storedPayload,
-    contentGenerationInput,
-    contentPlan,
-    cardDeckContract,
-    cardDeckCurrentScene: {
-      contractVersion: "card-deck-current-scene.v1",
-      deckSha256: cardDeckContract.deckSha256,
-      sceneIndex: assetIndex,
-      compatibilityRole: outline.role,
-      scene,
-    },
+    visualSession: parseAiContentVisualSessionV1(visualSession),
   };
 }
 
@@ -1005,6 +920,77 @@ function validateBlogImageBindings(manifest: AiContentManifestV3, expectedUrls: 
   }
 }
 
+function orderedLeaseVector(value: VisualSessionLeaseInput["jobs"]): VisualSessionLeaseInput["jobs"] {
+  if (!Array.isArray(value) || value.length < 1 || value.length > 5) throw new Error("ai_content_visual_session_lease_invalid");
+  const jobs = value.map((job) => ({
+    jobId: String(job.jobId), assetIndex: Number(job.assetIndex), leaseToken: String(job.leaseToken),
+  }));
+  if (jobs.some((job, offset) => !job.jobId || !job.leaseToken || job.assetIndex !== offset + 1)
+    || new Set(jobs.map(({ jobId }) => jobId)).size !== jobs.length
+    || new Set(jobs.map(({ leaseToken }) => leaseToken)).size !== jobs.length) {
+    throw new Error("ai_content_visual_session_lease_invalid");
+  }
+  return jobs;
+}
+
+export function aiContentVisualSessionCompletionSha256(input: Omit<VisualSessionCompletion, "bodySha256">): string {
+  return createHash("sha256").update(canonicalJson(input)).digest("hex");
+}
+
+function assertDiagnosticForBinding(
+  diagnostic: EditorialRenderDiagnosticAppend["diagnostic"],
+  binding: Record<string, unknown>,
+  assetIndex: number,
+): void {
+  if (diagnostic.contractVersion !== "ai-content-editorial-render-diagnostic.v1"
+    || diagnostic.sourceContractVersion !== binding.sourceContractVersion
+    || diagnostic.sourceSha256 !== binding.sourceSha256
+    || diagnostic.sceneIndex !== assetIndex
+    || diagnostic.compiledPromptVersion !== "image-visual-session.v1"
+    || !/^[0-9a-f]{64}$/.test(diagnostic.compiledPromptSha256)
+    || !["observed", "not_emitted_by_runner"].includes(diagnostic.actualToolArgumentsObservation)
+    || (diagnostic.actualToolArgumentsObservation === "observed") !== (diagnostic.actualToolArgumentsSha256 !== null)
+    || (diagnostic.actualToolArgumentsSha256 !== null && !/^[0-9a-f]{64}$/.test(diagnostic.actualToolArgumentsSha256))) {
+    throw new Error("ai_content_editorial_render_diagnostic_invalid");
+  }
+}
+
+async function lockVisualSessionRows(client: Queryable, outputId: string): Promise<Record<string, unknown>[]> {
+  const result = await client.query(
+    `select *,lease_expires_at<=clock_timestamp() as lease_expired
+       from ai_content_generation_render_jobs
+      where output_id=$1 and job_kind='image_asset'
+        and payload_json->>'contractVersion'='ai-content-visual-session-render-job.v1'
+      order by asset_index for update`,
+    [outputId],
+  );
+  const rows = result.rows as Record<string, unknown>[];
+  if (!rows.length || rows.some((row, offset) => Number(row.asset_index) !== offset + 1)) {
+    throw new Error("ai_content_visual_session_lease_invalid");
+  }
+  const scope = rows[0]!;
+  if (rows.some((row) => !hasSameRenderScope(scope, row))) throw new Error("ai_content_visual_session_lease_invalid");
+  return rows;
+}
+
+function assertVisualLeaseRows(
+  rows: Record<string, unknown>[],
+  input: { workerId: string; jobs: VisualSessionLeaseInput["jobs"] },
+  allowSucceeded = false,
+): void {
+  const jobs = orderedLeaseVector(input.jobs);
+  if (rows.length !== jobs.length) throw new Error("ai_content_visual_session_lease_invalid");
+  for (const [offset, row] of rows.entries()) {
+    const job = jobs[offset]!;
+    if (String(row.id) !== job.jobId || Number(row.asset_index) !== job.assetIndex
+      || row.worker_id !== input.workerId || String(row.lease_token) !== job.leaseToken
+      || (!allowSucceeded && (row.status !== "processing" || row.lease_expired === true))
+      || (allowSucceeded && !["processing", "succeeded"].includes(String(row.status)))) {
+      throw new Error("ai_content_visual_session_lease_invalid");
+    }
+  }
+}
+
 export function createAiContentRenderJobsRepository(
   pool: Pool,
   loadGeneration: (client: Queryable, generationId: string) => Promise<AiContentGenerationRecord>,
@@ -1026,16 +1012,45 @@ export function createAiContentRenderJobsRepository(
   }
 
   return {
-    async claim(input) {
+    claim: (async (input: { workerId: string; leaseSeconds: number; capabilities?: string[] }) => {
       if (!input.workerId?.trim() || !Number.isSafeInteger(input.leaseSeconds) || input.leaseSeconds < 30 || input.leaseSeconds > 300) {
         throw new Error("ai_content_render_claim_invalid");
       }
       const client = await pool.connect();
       try {
         await client.query("BEGIN");
+        const expiredVisual = await client.query(
+          `select distinct output_id
+             from ai_content_generation_render_jobs
+            where status='processing' and lease_expires_at<=clock_timestamp()
+              and payload_json->>'contractVersion'='ai-content-visual-session-render-job.v1'
+            order by output_id`,
+        );
+        for (const candidate of expiredVisual.rows) {
+          const outputId = String((candidate as Record<string, unknown>).output_id);
+          const first = await client.query(
+            `select id from ai_content_generation_render_jobs where output_id=$1 order by asset_index limit 1`, [outputId],
+          );
+          const scope = await renderJobScope(client, String(first.rows[0]?.id));
+          await lockRenderGeneration(client, scope);
+          await lockRenderOutput(client, scope);
+          const rows = await lockVisualSessionRows(client, outputId);
+          if (!rows.some((row) => row.status === "processing" && row.lease_expired === true)) continue;
+          await client.query(
+            `update ai_content_generation_render_jobs
+                set status='failed',worker_id=null,lease_token=null,lease_expires_at=null,
+                    error_code='ai_content_visual_session_lease_expired',
+                    error_message='Visual session lease expired',completed_at=coalesce(completed_at,now()),updated_at=now()
+              where output_id=$1 and job_kind='image_asset'
+                and payload_json->>'contractVersion'='ai-content-visual-session-render-job.v1'`,
+            [outputId],
+          );
+          await failRenderOutputAndGeneration(client, rows[0]!, "ai_content_visual_session_lease_expired", "Visual session lease expired");
+        }
         const exhausted = await client.query(
           `select id from ai_content_generation_render_jobs
             where status='processing' and lease_expires_at<=clock_timestamp() and attempt_count>=max_attempts
+              and payload_json->>'contractVersion' is distinct from 'ai-content-visual-session-render-job.v1'
             order by generation_id,output_id,id`,
         );
         for (const expired of exhausted.rows) {
@@ -1065,11 +1080,52 @@ export function createAiContentRenderJobsRepository(
           `update ai_content_generation_render_jobs
               set status='queued',available_at=now(),worker_id=null,lease_token=null,lease_expires_at=null,
                   error_code='ai_content_render_lease_expired',updated_at=now()
-            where status='processing' and lease_expires_at<=clock_timestamp() and attempt_count<max_attempts`,
+            where status='processing' and lease_expires_at<=clock_timestamp() and attempt_count<max_attempts
+              and payload_json->>'contractVersion' is distinct from 'ai-content-visual-session-render-job.v1'`,
         );
+        if (input.capabilities?.includes("ai-content-visual-session.v1")) {
+          const visualCandidate = await client.query(
+            `select output_id
+               from ai_content_generation_render_jobs
+              where status='queued' and available_at<=clock_timestamp() and attempt_count<max_attempts
+                and job_kind='image_asset'
+                and payload_json->>'contractVersion'='ai-content-visual-session-render-job.v1'
+              group by output_id
+              order by min(available_at),min(created_at),output_id limit 1`,
+          );
+          if (visualCandidate.rows.length) {
+            const outputId = String((visualCandidate.rows[0] as Record<string, unknown>).output_id);
+            const scope = await renderJobScope(client, String((await client.query(
+              `select id from ai_content_generation_render_jobs where output_id=$1 order by asset_index limit 1`, [outputId],
+            )).rows[0]?.id));
+            await lockRenderGeneration(client, scope);
+            await lockRenderOutput(client, scope);
+            const rows = await lockVisualSessionRows(client, outputId);
+            if (rows.every((row) => row.status === "queued" && Number(row.attempt_count) < Number(row.max_attempts))) {
+              const claimed = await client.query(
+                `update ai_content_generation_render_jobs
+                    set status='processing',worker_id=$2,lease_token=gen_random_uuid(),
+                        lease_expires_at=clock_timestamp()+($3::text||' seconds')::interval,
+                        attempt_count=attempt_count+1,error_code=null,error_message=null,updated_at=now()
+                  where output_id=$1 and job_kind='image_asset'
+                    and payload_json->>'contractVersion'='ai-content-visual-session-render-job.v1'
+                    and status='queued' returning *`,
+                [outputId, input.workerId, input.leaseSeconds],
+              );
+              const claimedRows = (claimed.rows as Record<string, unknown>[]).sort((left, right) => Number(left.asset_index) - Number(right.asset_index));
+              if (claimedRows.length !== rows.length) throw new Error("ai_content_visual_session_lease_invalid");
+              const payload = await visualSessionImageAssetPayloadV1(client, claimedRows[0]!);
+              const visualSession = parseAiContentVisualSessionV1(payload.visualSession);
+              const jobs = claimedRows.map((row) => renderJob(row, { ...record(row.payload_json), contentGenerationInput: payload.contentGenerationInput, contentPlan: payload.contentPlan, visualSession }));
+              await client.query("COMMIT");
+              return { kind: "visual_session", outputId, outputFormat: visualSession.outputFormat, visualSession, jobs };
+            }
+          }
+        }
         const candidate = await client.query(
           `select id from ai_content_generation_render_jobs
             where status='queued' and available_at<=clock_timestamp() and attempt_count<max_attempts
+              and payload_json->>'contractVersion' is distinct from 'ai-content-visual-session-render-job.v1'
             order by available_at,created_at,id for update skip locked limit 1`,
         );
         if (!candidate.rows.length) {
@@ -1093,10 +1149,8 @@ export function createAiContentRenderJobsRepository(
         const storedPayload = record(row.payload_json);
         const payload = row.job_kind === "package_finalize"
           ? await finalizerPayload(client, row)
-          : storedPayload.contractVersion === "ai-content-card-deck-render-job.v1"
-            ? await cardDeckImageAssetPayloadV1(client, row)
-            : storedPayload.contractVersion === "ai-content-reel-storyboard-render-job.v1"
-            ? await reelStoryboardImageAssetPayloadV1(client, row)
+          : storedPayload.contractVersion === "ai-content-visual-session-render-job.v1"
+            ? await visualSessionImageAssetPayloadV1(client, row)
             : storedPayload.contractVersion === "ai-content-render-job.v2"
               ? await manualImageAssetPayloadV2(client, row)
               : storedPayload;
@@ -1106,7 +1160,7 @@ export function createAiContentRenderJobsRepository(
         await client.query("ROLLBACK");
         throw error;
       } finally { client.release(); }
-    },
+    }) as AiContentRenderJobsRepository["claim"],
 
     async heartbeat(input) {
       const result = await pool.query(
@@ -1117,6 +1171,133 @@ export function createAiContentRenderJobsRepository(
         [input.jobId, input.workerId, input.leaseToken, input.leaseSeconds],
       );
       return Boolean(result.rows.length);
+    },
+
+    async heartbeatVisualSession(input) {
+      if (!Number.isSafeInteger(input.leaseSeconds) || input.leaseSeconds < 30 || input.leaseSeconds > 300) {
+        throw new Error("ai_content_visual_session_lease_invalid");
+      }
+      const jobs = orderedLeaseVector(input.jobs);
+      const client = await pool.connect();
+      try {
+        await client.query("BEGIN");
+        const scope = await renderJobScope(client, jobs[0]!.jobId);
+        if (String(scope.output_id) !== input.outputId) throw new Error("ai_content_visual_session_lease_invalid");
+        await lockRenderGeneration(client, scope);
+        await lockRenderOutput(client, scope);
+        const rows = await lockVisualSessionRows(client, input.outputId);
+        try { assertVisualLeaseRows(rows, { workerId: input.workerId, jobs }); } catch {
+          await client.query("COMMIT");
+          return false;
+        }
+        const updated = await client.query(
+          `update ai_content_generation_render_jobs
+              set lease_expires_at=clock_timestamp()+($3::text||' seconds')::interval,updated_at=now()
+            where output_id=$1 and worker_id=$2 and status='processing'
+              and payload_json->>'contractVersion'='ai-content-visual-session-render-job.v1'
+            returning id`,
+          [input.outputId, input.workerId, input.leaseSeconds],
+        );
+        if (updated.rows.length !== rows.length) throw new Error("ai_content_visual_session_lease_invalid");
+        await client.query("COMMIT");
+        return true;
+      } catch (error) {
+        await client.query("ROLLBACK");
+        throw error;
+      } finally { client.release(); }
+    },
+
+    async completeVisualSession(input) {
+      const jobs = orderedLeaseVector(input.jobs);
+      const unhashed = { outputId: input.outputId, workerId: input.workerId, jobs, assets: input.assets, diagnostics: input.diagnostics };
+      if (!/^[0-9a-f]{64}$/.test(input.bodySha256) || aiContentVisualSessionCompletionSha256(unhashed) !== input.bodySha256
+        || input.assets.length !== jobs.length || input.diagnostics.length !== jobs.length) {
+        throw new Error("ai_content_visual_session_completion_invalid");
+      }
+      const client = await pool.connect();
+      try {
+        await client.query("BEGIN");
+        const scope = await renderJobScope(client, jobs[0]!.jobId);
+        if (String(scope.output_id) !== input.outputId) throw new Error("ai_content_visual_session_lease_invalid");
+        await lockRenderGeneration(client, scope);
+        await lockRenderOutput(client, scope);
+        const rows = await lockVisualSessionRows(client, input.outputId);
+        assertVisualLeaseRows(rows, { workerId: input.workerId, jobs }, true);
+        const allSucceeded = rows.every((row) => row.status === "succeeded");
+        if (allSucceeded) {
+          for (const [offset, row] of rows.entries()) {
+            const stored = record(row.payload_json);
+            if (stored.visualSessionCompletionSha256 !== input.bodySha256
+              || !isDeepStrictEqual(row.result_json, input.assets[offset])) throw new Error("ai_content_render_completion_conflict");
+          }
+          await client.query("COMMIT");
+          return;
+        }
+        if (rows.some((row) => row.status !== "processing")) throw new Error("ai_content_visual_session_lease_invalid");
+        for (const [offset, row] of rows.entries()) {
+          const imagePackage = record(row.payload_json).imagePackage as ImageGenerationPackageV1;
+          const asset = parseRenderAssetResult(input.assets[offset], {
+            brandId: String(row.brand_id), generationId: String(row.generation_id), outputId: String(row.output_id),
+            assetIndex: Number(row.asset_index), outputFormat: imagePackage.outputFormat, aspectRatio: imagePackage.aspectRatio,
+          });
+          const binding = record(record(row.payload_json).visualSessionBinding);
+          assertDiagnosticForBinding(input.diagnostics[offset]!, binding, Number(row.asset_index));
+          await client.query(
+            `update ai_content_generation_render_jobs
+                set status='succeeded',result_json=$2::jsonb,
+                    payload_json=jsonb_set(payload_json,'{visualSessionCompletionSha256}',to_jsonb($3::text),true),
+                    lease_expires_at=null,error_code=null,error_message=null,
+                    completed_at=coalesce(completed_at,now()),updated_at=now()
+              where id=$1`,
+            [row.id, JSON.stringify(asset), input.bodySha256],
+          );
+          const diagnostic = input.diagnostics[offset]!;
+          const diagnosticJson = canonicalJson(diagnostic);
+          const eventId = deterministicAuditEventId(["ai_content_editorial_render_diagnostic", String(row.id), input.workerId, diagnosticJson].join(":"));
+          await client.query(
+            `insert into audit_events(
+               id,workspace_id,brand_id,actor_type,actor_external_id,event_type,entity_type,entity_id,metadata
+             ) values($1,$2,$3,'worker',$4,'ai_content_editorial_render_diagnostic','ai_content_generation_render_job',$5,$6::jsonb)
+             on conflict (id) do nothing`,
+            [eventId, row.workspace_id, row.brand_id, input.workerId, row.id, diagnosticJson],
+          );
+        }
+        await insertFinalizer(client, {
+          workspaceId: String(scope.workspace_id), brandId: String(scope.brand_id),
+          generationId: String(scope.generation_id), outputId: input.outputId,
+        });
+        await client.query("COMMIT");
+      } catch (error) {
+        await client.query("ROLLBACK");
+        throw error;
+      } finally { client.release(); }
+    },
+
+    async failVisualSession(input) {
+      const jobs = orderedLeaseVector(input.jobs);
+      const client = await pool.connect();
+      try {
+        await client.query("BEGIN");
+        const scope = await renderJobScope(client, jobs[0]!.jobId);
+        if (String(scope.output_id) !== input.outputId) throw new Error("ai_content_visual_session_lease_invalid");
+        await lockRenderGeneration(client, scope);
+        await lockRenderOutput(client, scope);
+        const rows = await lockVisualSessionRows(client, input.outputId);
+        assertVisualLeaseRows(rows, { workerId: input.workerId, jobs });
+        await client.query(
+          `update ai_content_generation_render_jobs
+              set status='failed',lease_expires_at=null,error_code=$2,error_message=$3,
+                  completed_at=coalesce(completed_at,now()),updated_at=now()
+            where output_id=$1 and job_kind='image_asset'
+              and payload_json->>'contractVersion'='ai-content-visual-session-render-job.v1'`,
+          [input.outputId, input.errorCode, input.errorMessage],
+        );
+        await failRenderOutputAndGeneration(client, rows[0]!, input.errorCode, input.errorMessage);
+        await client.query("COMMIT");
+      } catch (error) {
+        await client.query("ROLLBACK");
+        throw error;
+      } finally { client.release(); }
     },
 
     async completeAsset(input) {
@@ -1310,16 +1491,13 @@ export function createAiContentRenderJobsRepository(
           throw new Error("ai_content_render_job_lease_invalid");
         }
         const storedPayload = record(row.payload_json);
-        const binding = storedPayload.contractVersion === "ai-content-card-deck-render-job.v1"
-          ? record(storedPayload.cardDeckBinding) : record(storedPayload.reelStoryboardBinding);
+        const binding = record(storedPayload.visualSessionBinding);
         const diagnostic = input.diagnostic;
-        const isCard = storedPayload.contractVersion === "ai-content-card-deck-render-job.v1";
-        const isReel = storedPayload.contractVersion === "ai-content-reel-storyboard-render-job.v1";
-        if ((!isCard && !isReel)
+        if (storedPayload.contractVersion !== "ai-content-visual-session-render-job.v1"
           || diagnostic.contractVersion !== "ai-content-editorial-render-diagnostic.v1"
-          || diagnostic.sourceContractVersion !== (isCard ? "card-deck-editorial-plan.v1" : "reel-storyboard.v1")
-          || diagnostic.compiledPromptVersion !== (isCard ? "image-card-deck.v1" : "image-reel-storyboard.v1")
-          || diagnostic.sourceSha256 !== (isCard ? binding.deckSha256 : binding.storyboardSha256)
+          || diagnostic.sourceContractVersion !== binding.sourceContractVersion
+          || diagnostic.compiledPromptVersion !== "image-visual-session.v1"
+          || diagnostic.sourceSha256 !== binding.sourceSha256
           || diagnostic.sceneIndex !== Number(row.asset_index)
           || !/^[0-9a-f]{64}$/.test(diagnostic.compiledPromptSha256)
           || !["observed", "not_emitted_by_runner"].includes(diagnostic.actualToolArgumentsObservation)

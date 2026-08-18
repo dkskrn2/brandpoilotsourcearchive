@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
-import { compileCardDeckPlanDraftV1 } from "@brand-pilot/content-contracts/card-deck-editorial-plan";
-import { cardDeckEditorialPlanSha256 } from "@brand-pilot/content-contracts/card-deck-editorial-plan/node";
+import { compileCardManuscriptPlanDraftV1 } from "@brand-pilot/content-contracts/card-manuscript-plan";
+import { cardManuscriptPlanSha256 } from "@brand-pilot/content-contracts/card-manuscript-plan/node";
 import { compileReelStoryboardDraftV1 } from "@brand-pilot/content-contracts/reel-storyboard";
 import { reelStoryboardSha256 } from "@brand-pilot/content-contracts/reel-storyboard/node";
 import {
@@ -27,8 +27,12 @@ describe("ai-content render job boundary helpers", () => {
             status: "succeeded", job_kind: "image_asset", asset_index: 1,
             worker_id: "image-worker", lease_token: "lease",
             payload_json: {
-              contractVersion: "ai-content-card-deck-render-job.v1",
-              cardDeckBinding: { deckSha256: "a".repeat(64) },
+              contractVersion: "ai-content-visual-session-render-job.v1",
+              visualSessionBinding: {
+                sourceContractVersion: "card-manuscript-plan.v1",
+                sourceSha256: "a".repeat(64),
+                sceneIndex: 1,
+              },
             },
           }] };
         }
@@ -44,9 +48,9 @@ describe("ai-content render job boundary helpers", () => {
     const repository = createAiContentRenderJobsRepository({ connect: async () => client } as never, async () => ({}) as never);
     const diagnostic = {
       contractVersion: "ai-content-editorial-render-diagnostic.v1" as const,
-      sourceContractVersion: "card-deck-editorial-plan.v1" as const,
+      sourceContractVersion: "card-manuscript-plan.v1" as const,
       sourceSha256: "a".repeat(64), sceneIndex: 1,
-      compiledPromptVersion: "image-card-deck.v1" as const,
+      compiledPromptVersion: "image-visual-session.v1" as const,
       compiledPromptSha256: "b".repeat(64),
       actualToolArgumentsObservation: "not_emitted_by_runner" as const,
       actualToolArgumentsSha256: null,
@@ -66,40 +70,33 @@ describe("ai-content render job boundary helpers", () => {
     expect(inserts[1]!.params[0]).toBe(inserts[0]!.params[0]);
   });
 
-  it("stores the named Card Deck binding without a legacy transport selector", async () => {
+  it("stores the Card Manuscript visual-session binding without a legacy transport selector", async () => {
     const writes: unknown[][] = [];
     const query = vi.fn(async (_sql: string, params: unknown[]) => {
       writes.push(params);
       return { rows: [], rowCount: 1 };
     });
     const outline = [1, 2, 3].map((index) => ({ index, role: index === 1 ? "hook" : "detail" }));
-    const deck = {
-      contractVersion: "card-deck-editorial-plan.v1" as const,
+    const manuscript = {
+      contractVersion: "card-manuscript-plan.v1" as const,
       content: { caption: "Caption", hashtags: ["#deck"], cta: "Save" },
       deckNarrative: "A connected three-card deck.",
-      visualSystem: {
-        paletteDirection: "Red, white, and black.",
-        typographyDirection: "Bold Korean editorial hierarchy.",
-        graphicLanguage: "Consistent flat editorial symbols.",
-        imageryDirection: "Use subject-led editorial imagery.",
-        invariants: ["Keep one visual system across every card."],
-      },
+      evidenceSelection: { selectedEvidenceIds: [], excludedEvidenceIds: [] },
       scenes: [1, 2, 3].map((index) => ({
         index,
-        editorialRole: index === 1 ? "hook" : "detail",
+        editorialRole: "transition",
         purpose: `Purpose ${index}`,
         coreMessage: `Core ${index}`,
         headline: `Headline ${index}`,
-        keyVisual: { type: "number" as const, entries: [{ role: "value" as const, label: null, value: `${index}x` }] },
+        informationRelation: { type: "number" as const, entries: [{ role: "value" as const, label: null, value: `${index}x` }] },
         supportingTexts: [`Support ${index}`],
         footnote: null,
-        visualThesis: `Make ${index}x dominant.`,
-        layoutArchetype: "stat_focus" as const,
         evidenceIds: [],
         productImageAssetIds: [],
+        avatarImageAssetIds: [],
       })),
     };
-    const draft = compileCardDeckPlanDraftV1(deck, outline);
+    const draft = compileCardManuscriptPlanDraftV1(manuscript, outline);
     const imagePackage = {
       contractVersion: "image-generation-package.v1" as const,
       generationId: "generation", outputFormat: "card_news" as const, purpose: "informational" as const,
@@ -112,23 +109,27 @@ describe("ai-content render job boundary helpers", () => {
         allowExternalReferenceLogo: false as const, allowExistingProductPackagingLogo: true as const,
       },
     };
-    const cardDeckContract = {
-      contractVersion: "card-deck-editorial-plan.v1" as const,
-      deckSha256: cardDeckEditorialPlanSha256(deck),
-      plan: deck,
+    const cardManuscriptContract = {
+      contractVersion: "card-manuscript-plan.v1" as const,
+      manuscriptSha256: cardManuscriptPlanSha256(manuscript),
+      plan: manuscript,
     };
 
     await enqueueAiContentRenderJobs({ query } as never, {
       workspaceId: "workspace", brandId: "brand", generationId: "generation", outputId: "output",
-      plan: { contractVersion: "card-news-plan.v2", content: deck.content, imagePackage },
-      finalInput: { selectedProposal: { outline } } as never,
-      cardDeckContract,
+      plan: { contractVersion: "card-news-plan.v2", content: manuscript.content, imagePackage },
+      finalInput: {
+        outputSettings: { outputFormat: "card_news" },
+        researchEvidence: { items: [] }, references: { brandStyleImages: [] },
+        selectedProposal: { outline },
+      } as never,
+      cardManuscriptContract,
     });
 
     expect(writes).toHaveLength(3);
     for (const [offset, write] of writes.entries()) {
       expect(JSON.parse(String(write[5]))).toEqual({
-        contractVersion: "ai-content-card-deck-render-job.v1",
+        contractVersion: "ai-content-visual-session-render-job.v1",
         jobKind: "image_asset",
         generationId: "generation",
         outputId: "output",
@@ -136,10 +137,10 @@ describe("ai-content render job boundary helpers", () => {
         assetIndex: offset + 1,
         assetKey: `generation:${offset + 1}`,
         storagePath: `ai-content/brand/generation/output/assets/0${offset + 1}.png`,
-        rendererPromptVersion: "image-card-deck.v1",
-        cardDeckBinding: {
-          contractVersion: "card-deck-editorial-plan.v1",
-          deckSha256: cardDeckContract.deckSha256,
+        rendererPromptVersion: "image-visual-session.v1",
+        visualSessionBinding: {
+          sourceContractVersion: "card-manuscript-plan.v1",
+          sourceSha256: cardManuscriptContract.manuscriptSha256,
           sceneIndex: offset + 1,
         },
       });
@@ -204,7 +205,7 @@ describe("ai-content render job boundary helpers", () => {
 
     const payload = JSON.parse(String(writes[0]?.[5]));
     expect(payload).toEqual({
-      contractVersion: "ai-content-reel-storyboard-render-job.v1",
+      contractVersion: "ai-content-visual-session-render-job.v1",
       jobKind: "image_asset",
       generationId: "generation",
       outputId: "output",
@@ -212,10 +213,10 @@ describe("ai-content render job boundary helpers", () => {
       assetIndex: 1,
       assetKey: "generation:1",
       storagePath: "ai-content/brand/generation/output/assets/01.png",
-      rendererPromptVersion: "image-reel-storyboard.v1",
-      reelStoryboardBinding: {
-        contractVersion: "reel-storyboard.v1",
-        storyboardSha256: expect.stringMatching(/^[0-9a-f]{64}$/),
+      rendererPromptVersion: "image-visual-session.v1",
+      visualSessionBinding: {
+        sourceContractVersion: "reel-storyboard.v1",
+        sourceSha256: reelStoryboardSha256(storyboard),
         sceneIndex: 1,
       },
     });

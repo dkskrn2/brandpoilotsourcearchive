@@ -20,14 +20,14 @@ describe("Threads Codex skill safety contract", () => {
     expect(agents).toContain("워커 코드, 설정, 인증 정보");
   });
 
-  it("uses only named Card Deck, Reel Storyboard, and Blog image contracts", async () => {
+  it("uses only the shared Card/Reel session and Blog image contracts", async () => {
     const skill = await readFile(new URL("../.codex/skills/image-render/SKILL.md", import.meta.url), "utf8");
 
-    expect(skill).toContain("image_asset` 작업 하나당 정확히 PNG 한 장");
-    expect(skill).toContain("ai-content-card-deck-render-job.v1");
-    expect(skill).toContain("ai-content-reel-storyboard-render-job.v1");
-    expect(skill).toContain("inputs/card-deck-editorial-plan.json");
-    expect(skill).toContain("inputs/reel-storyboard.json");
+    expect(skill).toContain("ai-content-visual-session-render.v1");
+    expect(skill).toContain("inputs/visual-session.json");
+    expect(skill).toContain("장면당 정확히 한 번");
+    expect(skill).not.toContain("ai-content-card-deck-render-job.v1");
+    expect(skill).not.toContain("ai-content-reel-storyboard-render-job.v1");
     expect(skill).toContain("블로그 보조 이미지 전용");
     expect(skill).not.toContain("ai-content-render-job.v3");
   });

@@ -1,8 +1,32 @@
 import { describe, expect, it, vi } from "vitest";
 import { createAiContentRenderClient } from "./aiContentRenderClient.js";
-import { cloneCardDeckImageJob, cloneManualBlogImageJobV2, cloneReelStoryboardImageJob } from "../test/fixtures/manualRender.js";
+import { cloneManualBlogImageJobV2 } from "../test/fixtures/manualRender.js";
 
 const uid = (n: number) => `10000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
+
+function visualClaim(outputFormat: "card_news" | "reel" = "card_news") {
+  const base = cloneManualBlogImageJobV2();
+  const sourceContractVersion = outputFormat === "card_news" ? "card-manuscript-plan.v1" as const : "reel-storyboard.v1" as const;
+  const visualSession = {
+    contractVersion: "ai-content-visual-session.v1" as const, outputFormat,
+    source: { contractVersion: sourceContractVersion, sha256: "a".repeat(64) }, narrative: "Narrative",
+    primaryMediumPolicy: { mode: "free_once" as const, styleReferenceIds: [] as string[] },
+    scenes: [1, 2].map((index) => ({ index, editorialContext: { editorialRole: "detail", purpose: `Purpose ${index}`, coreMessage: `Core ${index}` }, lockedDisplay: { headline: `Headline ${index}`, relation: { type: "none", entries: [] }, supportingTexts: [], footnote: null }, referenceBindings: { productImageAssetIds: [], avatarImageAssetIds: [] } })),
+  };
+  const jobs = [1, 2].map((assetIndex) => ({
+    ...base, id: uid(assetIndex), outputId: base.outputId, assetIndex, leaseToken: `lease-${assetIndex}`,
+    payload: {
+      contractVersion: "ai-content-visual-session-render-job.v1", jobKind: "image_asset",
+      generationId: base.generationId, outputId: base.outputId, imagePackage: base.payload.imagePackage,
+      assetIndex, assetKey: `${base.generationId}:${assetIndex}`,
+      storagePath: `ai-content/${base.brandId}/${base.generationId}/${base.outputId}/assets/0${assetIndex}.png`,
+      rendererPromptVersion: "image-visual-session.v1",
+      visualSessionBinding: { sourceContractVersion, sourceSha256: "a".repeat(64), sceneIndex: assetIndex },
+      contentGenerationInput: base.payload.contentGenerationInput, contentPlan: base.payload.contentPlan, visualSession,
+    },
+  }));
+  return { kind: "visual_session" as const, outputId: base.outputId, outputFormat, visualSession, jobs };
+}
 
 function consistentlyMutatedFormatClaim(
   format: "card_news" | "blog" | "reel",
@@ -44,7 +68,7 @@ function consistentlyMutatedFormatClaim(
 
 describe("AI content render API client", () => {
   it("uses the Task 9 endpoints and unwraps an image job without confusing a 204", async () => {
-    const job = cloneCardDeckImageJob();
+    const job = cloneManualBlogImageJobV2();
     const fetchImpl = vi.fn()
       .mockResolvedValueOnce(new Response(JSON.stringify({ job }), { status: 200, headers: { "content-type": "application/json" } }))
       .mockResolvedValueOnce(new Response(null, { status: 204 }));
@@ -53,7 +77,7 @@ describe("AI content render API client", () => {
     await expect(client.claim("worker", 180)).resolves.toMatchObject({ jobKind: "image_asset", assetIndex: 2 });
     await expect(client.claim("worker", 180)).resolves.toBeNull();
     expect(fetchImpl).toHaveBeenNthCalledWith(1, "https://api.example/worker/ai-content-render-jobs/claim", expect.objectContaining({
-      method: "POST", body: JSON.stringify({ workerId: "worker", leaseSeconds: 180 }),
+      method: "POST", body: JSON.stringify({ workerId: "worker", leaseSeconds: 180, capabilities: ["ai-content-visual-session.v1"] }),
     }));
   });
 
@@ -93,10 +117,10 @@ describe("AI content render API client", () => {
     const client = createAiContentRenderClient({ apiUrl: "https://api.example", token: "token", fetchImpl });
     const diagnostic = {
       contractVersion: "ai-content-editorial-render-diagnostic.v1" as const,
-      sourceContractVersion: "card-deck-editorial-plan.v1" as const,
+      sourceContractVersion: "card-manuscript-plan.v1" as const,
       sourceSha256: "a".repeat(64),
       sceneIndex: 2,
-      compiledPromptVersion: "image-card-deck.v1" as const,
+      compiledPromptVersion: "image-visual-session.v1" as const,
       compiledPromptSha256: "b".repeat(64),
       actualToolArgumentsObservation: "not_emitted_by_runner" as const,
       actualToolArgumentsSha256: null,
@@ -131,41 +155,27 @@ describe("AI content render API client", () => {
     });
   });
 
-  it("strictly parses the Reel Storyboard claim and authoritative current scene", async () => {
-    const job = cloneReelStoryboardImageJob();
+  it("strictly parses a Reel visual-session claim", async () => {
+    const job = visualClaim("reel");
     const fetchImpl = vi.fn(async () => new Response(JSON.stringify({ job }), { status: 200 }));
     const client = createAiContentRenderClient({ apiUrl: "https://api.example", token: "token", fetchImpl });
 
     await expect(client.claim("worker", 180)).resolves.toMatchObject({
-      payload: {
-        contractVersion: "ai-content-reel-storyboard-render-job.v1",
-        rendererPromptVersion: "image-reel-storyboard.v1",
-        reelStoryboardBinding: { contractVersion: "reel-storyboard.v1", sceneIndex: 2 },
-        reelStoryboardCurrentScene: {
-          contractVersion: "reel-storyboard-current-scene.v1",
-          scene: { index: 2, headline: "차 맛은 온도에서 갈립니다" },
-        },
-      },
+      kind: "visual_session", outputFormat: "reel",
+      visualSession: { source: { contractVersion: "reel-storyboard.v1" } },
+      jobs: [{ assetIndex: 1 }, { assetIndex: 2 }],
     });
   });
 
-  it("strictly parses the Card Deck claim and authoritative current scene", async () => {
-    const job = cloneCardDeckImageJob();
+  it("strictly parses a Card Manuscript visual-session claim", async () => {
+    const job = visualClaim("card_news");
     const fetchImpl = vi.fn(async () => new Response(JSON.stringify({ job }), { status: 200 }));
     const client = createAiContentRenderClient({ apiUrl: "https://api.example", token: "token", fetchImpl });
 
     await expect(client.claim("worker", 180)).resolves.toMatchObject({
-      payload: {
-        contractVersion: "ai-content-card-deck-render-job.v1",
-        rendererPromptVersion: "image-card-deck.v1",
-        cardDeckBinding: { contractVersion: "card-deck-editorial-plan.v1", sceneIndex: 2 },
-        cardDeckCurrentScene: {
-          contractVersion: "card-deck-current-scene.v1",
-          sceneIndex: 2,
-          compatibilityRole: "detail",
-          scene: { index: 2, headline: "차 맛은 온도에서 갈립니다" },
-        },
-      },
+      kind: "visual_session", outputFormat: "card_news",
+      visualSession: { source: { contractVersion: "card-manuscript-plan.v1" } },
+      jobs: [{ assetIndex: 1 }, { assetIndex: 2 }],
     });
   });
 

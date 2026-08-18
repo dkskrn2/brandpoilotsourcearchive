@@ -60,15 +60,18 @@ function authoredSourceFiles(directory: string): string[] {
         && entry !== "plannerDrafts.ts"
         // Structured scene copy is private render transport. It must not rotate the proposal catalog/hash.
         && entry !== "structuredSceneCopy.ts"
-        // Card deck editorial plans are a private worker/API sidecar, not a stored proposal catalog contract.
-        && entry !== "cardDeckEditorialPlan.ts"
-        && entry !== "cardDeckEditorialPlanNode.ts"
+        // Card Manuscript plans are private worker/API sidecars.
+        && entry !== "cardManuscriptPlan.ts"
+        && entry !== "cardManuscriptPlanNode.ts"
+        && entry !== "visualRenderSession.ts"
         // Reel storyboards are the equivalent private worker/API sidecar.
         && entry !== "reelStoryboard.ts"
         && entry !== "reelStoryboardNode.ts"
         // Safe Card/Reel planning projection and manual visual selection are private sidecars.
         && entry !== "editorialVisualContext.ts"
-        && entry !== "manualVisualSelection.ts") files.push(absolute);
+        && entry !== "manualVisualSelection.ts"
+        // Research acquisition is private execution authority, not a customer/canonical contract.
+        && entry !== "researchSourceAcquisition.ts") files.push(absolute);
     }
   };
   visit(directory);

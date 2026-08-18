@@ -17,7 +17,7 @@ describe("card-news V3 prompt", () => {
       references: { selected: [], brandStyleImages: [], avatarStyleImageId: null, attachments: [] },
     } as never, frozenManualVisualSelection);
     expect(prompt).toContain(purpose === "informational" ? "정보성 카드뉴스" : "마케팅성 카드뉴스");
-    expect(prompt).toContain("card-deck-editorial-plan.v1");
+    expect(prompt).toContain("card-manuscript-plan.v1");
     expect(prompt).not.toContain('"generationId"');
     expect(prompt).not.toContain("attachmentIds");
     expect(prompt).not.toContain("logoPolicy");
@@ -51,22 +51,23 @@ describe("card-news V3 prompt", () => {
       outputSettings: { purpose: "informational", outputFormat: "card_news" },
     } as never, frozenManualVisualSelection);
 
-    expect(prompt).toContain('"contractVersion": "card-deck-editorial-plan.v1"');
+    expect(prompt).toContain('"contractVersion": "card-manuscript-plan.v1"');
     expect(prompt).toContain('"index": 1');
-    expect(prompt).toContain("구성안의 방향·대상·목적은 유지");
-    expect(prompt).toContain("outline의 headline, role, order, evidenceIds는 편집 참고값");
-    expect(prompt).toContain("동결된 전체 factualSources를 다시 검토");
+    expect(prompt).toContain("Proposal is an Editorial Lens, not an evidence whitelist");
+    expect(prompt).toContain("outline headline, role, order, evidenceIds는 편집 참고값");
+    expect(prompt).toContain("Review and partition every Research Evidence Pool item before writing deckNarrative");
     expect(prompt).toContain("정확히 2장");
     expect(prompt).toContain("coreMessage");
     expect(prompt).toContain("headline");
-    expect(prompt).toContain("keyVisual");
+    expect(prompt).toContain("informationRelation");
     expect(prompt).toContain('"entries": []');
     expect(prompt).not.toContain('"texts": []');
     expect(prompt).toContain("supportingTexts");
     expect(prompt).toContain("footnote");
-    expect(prompt).toContain("visualThesis");
-    expect(prompt).toContain("layoutArchetype");
-    expect(prompt).toContain("visualSystem");
+    expect(prompt).toContain("related_facts");
+    expect(prompt).not.toContain('"visualThesis":');
+    expect(prompt).not.toContain('"layoutArchetype":');
+    expect(prompt).not.toContain('"visualSystem":');
     expect(prompt).toContain("evidenceIds");
     expect(prompt).toContain("productImageAssetIds");
     expect(prompt).toContain("avatarImageAssetIds");
@@ -74,15 +75,15 @@ describe("card-news V3 prompt", () => {
     expect(prompt).toContain("avatar");
     expect(prompt).toContain("explicitUserDirection");
     expect(prompt).toContain("attachments");
-    expect(prompt).toContain("한 카드에는 하나의 핵심 메시지만");
-    expect(prompt).toContain("구성안 outline의 headline은 최종 카피가 아닌 참고값");
-    expect(prompt).toContain("불필요한 supportingTexts나 footnote는 비워");
+    expect(prompt).toContain("각 Scene은 새로운 정보·관계·해석을 추가");
+    expect(prompt).toContain("Proposal의 outline headline, role, order, evidenceIds는 편집 참고값");
+    expect(prompt).toContain("supportingTexts는 headline 또는 informationRelation에 없는 새 정보만");
     expect(prompt).toContain("headline은 coreMessage의 축약본");
-    expect(prompt).toContain("supportingTexts를 모두 삭제해도 장면의 의미가 완전하다면");
-    expect(prompt).toContain("모든 장면의 headline만 순서대로 읽어도");
-    expect(prompt).toContain("선택된 구성안의 콘셉트와 목적을 유지");
+    expect(prompt).toContain("없어도 의미가 완전하면 비워 두세요");
+    expect(prompt).toContain("모든 headline만 순서대로 읽어도");
+    expect(prompt).toContain("선택된 Proposal의 서사 관점은 유지");
     expect(prompt).toContain("일반적인 배경 정보나 점검 안내로 대체하지 마세요");
-    expect(prompt).toContain("before, after");
+    expect(prompt).toContain("before/after");
     expect(prompt).toContain("페이지 번호, 장면 번호, 현재/전체 장수, 진행률 배지 또는 페이지 인디케이터를 기획하거나 출력하지 마세요");
     expect(prompt).not.toContain("여백, 번호, 아이콘");
     expect(prompt).not.toContain("한 장이 부실하지 않게");
@@ -106,13 +107,13 @@ describe("card-news V3 prompt", () => {
       references: { selected: [], brandStyleImages: [], avatarStyleImageId: null, attachments: [] },
     } as never, frozenManualVisualSelection);
 
-    expect(prompt).toContain("동결된 subject와 factualSources는 내용의 권위 원본");
-    expect(prompt).toContain("selectedProposal은 관점·대상·목적을 정하는 편집 방향");
+    expect(prompt).toContain("동결된 subject와 factualSources 전체가 내용의 권위 원본");
+    expect(prompt).toContain("Proposal is an Editorial Lens, not an evidence whitelist");
     expect(prompt).toContain("고유명사, 제품·서비스명, 버전, 핵심 수치, 조건, 시점과 적용 대상");
-    expect(prompt).toContain("누락하거나 더 일반적인 표현으로 바꾸지 마세요");
+    expect(prompt).toContain("누락하거나 일반적인 표현으로 바꾸지 마세요");
     expect(prompt).toContain("topic_url이면 subject.text 전체를 검토");
-    expect(prompt).toContain("요약이나 구성안 문구로 대체하지 마세요");
-    expect(prompt).toContain("원문의 모든 세부사항을 모든 장면에 억지로 넣지 마세요");
+    expect(prompt).toContain("요약이나 Proposal 문구로 대체하지 마세요");
+    expect(prompt).toContain("전체 근거를 보고 다시 판단하세요");
     expect(prompt).toContain("Windows 11이라는 주제와 핵심 조건을 훼손하지 마세요.");
   });
 

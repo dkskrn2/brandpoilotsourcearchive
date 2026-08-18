@@ -70,6 +70,17 @@ function publicContext(purpose: "informational" | "marketing") {
   };
 }
 
+function sourceAcquisition(status: "complete_body" | "partial_body" = "complete_body") {
+  return {
+    contractVersion: "research-source-acquisition.v1" as const,
+    status,
+    requestedUrl: "https://source.example/article",
+    canonicalUrl: "https://source.example/article",
+    contentHash: "a".repeat(64),
+    capturedAt: "2026-07-31T01:00:00.000Z",
+  };
+}
+
 describe("controlled proposal search", () => {
   it("serializes only the exact bounded public context inside an untrusted-data envelope", async () => {
     const runner = injectedRunner(`${webEvent()}\n${searchedResult()}`);
@@ -488,6 +499,85 @@ describe("controlled proposal search", () => {
     expect(new Set(result.items.map((item) => item.url)).size).toBe(8);
   });
 
+  it("preserves distinct independent claims from the same canonical URL", async () => {
+    const claims = ["80%가 사용합니다", "54.5%가 개선됐습니다", "3.2%는 격차입니다", "지원 정책이 있습니다"];
+    const model = JSON.stringify({
+      type: "item.completed",
+      item: { type: "agent_message", text: JSON.stringify({
+        decision: "searched", reason: "근거", queries: ["q"],
+        items: claims.map((claimSummary, index) => ({
+          title: `자료 ${index}`, url: "https://source.example/article?utm_source=test",
+          publisher: "Source", publishedAt: null, claimSummary,
+        })),
+      }) },
+    });
+    const runner = injectedRunner(`${webEvent()}\n${model}`);
+
+    const result = await runControlledSearch({
+      purpose: "informational",
+      mode: "required",
+      evidenceGranularity: "independent_claim",
+      sourceAcquisition: sourceAcquisition(),
+      publicResearchContext: publicContext("informational"),
+    }, { runChild: runner.run });
+
+    expect(result.items.map((item) => item.claimSummary)).toEqual(claims);
+    expect(new Set(result.items.map((item) => item.url))).toEqual(new Set([
+      "https://source.example/article?utm_source=test",
+    ]));
+  });
+
+  it("deduplicates the same normalized claim and applies the eight-item cap after claim dedupe", async () => {
+    const items = Array.from({ length: 10 }, (_, index) => ({
+      title: `자료 ${index}`,
+      url: index < 2 ? "https://source.example/article" : `https://source.example/${index}`,
+      publisher: null,
+      publishedAt: null,
+      claimSummary: index < 2 ? "  같은   주장  " : `독립 주장 ${index}`,
+    }));
+    const model = JSON.stringify({
+      type: "item.completed",
+      item: { type: "agent_message", text: JSON.stringify({
+        decision: "searched", reason: "근거", queries: ["q"], items,
+      }) },
+    });
+    const runner = injectedRunner(`${webEvent()}\n${model}`);
+
+    const result = await runControlledSearch({
+      purpose: "informational",
+      mode: "required",
+      evidenceGranularity: "independent_claim",
+      sourceAcquisition: sourceAcquisition(),
+      publicResearchContext: publicContext("informational"),
+    }, { runChild: runner.run });
+
+    expect(result.items).toHaveLength(8);
+    expect(result.items.filter((item) => item.claimSummary.replace(/\s+/g, " ").trim() === "같은 주장"))
+      .toHaveLength(1);
+  });
+
+  it("requires an actually audited supplemental query for incomplete source acquisition", async () => {
+    const withoutQuery = injectedRunner(`${webEvent()}\n${searchedResult()}`);
+    const input = {
+      purpose: "informational" as const,
+      mode: "required" as const,
+      evidenceGranularity: "independent_claim" as const,
+      sourceAcquisition: sourceAcquisition("partial_body"),
+      publicResearchContext: publicContext("informational"),
+    };
+
+    await expect(runControlledSearch(input, { runChild: withoutQuery.run }))
+      .rejects.toThrow("controlled_search_supplemental_search_required");
+
+    const executedQuery = "실제 보충 검색어";
+    const withQuery = injectedRunner(`${queryOnlyWebEvent(executedQuery)}\n${searchedResult()}`);
+    await expect(runControlledSearch(input, { runChild: withQuery.run })).resolves.toMatchObject({
+      queries: [executedQuery],
+    });
+    expect(withQuery.calls[0]!.prompt).toContain("불완전 수집");
+    expect(withQuery.calls[0]!.prompt).toContain("독립 Claim");
+  });
+
   it.each([
     ["action url", { item: { type: "web_search", action: { type: "open_page", url: "https://source.example/article#section" } } }],
     ["action urls", { item: { type: "web_search", action: { type: "search", urls: ["https://source.example/article#section"] } } }],
@@ -601,6 +691,23 @@ describe("controlled proposal search", () => {
     expect(runChild.mock.calls[0]![0].args).not.toContain("--search");
     expect(runChild.mock.calls[1]![0].args).toContain("--search");
     expect(runChild.mock.calls[1]![0].prompt).toContain("시장 상황, 고객 니즈, 구매 장벽");
+  });
+
+  it("skips the decision-only child and performs audited supplemental research for incomplete marketing acquisition", async () => {
+    const executedQuery = "구매 장벽 보충 조사";
+    const runner = injectedRunner(`${queryOnlyWebEvent(executedQuery)}\n${searchedResult()}`);
+
+    const result = await runControlledSearch({
+      purpose: "marketing",
+      mode: "automatic",
+      evidenceGranularity: "independent_claim",
+      sourceAcquisition: sourceAcquisition("partial_body"),
+      publicResearchContext: publicContext("marketing"),
+    }, { runChild: runner.run });
+
+    expect(runner.calls).toHaveLength(1);
+    expect(runner.calls[0]!.args).toContain("--search");
+    expect(result.queries).toEqual([executedQuery]);
   });
 
   it("does not forward instruction-like decision queries into the search-child prompt", async () => {

@@ -1,16 +1,11 @@
+import { createHash } from "node:crypto";
+import type { ContentGenerationInputV3, ImageGenerationPackageV1 } from "@brand-pilot/content-contracts";
+import { parseAiContentVisualSessionV1, type AiContentVisualSessionV1 } from "@brand-pilot/content-contracts/visual-render-session";
 import {
   parseAiContentManualImageAssetPayloadV2,
   type AiContentManualImageAssetPayloadV2,
 } from "./aiContentManualRenderContract.js";
-import {
-  parseAiContentCardDeckImageAssetPayloadV1,
-  type AiContentCardDeckImageAssetPayloadV1,
-} from "./aiContentCardDeckRenderContract.js";
 import type { AiContentEditorialRenderDiagnostic } from "./aiContentAssetRenderer.js";
-import {
-  parseAiContentReelStoryboardImageAssetPayloadV1,
-  type AiContentReelStoryboardImageAssetPayloadV1,
-} from "./aiContentReelStoryboardRenderContract.js";
 
 export interface AiContentRenderedAsset {
   index: number;
@@ -38,19 +33,35 @@ export interface AiContentImageAssetJobV2 extends AiContentRenderJobBase {
   payload: AiContentManualImageAssetPayloadV2;
 }
 
-export interface AiContentCardDeckImageAssetJob extends AiContentRenderJobBase {
+export interface AiContentVisualSessionImageAssetJob extends AiContentRenderJobBase {
   jobKind: "image_asset";
   assetIndex: number;
-  payload: AiContentCardDeckImageAssetPayloadV1;
+  payload: {
+    contractVersion: "ai-content-visual-session-render-job.v1";
+    jobKind: "image_asset";
+    generationId: string;
+    outputId: string;
+    imagePackage: ImageGenerationPackageV1;
+    assetIndex: number;
+    assetKey: string;
+    storagePath: string;
+    rendererPromptVersion: "image-visual-session.v1";
+    visualSessionBinding: { sourceContractVersion: "card-manuscript-plan.v1" | "reel-storyboard.v1"; sourceSha256: string; sceneIndex: number };
+    contentGenerationInput: ContentGenerationInputV3;
+    contentPlan: Record<string, unknown>;
+    visualSession: AiContentVisualSessionV1;
+  };
 }
 
-export interface AiContentReelStoryboardImageAssetJob extends AiContentRenderJobBase {
-  jobKind: "image_asset";
-  assetIndex: number;
-  payload: AiContentReelStoryboardImageAssetPayloadV1;
-}
+export type AiContentImageAssetJob = AiContentImageAssetJobV2;
 
-export type AiContentImageAssetJob = AiContentImageAssetJobV2 | AiContentCardDeckImageAssetJob | AiContentReelStoryboardImageAssetJob;
+export interface AiContentVisualSessionLease {
+  kind: "visual_session";
+  outputId: string;
+  outputFormat: "card_news" | "reel";
+  visualSession: AiContentVisualSessionV1;
+  jobs: AiContentVisualSessionImageAssetJob[];
+}
 
 export interface AiContentPackageFinalizeJob extends AiContentRenderJobBase {
   jobKind: "package_finalize";
@@ -68,15 +79,31 @@ export interface AiContentPackageFinalizeJob extends AiContentRenderJobBase {
 }
 
 export type AiContentRenderJob = AiContentImageAssetJob | AiContentPackageFinalizeJob;
+export type AiContentRenderClaim = AiContentRenderJob | AiContentVisualSessionLease;
 export type AiContentRenderLease = Pick<AiContentRenderJob, "id" | "leaseToken">;
 
 export interface AiContentRenderClient {
-  claim(workerId: string, leaseSeconds: number): Promise<AiContentRenderJob | null>;
+  claim(workerId: string, leaseSeconds: number): Promise<AiContentRenderClaim | null>;
   heartbeat(job: AiContentRenderLease, workerId: string, leaseSeconds: number): Promise<boolean>;
+  heartbeatBatch(batch: AiContentVisualSessionLease, workerId: string, leaseSeconds: number): Promise<boolean>;
+  completeBatch(batch: AiContentVisualSessionLease, workerId: string, input: { assets: AiContentRenderedAsset[]; diagnostics: AiContentEditorialRenderDiagnostic[] }): Promise<void>;
+  failBatch(batch: AiContentVisualSessionLease, workerId: string, input: { errorCode: string; errorMessage: string }): Promise<void>;
   completeAsset(job: AiContentRenderLease, workerId: string, asset: AiContentRenderedAsset): Promise<void>;
   appendRenderDiagnostic?(job: AiContentRenderLease, workerId: string, diagnostic: AiContentEditorialRenderDiagnostic): Promise<void>;
   completePackage(job: AiContentRenderLease, workerId: string, input: { manifest: object; manifestUrl: string }): Promise<void>;
   fail(job: AiContentRenderLease, workerId: string, input: { errorCode: string; errorMessage: string; diagnosticCode?: string; retryable: boolean }): Promise<void>;
+}
+
+function canonicalJson(value: unknown): string {
+  const normalize = (item: unknown): unknown => Array.isArray(item) ? item.map(normalize)
+    : item && typeof item === "object"
+      ? Object.fromEntries(Object.entries(item as Record<string, unknown>).sort(([a], [b]) => a.localeCompare(b)).map(([key, child]) => [key, normalize(child)]))
+      : item;
+  return JSON.stringify(normalize(value));
+}
+
+export function aiContentVisualSessionCompletionSha256(value: unknown): string {
+  return createHash("sha256").update(canonicalJson(value), "utf8").digest("hex");
 }
 
 function record(value: unknown, code = "ai_content_render_job_invalid"): Record<string, unknown> {
@@ -121,22 +148,6 @@ function parseJob(value: unknown): AiContentRenderJob {
   if (!Number.isSafeInteger(common.attemptCount) || common.attemptCount < 1) throw new Error("ai_content_render_job_invalid");
   if (source.jobKind === "image_asset") {
     const rawPayload = record(source.payload);
-    if (rawPayload.contractVersion === "ai-content-card-deck-render-job.v1") {
-      const assetIndex = Number(source.assetIndex);
-      if (!Number.isSafeInteger(assetIndex) || assetIndex < 1 || source.assetIndex !== assetIndex) {
-        throw new Error("ai_content_render_job_invalid");
-      }
-      const payload = parseAiContentCardDeckImageAssetPayloadV1(rawPayload, { ...common, id: common.id, assetIndex });
-      return { ...common, jobKind: "image_asset", assetIndex, payload };
-    }
-    if (rawPayload.contractVersion === "ai-content-reel-storyboard-render-job.v1") {
-      const assetIndex = Number(source.assetIndex);
-      if (!Number.isSafeInteger(assetIndex) || assetIndex < 1 || source.assetIndex !== assetIndex) {
-        throw new Error("ai_content_render_job_invalid");
-      }
-      const payload = parseAiContentReelStoryboardImageAssetPayloadV1(rawPayload, { ...common, id: common.id, assetIndex });
-      return { ...common, jobKind: "image_asset", assetIndex, payload };
-    }
     if (rawPayload.contractVersion === "ai-content-render-job.v2") {
       const assetIndex = Number(source.assetIndex);
       if (!Number.isSafeInteger(assetIndex) || assetIndex < 1 || source.assetIndex !== assetIndex) {
@@ -155,6 +166,43 @@ function parseJob(value: unknown): AiContentRenderJob {
     return { ...common, jobKind: "package_finalize", assetIndex: null, payload: { contractVersion: "ai-content-render-job.v1", jobKind: "package_finalize", generationId: common.generationId, outputId: common.outputId, plan: record(payload.plan), finalInput: record(payload.finalInput), supplementalResearch: payload.supplementalResearch === null ? null : record(payload.supplementalResearch), assets: payload.assets.map(renderedAsset) } };
   }
   throw new Error("ai_content_render_job_invalid");
+}
+
+function parseVisualJob(value: unknown, session: AiContentVisualSessionV1, outputId: string): AiContentVisualSessionImageAssetJob {
+  const source = exact(value, ["id", "generationId", "outputId", "brandId", "workspaceId", "jobKind", "assetIndex", "leaseToken", "attemptCount", "payload"]);
+  const assetIndex = Number(source.assetIndex);
+  if (source.jobKind !== "image_asset" || source.outputId !== outputId || !Number.isSafeInteger(assetIndex) || assetIndex < 1) throw new Error("ai_content_visual_session_invalid");
+  const payload = exact(source.payload, ["contractVersion", "jobKind", "generationId", "outputId", "imagePackage", "assetIndex", "assetKey", "storagePath", "rendererPromptVersion", "visualSessionBinding", "contentGenerationInput", "contentPlan", "visualSession"]);
+  const binding = exact(payload.visualSessionBinding, ["sourceContractVersion", "sourceSha256", "sceneIndex"]);
+  const parsedSession = parseAiContentVisualSessionV1(payload.visualSession);
+  if (payload.contractVersion !== "ai-content-visual-session-render-job.v1" || payload.rendererPromptVersion !== "image-visual-session.v1"
+    || payload.outputId !== outputId || payload.assetIndex !== assetIndex || binding.sceneIndex !== assetIndex
+    || binding.sourceContractVersion !== session.source.contractVersion || binding.sourceSha256 !== session.source.sha256
+    || canonicalJson(parsedSession) !== canonicalJson(session)) throw new Error("ai_content_visual_session_invalid");
+  const base = { id: text(source.id), generationId: text(source.generationId), outputId, workspaceId: text(source.workspaceId), brandId: text(source.brandId), leaseToken: text(source.leaseToken), attemptCount: Number(source.attemptCount) };
+  if (!Number.isSafeInteger(base.attemptCount) || base.attemptCount < 1) throw new Error("ai_content_visual_session_invalid");
+  return { ...base, jobKind: "image_asset", assetIndex, payload: {
+    contractVersion: "ai-content-visual-session-render-job.v1", jobKind: "image_asset", generationId: text(payload.generationId), outputId,
+    imagePackage: record(payload.imagePackage) as ImageGenerationPackageV1, assetIndex, assetKey: text(payload.assetKey), storagePath: text(payload.storagePath), rendererPromptVersion: "image-visual-session.v1",
+    visualSessionBinding: { sourceContractVersion: binding.sourceContractVersion as "card-manuscript-plan.v1" | "reel-storyboard.v1", sourceSha256: text(binding.sourceSha256), sceneIndex: assetIndex },
+    contentGenerationInput: record(payload.contentGenerationInput) as ContentGenerationInputV3, contentPlan: record(payload.contentPlan), visualSession: parsedSession,
+  } };
+}
+
+function parseClaim(value: unknown): AiContentRenderClaim {
+  const source = record(value);
+  if (source.kind !== "visual_session") return parseJob(value);
+  const exactSource = exact(value, ["kind", "outputId", "outputFormat", "visualSession", "jobs"]);
+  const outputId = text(exactSource.outputId);
+  const visualSession = parseAiContentVisualSessionV1(exactSource.visualSession);
+  if (exactSource.outputFormat !== visualSession.outputFormat || !Array.isArray(exactSource.jobs)) throw new Error("ai_content_visual_session_invalid");
+  const jobs = exactSource.jobs.map((job) => parseVisualJob(job, visualSession, outputId));
+  if (jobs.length !== visualSession.scenes.length || jobs.some(({ assetIndex }, offset) => assetIndex !== offset + 1)) throw new Error("ai_content_visual_session_invalid");
+  return { kind: "visual_session", outputId, outputFormat: visualSession.outputFormat, visualSession, jobs };
+}
+
+function leaseVector(batch: AiContentVisualSessionLease) {
+  return batch.jobs.map(({ id, assetIndex, leaseToken }) => ({ jobId: id, assetIndex, leaseToken }));
 }
 
 async function apiFailure(response: Response): Promise<Error> {
@@ -179,16 +227,35 @@ export function createAiContentRenderClient({ apiUrl, token, fetchImpl = fetch }
   }
   return {
     async claim(workerId, leaseSeconds) {
-      const response = await request("/worker/ai-content-render-jobs/claim", { workerId, leaseSeconds });
+      const response = await request("/worker/ai-content-render-jobs/claim", { workerId, leaseSeconds, capabilities: ["ai-content-visual-session.v1"] });
       if (response.status === 204) return null;
       const envelope = exact(await response.json(), ["job"]);
-      return envelope.job === null ? null : parseJob(envelope.job);
+      return envelope.job === null ? null : parseClaim(envelope.job);
     },
     async heartbeat(job, workerId, leaseSeconds) {
       const response = await fetchImpl(`${baseUrl}/worker/ai-content-render-jobs/${encodeURIComponent(job.id)}/heartbeat`, { method: "POST", headers: { authorization: `Bearer ${token}`, "content-type": "application/json" }, body: JSON.stringify({ workerId, leaseToken: job.leaseToken, leaseSeconds }) });
       if (response.status === 409) return false;
       if (!response.ok) throw await apiFailure(response);
       return true;
+    },
+    async heartbeatBatch(batch, workerId, leaseSeconds) {
+      const response = await fetchImpl(`${baseUrl}/worker/ai-content-render-jobs/visual-session/heartbeat`, { method: "POST", headers: { authorization: `Bearer ${token}`, "content-type": "application/json" }, body: JSON.stringify({ outputId: batch.outputId, workerId, leaseSeconds, jobs: leaseVector(batch) }) });
+      if (response.status === 409) return false;
+      if (!response.ok) throw await apiFailure(response);
+      return true;
+    },
+    async completeBatch(batch, workerId, input) {
+      const body = { outputId: batch.outputId, workerId, jobs: leaseVector(batch), assets: input.assets, diagnostics: input.diagnostics };
+      const exactBody = { ...body, bodySha256: aiContentVisualSessionCompletionSha256(body) };
+      let lastError: unknown;
+      for (let attempt = 0; attempt < 4; attempt += 1) {
+        try { await request("/worker/ai-content-render-jobs/visual-session/complete", exactBody); return; }
+        catch (error) { lastError = error; if (attempt < 3) await new Promise((resolve) => setTimeout(resolve, [250, 750, 1500][attempt])); }
+      }
+      throw lastError;
+    },
+    async failBatch(batch, workerId, input) {
+      await request("/worker/ai-content-render-jobs/visual-session/fail", { outputId: batch.outputId, workerId, jobs: leaseVector(batch), ...input });
     },
     async completeAsset(job, workerId, asset) {
       await request(`/worker/ai-content-render-jobs/${encodeURIComponent(job.id)}/complete`, { workerId, leaseToken: job.leaseToken, jobKind: "image_asset", asset });

@@ -62,16 +62,20 @@ describe("generated content contract artifacts", () => {
     const canonicalPath = join(source, "canonical.ts");
     const privateDraftPath = join(source, "plannerDrafts.ts");
     const privateStructuredScenePath = join(source, "structuredSceneCopy.ts");
-    const privateCardDeckPath = join(source, "cardDeckEditorialPlan.ts");
-    const privateCardDeckNodePath = join(source, "cardDeckEditorialPlanNode.ts");
+    const privateCardManuscriptPath = join(source, "cardManuscriptPlan.ts");
+    const privateCardManuscriptNodePath = join(source, "cardManuscriptPlanNode.ts");
+    const privateVisualSessionPath = join(source, "visualRenderSession.ts");
+    const privateResearchAcquisitionPath = join(source, "researchSourceAcquisition.ts");
     const privateReelStoryboardPath = join(source, "reelStoryboard.ts");
     const privateReelStoryboardNodePath = join(source, "reelStoryboardNode.ts");
     const privateEditorialVisualContextPath = join(source, "editorialVisualContext.ts");
     writeFileSync(canonicalPath, "export const canonical = 'v1';\n", "utf8");
     writeFileSync(privateDraftPath, "export const privateDraft = 'v1';\n", "utf8");
     writeFileSync(privateStructuredScenePath, "export const privateStructuredScene = 'v1';\n", "utf8");
-    writeFileSync(privateCardDeckPath, "export const privateCardDeck = 'v1';\n", "utf8");
-    writeFileSync(privateCardDeckNodePath, "export const privateCardDeckNode = 'v1';\n", "utf8");
+    writeFileSync(privateCardManuscriptPath, "export const privateCardManuscript = 'v1';\n", "utf8");
+    writeFileSync(privateCardManuscriptNodePath, "export const privateCardManuscriptNode = 'v1';\n", "utf8");
+    writeFileSync(privateVisualSessionPath, "export const privateVisualSession = 'v1';\n", "utf8");
+    writeFileSync(privateResearchAcquisitionPath, "export const privateResearchAcquisition = 'v1';\n", "utf8");
     writeFileSync(privateReelStoryboardPath, "export const privateReelStoryboard = 'v1';\n", "utf8");
     writeFileSync(privateReelStoryboardNodePath, "export const privateReelStoryboardNode = 'v1';\n", "utf8");
     writeFileSync(privateEditorialVisualContextPath, "export const privateEditorialVisualContext = 'v1';\n", "utf8");
@@ -81,8 +85,10 @@ describe("generated content contract artifacts", () => {
 
     writeFileSync(privateDraftPath, "export const privateDraft = 'v2';\n", "utf8");
     writeFileSync(privateStructuredScenePath, "export const privateStructuredScene = 'v2';\n", "utf8");
-    writeFileSync(privateCardDeckPath, "export const privateCardDeck = 'v2';\n", "utf8");
-    writeFileSync(privateCardDeckNodePath, "export const privateCardDeckNode = 'v2';\n", "utf8");
+    writeFileSync(privateCardManuscriptPath, "export const privateCardManuscript = 'v2';\n", "utf8");
+    writeFileSync(privateCardManuscriptNodePath, "export const privateCardManuscriptNode = 'v2';\n", "utf8");
+    writeFileSync(privateVisualSessionPath, "export const privateVisualSession = 'v2';\n", "utf8");
+    writeFileSync(privateResearchAcquisitionPath, "export const privateResearchAcquisition = 'v2';\n", "utf8");
     writeFileSync(privateReelStoryboardPath, "export const privateReelStoryboard = 'v2';\n", "utf8");
     writeFileSync(privateReelStoryboardNodePath, "export const privateReelStoryboardNode = 'v2';\n", "utf8");
     writeFileSync(privateEditorialVisualContextPath, "export const privateEditorialVisualContext = 'v2';\n", "utf8");
@@ -131,7 +137,8 @@ describe("generated content contract artifacts", () => {
         else if (name.endsWith(".ts") && !name.endsWith(".test.ts")
           && name !== "generateArtifacts.ts" && name !== "checkGenerated.ts"
           && name !== "plannerDrafts.ts" && name !== "structuredSceneCopy.ts"
-          && name !== "cardDeckEditorialPlan.ts" && name !== "cardDeckEditorialPlanNode.ts"
+          && name !== "cardManuscriptPlan.ts" && name !== "cardManuscriptPlanNode.ts"
+          && name !== "visualRenderSession.ts" && name !== "researchSourceAcquisition.ts"
           && name !== "reelStoryboard.ts" && name !== "reelStoryboardNode.ts"
           && name !== "editorialVisualContext.ts" && name !== "manualVisualSelection.ts") files.push(absolute);
       }

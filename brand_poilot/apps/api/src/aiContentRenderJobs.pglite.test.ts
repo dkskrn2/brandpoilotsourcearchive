@@ -2,11 +2,11 @@ import { PGlite } from "@electric-sql/pglite";
 import { pgcrypto } from "@electric-sql/pglite/contrib/pgcrypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ImageGenerationPackageV1 } from "@brand-pilot/content-contracts";
-import { compileCardDeckPlanDraftV1 } from "@brand-pilot/content-contracts/card-deck-editorial-plan";
-import { cardDeckEditorialPlanSha256 } from "@brand-pilot/content-contracts/card-deck-editorial-plan/node";
+import { compileCardManuscriptPlanDraftV1 } from "@brand-pilot/content-contracts/card-manuscript-plan";
+import { cardManuscriptPlanSha256 } from "@brand-pilot/content-contracts/card-manuscript-plan/node";
 import { compileReelStoryboardDraftV1 } from "@brand-pilot/content-contracts/reel-storyboard";
 import { reelStoryboardSha256 } from "@brand-pilot/content-contracts/reel-storyboard/node";
-import { createAiContentRenderJobsRepository, enqueueAiContentRenderJobs, type AiContentRenderedAsset } from "./aiContentRenderJobs.js";
+import { aiContentVisualSessionCompletionSha256, createAiContentRenderJobsRepository, enqueueAiContentRenderJobs, type AiContentRenderedAsset } from "./aiContentRenderJobs.js";
 
 const ids = {
   workspace: "10000000-0000-4000-8000-000000000001", brand: "20000000-0000-4000-8000-000000000001",
@@ -147,44 +147,16 @@ describe("AiContentRenderJobsRepository with postgres semantics", () => {
 
   afterEach(async () => db?.close(), 30_000);
 
-  it("queues only package assets, preserves successful siblings, and creates one finalizer after all assets succeed", async () => {
+  it("claims and completes all Card images as one atomic visual session", async () => {
     await enqueueCardDeck();
-    expect((await db.query<{ asset_index: number }>("select asset_index from ai_content_generation_render_jobs order by asset_index")).rows.map((row) => Number(row.asset_index))).toEqual([1, 2, 3]);
-
-    for (const index of [1, 3]) {
-      const job = await repository.claim({ workerId: "image-worker", leaseSeconds: 180 });
-      expect(job?.jobKind).toBe("image_asset");
-      expect(job?.payload.contractVersion).toBe("ai-content-card-deck-render-job.v1");
-      await repository.completeAsset({ jobId: job!.id, workerId: "image-worker", leaseToken: job!.leaseToken, jobKind: "image_asset", asset: { index: job!.assetIndex!, url: blobAssetUrl(job!.assetIndex!), storagePath: `ai-content/${ids.brand}/${ids.generation}/${ids.output}/assets/${String(job!.assetIndex).padStart(2, "0")}.png`, mimeType: "image/png", width: 1080, height: 1080, checksum: String(index).repeat(64) } });
-    }
-    const failed = await repository.claim({ workerId: "image-worker", leaseSeconds: 180 });
-    await repository.fail({ jobId: failed!.id, workerId: "image-worker", leaseToken: failed!.leaseToken, errorCode: "render_failed", errorMessage: "failed", diagnosticCode: "ai_content_asset_final_message_invalid", retryable: true });
-    await db.query("update ai_content_generation_render_jobs set available_at=now() where id=$1", [failed!.id]);
-    const retry = await repository.claim({ workerId: "image-worker", leaseSeconds: 180 });
-    expect(retry?.assetIndex).toBe(failed?.assetIndex);
-    await repository.completeAsset({ jobId: retry!.id, workerId: "image-worker", leaseToken: retry!.leaseToken, jobKind: "image_asset", asset: { index: retry!.assetIndex!, url: blobAssetUrl(retry!.assetIndex!), storagePath: `ai-content/${ids.brand}/${ids.generation}/${ids.output}/assets/${String(retry!.assetIndex).padStart(2, "0")}.png`, mimeType: "image/png", width: 1080, height: 1080, checksum: "b".repeat(64) } });
-    const states = await db.query<{ job_kind: string; asset_index: number | null; status: string; result_json: unknown }>("select job_kind,asset_index,status,result_json from ai_content_generation_render_jobs order by job_kind,asset_index");
-    expect(states.rows.filter((row) => row.job_kind === "image_asset").every((row) => row.status === "succeeded" && row.result_json)).toBe(true);
-    expect(states.rows.filter((row) => row.job_kind === "package_finalize")).toHaveLength(1);
-    const events = await db.query<{ event_type: string; entity_id: string; actor_external_id: string; metadata: Record<string, unknown> }>(
-      "select event_type,entity_id,actor_external_id,metadata from audit_events order by created_at",
+    const rendered = await completeVisualSession("card_news");
+    expect(rendered.map(({ index }) => index)).toEqual([1, 2, 3]);
+    const states = await db.query<{ job_kind: string; status: string }>(
+      "select job_kind,status from ai_content_generation_render_jobs order by job_kind,asset_index",
     );
-    expect(events.rows).toEqual([expect.objectContaining({
-      event_type: "ai_content_render_attempt_failed",
-      entity_id: failed!.id,
-      actor_external_id: "image-worker",
-      metadata: expect.objectContaining({
-        contractVersion: "ai-content-render-attempt-failed.v1",
-        generationId: ids.generation,
-        outputId: ids.output,
-        assetIndex: failed!.assetIndex,
-        attemptCount: 1,
-        errorCode: "render_failed",
-        diagnosticCode: "ai_content_asset_final_message_invalid",
-        requestedRetryable: true,
-        willRetry: true,
-      }),
-    })]);
+    expect(states.rows.filter(({ job_kind }) => job_kind === "image_asset").map(({ status }) => status))
+      .toEqual(["succeeded", "succeeded", "succeeded"]);
+    expect(states.rows.filter(({ job_kind }) => job_kind === "package_finalize")).toHaveLength(1);
   });
 
   it("queues one finalizer immediately for a blog plan without images", async () => {
@@ -212,46 +184,40 @@ describe("AiContentRenderJobsRepository with postgres semantics", () => {
         outline: baseInput.selectedProposal.outline.slice(0, count),
       },
     };
-    const deck = {
-      contractVersion: "card-deck-editorial-plan.v1" as const,
+    const evidenceId = input.researchEvidence.items[0]!.id;
+    const manuscript = {
+      contractVersion: "card-manuscript-plan.v1" as const,
       content: { caption: "Tea", hashtags: [] as string[], cta: "Read" },
       deckNarrative: "One coherent editorial card.",
-      visualSystem: {
-        paletteDirection: "Green and cream.",
-        typographyDirection: "Bold Korean editorial hierarchy.",
-        graphicLanguage: "Flat editorial symbols.",
-        imageryDirection: "Tea-led subject imagery.",
-        invariants: ["Keep the visual system stable."],
-      },
+      evidenceSelection: { selectedEvidenceIds: [evidenceId], excludedEvidenceIds: [] },
       scenes: Array.from({ length: count }, (_, offset) => offset + 1).map((index) => ({
         index,
         editorialRole: index === 1 ? "hook" : "detail",
         purpose: `Purpose ${index}`,
         coreMessage: `Core ${index}`,
         headline: `Headline ${index}`,
-        keyVisual: { type: "number" as const, entries: [{ role: "value" as const, label: null, value: `${index} steps` }] },
+        informationRelation: { type: "number" as const, entries: [{ role: "value" as const, label: null, value: `${index} steps` }] },
         supportingTexts: [`Support ${index}`],
         footnote: null,
-        visualThesis: `Make ${index} steps dominant.`,
-        layoutArchetype: "stat_focus" as const,
-        evidenceIds: [] as string[],
+        evidenceIds: [evidenceId],
         productImageAssetIds: [] as string[],
+        avatarImageAssetIds: [] as string[],
       })),
     };
-    const draft = compileCardDeckPlanDraftV1(deck, input.selectedProposal.outline);
+    const draft = compileCardManuscriptPlanDraftV1(manuscript, input.selectedProposal.outline);
     const cardPackage = {
       ...imagePackage(count),
       assets: draft.assets.map((asset) => ({ ...asset, attachmentIds: [] as string[] })),
     };
     const plan = {
       contractVersion: "card-news-plan.v2" as const,
-      content: deck.content,
+      content: manuscript.content,
       imagePackage: cardPackage,
     };
-    const cardDeckContract = {
-      contractVersion: "card-deck-editorial-plan.v1" as const,
-      deckSha256: cardDeckEditorialPlanSha256(deck),
-      plan: deck,
+    const cardManuscriptContract = {
+      contractVersion: "card-manuscript-plan.v1" as const,
+      manuscriptSha256: cardManuscriptPlanSha256(manuscript),
+      plan: manuscript,
     };
     await db.query("insert into ai_content_proposal_batches(id,workspace_id,brand_id,origin) values($1,$2,$3,'manual')", [ids.batch, ids.workspace, ids.brand]);
     await db.query("insert into ai_content_proposals(id,batch_id,workspace_id,brand_id) values($1,$2,$3,$4)", [ids.proposal, ids.batch, ids.workspace, ids.brand]);
@@ -260,18 +226,23 @@ describe("AiContentRenderJobsRepository with postgres semantics", () => {
     await db.query("update ai_content_generation_outputs set plan_json=$2::jsonb where id=$1", [ids.output, JSON.stringify(plan)]);
     await db.query(
       "insert into ai_content_generation_jobs(id,generation_id,output_id,workspace_id,brand_id,job_type,output_format,status,payload_json) values(gen_random_uuid(),$1,$2,$3,$4,'generate','card_news','succeeded',$5::jsonb)",
-      [ids.generation, ids.output, ids.workspace, ids.brand, JSON.stringify({ cardDeckContract })],
+      [ids.generation, ids.output, ids.workspace, ids.brand, JSON.stringify({ cardManuscriptContract })],
     );
     await enqueueAiContentRenderJobs(db as never, {
       workspaceId: ids.workspace, brandId: ids.brand, generationId: ids.generation, outputId: ids.output,
-      plan, finalInput: input, cardDeckContract,
+      plan, finalInput: input, cardManuscriptContract,
     });
-    return { input, plan, cardDeckContract };
+    return { input, plan, cardManuscriptContract };
   }
 
   async function enqueueSingleRenderFixture() {
     const result = await enqueueCardDeck();
     await db.query("delete from ai_content_generation_render_jobs where job_kind='image_asset' and asset_index > 1");
+    await db.query(`update ai_content_generation_render_jobs
+      set payload_json=jsonb_set(
+        jsonb_set(payload_json - 'visualSessionBinding','{contractVersion}','\"ai-content-render-job.v2\"'::jsonb,true),
+        '{rendererPromptVersion}','\"image-final-pixels.v2\"'::jsonb,true
+      ) where job_kind='image_asset'`);
     return result;
   }
 
@@ -322,124 +293,38 @@ describe("AiContentRenderJobsRepository with postgres semantics", () => {
     return { input, plan, reelStoryboardContract };
   }
 
-  it("hydrates a Card Deck claim from the authoritative stored Deck", async () => {
-    const { input, plan, cardDeckContract } = await enqueueCardDeck();
-    const before = await db.query<{ id: string; payload_json: Record<string, unknown> }>(
-      "select id,payload_json from ai_content_generation_render_jobs order by id",
-    );
-    const job = await repository.claim({ workerId: "deck-image-worker", leaseSeconds: 180 });
-
-    expect(job?.payload).toMatchObject({
-      contractVersion: "ai-content-card-deck-render-job.v1",
-      rendererPromptVersion: "image-card-deck.v1",
-      contentGenerationInput: input,
-      contentPlan: plan,
-      cardDeckContract,
-      cardDeckCurrentScene: {
-        contractVersion: "card-deck-current-scene.v1",
-        deckSha256: cardDeckContract.deckSha256,
-        sceneIndex: 1,
-        compatibilityRole: input.selectedProposal.outline[0]!.role,
-        scene: cardDeckContract.plan.scenes[0],
-      },
+  async function completeVisualSession(outputFormat: "card_news" | "reel"): Promise<AiContentRenderedAsset[]> {
+    const claim = await repository.claim({
+      workerId: "image-worker", leaseSeconds: 180, capabilities: ["ai-content-visual-session.v1"],
     });
-    expect((await db.query<{ id: string; payload_json: Record<string, unknown> }>(
-      "select id,payload_json from ai_content_generation_render_jobs order by id",
-    )).rows).toEqual(before.rows);
-  });
-
-  it("hydrates a Reel claim from the authoritative stored Storyboard", async () => {
-    const { input, plan, reelStoryboardContract } = await enqueueReelStoryboard();
-    const before = await db.query<{ id: string; payload_json: Record<string, unknown> }>(
-      "select id,payload_json from ai_content_generation_render_jobs order by id",
-    );
-    const job = await repository.claim({ workerId: "reel-image-worker", leaseSeconds: 180 });
-
-    expect(job?.payload).toMatchObject({
-      contractVersion: "ai-content-reel-storyboard-render-job.v1",
-      rendererPromptVersion: "image-reel-storyboard.v1",
-      contentGenerationInput: input,
-      contentPlan: plan,
-      reelStoryboardContract,
-      reelStoryboardCurrentScene: {
-        contractVersion: "reel-storyboard-current-scene.v1",
-        storyboardSha256: reelStoryboardContract.storyboardSha256,
-        sceneIndex: 1,
-        compatibilityRole: input.selectedProposal.outline[0]!.role,
-        scene: reelStoryboardContract.storyboard.scenes[0],
-      },
-    });
-    expect((await db.query<{ id: string; payload_json: Record<string, unknown> }>(
-      "select id,payload_json from ai_content_generation_render_jobs order by id",
-    )).rows).toEqual(before.rows);
-  });
-
-  it("reclaims exactly the same card Deck scene after a retry without duplicating or rewriting the render row", async () => {
-    await enqueueCardDeck();
-    const before = (await db.query<{ id: string; payload_json: Record<string, unknown> }>(
-      "select id,payload_json from ai_content_generation_render_jobs order by asset_index",
-    )).rows;
-    const first = await repository.claim({ workerId: "deck-image-worker", leaseSeconds: 180 });
-    await repository.fail({
-      jobId: first!.id, workerId: "deck-image-worker", leaseToken: first!.leaseToken,
-      errorCode: "render_transient", errorMessage: "retry", retryable: true,
-    });
-    await db.query(
-      "update ai_content_generation_render_jobs set available_at=case when id=$1 then now() else now()+interval '1 hour' end",
-      [first!.id],
-    );
-    const second = await repository.claim({ workerId: "deck-image-worker", leaseSeconds: 180 });
-
-    expect(second?.id).toBe(first?.id);
-    expect(second?.payload.cardDeckContract).toEqual(first?.payload.cardDeckContract);
-    expect(second?.payload.cardDeckCurrentScene).toEqual(first?.payload.cardDeckCurrentScene);
-    const rows = await db.query<{ id: string; payload_json: Record<string, unknown> }>(
-      "select id,payload_json from ai_content_generation_render_jobs order by asset_index",
-    );
-    expect(rows.rows).toHaveLength(3);
-    expect(rows.rows).toEqual(before);
-  });
-
-  it("appends an idempotent private diagnostic only after the exact editorial asset succeeds", async () => {
-    const { cardDeckContract } = await enqueueCardDeck();
-    const job = await repository.claim({ workerId: "deck-image-worker", leaseSeconds: 180 });
-    const diagnostic = {
+    if (!claim || !("kind" in claim)) throw new Error("expected_visual_session");
+    const jobs = claim.jobs.map(({ id, assetIndex, leaseToken }) => ({ jobId: id, assetIndex: assetIndex!, leaseToken }));
+    const assets = jobs.map(({ assetIndex }) => ({
+      index: assetIndex,
+      url: blobAssetUrl(assetIndex),
+      storagePath: `ai-content/${ids.brand}/${ids.generation}/${ids.output}/assets/${String(assetIndex).padStart(2, "0")}.png`,
+      mimeType: "image/png" as const,
+      width: 1080,
+      height: outputFormat === "reel" ? 1920 : 1080,
+      checksum: String(assetIndex).repeat(64),
+    }));
+    const diagnostics = jobs.map(({ assetIndex }) => ({
       contractVersion: "ai-content-editorial-render-diagnostic.v1" as const,
-      sourceContractVersion: "card-deck-editorial-plan.v1" as const,
-      sourceSha256: cardDeckContract.deckSha256,
-      sceneIndex: job!.assetIndex!,
-      compiledPromptVersion: "image-card-deck.v1" as const,
+      sourceContractVersion: claim.visualSession.source.contractVersion,
+      sourceSha256: claim.visualSession.source.sha256,
+      sceneIndex: assetIndex,
+      compiledPromptVersion: "image-visual-session.v1" as const,
       compiledPromptSha256: "a".repeat(64),
       actualToolArgumentsObservation: "not_emitted_by_runner" as const,
       actualToolArgumentsSha256: null,
-    };
-    await expect(repository.appendEditorialDiagnostic({
-      jobId: job!.id, workerId: "deck-image-worker", leaseToken: job!.leaseToken, diagnostic,
-    })).rejects.toThrow("ai_content_render_job_lease_invalid");
-    await repository.completeAsset({
-      jobId: job!.id, workerId: "deck-image-worker", leaseToken: job!.leaseToken,
-      jobKind: "image_asset",
-      asset: {
-        index: job!.assetIndex!, url: blobAssetUrl(job!.assetIndex!),
-        storagePath: `ai-content/${ids.brand}/${ids.generation}/${ids.output}/assets/${String(job!.assetIndex).padStart(2, "0")}.png`,
-        mimeType: "image/png", width: 1080, height: 1080, checksum: "b".repeat(64),
-      },
+    }));
+    const completion = { outputId: claim.outputId, workerId: "image-worker", jobs, assets, diagnostics };
+    await repository.completeVisualSession({
+      ...completion,
+      bodySha256: aiContentVisualSessionCompletionSha256(completion),
     });
-    await repository.appendEditorialDiagnostic({
-      jobId: job!.id, workerId: "deck-image-worker", leaseToken: job!.leaseToken, diagnostic,
-    });
-    await repository.appendEditorialDiagnostic({
-      jobId: job!.id, workerId: "deck-image-worker", leaseToken: job!.leaseToken, diagnostic,
-    });
-    expect((await db.query<{ count: number }>(
-      "select count(*)::integer count from audit_events where entity_id=$1 and event_type='ai_content_editorial_render_diagnostic'",
-      [job!.id],
-    )).rows[0]?.count).toBe(1);
-    await expect(repository.appendEditorialDiagnostic({
-      jobId: job!.id, workerId: "deck-image-worker", leaseToken: job!.leaseToken,
-      diagnostic: { ...diagnostic, actualToolArgumentsObservation: "observed", actualToolArgumentsSha256: null },
-    })).rejects.toThrow("ai_content_editorial_render_diagnostic_invalid");
-  });
+    return assets;
+  }
 
   it("binds supplemental blog research immutably to the current generate lease and output", async () => {
     const jobId = "50000000-0000-4000-8000-000000000001";
@@ -524,14 +409,7 @@ describe("AiContentRenderJobsRepository with postgres semantics", () => {
 
   it("requires final manifest PNG assets to match each successful render result in asset order", async () => {
     const { plan } = await enqueueCardDeck();
-    const rendered: AiContentRenderedAsset[] = [];
-    for (let index = 1; index <= 3; index += 1) {
-      const job = await repository.claim({ workerId: "image-worker", leaseSeconds: 180 });
-      const assetIndex = job!.assetIndex!;
-      const asset = { index: assetIndex, url: blobAssetUrl(assetIndex), storagePath: `ai-content/${ids.brand}/${ids.generation}/${ids.output}/assets/${String(assetIndex).padStart(2, "0")}.png`, mimeType: "image/png" as const, width: 1080, height: 1080, checksum: String(assetIndex).repeat(64) };
-      await repository.completeAsset({ jobId: job!.id, workerId: "image-worker", leaseToken: job!.leaseToken, jobKind: "image_asset", asset });
-      rendered.push(asset);
-    }
+    const rendered = await completeVisualSession("card_news");
     rendered.sort((left, right) => left.index - right.index);
     const finalizer = await repository.claim({ workerId: "finalizer", leaseSeconds: 180 });
     const manifest = {
@@ -717,14 +595,7 @@ describe("AiContentRenderJobsRepository with postgres semantics", () => {
 
   it("binds the final reel video to its exact deterministic canonical Blob URL", async () => {
     const { plan } = await enqueueReelStoryboard();
-    const rendered: AiContentRenderedAsset[] = [];
-    for (let index = 1; index <= 2; index += 1) {
-      const job = await repository.claim({ workerId: "image-worker", leaseSeconds: 180 });
-      const assetIndex = job!.assetIndex!;
-      const asset = { index: assetIndex, url: blobAssetUrl(assetIndex), storagePath: `ai-content/${ids.brand}/${ids.generation}/${ids.output}/assets/${String(assetIndex).padStart(2, "0")}.png`, mimeType: "image/png" as const, width: 1080, height: 1920, checksum: String(assetIndex).repeat(64) };
-      await repository.completeAsset({ jobId: job!.id, workerId: "image-worker", leaseToken: job!.leaseToken, jobKind: "image_asset", asset });
-      rendered.push(asset);
-    }
+    const rendered = await completeVisualSession("reel");
     rendered.sort((left, right) => left.index - right.index);
     const finalizer = await repository.claim({ workerId: "reel-finalizer", leaseSeconds: 180 });
     const video = { role: "video" as const, index: 1, url: blobVideoUrl, fileName: "reel.mp4", mimeType: "video/mp4" as const, width: 1080, height: 1920, durationSeconds: 8, videoCodec: "h264" as const, fps: 30 as const, audioCodec: null };

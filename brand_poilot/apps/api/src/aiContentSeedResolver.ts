@@ -1,9 +1,13 @@
 import { createHash } from "node:crypto";
+import {
+  parseResearchSourceAcquisitionV1,
+  type ResearchSourceAcquisitionV1,
+} from "@brand-pilot/content-contracts/research-source-acquisition";
 import type { ContentReferenceRoleV2, ContentSeedV2 } from "./aiContentContracts.js";
 import { crawlSourceUrl, isLikelyContentPage } from "./sourceCrawler.js";
 
 export type ResolvedAiContentSubjectV2 =
-  | { kind: "topic_text"; title: string }
+  | { kind: "topic_text"; title: string; researchSourceAcquisition: ResearchSourceAcquisitionV1 }
   | {
     kind: "topic_url";
     requestedUrl: string;
@@ -12,8 +16,9 @@ export type ResolvedAiContentSubjectV2 =
     text: string;
     contentHash: string;
     capturedAt: string;
+    researchSourceAcquisition: ResearchSourceAcquisitionV1;
   }
-  | { kind: "reference"; referenceIds: string[] };
+  | { kind: "reference"; referenceIds: string[]; researchSourceAcquisition: ResearchSourceAcquisitionV1 };
 
 const referenceRoles = new Set<ContentReferenceRoleV2>([
   "planning",
@@ -67,6 +72,19 @@ function normalizedSnapshotTitle(value: unknown): string | null {
 
 function publisherBlocked(error: unknown): boolean {
   return error instanceof Error && /^HTTP (?:402|403|429)$/.test(error.message);
+}
+
+function indeterminateCrawlerFailure(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  if (error.message === "crawl_url_unsafe_address" || /^HTTP \d{3}$/.test(error.message)) return false;
+  return true;
+}
+
+function acquisition(input: Omit<ResearchSourceAcquisitionV1, "contractVersion">): ResearchSourceAcquisitionV1 {
+  return parseResearchSourceAcquisitionV1({
+    contractVersion: "research-source-acquisition.v1",
+    ...input,
+  });
 }
 
 function urlTopicHint(value: string): string {
@@ -165,11 +183,31 @@ export async function resolveAiContentSeed(
     if (typeof seed.title !== "string") invalidSeed();
     const title = seed.title.trim();
     if (!title || title.length > 500) invalidSeed();
-    return { kind: "topic_text", title };
+    return {
+      kind: "topic_text",
+      title,
+      researchSourceAcquisition: acquisition({
+        status: "not_applicable",
+        requestedUrl: null,
+        canonicalUrl: null,
+        contentHash: null,
+        capturedAt: deps.now().toISOString(),
+      }),
+    };
   }
 
   if (seed.kind === "reference") {
-    return { kind: "reference", referenceIds: canonicalReferenceIds(seed) };
+    return {
+      kind: "reference",
+      referenceIds: canonicalReferenceIds(seed),
+      researchSourceAcquisition: acquisition({
+        status: "not_applicable",
+        requestedUrl: null,
+        canonicalUrl: null,
+        contentHash: null,
+        capturedAt: deps.now().toISOString(),
+      }),
+    };
   }
 
   if (seed.kind !== "topic_url") return invalidSeed();
@@ -180,17 +218,26 @@ export async function resolveAiContentSeed(
   try {
     snapshot = await deps.crawlUrl(requestedUrl);
   } catch (error) {
-    if (!publisherBlocked(error)) return resolutionFailed();
+    if (!publisherBlocked(error) && !indeterminateCrawlerFailure(error)) return resolutionFailed();
     const title = urlTopicHint(requestedUrl);
     const text = `원문 URL을 수집하지 못했습니다. 온라인 검색으로 확인할 주제: ${title}`;
+    const contentHash = createHash("sha256").update(text, "utf8").digest("hex");
+    const capturedAt = deps.now().toISOString();
     return {
       kind: "topic_url",
       requestedUrl,
       canonicalUrl: requestedUrl,
       title,
       text,
-      contentHash: createHash("sha256").update(text, "utf8").digest("hex"),
-      capturedAt: deps.now().toISOString(),
+      contentHash,
+      capturedAt,
+      researchSourceAcquisition: acquisition({
+        status: publisherBlocked(error) ? "access_failed" : "indeterminate",
+        requestedUrl,
+        canonicalUrl: requestedUrl,
+        contentHash,
+        capturedAt,
+      }),
     };
   }
 
@@ -198,6 +245,7 @@ export async function resolveAiContentSeed(
     const canonicalUrl = normalizedHttpUrl(snapshot?.finalUrl, resolutionFailed);
     let title = normalizedSnapshotTitle(snapshot?.title);
     let text = normalizedSnapshotText(snapshot?.text);
+    let acquisitionStatus: ResearchSourceAcquisitionV1["status"] = "complete_body";
     if (typeof snapshot?.rawText !== "string") return resolutionFailed();
     if (text === null) {
       if (title === null && boundedMetadataHint(snapshot.metaDescription, 1_000) === null) return resolutionFailed();
@@ -207,6 +255,7 @@ export async function resolveAiContentSeed(
         title,
         metaDescription: snapshot.metaDescription,
       });
+      acquisitionStatus = "metadata_only";
     } else if (
       !isLikelyContentPage(canonicalUrl, snapshot.rawText, { text }) ||
       hasAmbiguousArticleOnlyBody(snapshot.rawText, text)
@@ -217,6 +266,7 @@ export async function resolveAiContentSeed(
         title,
         metaDescription: snapshot.metaDescription,
       });
+      acquisitionStatus = "partial_body";
     }
     const contentHash = createHash("sha256").update(text, "utf8").digest("hex");
     const capturedAt = deps.now().toISOString();
@@ -228,6 +278,13 @@ export async function resolveAiContentSeed(
       text,
       contentHash,
       capturedAt,
+      researchSourceAcquisition: acquisition({
+        status: acquisitionStatus,
+        requestedUrl,
+        canonicalUrl,
+        contentHash,
+        capturedAt,
+      }),
     };
   } catch {
     return resolutionFailed();

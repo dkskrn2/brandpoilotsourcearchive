@@ -8,7 +8,7 @@ import {
   type RenderedInstagramPackage,
   type RenderedReelMedia
 } from "./worker.js";
-import type { AiContentImageAssetJob, AiContentPackageFinalizeJob } from "./aiContentRenderClient.js";
+import type { AiContentImageAssetJob, AiContentPackageFinalizeJob, AiContentVisualSessionLease } from "./aiContentRenderClient.js";
 import { createAiContentShutdownCoordinator } from "./aiContentShutdown.js";
 
 const hashtags = ["#one", "#two", "#three", "#four", "#five"];
@@ -433,15 +433,71 @@ function v3AssetJob(): AiContentImageAssetJob {
   };
 }
 
-function v3Client(claimed: AiContentImageAssetJob | AiContentPackageFinalizeJob | null = v3AssetJob()) {
+function visualBatch(outputFormat: "card_news" | "reel"): AiContentVisualSessionLease {
+  const scenes = [1, 2, 3, 4, 5].map((index) => ({
+    index,
+    editorialContext: { editorialRole: "detail", purpose: `Purpose ${index}`, coreMessage: `Core ${index}` },
+    lockedDisplay: { headline: `Headline ${index}`, relation: { type: "none" }, supportingTexts: [], footnote: null },
+    referenceBindings: { productImageAssetIds: [], avatarImageAssetIds: [] },
+  }));
+  const visualSession = {
+    contractVersion: "ai-content-visual-session.v1" as const,
+    outputFormat,
+    source: { contractVersion: outputFormat === "card_news" ? "card-manuscript-plan.v1" as const : "reel-storyboard.v1" as const, sha256: "a".repeat(64) },
+    narrative: "Narrative",
+    primaryMediumPolicy: { mode: "free_once" as const, styleReferenceIds: [] as string[] },
+    scenes,
+  };
+  return {
+    kind: "visual_session", outputId: v3id(30), outputFormat, visualSession,
+    jobs: scenes.map(({ index }) => ({
+      id: v3id(30 + index), generationId: v3id(2), outputId: v3id(30), workspaceId: v3id(4), brandId: v3id(5),
+      jobKind: "image_asset", assetIndex: index, leaseToken: `lease-${index}`, attemptCount: 1,
+      payload: {
+        contractVersion: "ai-content-visual-session-render-job.v1", jobKind: "image_asset", generationId: v3id(2), outputId: v3id(30),
+        imagePackage: { outputFormat }, assetIndex: index, assetKey: `${v3id(2)}:${index}`, storagePath: `assets/${index}.png`,
+        rendererPromptVersion: "image-visual-session.v1", visualSessionBinding: { sourceContractVersion: visualSession.source.contractVersion, sourceSha256: visualSession.source.sha256, sceneIndex: index },
+        contentGenerationInput: {}, contentPlan: {}, visualSession,
+      },
+    })),
+  } as AiContentVisualSessionLease;
+}
+
+function v3Client(claimed: AiContentImageAssetJob | AiContentPackageFinalizeJob | AiContentVisualSessionLease | null = v3AssetJob()) {
   return {
     claim: vi.fn(async () => claimed), heartbeat: vi.fn(async () => true), completeAsset: vi.fn(async () => undefined),
+    heartbeatBatch: vi.fn(async () => true), completeBatch: vi.fn(async () => undefined), failBatch: vi.fn(async () => undefined),
     appendRenderDiagnostic: vi.fn(async () => undefined),
     completePackage: vi.fn(async () => undefined), fail: vi.fn(async () => undefined),
   };
 }
 
 describe("V3 AI content render priority", () => {
+  it.each(["card_news", "reel"] as const)("records one %s Codex session and five image/upload timings", async (outputFormat) => {
+    const batch = visualBatch(outputFormat);
+    const aiContentClient = v3Client(batch);
+    const rendered = Object.assign(batch.jobs.map(({ assetIndex }) => ({
+      index: assetIndex, bytes: Buffer.from(`asset-${assetIndex}`), mimeType: "image/png" as const,
+      width: outputFormat === "card_news" ? 1080 : 1080, height: outputFormat === "card_news" ? 1080 : 1920,
+      checksum: "a".repeat(64),
+      renderDiagnostic: {
+        contractVersion: "ai-content-editorial-render-diagnostic.v1" as const, sourceContractVersion: batch.visualSession.source.contractVersion,
+        sourceSha256: batch.visualSession.source.sha256, sceneIndex: assetIndex, compiledPromptVersion: "image-visual-session.v1" as const,
+        compiledPromptSha256: "b".repeat(64), actualToolArgumentsObservation: "observed" as const, actualToolArgumentsSha256: "c".repeat(64),
+      },
+    })), { timing: { stageReferencesMs: 2, codexStartupMs: 3, sceneGenerationMs: [4, 5, 6, 7, 8] } });
+    const aiContentVisualRenderer = { renderSession: vi.fn(async () => rendered) };
+    const aiContentStorage = { uploadAsset: vi.fn(async (input: { index: number; path: string; width: number; height: number; checksum: string }) => ({ index: input.index, url: `https://blob/${input.index}.png`, storagePath: input.path, mimeType: "image/png" as const, width: input.width, height: input.height, checksum: input.checksum })) };
+    const onVisualSessionTiming = vi.fn();
+
+    await expect(runOnce({ workerId: "worker", aiContentClient, aiContentRenderer: { renderAsset: vi.fn() }, aiContentVisualRenderer, aiContentStorage, aiContentFinalizer: vi.fn(), onVisualSessionTiming, client: workerClient(), renderer: { renderJob: vi.fn() }, storage: { upload: vi.fn() } }))
+      .resolves.toEqual({ status: "completed", jobId: batch.outputId });
+    expect(aiContentVisualRenderer.renderSession).toHaveBeenCalledTimes(1);
+    expect(aiContentStorage.uploadAsset).toHaveBeenCalledTimes(5);
+    expect(aiContentClient.completeBatch).toHaveBeenCalledTimes(1);
+    expect(onVisualSessionTiming).toHaveBeenCalledWith(expect.objectContaining({ outputFormat, stageReferencesMs: 2, codexStartupMs: 3, sceneGenerationMs: [4, 5, 6, 7, 8], uploadMs: expect.any(Number), completeMs: expect.any(Number) }));
+  });
+
   it("falls through unchanged to the legacy image queue when V3 is empty", async () => {
     const aiContentClient = v3Client(null);
     const client = workerClient();
@@ -467,44 +523,6 @@ describe("V3 AI content render priority", () => {
     expect(aiContentStorage.uploadAsset).toHaveBeenCalledWith(expect.objectContaining({ path: expect.stringMatching(/\/assets\/02\.png$/), index: 2 }));
     expect(aiContentClient.completeAsset).toHaveBeenCalledWith(expect.objectContaining({ id: v3id(1) }), "worker", expect.objectContaining({ index: 2 }));
     expect(client.claim).not.toHaveBeenCalled();
-  });
-
-  it("keeps a completed editorial asset successful when private diagnostic append fails", async () => {
-    const job = v3AssetJob() as any;
-    job.payload.contractVersion = "ai-content-card-deck-render-job.v1";
-    const aiContentClient = v3Client(job);
-    aiContentClient.appendRenderDiagnostic.mockRejectedValueOnce(new Error("diagnostic unavailable"));
-    const renderDiagnostic = {
-      contractVersion: "ai-content-editorial-render-diagnostic.v1" as const,
-      sourceContractVersion: "card-deck-editorial-plan.v1" as const,
-      sourceSha256: "a".repeat(64),
-      sceneIndex: 2,
-      compiledPromptVersion: "image-card-deck.v1" as const,
-      compiledPromptSha256: "b".repeat(64),
-      actualToolArgumentsObservation: "not_emitted_by_runner" as const,
-      actualToolArgumentsSha256: null,
-    };
-    const rendered = {
-      index: 2, bytes: Buffer.from("asset-2"), mimeType: "image/png" as const,
-      width: 1080, height: 1080, checksum: "a".repeat(64), renderDiagnostic,
-    };
-    const uploaded = {
-      index: 2, url: "https://blob.example/02.png", storagePath: job.payload.storagePath,
-      mimeType: "image/png" as const, width: 1080, height: 1080, checksum: "a".repeat(64),
-    };
-
-    await expect(runOnce({
-      workerId: "worker",
-      aiContentClient,
-      aiContentRenderer: { renderAsset: vi.fn(async () => rendered) },
-      aiContentStorage: { uploadAsset: vi.fn(async () => uploaded) },
-      aiContentFinalizer: vi.fn(),
-      client: workerClient(), renderer: { renderJob: vi.fn() }, storage: { upload: vi.fn() },
-    })).resolves.toEqual({ status: "completed", jobId: job.id });
-
-    expect(aiContentClient.completeAsset).toHaveBeenCalledTimes(1);
-    expect(aiContentClient.appendRenderDiagnostic).toHaveBeenCalledWith(job, "worker", renderDiagnostic);
-    expect(aiContentClient.fail).not.toHaveBeenCalled();
   });
 
   it("isolates V3 failure from legacy job state", async () => {

@@ -33,13 +33,98 @@ function unexpectedCrawler() {
 const clock = { now: () => new Date(capturedAt) };
 
 describe("resolveAiContentSeed", () => {
+  it("marks non-URL seeds as not applicable research acquisition", async () => {
+    const result = await resolveAiContentSeed(
+      { kind: "topic_text", title: "A useful topic" },
+      { crawlUrl: unexpectedCrawler(), ...clock },
+    );
+
+    expect(result.researchSourceAcquisition).toEqual({
+      contractVersion: "research-source-acquisition.v1",
+      status: "not_applicable",
+      requestedUrl: null,
+      canonicalUrl: null,
+      contentHash: null,
+      capturedAt,
+    });
+  });
+
+  it("marks a trusted article body as complete", async () => {
+    const result = await resolveAiContentSeed(
+      { kind: "topic_url", url: "https://example.com/articles/source" },
+      { crawlUrl: vi.fn(async () => crawledSnapshot({
+        finalUrl: "https://example.com/articles/source",
+        text: "Trusted source article with detailed evidence. ".repeat(12).trim(),
+        rawText: `<html><body><main><article>${"Trusted source article with detailed evidence. ".repeat(12)}</article></main></body></html>`,
+      })), ...clock },
+    );
+
+    expect(result.researchSourceAcquisition).toMatchObject({
+      status: "complete_body",
+      requestedUrl: "https://example.com/articles/source",
+      canonicalUrl: "https://example.com/articles/source",
+      contentHash: result.kind === "topic_url" ? result.contentHash : null,
+    });
+  });
+
+  it("distinguishes partial content, metadata fallback and publisher denial", async () => {
+    const partial = await resolveAiContentSeed(
+      { kind: "topic_url", url: "https://example.com/partial" },
+      { crawlUrl: vi.fn(async () => crawledSnapshot({
+        finalUrl: "https://example.com/partial",
+        text: "Untrusted recommendation copy ".repeat(8).trim(),
+        rawText: "<article>First recommendation</article><article>Second recommendation</article>",
+      })), ...clock },
+    );
+    const metadata = await resolveAiContentSeed(
+      { kind: "topic_url", url: "https://example.com/metadata" },
+      { crawlUrl: vi.fn(async () => crawledSnapshot({
+        finalUrl: "https://example.com/metadata",
+        text: " ",
+        rawText: "<main id=\"app\"></main>",
+        metaDescription: "Metadata only source",
+      })), ...clock },
+    );
+    const blocked = await resolveAiContentSeed(
+      { kind: "topic_url", url: "https://example.com/blocked" },
+      { crawlUrl: vi.fn(async () => { throw new Error("HTTP 403"); }), ...clock },
+    );
+
+    expect(partial.researchSourceAcquisition.status).toBe("partial_body");
+    expect(metadata.researchSourceAcquisition.status).toBe("metadata_only");
+    expect(blocked.researchSourceAcquisition.status).toBe("access_failed");
+  });
+
+  it("preserves a bounded topic hint and marks an ordinary transport failure indeterminate", async () => {
+    const result = await resolveAiContentSeed(
+      { kind: "topic_url", url: "https://example.com/research/source-topic" },
+      { crawlUrl: vi.fn(async () => { throw new Error("crawl_request_timeout"); }), ...clock },
+    );
+
+    expect(result).toMatchObject({
+      kind: "topic_url",
+      researchSourceAcquisition: { status: "indeterminate" },
+    });
+  });
+
   it("normalizes a topic text seed without crawling", async () => {
     const crawlUrl = unexpectedCrawler();
 
     await expect(resolveAiContentSeed(
       { kind: "topic_text", title: "  A useful\n topic  " },
       { crawlUrl, ...clock },
-    )).resolves.toEqual({ kind: "topic_text", title: "A useful\n topic" });
+    )).resolves.toEqual({
+      kind: "topic_text",
+      title: "A useful\n topic",
+      researchSourceAcquisition: {
+        contractVersion: "research-source-acquisition.v1",
+        status: "not_applicable",
+        requestedUrl: null,
+        canonicalUrl: null,
+        contentHash: null,
+        capturedAt,
+      },
+    });
     expect(crawlUrl).not.toHaveBeenCalled();
   });
 
@@ -55,6 +140,14 @@ describe("resolveAiContentSeed", () => {
     }, { crawlUrl, ...clock })).resolves.toEqual({
       kind: "reference",
       referenceIds: [firstReferenceId, secondReferenceId.toLowerCase()],
+      researchSourceAcquisition: {
+        contractVersion: "research-source-acquisition.v1",
+        status: "not_applicable",
+        requestedUrl: null,
+        canonicalUrl: null,
+        contentHash: null,
+        capturedAt,
+      },
     });
     expect(crawlUrl).not.toHaveBeenCalled();
   });
@@ -86,6 +179,14 @@ describe("resolveAiContentSeed", () => {
       text: normalizedBody,
       contentHash: createHash("sha256").update(normalizedBody, "utf8").digest("hex"),
       capturedAt,
+      researchSourceAcquisition: {
+        contractVersion: "research-source-acquisition.v1",
+        status: "complete_body",
+        requestedUrl: "https://example.com/start?keep=2",
+        canonicalUrl: "https://www.example.com/final?keep=1",
+        contentHash: createHash("sha256").update(normalizedBody, "utf8").digest("hex"),
+        capturedAt,
+      },
     });
     expect(Object.keys(result)).toEqual([
       "kind",
@@ -95,6 +196,7 @@ describe("resolveAiContentSeed", () => {
       "text",
       "contentHash",
       "capturedAt",
+      "researchSourceAcquisition",
     ]);
   });
 
@@ -344,6 +446,14 @@ describe("resolveAiContentSeed", () => {
       text: fallbackText,
       contentHash: createHash("sha256").update(fallbackText, "utf8").digest("hex"),
       capturedAt,
+      researchSourceAcquisition: {
+        contractVersion: "research-source-acquisition.v1",
+        status: "access_failed",
+        requestedUrl: url,
+        canonicalUrl: url,
+        contentHash: createHash("sha256").update(fallbackText, "utf8").digest("hex"),
+        capturedAt,
+      },
     });
     expect(crawlUrl).toHaveBeenCalledOnce();
   });
@@ -357,18 +467,31 @@ describe("resolveAiContentSeed", () => {
     )).rejects.toThrow("ai_content_seed_resolution_failed");
   });
 
-  it.each([
-    "crawl_request_timeout",
-    "crawl_response_too_large",
-    "crawl_url_unsafe_address",
-    "unexpected transport details",
-  ])("maps crawler failure %s to one stable resolver error without fallback", async (message) => {
+  it("keeps an unsafe-address crawler failure terminal", async () => {
+    const message = "crawl_url_unsafe_address";
     const crawlUrl = vi.fn(async () => { throw new Error(message); }) as unknown as typeof crawlSourceUrl;
 
     await expect(resolveAiContentSeed(
       { kind: "topic_url", url: "https://example.com/article" },
       { crawlUrl, ...clock },
     )).rejects.toThrow("ai_content_seed_resolution_failed");
+    expect(crawlUrl).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    "crawl_request_timeout",
+    "crawl_response_too_large",
+    "unexpected transport details",
+  ])("marks crawler failure %s indeterminate for audited supplemental research", async (message) => {
+    const crawlUrl = vi.fn(async () => { throw new Error(message); }) as unknown as typeof crawlSourceUrl;
+
+    await expect(resolveAiContentSeed(
+      { kind: "topic_url", url: "https://example.com/article" },
+      { crawlUrl, ...clock },
+    )).resolves.toMatchObject({
+      kind: "topic_url",
+      researchSourceAcquisition: { status: "indeterminate" },
+    });
     expect(crawlUrl).toHaveBeenCalledTimes(1);
   });
 

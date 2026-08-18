@@ -29,6 +29,14 @@ const id = {
 } as const;
 const HASH = "a".repeat(64);
 const NOW = "2026-08-06T00:00:00.000Z";
+const researchSourceAcquisition = {
+  contractVersion: "research-source-acquisition.v1",
+  status: "not_applicable",
+  requestedUrl: null,
+  canonicalUrl: null,
+  contentHash: null,
+  capturedAt: NOW,
+};
 
 const brandCore = {
   versionId: id.core, companyOverview: "개요", businessDescription: "설명",
@@ -149,7 +157,7 @@ function harness(options: {
       }
       if (sql.startsWith("update ai_content_generations")) return { rows: [{ ...generation, status: "queued", operation_id: id.operation, generation_input_snapshot: frozenInput, attachments_locked_at: NOW }], rowCount: 1 };
       if (sql.includes("from ai_content_generations")) return { rows: [generation], rowCount: 1 };
-      if (sql.includes("from ai_content_proposal_batches")) return { rows: [{ id: id.batch, workspace_id: id.workspace, brand_id: id.brand, status: "ready", purpose: "informational", input_snapshot_json: { baseInput, replayFingerprint: HASH, resumeInput: { contractVersion: "content-orchestration.v2", brandId: id.brand, purpose: "informational", seed: { kind: "topic_text", title: "주제" }, contentInstruction: null, productId: null, outputSettings: { outputFormat: "reel", channelTargets: ["instagram"], aspectRatio: "9:16", outputCount: 1 } } }, request_json: {} }], rowCount: 1 };
+      if (sql.includes("from ai_content_proposal_batches")) return { rows: [{ id: id.batch, workspace_id: id.workspace, brand_id: id.brand, status: "ready", purpose: "informational", input_snapshot_json: { baseInput, replayFingerprint: HASH, researchSourceAcquisition, resumeInput: { contractVersion: "content-orchestration.v2", brandId: id.brand, purpose: "informational", seed: { kind: "topic_text", title: "주제" }, contentInstruction: null, productId: null, outputSettings: { outputFormat: "reel", channelTargets: ["instagram"], aspectRatio: "9:16", outputCount: 1 } } }, request_json: {} }], rowCount: 1 };
       if (sql.includes("from ai_content_proposals") && sql.includes("for update")) return { rows: [{ id: id.proposal, batch_id: id.batch, workspace_id: id.workspace, brand_id: id.brand, status: "selected", generation_id: id.generation, proposal_json: selectedProposal, successful_model_attempt_id: id.attempt, successful_proposal_job_id: id.job, final_invocation_ordinal: 1 }], rowCount: 1 };
       if (sql.includes("from ai_content_generation_operations")) {
         return options.replay ? { rows: [{ id: id.operation, workspace_id: id.workspace, brand_id: id.brand, generation_id: options.operationGenerationId ?? id.generation, request_fingerprint_sha256: options.operationFingerprint ?? proposalSha256({ generationId: id.generation, contractVersion: "content-generation-start.v2", workspaceId: id.workspace, brandId: id.brand, proposalBatchId: id.batch, proposalId: id.proposal, outputFormat: "reel", purpose: "informational", finalization, manualVisualSelection: frozenManualVisualSelection }), status: "started" }], rowCount: 1 } : { rows: [], rowCount: 0 };

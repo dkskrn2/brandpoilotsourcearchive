@@ -6,8 +6,8 @@ const formats = Object.freeze([
   {
     format: "card-news",
     worker: "brand-pilot-card-news-worker",
-    runner: "run-codex-card-deck-plan.mjs",
-    schema: "card-deck-editorial-plan-v1.schema.json",
+    runner: "run-codex-card-manuscript-plan.mjs",
+    schema: "card-manuscript-plan-v1.schema.json",
   },
   {
     format: "blog",

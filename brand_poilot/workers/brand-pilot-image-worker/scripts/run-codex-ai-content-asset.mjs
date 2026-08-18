@@ -1,12 +1,14 @@
 import { spawn } from "node:child_process";
-import { copyFile, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { buildImageWorkerChildEnvironment, resolveGeneratedImagesDirectory } from "../dist/childEnvironment.mjs";
 import { buildCodexExecArguments, resolveCodexInvocation } from "../dist/codexCommand.mjs";
 import { findGeneratedImages, parseCodexFinalMessage, parseCodexThreadId, resolveCodexGeneratedImagesDirectory } from "../dist/codexImageOutput.mjs";
+import { assertCompleteVisualSessionImageAudit } from "./visualSessionImageAudit.mjs";
 import { forwardParentTermination } from "../dist/processTermination.mjs";
 import { parseAiContentAssetRenderResult, parseAiContentAssetRunnerJob } from "../dist/aiContentAssetRunnerContract.js";
+import { parseAiContentVisualSessionRunnerJob, parseAiContentVisualSessionRunnerResult } from "../dist/aiContentVisualSessionRunnerContract.js";
 
 function argument(name) {
   const index = process.argv.indexOf(name);
@@ -17,10 +19,13 @@ function argument(name) {
 
 async function main() {
   const jobFile = argument("--job");
-  const outputFile = path.resolve(argument("--output"));
+  const outputTarget = path.resolve(argument("--output"));
   const workspaceDir = path.resolve(argument("--workspace"));
   const diagnosticFile = path.resolve(argument("--diagnostic"));
-  const job = parseAiContentAssetRunnerJob(JSON.parse(await readFile(jobFile, "utf8")));
+  const rawJob = JSON.parse(await readFile(jobFile, "utf8"));
+  const visualSession = rawJob?.contractVersion === "ai-content-visual-session-render.v1";
+  const job = visualSession ? parseAiContentVisualSessionRunnerJob(rawJob) : parseAiContentAssetRunnerJob(rawJob);
+  const expectedCount = visualSession ? job.expectedSceneIndices.length : 1;
   await Promise.all([
     readFile(path.join(workspaceDir, "AGENTS.md"), "utf8"),
     readFile(path.join(workspaceDir, ".codex", "skills", "image-render", "SKILL.md"), "utf8"),
@@ -30,10 +35,12 @@ async function main() {
   const imagegenOutputDir = resolveCodexGeneratedImagesDirectory({ generatedImagesDirectory, codexHome: process.env.CODEX_HOME, homeDir: os.homedir() });
   await mkdir(imagegenOutputDir, { recursive: true });
   const codex = resolveCodexInvocation();
-  const codexArgs = buildCodexExecArguments({ rootDir: workspaceDir });
+  const codexArgs = buildCodexExecArguments({ rootDir: workspaceDir, enableHooks: visualSession });
   if (!codexArgs.includes("image_generation") || !codexArgs.includes("permissions.worker.network.enabled=false")) throw new Error("ai_content_asset_codex_permissions_invalid");
+  if (visualSession && (!codexArgs.includes("codex_hooks") || !codexArgs.includes("--dangerously-bypass-hook-trust"))) throw new Error("ai_content_visual_session_hook_config_invalid");
   let ownedSessionId = null;
   try {
+    const codexStartedAtMs = Date.now();
     const result = await new Promise((resolve, reject) => {
       let sessionId = null;
       let finalMessage = null;
@@ -71,18 +78,38 @@ async function main() {
       child.stdin.end(job.prompt, "utf8");
     });
     try {
-      parseAiContentAssetRenderResult(JSON.parse(result.finalMessage), job);
+      if (visualSession) parseAiContentVisualSessionRunnerResult(JSON.parse(result.finalMessage), job);
+      else parseAiContentAssetRenderResult(JSON.parse(result.finalMessage), job);
     } catch {
       throw new Error("ai_content_asset_final_message_invalid");
     }
-    const generated = await findGeneratedImages({ directory: imagegenOutputDir, threadId: result.sessionId, maxImages: 1, selectedAssetCount: 1 });
-    if (generated.length !== 1) throw new Error("codex_image_output_count_mismatch");
-    await mkdir(path.dirname(outputFile), { recursive: true });
-    await copyFile(generated[0], outputFile);
+    let generated;
+    let visualCalls = null;
+    if (visualSession) {
+      const rawAudit = JSON.parse(await readFile(path.join(workspaceDir, "visual-session-hook-audit.json"), "utf8"));
+      visualCalls = assertCompleteVisualSessionImageAudit(rawAudit);
+      const sessionDirectory = path.join(imagegenOutputDir, result.sessionId);
+      const entries = await readdir(sessionDirectory, { withFileTypes: true }).catch(() => { throw new Error("codex_image_output_missing"); });
+      const pngNames = entries.filter((entry) => entry.isFile() && entry.name.toLowerCase().endsWith(".png")).map(({ name }) => name).sort();
+      const expectedNames = visualCalls.map(({ toolUseId }) => `${toolUseId}.png`).sort();
+      if (JSON.stringify(pngNames) !== JSON.stringify(expectedNames)) throw new Error("codex_image_output_binding_invalid");
+      generated = visualCalls.map(({ toolUseId }) => path.join(sessionDirectory, `${toolUseId}.png`));
+      await mkdir(outputTarget, { recursive: true });
+      for (const [offset, generatedFile] of generated.entries()) {
+        await copyFile(generatedFile, path.join(outputTarget, `scene-${String(offset + 1).padStart(2, "0")}.png`));
+      }
+    } else {
+      generated = await findGeneratedImages({ directory: imagegenOutputDir, threadId: result.sessionId, maxImages: expectedCount, selectedAssetCount: expectedCount });
+      await mkdir(path.dirname(outputTarget), { recursive: true });
+      await copyFile(generated[0], outputTarget);
+    }
     await writeFile(diagnosticFile, JSON.stringify({
       contractVersion: "ai-content-editorial-tool-observation.v1",
-      observation: "not_emitted_by_runner",
-      actualToolArguments: null,
+      observation: visualSession ? "observed" : "not_emitted_by_runner",
+      actualToolArguments: visualSession ? visualCalls.map(({ arguments: toolArguments }) => toolArguments) : null,
+      firstToolStartedAtMs: visualSession ? visualCalls[0].startedAtMs : null,
+      codexStartupMs: visualSession ? Math.max(0, visualCalls[0].startedAtMs - codexStartedAtMs) : null,
+      sceneGenerationMs: visualSession ? visualCalls.map(({ durationMs }) => durationMs) : null,
     }), "utf8");
   } finally {
     if (ownedSessionId && /^[a-zA-Z0-9_-]+$/.test(ownedSessionId)) {

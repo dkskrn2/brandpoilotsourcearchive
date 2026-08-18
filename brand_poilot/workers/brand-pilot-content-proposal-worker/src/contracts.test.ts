@@ -22,6 +22,14 @@ describe("Proposal V2 claim contract", () => {
     expect(parseContentProposalJob(input)).toEqual(input);
   });
 
+  it("rejects a malformed acquisition sidecar before research", () => {
+    const input = researchJob();
+    expect(() => parseContentProposalJob({
+      ...input,
+      researchSourceAcquisition: { ...input.researchSourceAcquisition, status: "unknown" },
+    })).toThrow("content_proposal_job_invalid");
+  });
+
   it("accepts the closed composition claim and rejects V1 or mixed-arm fields", () => {
     const input = compositionJob();
     expect(isContentProposalCompositionJob(parseContentProposalJob(input))).toBe(true);
