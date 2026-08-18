@@ -516,6 +516,32 @@ complete and the user has approved its results. The experiment uses isolated fil
 and image runs; it does not mutate the production contract, queue, database schema, active worker
 configuration, or customer-visible result.
 
+### Deferred Production Research design candidate
+
+TEST 0 showed that the current source-level evidence model can compress several independent claims
+from one article into one `claimSummary`. The following is a design candidate only. It records the
+Research boundary that must be reviewed separately after the manuscript experiments and does not
+authorize a Production Research contract or worker change:
+
+- one Evidence item represents one independently usable Claim, not one source URL;
+- multiple Evidence items may share the same normalized source URL when their claims are distinct;
+- acquisition must pass a machine-readable completeness result from the source collector into the
+  Research decision, rather than exposing only the title and URL;
+- completeness must distinguish at least complete body, partial body, metadata only, access failure,
+  and indeterminate acquisition;
+- partial, metadata-only, failed, or indeterminate acquisition triggers supplemental public research
+  unless a separately approved policy proves the available source material sufficient;
+- source deduplication remains available for network acquisition and citation display, but it must
+  not collapse distinct claims after extraction;
+- the Evidence limit is defined and enforced as a claim limit, with a separate source-fetch limit if
+  one is operationally required;
+- the frozen result must retain enough source identity and acquisition provenance to audit which
+  claims came from direct body reading and which came from supplemental research.
+
+No field names, schema version, maximums, migration, rollout, or compatibility behavior for this
+candidate are approved yet. The existing Production `research-evidence.v1` remains unchanged during
+TEST 1 and TEST 2.
+
 ### TEST 0 — inspect the actual Evidence Pool
 
 For the chosen existing production generation:
