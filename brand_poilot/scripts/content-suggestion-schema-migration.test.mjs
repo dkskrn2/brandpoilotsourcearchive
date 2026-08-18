@@ -4,7 +4,7 @@ import test from "node:test";
 import { Client } from "pg";
 import * as migrationRunner from "./migrationRunner.mjs";
 
-test("post-cutover schemas 077 through 082 are an ordered sealed schema plan", async () => {
+test("post-cutover schemas 077 through 083 are an ordered sealed schema plan", async () => {
   const migrations = await migrationRunner.loadMigrations();
   const migration077 = migrations.find(({ id }) => id === "077_content_suggestion_batches.sql");
   const migration078 = migrations.find(({ id }) => id === "078_faq_utterance_matching.sql");
@@ -12,20 +12,23 @@ test("post-cutover schemas 077 through 082 are an ordered sealed schema plan", a
   const migration080 = migrations.find(({ id }) => id === "080_reference_channel_archive.sql");
   const migration081 = migrations.find(({ id }) => id === "081_meta_ad_library_references.sql");
   const migration082 = migrations.find(({ id }) => id === "082_manual_brand_visual_assets.sql");
+  const migration083 = migrations.find(({ id }) => id === "083_manual_visual_selection_write_fence_invoker.sql");
   assert.ok(migration077);
   assert.ok(migration078);
   assert.ok(migration079);
   assert.ok(migration080);
   assert.ok(migration081);
   assert.ok(migration082);
+  assert.ok(migration083);
   assert.equal(migrationRunner.validatePost075SchemaMigration(migration077), true);
   assert.equal(migrationRunner.validatePost075SchemaMigration(migration078), true);
   assert.equal(migrationRunner.validatePost075SchemaMigration(migration079), true);
   assert.equal(migrationRunner.validatePost075SchemaMigration(migration080), true);
   assert.equal(migrationRunner.validatePost075SchemaMigration(migration081), true);
   assert.equal(migrationRunner.validatePost075SchemaMigration(migration082), true);
+  assert.equal(migrationRunner.validatePost075SchemaMigration(migration083), true);
 
-  const pendingMigrations = [migration077, migration078, migration079, migration080, migration081, migration082];
+  const pendingMigrations = [migration077, migration078, migration079, migration080, migration081, migration082, migration083];
 
   const history = migrations
     .filter(({ id }) => !pendingMigrations.some((migration) => migration.id === id))
@@ -123,13 +126,15 @@ test("content suggestion schema runner accepts the exact managed provider sessio
   const migration080 = migrations.find(({ id }) => id === "080_reference_channel_archive.sql");
   const migration081 = migrations.find(({ id }) => id === "081_meta_ad_library_references.sql");
   const migration082 = migrations.find(({ id }) => id === "082_manual_brand_visual_assets.sql");
+  const migration083 = migrations.find(({ id }) => id === "083_manual_visual_selection_write_fence_invoker.sql");
   assert.ok(migration077);
   assert.ok(migration078);
   assert.ok(migration079);
   assert.ok(migration080);
   assert.ok(migration081);
   assert.ok(migration082);
-  const pendingMigrations = [migration077, migration078, migration079, migration080, migration081, migration082];
+  assert.ok(migration083);
+  const pendingMigrations = [migration077, migration078, migration079, migration080, migration081, migration082, migration083];
   const history = migrations
     .filter(({ id }) => !pendingMigrations.some((migration) => migration.id === id))
     .map(({ id, checksum }) => ({ id, checksum }));
@@ -250,7 +255,9 @@ test("content suggestion schema runner accepts the exact managed provider sessio
           app_product_asset_role_update: true,
           app_product_asset_position_update: true,
           app_product_asset_storage_update: false,
+          app_writable_assert_execute: true,
           selection_fence_enabled: "A",
+          selection_fence_security_definer: false,
           selection_fence_owner: "content_schema_owner",
           public_preset_privilege: false,
           public_reference_privilege: false,
@@ -318,13 +325,15 @@ test("content suggestion schema runner rejects a non-normal DDL guard before mut
   const migration080 = migrations.find(({ id }) => id === "080_reference_channel_archive.sql");
   const migration081 = migrations.find(({ id }) => id === "081_meta_ad_library_references.sql");
   const migration082 = migrations.find(({ id }) => id === "082_manual_brand_visual_assets.sql");
+  const migration083 = migrations.find(({ id }) => id === "083_manual_visual_selection_write_fence_invoker.sql");
   assert.ok(migration077);
   assert.ok(migration078);
   assert.ok(migration079);
   assert.ok(migration080);
   assert.ok(migration081);
   assert.ok(migration082);
-  const pendingMigrations = [migration077, migration078, migration079, migration080, migration081, migration082];
+  assert.ok(migration083);
+  const pendingMigrations = [migration077, migration078, migration079, migration080, migration081, migration082, migration083];
   const history = migrations
     .filter(({ id }) => !pendingMigrations.some((migration) => migration.id === id))
     .map(({ id, checksum }) => ({ id, checksum }));
@@ -363,7 +372,7 @@ test("content suggestion schema runner rejects a non-normal DDL guard before mut
   assert.equal(calls.includes("begin"), false);
 });
 
-test("ordered 077 through 082 schemas apply and replay against PostgreSQL 16", {
+test("ordered 077 through 083 schemas apply and replay against PostgreSQL 16", {
   skip: process.env.RUN_FAQ_SCHEMA_POSTGRES_INTEGRATION !== "1",
   timeout: 300_000,
 }, async () => {
@@ -417,6 +426,7 @@ test("ordered 077 through 082 schemas apply and replay against PostgreSQL 16", {
       "080_reference_channel_archive.sql",
       "081_meta_ad_library_references.sql",
       "082_manual_brand_visual_assets.sql",
+      "083_manual_visual_selection_write_fence_invoker.sql",
     ]);
     const topicScope = await client.query(
       `select relation.relname as relation_name,constraint_row.conname,
