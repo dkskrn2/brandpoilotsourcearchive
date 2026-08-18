@@ -365,6 +365,13 @@ read-only local files. They bypass the manuscript planner and are visible direct
 If no approved style image exists, the image model designs freely within the existing explicit user
 direction and brand rules.
 
+User attachments remain exactly on the current manual-generation path. The existing
+`product_image`, `visual_reference`, and `supporting_image` roles, upload/freeze contract, ownership and
+checksum validation, attachment index, and read-only local staging are unchanged. Every selected
+attachment continues to be provided to every manual card render as an optional visual reference. The
+manuscript does not select, filter, require, or allocate attachments per scene, and this project adds no
+new attachment field, fallback, or mandatory-use rule.
+
 ## Private contract and schema changes
 
 ### Content contracts
@@ -617,6 +624,7 @@ cutover.
 - no global visual system, visual thesis, or layout archetype is present;
 - approved brand-style images are staged and referenced exactly as existing frozen assets;
 - product, avatar, attachment, and explicit user direction behavior remains unchanged;
+- all current manual attachments remain available to every scene without manuscript-side filtering;
 - page-number instruction remains generation-only and triggers no OCR or retry.
 
 ### Regression and release checks
