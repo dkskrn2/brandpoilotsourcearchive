@@ -18,6 +18,10 @@ function argument(name) {
   return value;
 }
 
+function commandArgument(value) {
+  return `"${value.replaceAll('"', '\\"')}"`;
+}
+
 async function main() {
   const jobFile = argument("--job");
   const outputTarget = path.resolve(argument("--output"));
@@ -36,9 +40,13 @@ async function main() {
   const imagegenOutputDir = resolveCodexGeneratedImagesDirectory({ generatedImagesDirectory, codexHome: process.env.CODEX_HOME, homeDir: os.homedir() });
   await mkdir(imagegenOutputDir, { recursive: true });
   const codex = resolveCodexInvocation();
-  const codexArgs = buildCodexExecArguments({ rootDir: workspaceDir, enableHooks: visualSession });
+  const visualSessionHookCommand = `${commandArgument(process.execPath)} ${commandArgument(fileURLToPath(new URL("./audit-codex-visual-session-image.mjs", import.meta.url)))}`;
+  const codexArgs = buildCodexExecArguments({ rootDir: workspaceDir, hookCommand: visualSession ? visualSessionHookCommand : undefined });
   if (!codexArgs.includes("image_generation") || !codexArgs.includes("permissions.worker.network.enabled=false")) throw new Error("ai_content_asset_codex_permissions_invalid");
-  if (visualSession && (!codexArgs.includes("codex_hooks") || !codexArgs.includes("--dangerously-bypass-hook-trust"))) throw new Error("ai_content_visual_session_hook_config_invalid");
+  if (visualSession && (!codexArgs.includes("hooks")
+    || !codexArgs.includes("--dangerously-bypass-hook-trust")
+    || !codexArgs.some((value) => value.startsWith("hooks.PreToolUse="))
+    || !codexArgs.some((value) => value.startsWith("hooks.PostToolUse=")))) throw new Error("ai_content_visual_session_hook_config_invalid");
   let ownedSessionId = null;
   try {
     const codexStartedAtMs = Date.now();
@@ -96,7 +104,12 @@ async function main() {
     let generated;
     let visualCalls = null;
     if (visualSession) {
-      const rawAudit = JSON.parse(await readFile(path.join(workspaceDir, "visual-session-hook-audit.json"), "utf8"));
+      const rawAuditSource = await readFile(path.join(workspaceDir, "visual-session-hook-audit.json"), "utf8")
+        .catch((error) => {
+          if (error && typeof error === "object" && error.code === "ENOENT") throw new Error("ai_content_visual_session_hook_audit_missing");
+          throw error;
+        });
+      const rawAudit = JSON.parse(rawAuditSource);
       visualCalls = assertCompleteVisualSessionImageAudit(rawAudit);
       const sessionDirectory = path.join(imagegenOutputDir, result.sessionId);
       const entries = await readdir(sessionDirectory, { withFileTypes: true }).catch(() => { throw new Error("codex_image_output_missing"); });

@@ -38,7 +38,6 @@ function hash(bytes: Buffer): string { return createHash("sha256").update(bytes)
 function extension(mime: string): string { return mime === "image/jpeg" ? ".jpg" : mime === "image/webp" ? ".webp" : ".png"; }
 async function readonly(file: string): Promise<void> { await chmod(file, 0o444); }
 async function writeJson(file: string, value: unknown): Promise<void> { await writeFile(file, `${JSON.stringify(value, null, 2)}\n`, { encoding: "utf8", mode: 0o444 }); await readonly(file); }
-function commandArgument(value: string): string { return `"${value.replaceAll('"', '\\"')}"`; }
 
 function safeVisualSessionDiagnosticCode(error: unknown): string | undefined {
   const record = typeof error === "object" && error !== null ? error as Record<string, unknown> : {};
@@ -51,17 +50,6 @@ function safeVisualSessionDiagnosticCode(error: unknown): string | undefined {
     "codex_ai_content_asset_failed",
   ]);
   return matches ? [...matches].reverse().find((code) => !generic.has(code)) ?? matches.at(-1) : undefined;
-}
-
-function visualSessionHooks(workerRoot: string) {
-  const command = `${commandArgument(process.execPath)} ${commandArgument(path.join(workerRoot, "scripts", "audit-codex-visual-session-image.mjs"))}`;
-  const handler = { type: "command", command, timeout: 10 };
-  return {
-    hooks: {
-      PreToolUse: [{ matcher: ".*", hooks: [handler] }],
-      PostToolUse: [{ matcher: ".*", hooks: [handler] }],
-    },
-  };
 }
 
 async function normalize(bytes: Buffer, format: "card_news" | "reel") {
@@ -120,11 +108,10 @@ export function createAiContentVisualSessionRenderer(input: {
         const inputDir = path.join(workspaceDir, "inputs");
         const outputDir = path.join(workDir, "output");
         const skillDir = path.join(workspaceDir, ".codex", "skills", "image-render");
-        const codexDir = path.join(workspaceDir, ".codex");
         await Promise.all([mkdir(inputDir, { recursive: true }), mkdir(outputDir, { recursive: true }), mkdir(skillDir, { recursive: true })]);
         const agents = path.join(workspaceDir, "AGENTS.md"); const skill = path.join(skillDir, "SKILL.md");
         await Promise.all([copyFile(path.join(input.workerRoot, "AGENTS.md"), agents), copyFile(path.join(input.workerRoot, ".codex", "skills", "image-render", "SKILL.md"), skill)]);
-        await Promise.all([readonly(agents), readonly(skill), writeJson(path.join(codexDir, "hooks.json"), visualSessionHooks(input.workerRoot)), writeJson(path.join(inputDir, "visual-session.json"), batch.visualSession), writeJson(path.join(inputDir, "content-generation-input.json"), batch.jobs[0]!.payload.contentGenerationInput), writeJson(path.join(inputDir, "content-plan.json"), batch.jobs[0]!.payload.contentPlan)]);
+        await Promise.all([readonly(agents), readonly(skill), writeJson(path.join(inputDir, "visual-session.json"), batch.visualSession), writeJson(path.join(inputDir, "content-generation-input.json"), batch.jobs[0]!.payload.contentGenerationInput), writeJson(path.join(inputDir, "content-plan.json"), batch.jobs[0]!.payload.contentPlan)]);
 
         const stageReferencesStartedAt = Date.now();
         const staged: StagedAiContentAssetInputs = { productImages: [], styleImages: [], references: [], attachments: [] };
