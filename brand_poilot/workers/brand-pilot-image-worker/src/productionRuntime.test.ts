@@ -85,6 +85,7 @@ describe("production image worker runtime", () => {
     expect(runnerSource).toContain("visual-session-hook-audit.json");
     expect(runnerSource).toContain("ai_content_visual_session_hook_audit_missing");
     expect(runnerSource).toContain('hookCommand: visualSession ? visualSessionHookCommand : undefined');
+    expect(runnerSource).toContain('import { fileURLToPath } from "node:url";');
     expect(runnerSource).toContain('new URL("./audit-codex-visual-session-image.mjs", import.meta.url)');
     expect(runnerSource).not.toContain("codex_hooks");
     expect(runnerSource).toContain("${toolUseId}.png");
