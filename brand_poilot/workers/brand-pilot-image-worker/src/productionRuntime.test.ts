@@ -73,6 +73,7 @@ describe("production image worker runtime", () => {
     expect(packageJson.dependencies["@brand-pilot/worker-runtime"]).toBe("0.1.0");
     expect(runnerSource).toContain("../dist/codexCommand.mjs");
     expect(runnerSource).toContain("../dist/codexImageOutput.mjs");
+    expect(runnerSource).toContain("../dist/codexFailureDiagnostic.js");
     expect(runnerSource).toContain('readFile(path.join(workspaceDir, "AGENTS.md"');
     expect(runnerSource).toContain('image-render", "SKILL.md"');
     expect(runnerSource).toContain("selectedAssetCount: expectedCount");

@@ -9,6 +9,7 @@ import { assertCompleteVisualSessionImageAudit } from "./visualSessionImageAudit
 import { forwardParentTermination } from "../dist/processTermination.mjs";
 import { parseAiContentAssetRenderResult, parseAiContentAssetRunnerJob } from "../dist/aiContentAssetRunnerContract.js";
 import { parseAiContentVisualSessionRunnerJob, parseAiContentVisualSessionRunnerResult } from "../dist/aiContentVisualSessionRunnerContract.js";
+import { codexFailureDiagnostic } from "../dist/codexFailureDiagnostic.js";
 
 function argument(name) {
   const index = process.argv.indexOf(name);
@@ -45,13 +46,16 @@ async function main() {
       let sessionId = null;
       let finalMessage = null;
       let pendingOutput = "";
+      let diagnosticStdout = "";
+      let diagnosticStderr = "";
       const child = spawn(codex.command, [...codex.argsPrefix, ...codexArgs], {
-        shell: false, windowsHide: true, cwd: workspaceDir, stdio: ["pipe", "pipe", "inherit"],
+        shell: false, windowsHide: true, cwd: workspaceDir, stdio: ["pipe", "pipe", "pipe"],
         env: buildImageWorkerChildEnvironment({ ...process.env, CODEX_GENERATED_IMAGES_DIR: imagegenOutputDir }),
       });
       let termination = { signal: null, dispose() {} };
       child.stdout.setEncoding("utf8");
       child.stdout.on("data", (chunk) => {
+        diagnosticStdout = `${diagnosticStdout}${chunk}`.slice(-65_536);
         pendingOutput += chunk;
         const lines = pendingOutput.split(/\r?\n/);
         pendingOutput = lines.pop() ?? "";
@@ -61,6 +65,10 @@ async function main() {
           finalMessage = parseCodexFinalMessage(line) ?? finalMessage;
         }
       });
+      child.stderr.setEncoding("utf8");
+      child.stderr.on("data", (chunk) => {
+        diagnosticStderr = `${diagnosticStderr}${chunk}`.slice(-32_768);
+      });
       child.once("error", (error) => { termination.dispose(); reject(error); });
       child.once("exit", (code) => {
         const terminationSignal = termination.signal;
@@ -69,7 +77,7 @@ async function main() {
         ownedSessionId ??= sessionId;
         finalMessage = parseCodexFinalMessage(pendingOutput) ?? finalMessage;
         if (terminationSignal) return reject(new Error(`codex_ai_content_asset_aborted:${terminationSignal}`));
-        if (code !== 0) return reject(new Error(`codex_ai_content_asset_failed:${code ?? "unknown"}`));
+        if (code !== 0) return reject(new Error(codexFailureDiagnostic(diagnosticStderr, diagnosticStdout)));
         if (!sessionId) return reject(new Error("codex_image_session_missing"));
         if (!finalMessage) return reject(new Error("codex_image_content_missing"));
         resolve({ sessionId, finalMessage });
