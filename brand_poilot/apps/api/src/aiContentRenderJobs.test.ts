@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { readFileSync } from "node:fs";
 import { compileCardManuscriptPlanDraftV1 } from "@brand-pilot/content-contracts/card-manuscript-plan";
 import { cardManuscriptPlanSha256 } from "@brand-pilot/content-contracts/card-manuscript-plan/node";
 import { compileReelStoryboardDraftV1 } from "@brand-pilot/content-contracts/reel-storyboard";
@@ -13,6 +14,13 @@ import {
 } from "./aiContentRenderJobs.js";
 
 describe("ai-content render job boundary helpers", () => {
+  it("keeps every editorial audit insert compatible with the INSERT-only runtime role", () => {
+    const source = readFileSync(new URL("./aiContentRenderJobs.ts", import.meta.url), "utf8")
+      .replace(/\s+/g, " ")
+      .toLowerCase();
+    expect(source).not.toContain("on conflict (id) do nothing");
+  });
+
   it("records editorial diagnostics idempotently with INSERT-only audit privileges", async () => {
     const inserts: Array<{ sql: string; params: unknown[] }> = [];
     const client = {
