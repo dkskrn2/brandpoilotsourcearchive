@@ -307,7 +307,7 @@ describe("V3 asset child termination", () => {
     controller.abort(new Error("lease_lost"));
     await vi.waitFor(() => expect(signalTree).toHaveBeenCalledWith(child, "SIGTERM"));
     expect(settled).toBe(false);
-    child.emit("exit", null);
+    child.emit("close", null);
 
     await expect(running).rejects.toThrow("lease_lost");
     expect(signalTree).toHaveBeenCalledTimes(1);
@@ -327,7 +327,7 @@ describe("V3 asset child termination", () => {
     controller.abort(new Error("lease_lost"));
     await vi.waitFor(() => expect(signalTree).toHaveBeenNthCalledWith(2, child, "SIGKILL"));
     expect(settlements).toBe(0);
-    child.emit("exit", null);
+    child.emit("close", null);
     child.emit("error", new Error("late"));
 
     await expect(running).rejects.toThrow("lease_lost");
@@ -358,10 +358,10 @@ describe("V3 asset child termination", () => {
 
       await vi.waitFor(() => expect(spawnProcess).toHaveBeenCalledTimes(1));
       primary.stderr.write("You've hit your usage limit");
-      primary.emit("exit", 1);
+      primary.emit("close", 1);
       await vi.waitFor(() => expect(spawnProcess).toHaveBeenCalledTimes(2));
       await writeFile(outputFile, "png");
-      secondary.emit("exit", 0);
+      secondary.emit("close", 0);
 
       await expect(running).resolves.toBeUndefined();
       expect(spawnProcess.mock.calls.map((call) => call[2]?.env?.CODEX_HOME)).toEqual([
@@ -394,7 +394,7 @@ describe("V3 asset child termination", () => {
 
       await writeFile(outputFile, "partial");
       primary.stderr.write("usage limit");
-      primary.emit("exit", 1);
+      primary.emit("close", 1);
 
       await assertion;
       expect(spawnProcess).toHaveBeenCalledTimes(1);
@@ -422,13 +422,44 @@ describe("V3 asset child termination", () => {
       const assertion = expect(running).rejects.toThrow("ai_content_asset_render_failed:1");
 
       primary.stderr.write("image tool failed ACCOUNT_SECRET");
-      primary.emit("exit", 1);
+      primary.emit("close", 1);
 
       await assertion;
       const error = await running.catch((caught: unknown) => caught);
       expect(JSON.stringify(error)).not.toContain("ACCOUNT_SECRET");
       expect(Object.keys(error as object)).not.toContain("diagnostic");
       expect(spawnProcess).toHaveBeenCalledTimes(1);
+    } finally {
+      await rm(workDir, { recursive: true, force: true });
+    }
+  });
+
+  it("waits for stderr to close before preserving the final safe diagnostic", async () => {
+    const accountPool = await testAccountPool();
+    const workDir = await mkdtemp(path.join(tmpdir(), "image-asset-child-"));
+    const primary = new FakeRenderChild();
+    try {
+      const running = runAiContentAssetChildProcess({
+        accountPool,
+        command: "node",
+        args: ["runner.mjs"],
+        cwd: workDir,
+        env: {},
+        outputFile: path.join(workDir, "asset.png"),
+        signal: new AbortController().signal,
+        timeoutMs: 60_000,
+      }, { spawnProcess: vi.fn(() => primary), platform: "linux" });
+
+      primary.emit("exit", 1);
+      primary.stderr.write("codex_failure_server_error_internal_error_http_500\n");
+      primary.stderr.end();
+      primary.emit("close", 1);
+
+      const failure = await running.catch((caught: unknown) => caught as Error & { diagnostic?: string });
+      expect(failure).toMatchObject({
+        message: "ai_content_asset_render_failed:1",
+        diagnostic: "codex_failure_server_error_internal_error_http_500\n",
+      });
     } finally {
       await rm(workDir, { recursive: true, force: true });
     }

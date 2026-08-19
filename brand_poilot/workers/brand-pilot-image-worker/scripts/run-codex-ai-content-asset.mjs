@@ -70,7 +70,9 @@ async function main() {
         diagnosticStderr = `${diagnosticStderr}${chunk}`.slice(-32_768);
       });
       child.once("error", (error) => { termination.dispose(); reject(error); });
-      child.once("exit", (code) => {
+      // `close` fires after stdout/stderr are closed. Using `exit` here can
+      // classify the process before the final structured provider error is read.
+      child.once("close", (code) => {
         const terminationSignal = termination.signal;
         termination.dispose();
         sessionId ??= parseCodexThreadId(pendingOutput);

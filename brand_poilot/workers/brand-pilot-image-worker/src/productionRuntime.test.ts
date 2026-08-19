@@ -74,6 +74,8 @@ describe("production image worker runtime", () => {
     expect(runnerSource).toContain("../dist/codexCommand.mjs");
     expect(runnerSource).toContain("../dist/codexImageOutput.mjs");
     expect(runnerSource).toContain("../dist/codexFailureDiagnostic.js");
+    expect(runnerSource).toContain('child.once("close"');
+    expect(runnerSource).not.toContain('child.once("exit"');
     expect(runnerSource).toContain('readFile(path.join(workspaceDir, "AGENTS.md"');
     expect(runnerSource).toContain('image-render", "SKILL.md"');
     expect(runnerSource).toContain("selectedAssetCount: expectedCount");

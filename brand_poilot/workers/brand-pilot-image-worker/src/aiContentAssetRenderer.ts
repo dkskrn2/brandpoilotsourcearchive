@@ -83,7 +83,7 @@ type AiContentAssetChild = {
   stderr?: NodeJS.ReadableStream | null;
   kill(signal?: NodeJS.Signals): unknown;
   once(event: "error", listener: (error: Error) => void): unknown;
-  once(event: "exit", listener: (code: number | null) => void): unknown;
+  once(event: "close", listener: (code: number | null) => void): unknown;
 };
 
 type SpawnAiContentAssetChild = (command: string, args: string[], options: SpawnOptions) => AiContentAssetChild;
@@ -197,7 +197,7 @@ async function runAiContentAssetChildAttempt(
       });
     }
     child.once("error", (error) => finish(stopError ?? error));
-    child.once("exit", (code) => {
+    child.once("close", (code) => {
       if (stopError) finish(stopError);
       else code === 0
         ? finish()
