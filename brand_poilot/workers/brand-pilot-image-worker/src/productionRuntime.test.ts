@@ -83,6 +83,10 @@ describe("production image worker runtime", () => {
     expect(runnerSource).toContain("permissions.worker.network.enabled=false");
     expect(runnerSource).toContain("assertCompleteVisualSessionImageAudit");
     expect(runnerSource).toContain("visual-session-hook-audit.json");
+    expect(runnerSource).toContain("ai_content_visual_session_hook_audit_missing");
+    expect(runnerSource).toContain('hookCommand: visualSession ? visualSessionHookCommand : undefined');
+    expect(runnerSource).toContain('new URL("./audit-codex-visual-session-image.mjs", import.meta.url)');
+    expect(runnerSource).not.toContain("codex_hooks");
     expect(runnerSource).toContain("${toolUseId}.png");
     expect(runnerSource).not.toContain("createCodexImageGenerationAudit");
     expect(runnerSource).toContain("ai-content-editorial-tool-observation.v1");

@@ -20,9 +20,8 @@ describe("visual session renderer", () => {
   const workerRoot = fileURLToPath(new URL("..", import.meta.url));
   it("uses one child execution for all ordered scenes and returns no partial result", async () => {
     const runChild = vi.fn(async ({ outputFiles, workspaceDir }: { outputFiles: string[]; workspaceDir: string }) => {
-      const hooks = JSON.parse(await readFile(`${workspaceDir}/.codex/hooks.json`, "utf8"));
-      expect(hooks.hooks.PreToolUse[0].matcher).toBe(".*");
-      expect(hooks.hooks.PostToolUse[0].hooks[0].command).toContain("audit-codex-visual-session-image.mjs");
+      await expect(readFile(`${workspaceDir}/.codex/hooks.json`, "utf8"))
+        .rejects.toMatchObject({ code: "ENOENT" });
       for (const output of outputFiles) { await mkdir(path.dirname(output), { recursive: true }); await writeFile(output, await sharp({ create: { width: 1080, height: 1080, channels: 4, background: "white" } }).png().toBuffer()); }
     });
     const renderer = createAiContentVisualSessionRenderer({ workerRoot, readOwned: vi.fn(), runChild: runChild as never });

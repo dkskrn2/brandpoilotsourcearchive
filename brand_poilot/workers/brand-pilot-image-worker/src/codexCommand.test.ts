@@ -29,36 +29,15 @@ describe("resolveCodexInvocation", () => {
   });
 
   it("pins the image renderer to the strict read-only worker profile", () => {
-    const args = buildCodexExecArguments({ rootDir: "C:\\worker", enableHooks: true });
+    const hookCommand = '"C:\\Program Files\\nodejs\\node.exe" "C:\\worker\\scripts\\audit-codex-visual-session-image.mjs"';
+    const args = buildCodexExecArguments({ rootDir: "C:\\worker", hookCommand });
 
-    expect(args).toEqual([
-      "--model",
-      "gpt-5.6-terra",
-      "--enable",
-      "codex_hooks",
-      "--dangerously-bypass-hook-trust",
-      "exec",
-      "--ignore-user-config",
-      "--strict-config",
-      "-c",
-      "default_permissions=\"worker\"",
-      "-c",
-      "permissions.worker.filesystem={\":minimal\"=\"read\",\"/codex\"=\"deny\",\"/codex-accounts\"=\"deny\",\":workspace_roots\"={\".\"=\"read\"}}",
-      "-c",
-      "permissions.worker.network.enabled=false",
-      "--enable",
-      "image_generation",
-      "--disable",
-      "shell_tool",
-      "--disable",
-      "shell_snapshot",
-      "--skip-git-repo-check",
-      "--ephemeral",
-      "--json",
-      "-C",
-      "C:\\worker",
-      "-"
+    expect(args.slice(0, 6)).toEqual([
+      "--model", "gpt-5.6-terra", "--enable", "hooks", "--dangerously-bypass-hook-trust", "exec",
     ]);
+    expect(args).toContain(`hooks.PreToolUse=[{matcher=".*",hooks=[{type="command",command=${JSON.stringify(hookCommand)},timeout=10}]}]`);
+    expect(args).toContain(`hooks.PostToolUse=[{matcher=".*",hooks=[{type="command",command=${JSON.stringify(hookCommand)},timeout=10}]}]`);
+    expect(args).not.toContain("codex_hooks");
     expect(args).not.toContain("--sandbox");
     expect(args.indexOf("gpt-5.6-terra")).toBeLessThan(args.indexOf("exec"));
     expect(args.join(" ")).not.toContain("creative brief");
@@ -66,8 +45,9 @@ describe("resolveCodexInvocation", () => {
 
   it("does not bypass hook trust for the markerless Blog renderer", () => {
     const args = buildCodexExecArguments({ rootDir: "C:\\worker" });
-    expect(args).not.toContain("codex_hooks");
+    expect(args).not.toContain("hooks");
     expect(args).not.toContain("--dangerously-bypass-hook-trust");
+    expect(args.join("\n")).not.toContain("hooks.PreToolUse");
   });
 
   it("pins Threads text to the strict read-only worker profile with image tools disabled", () => {

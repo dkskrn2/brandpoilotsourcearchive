@@ -16,9 +16,15 @@ export function resolveCodexInvocation({
   return { command: "codex", argsPrefix: [] };
 }
 
-export function buildCodexExecArguments({ rootDir, enableHooks = false }) {
-  const hookArguments = enableHooks
-    ? ["--enable", "codex_hooks", "--dangerously-bypass-hook-trust"]
+export function buildCodexExecArguments({ rootDir, hookCommand }) {
+  const hookArguments = hookCommand
+    ? ["--enable", "hooks", "--dangerously-bypass-hook-trust"]
+    : [];
+  const hookConfigArguments = hookCommand
+    ? [
+        "-c", `hooks.PreToolUse=[{matcher=".*",hooks=[{type="command",command=${JSON.stringify(hookCommand)},timeout=10}]}]`,
+        "-c", `hooks.PostToolUse=[{matcher=".*",hooks=[{type="command",command=${JSON.stringify(hookCommand)},timeout=10}]}]`,
+      ]
     : [];
   return [
     "--model", "gpt-5.6-terra",
@@ -29,6 +35,7 @@ export function buildCodexExecArguments({ rootDir, enableHooks = false }) {
     "-c", "default_permissions=\"worker\"",
     "-c", "permissions.worker.filesystem={\":minimal\"=\"read\",\"/codex\"=\"deny\",\"/codex-accounts\"=\"deny\",\":workspace_roots\"={\".\"=\"read\"}}",
     "-c", "permissions.worker.network.enabled=false",
+    ...hookConfigArguments,
     "--enable", "image_generation",
     "--disable", "shell_tool",
     "--disable", "shell_snapshot",
