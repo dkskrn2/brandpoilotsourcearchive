@@ -1,6 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 import { createAiContentRepository } from "./aiContentRepository.js";
 import { proposalSha256 } from "./aiContentProposalV2Service.js";
+import { assembleContentPlanResultV2 } from "./aiContentPlanContracts.js";
+import { compileReelStoryboardDraftV1, type ReelStoryboardV1 } from "@brand-pilot/content-contracts/reel-storyboard";
+import { reelStoryboardSha256 } from "@brand-pilot/content-contracts/reel-storyboard/node";
 
 const UUID = {
   workspace: "10000000-0000-4000-8000-000000000001", brand: "10000000-0000-4000-8000-000000000002",
@@ -51,6 +54,43 @@ const promptBinding = {
   model: "gpt-5.6-terra",
 } as const;
 
+const frozenStoryboard: ReelStoryboardV1 = {
+  contractVersion: "reel-storyboard.v1",
+  content: { caption: "핵심을 설명합니다.", hashtags: ["#가이드"], cta: "저장해 두세요." },
+  storyNarrative: "검증된 핵심을 한 장면에 전달한다.",
+  visualSystem: {
+    paletteDirection: "high contrast",
+    typographyDirection: "large vertical type",
+    graphicLanguage: "editorial infographic",
+    imageryDirection: "evidence-led imagery",
+    invariants: ["consistent spacing"],
+  },
+  scenes: [{
+    index: 1,
+    editorialRole: "scene",
+    purpose: "검증된 핵심을 설명한다.",
+    coreMessage: "핵심을 명확히 전달합니다.",
+    headline: "핵심을 확인하세요",
+    keyVisual: { type: "none", entries: [] },
+    supportingTexts: ["검증된 내용을 그대로 사용합니다."],
+    footnote: null,
+    visualThesis: "세로 화면에서 핵심을 강조한다.",
+    layoutArchetype: "editorial_freeform",
+    evidenceIds: [],
+    productImageAssetIds: [],
+    avatarImageAssetIds: [],
+  }],
+};
+const frozenStoryboardContract = {
+  contractVersion: "reel-storyboard.v1",
+  storyboardSha256: reelStoryboardSha256(frozenStoryboard),
+  storyboard: frozenStoryboard,
+} as const;
+const frozenPlan = assembleContentPlanResultV2(
+  compileReelStoryboardDraftV1(frozenStoryboard, frozenInput.selectedProposal.outline),
+  frozenInput,
+);
+
 function harness(options: {
   replay?: boolean;
   replayGraphDrift?: boolean;
@@ -59,6 +99,9 @@ function harness(options: {
   reversed?: boolean;
   corruptParentBinding?: boolean;
   missingManualVisualSelection?: boolean;
+  renderReady?: boolean;
+  invalidStoredContract?: boolean;
+  missingParentSkill?: boolean;
 } = {}) {
   const statements: Array<{ sql: string; params: unknown[] }> = [];
   let childId = "";
@@ -88,6 +131,14 @@ function harness(options: {
     proposal_job_id: "10000000-0000-4000-8000-00000000000c", proposal_contract_id: "10000000-0000-4000-8000-00000000000d",
     successful_model_attempt_id: "10000000-0000-4000-8000-00000000000e",
     manual_visual_selection: options.missingManualVisualSelection ? null : frozenManualVisualSelection,
+    parent_job_payload: options.renderReady ? {
+      generationId: UUID.parent,
+      manualVisualSelection: frozenManualVisualSelection,
+      reelStoryboardContract: options.invalidStoredContract
+        ? { ...frozenStoryboardContract, storyboardSha256: "0".repeat(64) }
+        : frozenStoryboardContract,
+    } : { generationId: UUID.parent, manualVisualSelection: frozenManualVisualSelection },
+    parent_skill_version: options.renderReady && !options.missingParentSkill ? "reel-storyboard-skill.v2" : null,
     attachments_locked_at: "2026-08-06T00:00:00.000Z", terminal_at: "2026-08-06T00:00:00.000Z",
     error_code: "failed", error_message: "failed", created_at: "2026-08-06T00:00:00.000Z", updated_at: "2026-08-06T00:00:00.000Z", completed_at: "2026-08-06T00:00:00.000Z",
   };
@@ -99,7 +150,11 @@ function harness(options: {
       if (sql.includes("from workspace_members member")) return { rows: [{}], rowCount: 1 };
       if (sql.includes("select generation_id from ai_content_generation_outputs")) return { rows: [{ generation_id: UUID.parent }], rowCount: 1 };
       if (sql.includes("select generation.*,")) return { rows: [parent], rowCount: 1 };
-      if (sql.includes("select * from ai_content_generation_outputs")) return { rows: [{ id: UUID.output, status: "failed" }], rowCount: 1 };
+      if (sql.includes("from ai_content_generation_outputs output") && sql.includes("for update of output")) return { rows: [{
+        id: UUID.output,
+        status: "failed",
+        plan_json: options.renderReady ? frozenPlan : null,
+      }], rowCount: 1 };
       if (sql.includes("select operation.*,generation.generation_input_snapshot")) return options.replay
         ? { rows: [{
           id: replayOperationId,
@@ -160,6 +215,38 @@ describe("V3 permanent-failure retry lineage", () => {
       manualVisualSelection: frozenManualVisualSelection,
     });
     expect(sql.at(-1)).toBe("COMMIT");
+  });
+
+  it("reuses a validated stored storyboard and queues only rendering after a render failure", async () => {
+    const run = harness({ renderReady: true });
+    const result = await run.repository.retryAiContentOutput(run.command);
+
+    expect(result.id).not.toBe(UUID.parent);
+    const sql = run.statements.map(({ sql }) => sql).join("\n");
+    expect(sql).toContain("insert into ai_content_generation_render_jobs");
+    const childOutput = run.statements.find(({ sql: value }) => value.includes("insert into ai_content_generation_outputs"));
+    expect(childOutput?.params[4]).toBe("generating");
+    expect(JSON.parse(String(childOutput?.params[5]))).toMatchObject({ contractVersion: "reel-plan.v2" });
+    const childJob = run.statements.find(({ sql: value }) => value.includes("insert into ai_content_generation_jobs"));
+    expect(childJob?.sql).toContain("'succeeded'");
+    expect(childJob?.sql).not.toContain("'queued'");
+    expect(JSON.parse(String(childJob?.params[6]))).toMatchObject({
+      reelStoryboardContract: frozenStoryboardContract,
+    });
+  });
+
+  it("fails closed instead of replanning when a stored render graph has invalid planning evidence", async () => {
+    for (const options of [
+      { renderReady: true, invalidStoredContract: true },
+      { renderReady: true, missingParentSkill: true },
+    ]) {
+      const run = harness(options);
+      await expect(run.repository.retryAiContentOutput(run.command))
+        .rejects.toThrow("ai_content_generation_retry_parent_invalid");
+      expect(run.statements.map(({ sql }) => sql).filter((sql) => /^(?:insert|update|delete)\b/i.test(sql.trim())))
+        .toEqual([]);
+      expect(run.statements.at(-1)?.sql).toBe("ROLLBACK");
+    }
   });
 
   it("fails closed before creating a child when the parent job has no frozen manual visual selection", async () => {

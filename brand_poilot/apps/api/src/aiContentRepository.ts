@@ -580,6 +580,44 @@ function assertStoredCardManuscriptContract(payload: unknown, manuscript: CardMa
   if (canonicalJson(stored) !== canonicalJson(manuscript)) throw new Error("ai_content_plan_completion_conflict");
 }
 
+function parseStoredReelStoryboardContract(
+  payload: unknown,
+  finalInput: ReturnType<typeof parseCanonicalContentGenerationInputV3>,
+): ReelStoryboardContractV1 {
+  const source = object(payload);
+  if (finalInput.outputSettings.outputFormat !== "reel" || source.cardManuscriptContract !== undefined) {
+    throw new Error("ai_content_generation_retry_parent_invalid");
+  }
+  const stored = object(source.reelStoryboardContract);
+  if (!isDeepStrictEqual(Object.keys(stored).sort(), ["contractVersion", "storyboard", "storyboardSha256"])) {
+    throw new Error("ai_content_generation_retry_parent_invalid");
+  }
+  const storyboard = parseReelStoryboardV1(stored.storyboard);
+  if (stored.contractVersion !== "reel-storyboard.v1"
+    || typeof stored.storyboardSha256 !== "string"
+    || reelStoryboardSha256(storyboard) !== stored.storyboardSha256) {
+    throw new Error("ai_content_generation_retry_parent_invalid");
+  }
+  return {
+    contractVersion: "reel-storyboard.v1",
+    storyboardSha256: stored.storyboardSha256,
+    storyboard,
+  };
+}
+
+function rebindStoredPlanToGeneration(
+  rawPlan: unknown,
+  finalInput: ReturnType<typeof parseCanonicalContentGenerationInputV3>,
+  supplementalResearch: unknown,
+): ContentPlanResultV2 {
+  const source = object(rawPlan);
+  const imagePackage = source.imagePackage;
+  const rebound = imagePackage && typeof imagePackage === "object" && !Array.isArray(imagePackage)
+    ? { ...source, imagePackage: { ...(imagePackage as Record<string, unknown>), generationId: finalInput.generationId } }
+    : source;
+  return parseContentPlanResultV2(rebound, finalInput, supplementalResearch);
+}
+
 const EXPECTED_PROPOSAL_CATALOG_SHA256 = "41ac04e76adf0fd9746ea7535b36f6c1ea314ec4890253a2cd56a9f215f7cdbe";
 const PROPOSAL_MODEL_ID = "gpt-5.6-terra";
 
@@ -3788,7 +3826,21 @@ export function createAiContentRepository(pool: Pool, options: AiContentReposito
                       and parent_job.workspace_id=generation.workspace_id
                       and parent_job.brand_id=generation.brand_id
                       and parent_job.job_type='generate'
-                      and parent_job.output_format=generation.output_format) manual_visual_selection
+                      and parent_job.output_format=generation.output_format) manual_visual_selection,
+                  (select parent_job.payload_json
+                      from ai_content_generation_jobs parent_job
+                     where parent_job.generation_id=generation.id and parent_job.output_id=$4
+                       and parent_job.workspace_id=generation.workspace_id
+                       and parent_job.brand_id=generation.brand_id
+                       and parent_job.job_type='generate'
+                       and parent_job.output_format=generation.output_format) parent_job_payload,
+                  (select parent_job.skill_version
+                      from ai_content_generation_jobs parent_job
+                     where parent_job.generation_id=generation.id and parent_job.output_id=$4
+                       and parent_job.workspace_id=generation.workspace_id
+                       and parent_job.brand_id=generation.brand_id
+                       and parent_job.job_type='generate'
+                       and parent_job.output_format=generation.output_format) parent_skill_version
              from ai_content_generations generation
              join ai_content_generation_operations operation on operation.id=generation.operation_id
              join ai_content_usage_ledger reservation
@@ -3811,8 +3863,13 @@ export function createAiContentRepository(pool: Pool, options: AiContentReposito
         const parent = parentResult.rows[0] as Record<string, unknown> | undefined;
         if (!parent) throw new Error("ai_content_generation_retry_parent_invalid");
         const failedOutput = await client.query(
-          `select * from ai_content_generation_outputs
-            where id=$1 and generation_id=$2 and workspace_id=$3 and brand_id=$4 for update`,
+          `select output.*,research.evidence_json
+             from ai_content_generation_outputs output
+             left join ai_content_output_research_snapshots research
+               on research.output_id=output.id and research.generation_id=output.generation_id
+              and research.workspace_id=output.workspace_id and research.brand_id=output.brand_id
+            where output.id=$1 and output.generation_id=$2
+              and output.workspace_id=$3 and output.brand_id=$4 for update of output`,
           [input.outputId, parentGenerationId, input.workspaceId, input.brandId],
         );
         if (!failedOutput.rows.length || failedOutput.rows[0].status !== "failed"
@@ -3837,6 +3894,25 @@ export function createAiContentRepository(pool: Pool, options: AiContentReposito
           || proposalSha256(parent.input_json) !== String(parent.content_hash)
           || parent.binding_hash_matches !== true) {
           throw new Error("ai_content_generation_retry_parent_invalid");
+        }
+        const storedPlanValue = failedOutput.rows[0].plan_json;
+        let storedParentPlan: ContentPlanResultV2 | null = null;
+        let storedReelStoryboardContract: ReelStoryboardContractV1 | null = null;
+        if (parentInput.outputSettings.outputFormat === "reel"
+          && storedPlanValue !== null && storedPlanValue !== undefined) {
+          if (typeof parent.parent_skill_version !== "string" || !parent.parent_skill_version.trim()) {
+            throw new Error("ai_content_generation_retry_parent_invalid");
+          }
+          try {
+            storedParentPlan = parseContentPlanResultV2(
+              storedPlanValue,
+              parentInput,
+              failedOutput.rows[0].evidence_json,
+            );
+            storedReelStoryboardContract = parseStoredReelStoryboardContract(parent.parent_job_payload, parentInput);
+          } catch {
+            throw new Error("ai_content_generation_retry_parent_invalid");
+          }
         }
         const requestFingerprint = proposalSha256({
           contractVersion: input.contractVersion,
@@ -3949,18 +4025,23 @@ export function createAiContentRepository(pool: Pool, options: AiContentReposito
         });
         const retriedJson = canonicalProposalJson(retriedInput);
         const retriedHash = proposalSha256(retriedInput);
+        const renderOnlyPlan = storedParentPlan === null
+          ? null
+          : rebindStoredPlanToGeneration(storedParentPlan, retriedInput, failedOutput.rows[0].evidence_json);
+        const childStatus = renderOnlyPlan === null ? "queued" : "generating";
         await client.query(
           `insert into ai_content_generations(
              id,workspace_id,brand_id,output_format,purpose,title,status,current_stage,draft_json,analysis_json,
              analysis_idempotency_key,generation_idempotency_key,operation_id,parent_generation_id,generation_input_snapshot,
              attachments_locked_at,created_by_user_id,updated_by_user_id
-           ) values($1,$2,$3,$4,$5,$6,'queued','generation',$7::jsonb,$8::jsonb,$9,$10,$11,$12,$13::jsonb,
+           ) values($1,$2,$3,$4,$5,$6,$15,'generation',$7::jsonb,$8::jsonb,$9,$10,$11,$12,$13::jsonb,
               statement_timestamp(),$14,$14)`,
           [generationId, input.workspaceId, input.brandId, parent.output_format, parent.purpose,
             parent.title, JSON.stringify({ ...object(parent.draft_json), origin: "retry-v3",
-              parentGenerationId, parentOutputId: input.outputId, retryReason: input.reason.trim() }),
+              parentGenerationId, parentOutputId: input.outputId, retryReason: input.reason.trim(),
+              retryMode: renderOnlyPlan === null ? "planning_and_render" : "render_only" }),
             JSON.stringify(object(parent.analysis_json)), `retry-v3:${parentGenerationId}:${input.idempotencyKey}`,
-            input.idempotencyKey, operationId, parentGenerationId, retriedJson, input.actorUserId],
+            input.idempotencyKey, operationId, parentGenerationId, retriedJson, input.actorUserId, childStatus],
         );
         await client.query(
           `insert into ai_content_generation_operations(
@@ -3992,9 +4073,10 @@ export function createAiContentRepository(pool: Pool, options: AiContentReposito
         const outputId = randomUUID();
         await client.query(
           `insert into ai_content_generation_outputs(
-             id,generation_id,workspace_id,brand_id,output_index,status
-           ) values($1,$2,$3,$4,1,'queued')`,
-          [outputId, generationId, input.workspaceId, input.brandId],
+             id,generation_id,workspace_id,brand_id,output_index,status,plan_json
+           ) values($1,$2,$3,$4,1,$5,$6::jsonb)`,
+          [outputId, generationId, input.workspaceId, input.brandId, childStatus,
+            renderOnlyPlan === null ? null : JSON.stringify(renderOnlyPlan)],
         );
         if (parentInput.outputSettings.outputFormat !== "blog") {
           await client.query(
@@ -4005,17 +4087,45 @@ export function createAiContentRepository(pool: Pool, options: AiContentReposito
               JSON.stringify(parentInput.researchEvidence)],
           );
         }
-        await client.query(
-          `insert into ai_content_generation_jobs(
-             id,generation_id,output_id,workspace_id,brand_id,job_type,output_format,status,payload_json
-           ) values($1,$2,$3,$4,$5,'generate',$6,'queued',$7::jsonb)`,
-          [randomUUID(), generationId, outputId, input.workspaceId, input.brandId,
-            parentInput.outputSettings.outputFormat, JSON.stringify({
-              generationId, outputId, contentGenerationInput: retriedInput,
-              planningMode: "selected_proposal", operationId,
-              manualVisualSelection: parentManualVisualSelection,
-            })],
-        );
+        const childJobPayload = {
+          generationId,
+          outputId,
+          contentGenerationInput: retriedInput,
+          planningMode: "selected_proposal",
+          operationId,
+          manualVisualSelection: parentManualVisualSelection,
+          ...(storedReelStoryboardContract
+            ? { reelStoryboardContract: storedReelStoryboardContract }
+            : {}),
+        };
+        if (renderOnlyPlan === null) {
+          await client.query(
+            `insert into ai_content_generation_jobs(
+               id,generation_id,output_id,workspace_id,brand_id,job_type,output_format,status,payload_json
+             ) values($1,$2,$3,$4,$5,'generate',$6,'queued',$7::jsonb)`,
+            [randomUUID(), generationId, outputId, input.workspaceId, input.brandId,
+              parentInput.outputSettings.outputFormat, JSON.stringify(childJobPayload)],
+          );
+        } else {
+          await client.query(
+            `insert into ai_content_generation_jobs(
+               id,generation_id,output_id,workspace_id,brand_id,job_type,output_format,status,payload_json,
+               skill_version,completed_at
+             ) values($1,$2,$3,$4,$5,'generate',$6,'succeeded',$7::jsonb,$8,statement_timestamp())`,
+            [randomUUID(), generationId, outputId, input.workspaceId, input.brandId,
+              parentInput.outputSettings.outputFormat, JSON.stringify(childJobPayload), parent.parent_skill_version],
+          );
+          await enqueueAiContentRenderJobs(client, {
+            workspaceId: input.workspaceId,
+            brandId: input.brandId,
+            generationId,
+            outputId,
+            plan: renderOnlyPlan,
+            finalInput: retriedInput,
+            cardManuscriptContract: null,
+            reelStoryboardContract: storedReelStoryboardContract,
+          });
+        }
         await client.query(
           "select transition_ai_content_generation_operation($1,'reserved','started')",
           [operationId],
