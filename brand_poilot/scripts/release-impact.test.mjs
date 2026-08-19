@@ -371,6 +371,27 @@ test("Card Manuscript visual session accepts exact deployment tooling without wi
   assert.deepEqual(impact.unknownPaths, []);
 });
 
+test("no-crop social delivery rolls out only Image and Card News workers", () => {
+  const impact = classifyChangedPaths([
+    "brand_poilot/workers/brand-pilot-image-worker/src/aiContentVisualSessionRenderer.ts",
+    "brand_poilot/workers/brand-pilot-image-worker/src/aiContentVisualSessionRenderer.test.ts",
+    "brand_poilot/deploy/scripts/rollout-workers.sh",
+    "brand_poilot/scripts/deployment-contract.test.mjs",
+    "brand_poilot/scripts/release-impact.mjs",
+    "brand_poilot/scripts/release-impact.test.mjs",
+    "brand_poilot/docs/superpowers/specs/2026-08-19-no-crop-social-images-card-runner-design.md",
+    "brand_poilot/docs/superpowers/plans/2026-08-19-no-crop-social-images-card-runner.md",
+  ], { profile: CARD_MANUSCRIPT_VISUAL_SESSION_PROFILE });
+
+  assert.deepEqual(enabled(impact), ["cardNewsWorker", "imageWorker"]);
+  assert.equal(impact.buildAllServer, false);
+  assert.equal(impact.migrationChanged, false);
+  assert.equal(impact.productionDeployAllowed, true);
+  assert.equal(impact.deployBundleChanged, true);
+  assert.equal(impact.verifiedScope, true);
+  assert.deepEqual(impact.unknownPaths, []);
+});
+
 test("FAQ utterance profile selects only API, customer UI, and the shared DM image", () => {
   const impact = classifyChangedPaths([
     "brand_poilot/apps/api/src/faqMatcher.ts",

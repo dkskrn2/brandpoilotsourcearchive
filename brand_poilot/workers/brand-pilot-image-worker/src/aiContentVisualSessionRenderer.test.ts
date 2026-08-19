@@ -5,15 +5,34 @@ import sharp from "sharp";
 import { describe, expect, it, vi } from "vitest";
 import { createAiContentVisualSessionRenderer } from "./aiContentVisualSessionRenderer.js";
 
-function batch() {
+function batch(outputFormat: "card_news" | "reel" = "card_news") {
+  const sourceContractVersion = outputFormat === "card_news" ? "card-manuscript-plan.v1" : "reel-storyboard.v1";
   const visualSession = {
-    contractVersion: "ai-content-visual-session.v1" as const, outputFormat: "card_news" as const,
-    source: { contractVersion: "card-manuscript-plan.v1" as const, sha256: "a".repeat(64) }, narrative: "Narrative",
+    contractVersion: "ai-content-visual-session.v1" as const, outputFormat,
+    source: { contractVersion: sourceContractVersion, sha256: "a".repeat(64) }, narrative: "Narrative",
     primaryMediumPolicy: { mode: "free_once" as const, styleReferenceIds: [] as string[] },
     scenes: [1, 2].map((index) => ({ index, editorialContext: { editorialRole: "detail", purpose: `Purpose ${index}`, coreMessage: `Core ${index}` }, lockedDisplay: { headline: `Headline ${index}`, relation: { type: "related_facts", entries: [{ role: "fact", label: "A", value: "80%" }, { role: "fact", label: "B", value: "83.3%" }] }, supportingTexts: [], footnote: null }, referenceBindings: { productImageAssetIds: [], avatarImageAssetIds: [] } })),
   };
-  const imagePackage = { outputFormat: "card_news", product: null, brandStyleImages: [], references: [], attachments: [], userImageInstruction: null };
-  return { kind: "visual_session" as const, outputId: "output", outputFormat: "card_news" as const, visualSession, jobs: [1, 2].map((assetIndex) => ({ id: `job-${assetIndex}`, generationId: "generation", outputId: "output", workspaceId: "workspace", brandId: "brand", jobKind: "image_asset" as const, assetIndex, leaseToken: `lease-${assetIndex}`, attemptCount: 1, payload: { contractVersion: "ai-content-visual-session-render-job.v1" as const, jobKind: "image_asset" as const, generationId: "generation", outputId: "output", imagePackage, assetIndex, assetKey: `generation:${assetIndex}`, storagePath: `path-${assetIndex}`, rendererPromptVersion: "image-visual-session.v1" as const, visualSessionBinding: { sourceContractVersion: "card-manuscript-plan.v1" as const, sourceSha256: "a".repeat(64), sceneIndex: assetIndex }, contentGenerationInput: {}, contentPlan: {}, visualSession } })) };
+  const imagePackage = { outputFormat, product: null, brandStyleImages: [], references: [], attachments: [], userImageInstruction: null };
+  return { kind: "visual_session" as const, outputId: "output", outputFormat, visualSession, jobs: [1, 2].map((assetIndex) => ({ id: `job-${assetIndex}`, generationId: "generation", outputId: "output", workspaceId: "workspace", brandId: "brand", jobKind: "image_asset" as const, assetIndex, leaseToken: `lease-${assetIndex}`, attemptCount: 1, payload: { contractVersion: "ai-content-visual-session-render-job.v1" as const, jobKind: "image_asset" as const, generationId: "generation", outputId: "output", imagePackage, assetIndex, assetKey: `generation:${assetIndex}`, storagePath: `path-${assetIndex}`, rendererPromptVersion: "image-visual-session.v1" as const, visualSessionBinding: { sourceContractVersion, sourceSha256: "a".repeat(64), sceneIndex: assetIndex }, contentGenerationInput: {}, contentPlan: {}, visualSession } })) };
+}
+
+async function borderedSource(width: number, height: number): Promise<Buffer> {
+  const border = 40;
+  return sharp({ create: { width, height, channels: 4, background: "#00ff00" } })
+    .composite([
+      { input: { create: { width, height: border, channels: 4, background: "#ff0000" } }, top: 0, left: 0 },
+      { input: { create: { width, height: border, channels: 4, background: "#ff0000" } }, top: height - border, left: 0 },
+      { input: { create: { width: border, height, channels: 4, background: "#ff0000" } }, top: 0, left: 0 },
+      { input: { create: { width: border, height, channels: 4, background: "#ff0000" } }, top: 0, left: width - border },
+    ])
+    .png()
+    .toBuffer();
+}
+
+async function rgbAt(bytes: Buffer, left: number, top: number): Promise<number[]> {
+  const pixel = await sharp(bytes).extract({ left, top, width: 1, height: 1 }).removeAlpha().raw().toBuffer();
+  return [...pixel];
 }
 
 describe("visual session renderer", () => {
@@ -60,5 +79,43 @@ describe("visual session renderer", () => {
       diagnostic: "codex_image_generation_internal_error",
     });
     expect(JSON.stringify(failure)).not.toContain("SECRET_TOKEN");
+  });
+
+  it("preserves every Card News source edge inside a fixed square delivery canvas", async () => {
+    const source = await borderedSource(1200, 800);
+    const runChild = vi.fn(async ({ outputFiles }: { outputFiles: string[] }) => {
+      for (const output of outputFiles) {
+        await mkdir(path.dirname(output), { recursive: true });
+        await writeFile(output, source);
+      }
+    });
+    const renderer = createAiContentVisualSessionRenderer({ workerRoot, readOwned: vi.fn(), runChild: runChild as never });
+
+    const result = await renderer.renderSession(batch("card_news") as never, new AbortController().signal);
+
+    expect(result[0]).toMatchObject({ width: 1080, height: 1080 });
+    expect(await rgbAt(result[0]!.bytes, 10, 540)).toEqual([255, 0, 0]);
+    expect(await rgbAt(result[0]!.bytes, 1069, 540)).toEqual([255, 0, 0]);
+    expect(await rgbAt(result[0]!.bytes, 540, 190)).toEqual([255, 0, 0]);
+    expect(await rgbAt(result[0]!.bytes, 540, 889)).toEqual([255, 0, 0]);
+  });
+
+  it("preserves every Reel source edge inside a fixed 9:16 delivery canvas", async () => {
+    const source = await borderedSource(1122, 1402);
+    const runChild = vi.fn(async ({ outputFiles }: { outputFiles: string[] }) => {
+      for (const output of outputFiles) {
+        await mkdir(path.dirname(output), { recursive: true });
+        await writeFile(output, source);
+      }
+    });
+    const renderer = createAiContentVisualSessionRenderer({ workerRoot, readOwned: vi.fn(), runChild: runChild as never });
+
+    const result = await renderer.renderSession(batch("reel") as never, new AbortController().signal);
+
+    expect(result[0]).toMatchObject({ width: 1080, height: 1920 });
+    expect(await rgbAt(result[0]!.bytes, 10, 960)).toEqual([255, 0, 0]);
+    expect(await rgbAt(result[0]!.bytes, 1069, 960)).toEqual([255, 0, 0]);
+    expect(await rgbAt(result[0]!.bytes, 540, 295)).toEqual([255, 0, 0]);
+    expect(await rgbAt(result[0]!.bytes, 540, 1624)).toEqual([255, 0, 0]);
   });
 });

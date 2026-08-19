@@ -9,7 +9,7 @@ ROOT="${BRAND_PILOT_ROOT:-/opt/brand-pilot}"
 [[ $# -eq 1 ]] || fail "usage_rollout_workers_release_directory"
 RELEASE_DIR="$(cd -- "$1" && pwd)"
 
-for command_name in docker flock grep; do
+for command_name in docker flock grep stat; do
   require_command "$command_name"
 done
 
@@ -151,6 +151,23 @@ done
 if [[ ${#ROLLOUT_SERVICES[@]} -eq 0 ]]; then
   printf '%s\n' "worker_rollout=skipped_inactive"
   exit 0
+fi
+
+card_news_rollout=false
+for service in "${ROLLOUT_SERVICES[@]}"; do
+  if [[ "$service" == "card-news-worker-1" ]]; then
+    card_news_rollout=true
+    break
+  fi
+done
+if [[ "$card_news_rollout" == "true" ]]; then
+  card_news_worker_env="$ROOT/shared/env/card-news-worker-1.env"
+  require_file_mode_600 "$card_news_worker_env" "bpdeploy"
+  expected_card_news_planner_command='CARD_NEWS_CODEX_PLAN_COMMAND=node scripts/run-codex-card-manuscript-plan.mjs --job "{{jobFile}}" --output "{{outputDir}}"'
+  planner_command_count="$(grep -Ec '^CARD_NEWS_CODEX_PLAN_COMMAND=' "$card_news_worker_env" || true)"
+  exact_planner_command_count="$(grep -Fxc -- "$expected_card_news_planner_command" "$card_news_worker_env" || true)"
+  [[ "$planner_command_count" == "1" && "$exact_planner_command_count" == "1" ]] ||
+    fail "card_news_planner_command_invalid"
 fi
 
 declare -A PREVIOUS_SERVICE_IMAGES=()

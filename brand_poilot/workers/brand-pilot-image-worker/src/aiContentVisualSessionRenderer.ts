@@ -55,15 +55,13 @@ function safeVisualSessionDiagnosticCode(error: unknown): string | undefined {
 async function normalize(bytes: Buffer, format: "card_news" | "reel") {
   const metadata = await sharp(bytes, { failOn: "error" }).metadata().catch(() => { throw new Error("ai_content_asset_output_not_png"); });
   if (metadata.format !== "png" || !metadata.width || !metadata.height) throw new Error("ai_content_asset_output_not_png");
-  if (format === "card_news") {
-    const size = Math.min(metadata.width, metadata.height);
-    const output = await sharp(bytes, { failOn: "error" }).extract({ left: Math.floor((metadata.width - size) / 2), top: Math.floor((metadata.height - size) / 2), width: size, height: size }).png({ compressionLevel: 9 }).toBuffer();
-    return { bytes: output, width: size, height: size };
-  }
-  const unit = Math.floor(Math.min(metadata.width / 9, metadata.height / 16) / 2) * 2;
-  if (unit < 1) throw new Error("ai_content_asset_output_aspect_ratio_invalid");
-  const width = unit * 9; const height = unit * 16;
-  const output = await sharp(bytes, { failOn: "error" }).extract({ left: Math.floor((metadata.width - width) / 2), top: Math.floor((metadata.height - height) / 2), width, height }).png({ compressionLevel: 9 }).toBuffer();
+  const { width, height } = format === "card_news"
+    ? { width: 1080, height: 1080 }
+    : { width: 1080, height: 1920 };
+  const output = await sharp(bytes, { failOn: "error" })
+    .resize(width, height, { fit: "contain", background: "#ffffff" })
+    .png({ compressionLevel: 9 })
+    .toBuffer();
   return { bytes: output, width, height };
 }
 

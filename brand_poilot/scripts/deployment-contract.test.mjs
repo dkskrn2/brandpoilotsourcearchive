@@ -202,6 +202,18 @@ test("FAQ runbook excludes Wiki without permanently disabling generic Wiki rollo
   assert.match(rollout, /WIKI_WORKER_IMAGE[\s\S]*continue/);
 });
 
+test("Card News rollout rejects a stale live planner command before pulling or mutating workers", () => {
+  const rollout = read("deploy/scripts/rollout-workers.sh");
+  assert.match(rollout, /CARD_NEWS_CODEX_PLAN_COMMAND=node scripts\/run-codex-card-manuscript-plan\.mjs --job "\{\{jobFile\}\}" --output "\{\{outputDir\}\}"/);
+  assert.match(rollout, /grep -Ec '\^CARD_NEWS_CODEX_PLAN_COMMAND='/);
+  assert.match(rollout, /grep -Fxc -- "\$expected_card_news_planner_command"/);
+  assert.match(rollout, /fail "card_news_planner_command_invalid"/);
+  const validation = rollout.indexOf('fail "card_news_planner_command_invalid"');
+  const candidatePull = rollout.indexOf('docker pull --quiet "${CANDIDATE_IMAGES[$image_key]}"');
+  const mutation = rollout.indexOf("ROLLOUT_MUTATED=true");
+  assert.ok(validation >= 0 && validation < candidatePull && candidatePull < mutation);
+});
+
 test("stored schema evidence never replaces a fresh live database verification", () => {
   const deploy = read("deploy/scripts/deploy.sh");
   const gate = deploy.slice(

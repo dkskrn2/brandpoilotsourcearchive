@@ -162,13 +162,16 @@ const RETIRED_CARD_DECK_CONTRACT_PATHS = new Set([
 
 const CARD_MANUSCRIPT_DOC_PATHS = new Set([
   "docs/superpowers/plans/2026-08-18-card-manuscript-shared-visual-session.md",
+  "docs/superpowers/plans/2026-08-19-no-crop-social-images-card-runner.md",
   "docs/superpowers/specs/2026-08-18-card-manuscript-plan-design.md",
+  "docs/superpowers/specs/2026-08-19-no-crop-social-images-card-runner-design.md",
 ]);
 
 const CARD_MANUSCRIPT_TOOLING_PATHS = new Set([
   "deploy/env/card-news-worker.env.example",
   "scripts/canonical-format-schema-runtime.test.mjs",
   "scripts/content-account-pool-deployment.test.mjs",
+  "scripts/deployment-contract.test.mjs",
   "scripts/incremental-cicd-contract.test.mjs",
   "scripts/reel-worker-deployment-cutover.test.mjs",
   "scripts/release-impact.mjs",
@@ -415,6 +418,10 @@ function classifyCardManuscriptVisualSessionPath(path, components) {
   if (AI_CONTENT_CONTROLLED_SEARCH_RUNTIME_PATHS.has(path)) {
     components.contentProposalWorker = true;
     return { known: true };
+  }
+  if (path === "deploy/scripts/rollout-workers.sh") {
+    components.cardNewsWorker = true;
+    return { known: true, deployBundle: true };
   }
   if (CARD_MANUSCRIPT_TOOLING_PATHS.has(path)) {
     return { known: true, deployBundle: path === "scripts/release-impact.mjs" };
