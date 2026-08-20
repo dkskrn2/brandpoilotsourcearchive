@@ -5,7 +5,7 @@ import {
   projectManualEditorialVisualInputs,
 } from "@brand-pilot/content-contracts/editorial-visual-context";
 
-export const reelPlanSkillVersion = "reel-storyboard-skill.v2";
+export const reelPlanSkillVersion = "reel-storyboard-skill.v3";
 
 function safePromptJson(value: unknown): string {
   return JSON.stringify(value, null, 2).replace(/[<>&\u2028\u2029]/g, (character) => {
@@ -44,6 +44,20 @@ function creativeContext(input: ContentGenerationInputV3, selection: FrozenManua
         buyingBarriers: input.selectedProposal.purposeDetails.buyingBarriers,
         cta: input.selectedProposal.purposeDetails.cta,
       };
+  const proposalLens = {
+    angle: input.selectedProposal.title,
+    target: input.selectedProposal.target,
+    customerContext: input.selectedProposal.customerContext,
+    purposeDetails,
+    question: purposeDetails.kind === "informational" ? purposeDetails.question : null,
+    whyNow: purposeDetails.kind === "informational" ? purposeDetails.whyNow : null,
+    oneLineIntent: input.selectedProposal.oneLineIntent,
+    keyMessage: input.selectedProposal.keyMessage,
+    differentiator: input.selectedProposal.differentiator,
+    hook: input.selectedProposal.hook,
+    informationalType: input.selectedProposal.informationalType,
+    assetCount: input.selectedProposal.assetCount,
+  };
   return {
     brand: {
       companyOverview: input.brandCore.companyOverview,
@@ -80,23 +94,7 @@ function creativeContext(input: ContentGenerationInputV3, selection: FrozenManua
       roles, title, sourceUrl, text,
     })),
     visualInputs: projectManualEditorialVisualInputs(input, selection),
-    selectedProposal: {
-      conceptKey: input.selectedProposal.conceptKey,
-      title: input.selectedProposal.title,
-      informationalType: input.selectedProposal.informationalType,
-      oneLineIntent: input.selectedProposal.oneLineIntent,
-      differentiator: input.selectedProposal.differentiator,
-      differentiationAxes: input.selectedProposal.differentiationAxes,
-      target: input.selectedProposal.target,
-      customerContext: input.selectedProposal.customerContext,
-      keyMessage: input.selectedProposal.keyMessage,
-      hook: input.selectedProposal.hook,
-      selectionReason: input.selectedProposal.selectionReason,
-      evidenceIds: input.selectedProposal.evidenceIds,
-      assetCount: input.selectedProposal.assetCount,
-      outline: input.selectedProposal.outline,
-      purposeDetails,
-    },
+    proposalLens,
   };
 }
 
@@ -131,8 +129,8 @@ export function buildReelPlanPrompt(
       imageryDirection: "전체 Reel 이미지 방향",
       invariants: ["모든 장면에서 반드시 유지할 시각 규칙"],
     },
-    scenes: input.selectedProposal.outline.map((outline) => ({
-      index: outline.index,
+    scenes: Array.from({ length: assetCount }, (_, offset) => ({
+      index: offset + 1,
       editorialRole: "이 장면의 최종 편집 역할",
       purpose: "이 장면이 Reel 전체에서 수행할 목적",
       coreMessage: "이 장면에서 사용자가 기억해야 할 하나의 메시지",
@@ -166,13 +164,12 @@ export function buildReelPlanPrompt(
     "응답에는 창작 필드만 작성하세요. 서버가 보존하는 식별자, 출력 설정, 원본 스냅샷, 저장소 메타데이터와 정책을 다시 작성하지 마세요.",
     "attachment 선택은 서버와 최종 이미지 단계의 책임입니다. 기획 초안에서 첨부 선택 목록을 만들지 마세요.",
     `구성안의 방향·대상·목적은 유지하고 정확히 ${assetCount}개 장면이라는 수를 고정하세요. 장면을 추가·삭제하지 마세요.`,
-    "구성안 outline의 headline, role, order, evidenceIds는 편집 참고값입니다. 이를 최종 콘티로 복사하거나 고정하지 마세요.",
-    "동결된 subject와 researchEvidence는 내용의 권위 원본이고 selectedProposal은 관점·대상·목적을 정하는 편집 방향입니다.",
+    "Proposal Lens는 방향·대상·목적·질문·의도만 제공하며 Scene 순서·문구·Evidence 배치를 제공하거나 고정하지 않습니다.",
+    "동결된 subject와 researchEvidence는 내용의 권위 원본이고 proposalLens는 관점·대상·목적을 정하는 편집 방향입니다.",
     "subject.title, 존재하는 subject.text와 contentInstruction에서 주제 정체성과 핵심 주장에 해당하는 고유명사, 제품·서비스명, 버전, 핵심 수치, 조건, 시점과 적용 대상을 최종 화면 문구와 caption에서 누락하거나 더 일반적인 표현으로 바꾸지 마세요.",
     "topic_url이면 subject.text 전체를 검토하고 원문의 핵심 사실을 요약이나 구성안 문구로 대체하지 마세요.",
     "원문의 모든 세부사항을 모든 장면에 억지로 넣지 마세요. 선택한 관점에 불필요한 세부사항은 덜어내되 주제 정체성과 핵심 주장은 유지하세요.",
-    "동결된 전체 factualSources를 다시 검토해 선택된 구성안의 콘셉트와 목적을 가장 잘 살리는 장면 역할, 정보 선택, 정보 순서와 레이아웃을 다시 결정하세요.",
-    "구성안의 evidenceIds는 대표 근거일 뿐 최종 Storyboard에서 사용할 수 있는 근거의 허용 목록이 아닙니다. researchEvidence 전체를 사용할 수 있습니다.",
+    "동결된 전체 researchEvidence를 다시 검토해 선택된 구성안의 콘셉트와 목적을 가장 잘 살리는 장면 역할, 정보 선택, 정보 순서와 레이아웃을 다시 결정하세요.",
     "강한 원문 Evidence를 Scene 수에 맞추기 위해 제외하지 마세요. Scene보다 강한 Point가 많으면 의미상 같은 Point를 설명하는 Evidence끼리 재그룹하고 재배분하는 방법을 먼저 사용하세요.",
     "Proposal Lens에 직접 언급되지 않았다는 이유만으로 Evidence를 제외하지 마세요. Proposal은 편집 관점이지 원문 정보 범위의 제한이 아닙니다.",
     "원문 주제의 핵심 변화·범위·후속 확장·효과를 보완하는 Evidence도 관련 Evidence로 취급하세요.",
@@ -183,7 +180,7 @@ export function buildReelPlanPrompt(
     "모든 장면은 9:16 세로 이미지용 구조화 문구, visualThesis와 layoutArchetype을 가져야 합니다.",
     "한 장면에는 하나의 핵심 메시지만 담으세요. coreMessage는 내부 판단용이며 최종 화면 문구가 아닙니다.",
     "headline은 coreMessage의 축약본이어야 하며 coreMessage에 없는 사실, 수치, 효능 또는 결론을 추가하지 마세요. 주제를 설명하는 제목보다 내용을 읽지 않아도 장면의 결론을 알 수 있는 제목을 우선하세요.",
-    "outline의 headline은 최종 카피가 아닌 참고값입니다. 실제 headline은 결과, 변화, 차이 또는 의미가 바로 드러나게 작성하세요.",
+    "실제 headline은 결과, 변화, 차이 또는 의미가 바로 드러나게 작성하세요.",
     "핵심 숫자, 비교, 단계 또는 인용이 있으면 문장 속에 묻지 말고 keyVisual로 분리하세요. 필요하지 않으면 type을 none으로 하고 entries는 []로 두세요.",
     'keyVisual.entries 관계 규칙: none은 0개, number는 role="value" 1~4개, before_after는 정확히 before, after 순서, comparison은 label이 있는 left, right 순서, steps는 role="step" 2~4개, quote는 quote 뒤 선택적으로 attribution 1개, related_facts는 role="fact" 2~4개입니다.',
     "before_after는 동일 대상·동일 지표의 실제 전후 관계에만, comparison은 직접 비교 가능한 동일 차원의 값에만 사용하세요.",

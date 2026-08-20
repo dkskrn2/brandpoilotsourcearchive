@@ -22,13 +22,14 @@ describe("card-news V3 production runtime", () => {
     expect(skill).not.toContain("content-generation-input.v2");
   });
 
-  it("uses the pinned network-disabled Terra planner", async () => {
+  it("uses the pinned network-disabled Sol planner with high reasoning", async () => {
     const runner = await import(new URL("../scripts/run-codex-card-manuscript-plan.mjs", import.meta.url).href) as {
       buildCodexArgs(outputDir: string): string[];
       buildCodexPrompt(prompt: string): string;
     };
     const args = runner.buildCodexArgs(path.resolve("plan-output"));
-    expect(args.slice(0, 3)).toEqual(["--model", "gpt-5.6-terra", "--strict-config"]);
+    expect(args.slice(0, 3)).toEqual(["--model", "gpt-5.6-sol", "--strict-config"]);
+    expect(args).toEqual(expect.arrayContaining(["-c", 'model_reasoning_effort="high"']));
     expect(args.join(" ")).toContain("permissions.planner.network.enabled=false");
     const schemaPath = args[args.indexOf("--output-schema") + 1];
     expect(schemaPath).toMatch(/card-manuscript-plan-v1\.schema\.json$/);

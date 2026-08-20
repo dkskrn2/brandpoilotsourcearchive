@@ -18,6 +18,8 @@ const RUNTIME_MODEL_FILES = Object.freeze({
   proposal: "workers/brand-pilot-content-proposal-worker/src/codexModel.ts",
 });
 
+const SOL_HIGH_MANUSCRIPT_RUNTIME_IDS = Object.freeze(new Set(["card_news", "reel"]));
+
 const PLANNER_ENV_CONTRACTS = Object.freeze([
   {
     id: "card_news_deploy",
@@ -258,11 +260,30 @@ function checkCatalogAndPromptBranches(files, violations) {
 
 function checkRuntimeModelPins(files, violations) {
   const terraArgument = /["'](?:--model|-m)["']\s*,\s*(?:CONTENT_PLANNER_MODEL_ID|["']gpt-5\.6-terra["'])/;
+  const solArgument = /["'](?:--model|-m)["']\s*,\s*["']gpt-5\.6-sol["']/;
+  const highReasoning = /model_reasoning_effort=["']high["']/;
   const canonicalImport = /import\s*\{[^}]*\bCONTENT_PLANNER_MODEL_ID\b[^}]*\}\s*from\s*["']@brand-pilot\/content-contracts["']/;
   const localModelArgument = /["'](?:--model|-m)["']\s*,\s*MODEL_ID\b/;
   const localTerraBinding = /\bconst\s+MODEL_ID\s*=\s*["']gpt-5\.6-terra["']/;
   for (const [id, file] of Object.entries(RUNTIME_MODEL_FILES)) {
     const source = files.get(file) ?? "";
+    if (SOL_HIGH_MANUSCRIPT_RUNTIME_IDS.has(id)) {
+      if (!solArgument.test(source)) {
+        violations.push(violation(
+          `missing_sol_cli_model:${id}`,
+          file,
+          "the final Card/Reel manuscript invocation must pass the Sol model",
+        ));
+      }
+      if (!highReasoning.test(source)) {
+        violations.push(violation(
+          `missing_high_reasoning:${id}`,
+          file,
+          "the final Card/Reel manuscript invocation must pin high reasoning",
+        ));
+      }
+      continue;
+    }
     const match = source.match(terraArgument);
     const usesCanonicalConstant = match?.[0].includes("CONTENT_PLANNER_MODEL_ID") ?? false;
     const hasDirectPin = Boolean(match) && (!usesCanonicalConstant || canonicalImport.test(source));

@@ -63,14 +63,14 @@ const baseline = Object.freeze({
   "workers/brand-pilot-reel-worker/src/index.ts": `const workerId = process.env.REEL_WORKER_ID ?? "reel-worker";`,
   "workers/brand-pilot-reel-worker/src/worker.ts": `export const workerFailure = "reel_worker_failed";`,
   "workers/brand-pilot-card-news-worker/scripts/run-codex-card-manuscript-plan.mjs": `
-    const args = ["--model", "gpt-5.6-terra", "exec"];
+    const args = ["--model", "gpt-5.6-sol", "-c", 'model_reasoning_effort="high"', "exec"];
   `,
   "workers/brand-pilot-blog-worker/scripts/run-codex-blog-v2-plan.mjs": `
     import { CONTENT_PLANNER_MODEL_ID } from "@brand-pilot/content-contracts";
     const args = ["--model", CONTENT_PLANNER_MODEL_ID, "exec"];
   `,
   "workers/brand-pilot-reel-worker/scripts/run-codex-reel-plan.mjs": `
-    const args = ["exec", "--model", "gpt-5.6-terra"];
+    const args = ["exec", "--model", "gpt-5.6-sol", "-c", 'model_reasoning_effort="high"'];
   `,
   "workers/brand-pilot-worker-runtime/src/controlledSearch.ts": `
     import { CONTENT_PLANNER_MODEL_ID } from "@brand-pilot/content-contracts";
@@ -176,6 +176,8 @@ const violationFixtures = [
   ["missing_terra_cli_model:controlled_search", "workers/brand-pilot-worker-runtime/src/controlledSearch.ts", 'const args = ["--model", "gpt-5.6-sol", "exec"];'],
   ["missing_terra_cli_model:blog_research", "workers/brand-pilot-blog-worker/src/research.ts", 'const args = ["exec", "--model", "gpt-5.6-sol"];'],
   ["missing_terra_cli_model:proposal", "workers/brand-pilot-content-proposal-worker/src/codexModel.ts", 'const MODEL_ID = "gpt-5.6-sol"; const args = ["exec", "-m", MODEL_ID];'],
+  ["missing_sol_cli_model:card_news", "workers/brand-pilot-card-news-worker/scripts/run-codex-card-manuscript-plan.mjs", 'const args = ["--model", "gpt-5.6-terra", "-c", \'model_reasoning_effort="high"\', "exec"];'],
+  ["missing_high_reasoning:reel", "workers/brand-pilot-reel-worker/scripts/run-codex-reel-plan.mjs", 'const args = ["exec", "--model", "gpt-5.6-sol"];'],
   ["retired_worker_env_key", "deploy/env/content-proposal-worker.env.example", "CONTENT_PROPOSAL_CODEX_MODEL=gpt-5.4"],
   ["invalid_planner_command_env:card_news_deploy", "deploy/env/card-news-worker.env.example", 'CARD_NEWS_CODEX_PLAN_COMMAND=node scripts/run-codex-card-news-plan.mjs --job "{{jobFile}}" --output "{{outputDir}}"'],
   ["retired_worker_env_key", "workers/brand-pilot-card-news-worker/.env.example", 'CARD_NEWS_CODEX_COMMAND=node scripts/run-codex-card-news.mjs --job "{{jobFile}}" --output "{{outputDir}}"'],
