@@ -527,6 +527,34 @@ describe("controlled proposal search", () => {
     ]));
   });
 
+  it("supports independent-claim research without trusting a server acquisition judgment", async () => {
+    const model = JSON.stringify({
+      type: "item.completed",
+      item: { type: "agent_message", text: JSON.stringify({
+        decision: "searched", reason: "직접 URL 조사", queries: [],
+        items: [{
+          title: "직접 조사 자료",
+          url: "https://source.example/article",
+          publisher: "Source",
+          publishedAt: null,
+          claimSummary: "독립 주장",
+        }],
+      }) },
+    });
+    const runner = injectedRunner(`${webEvent()}\n${model}`);
+
+    const result = await runControlledSearch({
+      purpose: "informational",
+      mode: "required",
+      evidenceGranularity: "independent_claim",
+      publicResearchContext: publicContext("informational"),
+    }, { runChild: runner.run });
+
+    expect(result.items).toHaveLength(1);
+    expect(runner.calls).toHaveLength(1);
+    expect(runner.calls[0]!.prompt).not.toContain("불완전 수집");
+  });
+
   it("deduplicates the same normalized claim and applies the eight-item cap after claim dedupe", async () => {
     const items = Array.from({ length: 10 }, (_, index) => ({
       title: `자료 ${index}`,

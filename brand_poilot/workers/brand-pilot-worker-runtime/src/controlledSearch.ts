@@ -52,10 +52,13 @@ type ResearchExecutionControls = {
 function researchExecutionControls(input: ControlledSearchInput): ResearchExecutionControls {
   const hasGranularity = Object.hasOwn(input, "evidenceGranularity");
   const hasAcquisition = Object.hasOwn(input, "sourceAcquisition");
-  if (hasGranularity !== hasAcquisition) throw new Error("controlled_search_source_acquisition_invalid");
+  if (!hasGranularity && hasAcquisition) throw new Error("controlled_search_source_acquisition_invalid");
   if (!hasGranularity) return { evidenceGranularity: "source", sourceAcquisition: null };
   if (input.evidenceGranularity !== "independent_claim") {
     throw new Error("controlled_search_source_acquisition_invalid");
+  }
+  if (!hasAcquisition) {
+    return { evidenceGranularity: "independent_claim", sourceAcquisition: null };
   }
   try {
     return {

@@ -53,12 +53,7 @@ export function createContentProposalResearch(
       return search({
         purpose: job.request.purpose,
         mode: job.request.purpose === "informational" ? "required" : "automatic",
-        ...(job.researchSourceAcquisition === undefined
-          ? {}
-          : {
-              evidenceGranularity: "independent_claim" as const,
-              sourceAcquisition: job.researchSourceAcquisition,
-            }),
+        evidenceGranularity: "independent_claim",
         publicResearchContext: publicResearchContext(job),
         signal,
       });
