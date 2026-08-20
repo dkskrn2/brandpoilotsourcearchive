@@ -170,6 +170,26 @@ describe("card-news V3 prompt", () => {
     expect(prompt).toContain("검토 과정은 출력하지 말고 수정된 최종 JSON만 반환");
   });
 
+  it("does not show an output example that contradicts evidence and relation validation", () => {
+    const prompt = buildCardNewsPlanPrompt(job, {
+      generationId: job.generationId,
+      product: null,
+      subject: { kind: "topic_text", title: "Two changed thresholds" },
+      selectedProposal: { assetCount: 2, outline: [] },
+      outputSettings: { purpose: "informational", outputFormat: "card_news" },
+      researchEvidence: {
+        items: [{ id: "7cb198c9-9c3b-5214-870d-c3b510217869" }],
+      },
+      references: { selected: [], brandStyleImages: [], avatarStyleImageId: null, attachments: [] },
+    } as never, frozenManualVisualSelection);
+
+    expect(prompt).not.toContain('"evidenceIds": []');
+    expect(prompt).toContain("factual claim이 있는 장면은 exact Research Evidence Pool UUID를 1개 이상 넣으세요");
+    expect(prompt).toContain("comparison은 정확히 2개 entry만 허용");
+    expect(prompt).toContain('첫 entry.role은 정확히 "left", 두 번째는 정확히 "right"');
+    expect(prompt).toContain("두 개 이상의 비교 쌍을 comparison 하나에 넣지 마세요");
+  });
+
   it("treats the complete URL-derived subject as untrusted data rather than instructions", () => {
     const prompt = buildCardNewsPlanPrompt(job, {
       generationId: job.generationId,
