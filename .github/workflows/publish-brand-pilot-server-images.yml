@@ -34,6 +34,7 @@ jobs:
       deploy_bundle_changed: ${{ steps.impact.outputs.deploy_bundle_changed }}
       ui_changed: ${{ steps.impact.outputs.ui_changed }}
       bootstrap: ${{ steps.impact.outputs.bootstrap }}
+      policy_base_sha: ${{ steps.impact.outputs.policy_base_sha }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
@@ -68,9 +69,11 @@ jobs:
           SCHEMA2_READY: ${{ vars.PRODUCTION_RELEASE_SCHEMA2_READY }}
         run: |
           set -Eeuo pipefail
+          policy_base_sha=""
           if [[ "$GITHUB_EVENT_NAME" == "pull_request" ]]; then
             git fetch --no-tags origin "$GITHUB_BASE_REF"
             base_sha="$(git merge-base "origin/$GITHUB_BASE_REF" "$GITHUB_SHA")"
+            policy_base_sha="$base_sha"
             scoped_impact_json="$(node scripts/release-impact.mjs --base "$base_sha" --head "$GITHUB_SHA" --profile manual-brand-visual-assets)"
             if IMPACT_JSON="$scoped_impact_json" node --input-type=module -e '
               const impact = JSON.parse(process.env.IMPACT_JSON);
@@ -101,6 +104,7 @@ jobs:
             impact_json="$(node --input-type=module -e 'import { classifyChangedPaths } from "./scripts/release-impact.mjs"; console.log(JSON.stringify(classifyChangedPaths(["package-lock.json"])))')"
             bootstrap=true
           else
+            policy_base_sha="$PRODUCTION_RELEASE_SHA"
             scoped_impact_json="$(node scripts/release-impact.mjs --base "$PRODUCTION_RELEASE_SHA" --head "$GITHUB_SHA" --profile manual-brand-visual-assets)"
             if IMPACT_JSON="$scoped_impact_json" node --input-type=module -e '
                 const impact = JSON.parse(process.env.IMPACT_JSON);
@@ -155,6 +159,7 @@ jobs:
           NODE
           cat impact.outputs >> "$GITHUB_OUTPUT"
           printf 'bootstrap=%s\n' "$bootstrap" >> "$GITHUB_OUTPUT"
+          printf 'policy_base_sha=%s\n' "$policy_base_sha" >> "$GITHUB_OUTPUT"
 
   verify:
     needs: impact
@@ -164,6 +169,7 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
+          fetch-depth: 0
           persist-credentials: false
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
@@ -173,6 +179,17 @@ jobs:
       - name: Install
         working-directory: brand_poilot
         run: npm ci
+      - name: Verify canonical visual render policy release history
+        working-directory: brand_poilot
+        env:
+          POLICY_BASE_SHA: ${{ needs.impact.outputs.policy_base_sha }}
+        run: |
+          set -Eeuo pipefail
+          if [[ -n "$POLICY_BASE_SHA" ]]; then
+            node scripts/verify-ai-content-visual-render-policy.mjs --base "$POLICY_BASE_SHA"
+          else
+            node scripts/verify-ai-content-visual-render-policy.mjs
+          fi
       - name: Verify release tooling and deployment contracts
         working-directory: brand_poilot
         run: |

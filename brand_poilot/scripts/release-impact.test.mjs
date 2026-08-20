@@ -309,21 +309,25 @@ test("structured social render profile rejects any extra path without widening d
   assert.deepEqual(impact.unknownPaths, ["brand_poilot/workers/brand-pilot-blog-worker/src/worker.ts"]);
 });
 
-test("Card Manuscript visual session selects exactly its four coordinated server consumers", () => {
+test("Card Manuscript visual session selects exactly its five coordinated server consumers", () => {
   const impact = classifyChangedPaths([
     "brand_poilot/packages/brand-pilot-content-contracts/src/cardManuscriptPlan.ts",
     "brand_poilot/packages/brand-pilot-content-contracts/src/cardDeckEditorialPlan.ts",
     "brand_poilot/packages/brand-pilot-content-contracts/src/researchSourceAcquisition.ts",
+    "brand_poilot/packages/brand-pilot-content-contracts/src/structuredSceneCopy.test.ts",
+    "brand_poilot/packages/brand-pilot-content-contracts/src/structuredSceneCopy.ts",
     "brand_poilot/packages/brand-pilot-content-contracts/src/visualRenderSession.ts",
     "brand_poilot/apps/api/src/aiContentRenderJobs.ts",
     "brand_poilot/workers/brand-pilot-content-proposal-worker/src/contracts.ts",
     "brand_poilot/workers/brand-pilot-worker-runtime/src/controlledSearch.ts",
     "brand_poilot/workers/brand-pilot-card-news-worker/src/manuscriptPlan.ts",
+    "brand_poilot/workers/brand-pilot-reel-worker/src/promptBuilder.ts",
+    "brand_poilot/workers/brand-pilot-reel-worker/scripts/reel-storyboard-v1.schema.json",
     "brand_poilot/workers/brand-pilot-image-worker/src/aiContentVisualSessionPromptCompiler.ts",
     "brand_poilot/docs/superpowers/plans/2026-08-18-card-manuscript-shared-visual-session.md",
   ], { profile: CARD_MANUSCRIPT_VISUAL_SESSION_PROFILE });
 
-  assert.deepEqual(enabled(impact), ["api", "cardNewsWorker", "contentProposalWorker", "imageWorker"]);
+  assert.deepEqual(enabled(impact), ["api", "cardNewsWorker", "contentProposalWorker", "imageWorker", "reelWorker"]);
   assert.equal(impact.buildAllServer, false);
   assert.equal(impact.migrationChanged, false);
   assert.equal(impact.productionDeployAllowed, true);
@@ -331,10 +335,9 @@ test("Card Manuscript visual session selects exactly its four coordinated server
   assert.deepEqual(impact.unknownPaths, []);
 });
 
-test("Card Manuscript visual session rejects UI, Reel Worker, Blog, marketing, and migrations", () => {
+test("Card Manuscript visual session rejects UI, Blog, marketing, and migrations", () => {
   for (const path of [
     "brand_poilot/apps/customer-ui/src/App.tsx",
-    "brand_poilot/workers/brand-pilot-reel-worker/src/worker.ts",
     "brand_poilot/workers/brand-pilot-blog-worker/src/worker.ts",
     "brand_poilot/workers/brand-pilot-marketing-worker/src/worker.ts",
     "brand_poilot/db/migrations/077_unrelated.sql",
@@ -362,6 +365,8 @@ test("Card Manuscript visual session accepts exact deployment tooling without wi
     "brand_poilot/scripts/release-impact.test.mjs",
     "brand_poilot/scripts/three-format-cutover-static-check.mjs",
     "brand_poilot/scripts/three-format-cutover-static-check.test.mjs",
+    "brand_poilot/scripts/verify-ai-content-visual-render-policy.mjs",
+    "brand_poilot/scripts/verify-ai-content-visual-render-policy.test.mjs",
   ], { profile: CARD_MANUSCRIPT_VISUAL_SESSION_PROFILE });
 
   assert.deepEqual(enabled(impact), []);

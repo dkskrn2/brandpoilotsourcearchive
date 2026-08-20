@@ -29,7 +29,8 @@ function input(subject: unknown) {
       attachments: [{ id: id(7), role: "supporting_image", fileName: "youtube.png", storageUrl: "https://cdn.example/youtube.png" }],
     },
     selectedProposal: {
-      id: id(8), conceptKey: "change", title: "무엇이 바뀌었나", oneLineIntent: "변화를 설명", target: "Creators",
+      id: id(8), conceptKey: "change", title: "무엇이 바뀌었나", informationalType: "trend_insight",
+      oneLineIntent: "변화를 설명", differentiator: "수치 중심", target: "Creators",
       customerContext: "수익화 준비", keyMessage: "기준이 높아진다", hook: "2배", selectionReason: "핵심 변화",
       evidenceIds: [id(4)], referenceIds: [id(5)], assetCount: 3,
       outline: [1, 2, 3].map((index) => ({ index, role: index === 1 ? "hook" : "detail", headline: `참고 ${index}`, purpose: `참고 목적 ${index}` })),
@@ -66,6 +67,22 @@ describe("card deck source bundle", () => {
     expect(JSON.stringify(bundle)).not.toContain("storageUrl");
     expect(JSON.stringify(bundle)).not.toContain("storagePath");
     expect(JSON.stringify(bundle)).not.toContain("checksum");
-    expect(bundle.intent.selectedProposal.outline).toEqual(source.selectedProposal.outline);
+    expect(bundle.intent.proposalLens).toEqual({
+      angle: source.selectedProposal.title,
+      target: source.selectedProposal.target,
+      customerContext: source.selectedProposal.customerContext,
+      purposeDetails: source.selectedProposal.purposeDetails,
+      question: "무엇이 바뀌나",
+      whyNow: "발표",
+      oneLineIntent: source.selectedProposal.oneLineIntent,
+      keyMessage: source.selectedProposal.keyMessage,
+      differentiator: source.selectedProposal.differentiator,
+      hook: source.selectedProposal.hook,
+      informationalType: source.selectedProposal.informationalType,
+      assetCount: source.selectedProposal.assetCount,
+    });
+    expect(bundle.intent).not.toHaveProperty("selectedProposal");
+    expect(JSON.stringify(bundle)).not.toContain("참고 목적");
+    expect(JSON.stringify(bundle.intent)).not.toContain(`\"evidenceIds\"`);
   });
 });

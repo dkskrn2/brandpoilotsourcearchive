@@ -150,6 +150,8 @@ const CARD_MANUSCRIPT_CONTRACT_PATHS = new Set([
   "packages/brand-pilot-content-contracts/src/generatedArtifacts.test.ts",
   "packages/brand-pilot-content-contracts/src/researchSourceAcquisition.test.ts",
   "packages/brand-pilot-content-contracts/src/researchSourceAcquisition.ts",
+  "packages/brand-pilot-content-contracts/src/structuredSceneCopy.test.ts",
+  "packages/brand-pilot-content-contracts/src/structuredSceneCopy.ts",
   "packages/brand-pilot-content-contracts/src/visualRenderSession.test.ts",
   "packages/brand-pilot-content-contracts/src/visualRenderSession.ts",
 ]);
@@ -178,7 +180,15 @@ const CARD_MANUSCRIPT_TOOLING_PATHS = new Set([
   "scripts/release-impact.test.mjs",
   "scripts/three-format-cutover-static-check.mjs",
   "scripts/three-format-cutover-static-check.test.mjs",
+  "scripts/verify-ai-content-visual-render-policy.mjs",
+  "scripts/verify-ai-content-visual-render-policy.test.mjs",
   ".github/workflows/publish-brand-pilot-server-images.yml",
+]);
+
+const CARD_MANUSCRIPT_REEL_PATHS = new Set([
+  "workers/brand-pilot-reel-worker/scripts/reel-storyboard-v1.schema.json",
+  "workers/brand-pilot-reel-worker/src/promptBuilder.test.ts",
+  "workers/brand-pilot-reel-worker/src/promptBuilder.ts",
 ]);
 
 const FAQ_UTTERANCE_DEPLOY_PATHS = new Set([
@@ -413,6 +423,10 @@ function classifyCardManuscriptVisualSessionPath(path, components) {
   }
   if (path.startsWith("workers/brand-pilot-image-worker/")) {
     components.imageWorker = true;
+    return { known: true };
+  }
+  if (CARD_MANUSCRIPT_REEL_PATHS.has(path)) {
+    components.reelWorker = true;
     return { known: true };
   }
   if (AI_CONTENT_CONTROLLED_SEARCH_RUNTIME_PATHS.has(path)) {

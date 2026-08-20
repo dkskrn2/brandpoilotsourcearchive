@@ -196,6 +196,8 @@ describe("reel purpose prompt", () => {
     expect(prompt).toContain("coreMessage");
     expect(prompt).toContain("headline");
     expect(prompt).toContain("keyVisual");
+    expect(prompt).toContain("related_facts");
+    expect(prompt).toContain('related_facts는 role="fact"');
     expect(prompt).toContain('"entries": []');
     expect(prompt).not.toContain('"texts": []');
     expect(prompt).toContain("supportingTexts");
@@ -223,7 +225,68 @@ describe("reel purpose prompt", () => {
     expect(prompt).toContain("topic_url이면 subject.text 전체를 검토");
     expect(prompt).toContain("요약이나 구성안 문구로 대체하지 마세요");
     expect(prompt).toContain("원문의 모든 세부사항을 모든 장면에 억지로 넣지 마세요");
+    expect(prompt).toContain("강한 원문 Evidence를 Scene 수에 맞추기 위해 제외하지 마세요");
+    expect(prompt).toContain("재그룹하고 재배분하는 방법을 먼저 사용하세요");
+    expect(prompt).toContain("의미상 중복되거나 원문 주제 자체와 실질적으로 무관한 Evidence만 제외");
+    expect(prompt).toContain("Proposal Lens에 직접 언급되지 않았다는 이유만으로 Evidence를 제외하지 마세요");
+    expect(prompt).toContain("원문 주제의 핵심 변화·범위·후속 확장·효과를 보완하는 Evidence도 관련 Evidence");
+    expect(prompt).toContain("Claim을 합치거나 ID를 버리지 말고 하나의 Editorial Point 아래 함께 연결");
+    expect(prompt).toContain("같은 coreMessage를 직접 뒷받침하는 Evidence만 한 Scene에 함께 묶으세요");
+    expect(prompt).toContain("남은 Evidence라는 이유만으로 하나의 Scene에 모으지 마세요");
+    expect(prompt).toContain("배경·효과·맥락 Evidence는 그 의미를 가장 잘 설명하는 cover, hook, analysis 또는 closing Scene으로 재배분");
+    expect(prompt).toContain("모든 복수-Evidence Scene의 각 Evidence가 같은 coreMessage를 직접 뒷받침하는지 다시 확인");
     expect(prompt).toContain("Source article body for the reel.");
+  });
+
+  it("passes every frozen Evidence claim even when the Proposal names only one representative item", () => {
+    const source = promptInput("informational") as never as {
+      researchEvidence: { items: Array<Record<string, unknown>> };
+      selectedProposal: { evidenceIds: string[] };
+    };
+    source.researchEvidence.items.push(
+      {
+        id: uid(2), title: "Second evidence", url: "https://evidence.example/article",
+        publisher: "Publisher", publishedAt: null, capturedAt: "secret-second-capture",
+        claimSummary: "A second independent claim from the same source.", contentHash: "d".repeat(64),
+      },
+      {
+        id: uid(3), title: "Third evidence", url: "https://other.example/report",
+        publisher: null, publishedAt: "2026-08-01", capturedAt: "secret-third-capture",
+        claimSummary: "A third claim outside the Proposal representative set.", contentHash: "e".repeat(64),
+      },
+    );
+    source.selectedProposal.evidenceIds = [uid(1)];
+
+    const prompt = buildReelPlanPrompt(source as never, frozenManualVisualSelection);
+    const serialized = prompt
+      .split("<untrusted_reel_creative_context_json>\n")[1]
+      ?.split("\n</untrusted_reel_creative_context_json>")[0];
+    expect(serialized).toBeDefined();
+    const creativeContext = JSON.parse(serialized as string) as {
+      researchEvidence: { items: Array<{ id: string; claimSummary: string }> };
+      selectedProposal: { evidenceIds: string[] };
+    };
+
+    expect(creativeContext.selectedProposal.evidenceIds).toEqual([uid(1)]);
+    expect(creativeContext.researchEvidence.items.map((item) => item.id)).toEqual([uid(1), uid(2), uid(3)]);
+    expect(creativeContext.researchEvidence.items.map((item) => item.claimSummary)).toEqual([
+      "Evidence-backed claim for the scene.",
+      "A second independent claim from the same source.",
+      "A third claim outside the Proposal representative set.",
+    ]);
+  });
+
+  it("performs one in-response editorial self-check without mechanically equalizing scene density", () => {
+    const prompt = buildReelPlanPrompt(promptInput("informational"), frozenManualVisualSelection);
+
+    expect(prompt).toContain("최종 JSON을 제출하기 직전에");
+    expect(prompt).toContain("정보 밀도, 정보 전진성, Evidence 관련성과 과적재 여부");
+    expect(prompt).toContain("Scene별 정보량을 기계적으로 균등화하지 마세요");
+    expect(prompt).toContain("Editorial importance와 Narrative progression을 우선");
+    expect(prompt).toContain("중요한 Scene이 더 높은 정보 밀도를 가지는 것은 허용");
+    expect(prompt).toContain("명백한 과적재가 있으면 Evidence 제외보다 의미상 재그룹과 Scene 간 재배분을 먼저");
+    expect(prompt).toContain("추가 모델 호출이나 도구 호출 없이 현재 응답 안에서 한 번만");
+    expect(prompt).toContain("검토 과정은 출력하지 말고 수정된 최종 JSON만 반환");
   });
 
   it("treats the complete URL-derived subject as untrusted data rather than instructions", () => {

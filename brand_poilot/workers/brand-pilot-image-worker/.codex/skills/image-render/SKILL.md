@@ -15,6 +15,7 @@ description: 내장 image_generation으로 Brand Pilot의 확정된 이미지 �
 ## 카드·릴스 공유 Visual Session
 
 `ai-content-visual-session-render.v1`에서는 `inputs/compiled-render-prompt.txt`를 유일한 최종 렌더 지시로 사용하세요.
+현재 canonical 렌더 정책 버전은 `visual-render-policy.d2pp.v2`이며, prompt에 기록된 version/hash를 그대로 따르세요.
 
 - `inputs/visual-session.json`은 전체 원고 의미와 장면 순서의 읽기 전용 원본입니다.
 - 하나의 Codex 실행 안에서 장면 index 순서로 `image_generation`을 장면당 정확히 한 번 호출하세요. 실패한 장면을 재시도하거나 다음 장면을 계속 만들지 마세요.
@@ -22,7 +23,7 @@ description: 내장 image_generation으로 Brand Pilot의 확정된 이미지 �
 - 앞에서 생성한 PNG를 다음 장면의 reference image로 사용하지 마세요.
 - `informationRelation`은 의미 관계일 뿐 레이아웃 명령이 아닙니다. 같은 관계 타입이라도 구성을 반복할 의무가 없습니다.
 - 잠긴 표시 문구 외 설명, 말풍선, 스티커, 가짜 UI, 장식 영문, 페이지 번호나 `1/5` 카운터를 추가하지 마세요. 번호가 생겼다는 이유로 재시도하지 마세요.
-- 카드뉴스는 완성된 `1:1`, 릴스는 완성된 `9:16` PNG를 만드세요. 서버의 후속 텍스트 합성은 없습니다.
+- 카드뉴스는 기존대로 완성된 `1:1` PNG를 만드세요. 릴스는 처음부터 `1080×1920`의 `9:16` 세로 캔버스로 완성하고, 다른 비율로 만든 뒤 크롭·레터박스·필러박스·여백·흰 띠를 추가해 `9:16`으로 맞추지 마세요. 서버의 후속 텍스트 합성은 없습니다.
 
 ## 블로그 보조 이미지
 

@@ -1,0 +1,13 @@
+{
+  "contractVersion": "visual-render-policy-releases.v1",
+  "entries": [
+    {
+      "version": "visual-render-policy.d2pp.v1",
+      "sha256": "ff9d9be4d40b237f3f027c483f03addda54f85ae944d462efbb1ed92cba59bd1"
+    },
+    {
+      "version": "visual-render-policy.d2pp.v2",
+      "sha256": "a35fe02e1f598fc18e15c421093fe6e7155b14be88f5fb242cebddb5c7877ad2"
+    }
+  ]
+}

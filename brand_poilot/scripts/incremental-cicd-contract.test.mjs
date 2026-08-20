@@ -51,6 +51,12 @@ test("workflow detects production impact and builds an affected image matrix", (
   assert.match(workflow, /name: Verify customer UI[\s\S]*TZ: Asia\/Seoul[\s\S]*npm run test --workspace @brand-pilot\/customer-ui/);
 });
 
+test("workflow enforces the canonical visual render policy as an append-only release history", () => {
+  assert.match(workflow, /fetch-depth: 0/);
+  assert.match(workflow, /verify-ai-content-visual-render-policy\.mjs --base/);
+  assert.match(workflow, /needs\.impact\.outputs\.policy_base_sha/);
+});
+
 test.skip("DEFERRED: automatic three-format cutover waits for manual production and browser evidence", () => {
   assert.match(workflow, /release-impact\.mjs[^\n]*--profile ai-content-three-format-cutover/);
   assert.match(workflow, /assemble-release-manifest\.mjs[^\n]*--mode initial-cutover/);

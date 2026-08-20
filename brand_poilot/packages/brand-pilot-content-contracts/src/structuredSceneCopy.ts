@@ -11,6 +11,7 @@ export const StructuredKeyVisualTypeV1Schema = Type.Union([
   Type.Literal("comparison"),
   Type.Literal("steps"),
   Type.Literal("quote"),
+  Type.Literal("related_facts"),
 ]);
 
 export const StructuredKeyVisualEntryRoleV1Schema = Type.Union([
@@ -22,6 +23,7 @@ export const StructuredKeyVisualEntryRoleV1Schema = Type.Union([
   Type.Literal("step"),
   Type.Literal("quote"),
   Type.Literal("attribution"),
+  Type.Literal("fact"),
 ]);
 
 export const StructuredKeyVisualEntryV1Schema = Type.Object({
@@ -95,6 +97,9 @@ function validateRelations(keyVisual: StructuredSceneCopyV1["keyVisual"]): void 
     case "quote":
       if ((roles.length !== 1 && roles.length !== 2) || roles[0] !== "quote"
         || (roles.length === 2 && roles[1] !== "attribution")) relationInvalid();
+      return;
+    case "related_facts":
+      if (roles.length < 2 || roles.length > 4 || roles.some((role) => role !== "fact")) relationInvalid();
       return;
   }
 }

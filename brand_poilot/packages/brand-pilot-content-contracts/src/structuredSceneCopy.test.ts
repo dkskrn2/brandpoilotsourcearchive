@@ -84,6 +84,10 @@ describe("structured-scene-copy.v1", () => {
       { role: "quote", label: null, value: "신뢰는 반복에서 만들어집니다" },
       { role: "attribution", label: null, value: "브랜드 가이드" },
     ]],
+    ["related_facts", [
+      { role: "fact", label: "지원사업 참여", value: "3.2%" },
+      { role: "fact", label: "미참여자 중 사업 존재 미인지", value: "76.2%" },
+    ]],
   ])("accepts the locked %s relation", (type, entries) => {
     expect(parseStructuredSceneCopyV1(scene(type, entries))).toMatchObject({ keyVisual: { type, entries } });
   });
@@ -103,6 +107,9 @@ describe("structured-scene-copy.v1", () => {
     ["attribution before quote", "quote", [
       { role: "attribution", label: null, value: "브랜드 가이드" },
       { role: "quote", label: null, value: "신뢰를 만듭니다" },
+    ]],
+    ["one related fact", "related_facts", [
+      { role: "fact", label: "지원사업 참여", value: "3.2%" },
     ]],
   ])("rejects %s", (_name, type, entries) => {
     expect(() => parseStructuredSceneCopyV1(scene(type, entries))).toThrow("structured_scene_relation_invalid");
