@@ -94,9 +94,19 @@ def main() -> None:
     target_height = args.height if is_studio_v3 else 1920
     filters = []
     for index in range(len(scene_paths)):
+        input_duration = args.seconds_per_scene
+        if is_studio_v3 and index < len(scene_paths) - 1:
+            input_duration += args.fade_seconds
         filters.append(
             f"[{index}:v]scale={target_width}:{target_height}:force_original_aspect_ratio=decrease,"
-            f"pad={target_width}:{target_height}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps={args.fps},"
+            f"setsar=1,fps={args.fps},format=rgba,setpts=PTS-STARTPTS[fg{index}]"
+        )
+        filters.append(
+            f"color=c=white:s={target_width}x{target_height}:r={args.fps}:d={input_duration},"
+            f"format=rgba,setpts=PTS-STARTPTS[bg{index}]"
+        )
+        filters.append(
+            f"[bg{index}][fg{index}]overlay=(W-w)/2:(H-h)/2:shortest=1:format=auto,"
             f"format=yuv420p,setpts=PTS-STARTPTS[v{index}]"
         )
     video_label = "v0"
