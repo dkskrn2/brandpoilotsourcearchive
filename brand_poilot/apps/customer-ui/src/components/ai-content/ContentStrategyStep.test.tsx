@@ -51,6 +51,23 @@ const readyState = {
 };
 
 describe("ContentStrategyStep", () => {
+  it("shows an accessible proposal loading state", () => {
+    render(<ContentStrategyStep
+      outputFormat="card_news"
+      channelTarget="instagram"
+      loading
+      capabilityState={readyState}
+      onFormatChange={vi.fn()}
+      onChannelChange={vi.fn()}
+      onSubmit={vi.fn()}
+    />);
+
+    const submit = screen.getByRole("button", { name: /구성안을 만드는 중/ });
+    expect(submit).toBeDisabled();
+    expect(submit).toHaveAttribute("aria-busy", "true");
+    expect(screen.getByRole("img", { name: "구성안 생성 중" })).toBeVisible();
+  });
+
   it("shows the three canonical formats and only exact eligible remote channel logos", () => {
     render(<ContentStrategyStep
       outputFormat="card_news"

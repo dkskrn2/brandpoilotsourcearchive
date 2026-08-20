@@ -306,7 +306,7 @@ export function AiContentGenerationPage({
         ? <AiContentAssetProgress progress={generation.progress} />
         : null}
       {actionError ? <div className="alert bad" role="alert">{actionError}</div> : null}
-      {!reviewing ? outputList : (
+      {reviewing ? (
         <section className="ai-content-review ai-content-review--unified" aria-label="결과 확인">
           <div className="ai-content-result-layout">
             <div className="ai-content-result-primary">
@@ -327,7 +327,7 @@ export function AiContentGenerationPage({
             </aside>
           </div>
         </section>
-      )}
+      ) : null}
     </div>
   );
 }

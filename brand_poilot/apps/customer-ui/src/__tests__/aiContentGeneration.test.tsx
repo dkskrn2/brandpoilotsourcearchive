@@ -136,7 +136,8 @@ describe("AiContentGenerationPage", () => {
         expect.stringMatching(/^generation-partial-retry-/),
       );
     });
-    expect(await screen.findByText("대기")).toBeVisible();
+    expect(await screen.findByText(/생성 작업 상태:/)).toHaveTextContent("대기");
+    expect(screen.queryByRole("heading", { name: "생성 결과 상세" })).not.toBeInTheDocument();
   });
 
   it("shows the localized retry deadline and form before attachment retention expires", async () => {
@@ -317,10 +318,13 @@ describe("AiContentGenerationPage", () => {
 
   it("shows planning state", async () => {
     renderGeneration("generation-planning");
-    expect(await screen.findByText("기획 중")).toBeVisible();
+    expect(await screen.findByText(/생성 작업 상태:/)).toHaveTextContent("기획 중");
     expect(screen.getByRole("heading", { name: "콘텐츠를 만들고 있습니다" })).toBeVisible();
     expect(screen.getByText("콘텐츠 생성").closest("li")).toHaveAttribute("aria-current", "step");
     expect(screen.getByRole("status")).toHaveTextContent("선택한 구성안으로 콘텐츠를 기획하고 있습니다.");
+    expect(screen.queryByRole("heading", { name: "생성 결과 상세" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("list", { name: "생성 결과 목록" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "전체 ZIP" })).not.toBeInTheDocument();
   });
 
   it("shows asset-index progress when the detail API provides it", async () => {

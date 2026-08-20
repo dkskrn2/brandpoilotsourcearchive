@@ -10,6 +10,7 @@ import {
   type ChannelCapabilityState,
 } from "../../features/channels/channelCapabilityGateway";
 import { ChannelLogo } from "../channels/ChannelLogo";
+import { InlineSpinner } from "../ui/LoadingState";
 
 const formatLabels: Array<[ContentOutputFormatV2, string]> = CONTENT_OUTPUT_FORMATS.map((format) => [
   format,
@@ -134,7 +135,8 @@ export function ContentStrategyStep({
       type="button"
       className="button primary"
       disabled={!selectedTargetSupported || loading}
+      aria-busy={loading}
       onClick={onSubmit}
-    >{loading ? "구성안을 만드는 중" : "AI 구성안 만들기"}</button>
+    >{loading ? <><InlineSpinner label="구성안 생성 중" />구성안을 만드는 중</> : "AI 구성안 만들기"}</button>
   </div>;
 }

@@ -748,7 +748,7 @@ export function ContentProposalFlow({
           </div> : null}
         </section>;
       })}</main>
-      <aside className="content-input-summary"><span className="content-input-summary__eyebrow">현재 설정</span><h2>입력 요약</h2><dl>{summary.map((item) => <div key={item.label}><dt>{item.label}</dt><dd>{item.value}</dd></div>)}</dl>{loadingProposal ? <p>검증된 입력으로 구성안을 만들고 있습니다.</p> : null}</aside>
+      <aside className="content-input-summary"><span className="content-input-summary__eyebrow">현재 설정</span><h2>입력 요약</h2><dl>{summary.map((item) => <div key={item.label}><dt>{item.label}</dt><dd>{item.value}</dd></div>)}</dl>{loadingProposal ? <p role="status" aria-live="polite">원문과 근거를 분석해 구성안을 준비하고 있습니다.</p> : null}</aside>
     </div> : null}
     {machine.phase === "proposal_selection" && proposals.length
       ? <><div className="source-strip" aria-label="분석한 원문">
