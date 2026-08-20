@@ -3,7 +3,7 @@ import type { FrozenManualVisualSelectionV1 } from "@brand-pilot/content-contrac
 import type { AiContentJob } from "./contracts.js";
 import { buildCardDeckSourceBundle } from "./sourceBundle.js";
 
-export const cardNewsPlanSkillVersion = "card-manuscript-plan-skill.v1";
+export const cardNewsPlanSkillVersion = "card-manuscript-plan-skill.v2";
 
 function safePromptJson(value: unknown): string {
   return JSON.stringify(value, null, 2).replace(/[<>&\u2028\u2029]/g, (character) => {

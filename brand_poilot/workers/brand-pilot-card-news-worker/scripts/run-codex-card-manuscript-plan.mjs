@@ -15,7 +15,8 @@ export function buildCodexArgs(outputDir) {
   const schemaFile = path.resolve(import.meta.dirname, "card-manuscript-plan-v1.schema.json");
   const outputFile = path.join(outputDir, "card-manuscript-plan.json");
   return [
-    "--model", "gpt-5.6-terra", "--strict-config",
+    "--model", "gpt-5.6-sol", "--strict-config",
+    "-c", 'model_reasoning_effort="high"',
     "-c", 'default_permissions="planner"',
     "-c", 'permissions.planner.filesystem={":minimal"="read","/codex"="deny","/codex-accounts"="deny",":workspace_roots"={"."="deny"}}',
     "-c", "permissions.planner.network.enabled=false",

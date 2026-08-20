@@ -30,6 +30,8 @@ describe("reel production runtime", () => {
         "visualThesis", "layoutArchetype", "evidenceIds", "productImageAssetIds",
       ]);
       expect(args[args.indexOf("--output-schema") + 1]).toBe(schemaPath);
+      expect(args).toEqual(expect.arrayContaining(["--model", "gpt-5.6-sol"]));
+      expect(args).toEqual(expect.arrayContaining(["-c", 'model_reasoning_effort="high"']));
       expect(schemaPath).toContain("reel-storyboard-v1.schema.json");
       expect(args.join(" ")).not.toContain("reel-plan-v2.schema.json");
       expect(args.join(" ")).not.toContain("reel-plan-draft-v2.schema.json");

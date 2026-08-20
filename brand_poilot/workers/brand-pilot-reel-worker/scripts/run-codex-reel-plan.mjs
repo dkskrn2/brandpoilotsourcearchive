@@ -26,10 +26,11 @@ function argument(name) {
 export function buildCodexArgs(outputDir) {
   return [
     "--strict-config", "-c", 'default_permissions="planner"',
+    "-c", 'model_reasoning_effort="high"',
     "-c", 'permissions.planner.filesystem={":minimal"="read","/codex"="deny","/codex-accounts"="deny",":workspace_roots"={"."="deny"}}',
     "-c", "permissions.planner.network.enabled=false",
     "--disable", "shell_tool", "--disable", "image_generation", "--disable", "browser_use", "--disable", "multi_agent", "--disable", "plugins",
-    "--ask-for-approval", "never", "exec", "--model", "gpt-5.6-terra", "--ignore-user-config", "--skip-git-repo-check", "--ignore-rules", "--ephemeral",
+    "--ask-for-approval", "never", "exec", "--model", "gpt-5.6-sol", "--ignore-user-config", "--skip-git-repo-check", "--ignore-rules", "--ephemeral",
     "--output-schema", path.join(path.resolve(outputDir), "reel-storyboard-v1.schema.json"),
     "--output-last-message", path.join(outputDir, "reel-plan.json"), "-C", outputDir, "-",
   ];
