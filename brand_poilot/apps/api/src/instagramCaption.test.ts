@@ -35,4 +35,21 @@ describe("formatInstagramCaption", () => {
       "콘텐츠 운영 기준을 정리해 브랜드 신뢰를 높입니다.\n\n#콘텐츠운영 #브랜드신뢰 #콘텐츠마케팅 #AI콘텐츠"
     );
   });
+
+  it("limits generated hashtags to the first five instead of failing the publish", () => {
+    expect(formatInstagramCaption(
+      "Neon Rebels의 라이프스타일 큐레이션 전략을 정리했습니다.",
+      [
+        "#NeonRebels",
+        "#Maisonette",
+        "#트윈마켓",
+        "#라이프스타일큐레이션",
+        "#카테고리확장",
+        "#브랜드전략",
+        "#고객경험"
+      ]
+    )).toBe(
+      "Neon Rebels의 라이프스타일 큐레이션 전략을 정리했습니다.\n\n#NeonRebels #Maisonette #트윈마켓 #라이프스타일큐레이션 #카테고리확장"
+    );
+  });
 });
