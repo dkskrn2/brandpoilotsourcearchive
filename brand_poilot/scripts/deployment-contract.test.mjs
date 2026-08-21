@@ -86,7 +86,7 @@ const deploymentScripts = [
   ubuntuBootstrapPath,
 ];
 
-test("cutover API image contains ordered migrations through manual visual write-fence repair 083", () => {
+test("cutover API image contains ordered migrations through usage reversal repair 084", () => {
   const dockerfile = read("apps/api/Dockerfile");
   const migrate = read("scripts/migrate.mjs");
   const runner = read("scripts/migrationRunner.mjs");
@@ -106,6 +106,7 @@ test("cutover API image contains ordered migrations through manual visual write-
   assert.equal(existsSync("db/migrations/081_meta_ad_library_references.sql"), true);
   assert.equal(existsSync("db/migrations/082_manual_brand_visual_assets.sql"), true);
   assert.equal(existsSync("db/migrations/083_manual_visual_selection_write_fence_invoker.sql"), true);
+  assert.equal(existsSync("db/migrations/084_ai_content_usage_reversal_identity_invoker.sql"), true);
   assert.match(migrate, /AI_CONTENT_074_AUTHORIZATION_PUBLIC_KEY_FILE/);
   assert.match(migrate, /AI_CONTENT_074_PROVIDER_ATTESTATION_PUBLIC_KEY_FILE/);
   assert.doesNotMatch(migrate, /readFile\([^\n]*(?:PRIVATE|SIGNING)|createPrivateKey|AI_CONTENT_074_(?:AUTHORIZATION|PROVIDER_ATTESTATION)_KEY_FILE/);
@@ -151,7 +152,7 @@ test("deployment applies or verifies the pinned post-075 data migration before c
   assert.ok(migrationGate >= 0 && migrationGate < transition && transition < canary);
 });
 
-test("deployment applies the ordered post-075 schemas through manual visual write-fence repair before canary mutation", () => {
+test("deployment applies the ordered post-075 schemas through usage reversal repair before canary mutation", () => {
   const deploy = read("deploy/scripts/deploy.sh");
   const runner = read("scripts/migrationRunner.mjs");
   assert.match(runner, /077_content_suggestion_batches\.sql/);
@@ -168,8 +169,10 @@ test("deployment applies the ordered post-075 schemas through manual visual writ
   assert.match(runner, /9285dbc36d5dc17d33c0d53545e69bc3deb800679ef2409d2727e83dc5230b1e/);
   assert.match(runner, /083_manual_visual_selection_write_fence_invoker\.sql/);
   assert.match(runner, /d2a788802e460ab1815f4e859616dc0e9a702f6cb45d0f6578b7fba4a6a74296/);
-  assert.match(deploy, /POST_075_SCHEMA_MIGRATION_ID="083_manual_visual_selection_write_fence_invoker\.sql"/);
-  assert.match(deploy, /POST_075_SCHEMA_MIGRATION_SHA256="d2a788802e460ab1815f4e859616dc0e9a702f6cb45d0f6578b7fba4a6a74296"/);
+  assert.match(runner, /084_ai_content_usage_reversal_identity_invoker\.sql/);
+  assert.match(runner, /31938a77b6b2b278b608e32de48cc463ceda24b7c96622b0662aacc3c0978f12/);
+  assert.match(deploy, /POST_075_SCHEMA_MIGRATION_ID="084_ai_content_usage_reversal_identity_invoker\.sql"/);
+  assert.match(deploy, /POST_075_SCHEMA_MIGRATION_SHA256="31938a77b6b2b278b608e32de48cc463ceda24b7c96622b0662aacc3c0978f12"/);
   assert.match(deploy, /scripts\/migrate\.mjs --post-075-schema/);
   assert.match(deploy, /post-075-schema-migration-evidence\.v1/);
   const dataGate = deploy.lastIndexOf("run_post_075_data_migration_gate");
@@ -242,7 +245,7 @@ test("cutover API image contains both ordered migrations in an actual no-network
   try {
     const script = [
       "const fs=require('node:fs');",
-      "const required=['/app/db/migrations/074_ai_content_maintenance_write_fence.sql','/app/db/migrations/075_ai_content_three_format_cutover.sql','/app/db/migrations/076_manual_content_generation_brand_rules.sql','/app/db/migrations/077_content_suggestion_batches.sql','/app/db/migrations/078_faq_utterance_matching.sql','/app/db/migrations/079_publish_calendar_runtime.sql','/app/db/migrations/080_reference_channel_archive.sql','/app/db/migrations/081_meta_ad_library_references.sql','/app/db/migrations/082_manual_brand_visual_assets.sql','/app/db/migrations/083_manual_visual_selection_write_fence_invoker.sql','/app/scripts/migrationRunner.mjs','/app/scripts/migrate.mjs','/app/scripts/databaseTls.mjs'];",
+      "const required=['/app/db/migrations/074_ai_content_maintenance_write_fence.sql','/app/db/migrations/075_ai_content_three_format_cutover.sql','/app/db/migrations/076_manual_content_generation_brand_rules.sql','/app/db/migrations/077_content_suggestion_batches.sql','/app/db/migrations/078_faq_utterance_matching.sql','/app/db/migrations/079_publish_calendar_runtime.sql','/app/db/migrations/080_reference_channel_archive.sql','/app/db/migrations/081_meta_ad_library_references.sql','/app/db/migrations/082_manual_brand_visual_assets.sql','/app/db/migrations/083_manual_visual_selection_write_fence_invoker.sql','/app/db/migrations/084_ai_content_usage_reversal_identity_invoker.sql','/app/scripts/migrationRunner.mjs','/app/scripts/migrate.mjs','/app/scripts/databaseTls.mjs'];",
       "for(const path of required)if(!fs.existsSync(path))throw new Error('missing:'+path);",
     ].join("");
     const inspect = spawnSync("docker", ["run", "--rm", "--network", "none", "--entrypoint", "node", tag, "-e", script], {
@@ -2649,7 +2652,7 @@ if [[ "$*" == *"/app/scripts/ai-content-cutover-floor-probe.mjs"* ]]; then
   exit 0
 fi
 if [[ "$*" == *"/app/scripts/migrate.mjs --post-075-schema"* ]]; then
-  printf '{\n  "post075SchemaMigration": {\n    "contractVersion": "post-075-schema-migration-evidence.v1",\n    "providerRoleName": "postgres",\n    "migrationId": "083_manual_visual_selection_write_fence_invoker.sql",\n    "migrationSha256": "%s",\n    "status": "already_applied"\n  }\n}\n' "$POST_075_SCHEMA_SHA_FOR_TEST"
+  printf '{\n  "post075SchemaMigration": {\n    "contractVersion": "post-075-schema-migration-evidence.v1",\n    "providerRoleName": "postgres",\n    "migrationId": "084_ai_content_usage_reversal_identity_invoker.sql",\n    "migrationSha256": "%s",\n    "status": "already_applied"\n  }\n}\n' "$POST_075_SCHEMA_SHA_FOR_TEST"
   exit 0
 fi
 if [[ "$1 $2" == "image inspect" ]]; then
@@ -2754,12 +2757,12 @@ function runDeployFixture({
   }, null, 2)}\n`, { mode: 0o600 });
   const post075SchemaState = join(root, "state", "post-075-schema-migrations");
   mkdirSync(post075SchemaState, { recursive: true, mode: 0o700 });
-  writeFileSync(join(post075SchemaState, "083_manual_visual_selection_write_fence_invoker.sql.json"), `${JSON.stringify({
+  writeFileSync(join(post075SchemaState, "084_ai_content_usage_reversal_identity_invoker.sql.json"), `${JSON.stringify({
     post075SchemaMigration: {
       contractVersion: "post-075-schema-migration-evidence.v1",
       providerRoleName: "postgres",
-      migrationId: "083_manual_visual_selection_write_fence_invoker.sql",
-      migrationSha256: "d2a788802e460ab1815f4e859616dc0e9a702f6cb45d0f6578b7fba4a6a74296",
+      migrationId: "084_ai_content_usage_reversal_identity_invoker.sql",
+      migrationSha256: "31938a77b6b2b278b608e32de48cc463ceda24b7c96622b0662aacc3c0978f12",
       status: "already_applied",
     },
   }, null, 2)}\n`, { mode: 0o600 });
@@ -2841,7 +2844,7 @@ function runDeployFixture({
       DOCKER_FAIL_UP_TIMES: "1",
       RELEASE_SHA_FOR_TEST: "1".repeat(40),
       AI_CONTENT_POST_075_PROVIDER_DATABASE_URL_FILE: bashPath(providerDatabaseUrlFile),
-      POST_075_SCHEMA_SHA_FOR_TEST: "d2a788802e460ab1815f4e859616dc0e9a702f6cb45d0f6578b7fba4a6a74296",
+      POST_075_SCHEMA_SHA_FOR_TEST: "31938a77b6b2b278b608e32de48cc463ceda24b7c96622b0662aacc3c0978f12",
     },
   });
   return { fixture, root, dockerLog, preflightLog, result, candidateSha: "1".repeat(40) };

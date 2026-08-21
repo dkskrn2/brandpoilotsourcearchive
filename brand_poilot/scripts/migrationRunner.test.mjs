@@ -4610,6 +4610,7 @@ test("an installation applied through 064 has every later migration pending", as
       "081_meta_ad_library_references.sql",
       "082_manual_brand_visual_assets.sql",
       "083_manual_visual_selection_write_fence_invoker.sql",
+      "084_ai_content_usage_reversal_identity_invoker.sql",
     ],
   );
 });
@@ -4664,6 +4665,7 @@ const post076SchemaMigrationIdsForTests = [
   "081_meta_ad_library_references.sql",
   "082_manual_brand_visual_assets.sql",
   "083_manual_visual_selection_write_fence_invoker.sql",
+  "084_ai_content_usage_reversal_identity_invoker.sql",
 ];
 
 test("post-075 data migrations are a closed DML-only contract", async () => {

@@ -225,6 +225,7 @@ const MANUAL_BRAND_VISUAL_TOOLING_PATHS = new Set([
   "scripts/ai-content-database-roles.mjs",
   "scripts/ai-content-quality-cases.mjs",
   "scripts/ai-content-quality-cases.test.mjs",
+  "scripts/ai-content-usage-reversal-identity.test.mjs",
   "scripts/content-suggestion-schema-migration.test.mjs",
   "scripts/deployment-contract.test.mjs",
   "scripts/incremental-cicd-contract.test.mjs",
@@ -482,7 +483,8 @@ function classifyManualBrandVisualAssetsPath(path, components) {
     return { known: true, documentation: true };
   }
   if (path === "db/migrations/082_manual_brand_visual_assets.sql"
-    || path === "db/migrations/083_manual_visual_selection_write_fence_invoker.sql") {
+    || path === "db/migrations/083_manual_visual_selection_write_fence_invoker.sql"
+    || path === "db/migrations/084_ai_content_usage_reversal_identity_invoker.sql") {
     components.api = true;
     return { known: true, migration: true };
   }

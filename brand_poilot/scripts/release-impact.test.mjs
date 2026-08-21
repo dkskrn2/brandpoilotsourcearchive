@@ -483,6 +483,28 @@ test("manual visual write-fence repair selects only API and the explicit migrati
   assert.deepEqual(impact.unknownPaths, []);
 });
 
+test("usage reversal identity repair selects only API and the explicit migration gate", () => {
+  const impact = classifyChangedPaths([
+    "brand_poilot/db/migrations/084_ai_content_usage_reversal_identity_invoker.sql",
+    "brand_poilot/deploy/scripts/deploy.sh",
+    "brand_poilot/scripts/ai-content-usage-reversal-identity.test.mjs",
+    "brand_poilot/scripts/content-suggestion-schema-migration.test.mjs",
+    "brand_poilot/scripts/deployment-contract.test.mjs",
+    "brand_poilot/scripts/migrationRunner.mjs",
+    "brand_poilot/scripts/migrationRunner.test.mjs",
+    "brand_poilot/scripts/release-impact.mjs",
+    "brand_poilot/scripts/release-impact.test.mjs",
+    "brand_poilot/scripts/repository-contract.test.mjs",
+  ], { profile: MANUAL_BRAND_VISUAL_ASSETS_PROFILE });
+
+  assert.deepEqual(enabled(impact), ["api"]);
+  assert.equal(impact.migrationChanged, true);
+  assert.equal(impact.productionDeployAllowed, false);
+  assert.equal(impact.deployBundleChanged, true);
+  assert.equal(impact.verifiedScope, true);
+  assert.deepEqual(impact.unknownPaths, []);
+});
+
 test("FAQ utterance profile rejects unrelated workers and migrations without widening", () => {
   for (const path of [
     "brand_poilot/workers/brand-pilot-blog-worker/src/worker.ts",
