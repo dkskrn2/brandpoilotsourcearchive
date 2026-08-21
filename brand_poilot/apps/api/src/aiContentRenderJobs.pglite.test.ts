@@ -4,8 +4,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ImageGenerationPackageV1 } from "@brand-pilot/content-contracts";
 import { compileCardManuscriptPlanDraftV1 } from "@brand-pilot/content-contracts/card-manuscript-plan";
 import { cardManuscriptPlanSha256 } from "@brand-pilot/content-contracts/card-manuscript-plan/node";
-import { compileReelStoryboardDraftV1 } from "@brand-pilot/content-contracts/reel-storyboard";
-import { reelStoryboardSha256 } from "@brand-pilot/content-contracts/reel-storyboard/node";
+import { compileReelStoryboardDraftV2, parseReelStoryboardV2 } from "@brand-pilot/content-contracts/reel-storyboard";
+import { reelStoryboardV2Sha256 } from "@brand-pilot/content-contracts/reel-storyboard/node";
 import { aiContentVisualSessionCompletionSha256, createAiContentRenderJobsRepository, enqueueAiContentRenderJobs, type AiContentRenderedAsset } from "./aiContentRenderJobs.js";
 
 const ids = {
@@ -248,33 +248,29 @@ describe("AiContentRenderJobsRepository with postgres semantics", () => {
 
   async function enqueueReelStoryboard() {
     const input = reelFinalInput();
-    const storyboard = {
-      contractVersion: "reel-storyboard.v1" as const,
+    const evidenceId = input.researchEvidence.items[0]!.id;
+    const storyboard = parseReelStoryboardV2({
+      contractVersion: "reel-storyboard.v2" as const,
       content: { caption: "Tea Reel", hashtags: [] as string[], cta: "Save" },
       storyNarrative: "A coherent vertical story.",
-      visualSystem: {
-        paletteDirection: "Green and cream.", typographyDirection: "Bold vertical Korean hierarchy.",
-        graphicLanguage: "Flat editorial symbols.", imageryDirection: "Tea-led subject imagery.",
-        invariants: ["Keep the visual system stable."],
-      },
+      evidenceSelection: { selectedEvidenceIds: [evidenceId], excludedEvidenceIds: [] },
       scenes: [1, 2].map((index) => ({
         index, editorialRole: index === 1 ? "hook" : "detail", purpose: `Purpose ${index}`,
         coreMessage: `Core ${index}`, headline: `Headline ${index}`,
-        keyVisual: { type: "number" as const, entries: [{ role: "value" as const, label: null, value: `${index} steps` }] },
+        informationRelation: { type: "number" as const, entries: [{ role: "value" as const, label: null, value: `${index} steps` }] },
         supportingTexts: [`Support ${index}`], footnote: null,
-        visualThesis: `Make ${index} steps dominant.`, layoutArchetype: "stat_focus" as const,
-        evidenceIds: [] as string[], productImageAssetIds: [] as string[],
+        evidenceIds: [evidenceId], productImageAssetIds: [] as string[], avatarImageAssetIds: [] as string[],
       })),
-    };
-    const draft = compileReelStoryboardDraftV1(storyboard, input.selectedProposal.outline);
+    }, input);
+    const draft = compileReelStoryboardDraftV2(storyboard, input.selectedProposal.outline);
     const reelPackage = {
       ...imagePackage(2), outputFormat: "reel" as const, aspectRatio: "9:16" as const,
       assets: draft.assets.map((asset) => ({ ...asset, attachmentIds: [] as string[] })),
     };
     const plan = { contractVersion: "reel-plan.v2" as const, outputFormat: "reel" as const, content: storyboard.content, imagePackage: reelPackage };
     const reelStoryboardContract = {
-      contractVersion: "reel-storyboard.v1" as const,
-      storyboardSha256: reelStoryboardSha256(storyboard), storyboard,
+      contractVersion: "reel-storyboard.v2" as const,
+      storyboardSha256: reelStoryboardV2Sha256(storyboard), storyboard,
     };
     await db.query("update ai_content_generations set output_format='reel' where id=$1", [ids.generation]);
     await db.query("insert into ai_content_proposal_batches(id,workspace_id,brand_id,origin) values($1,$2,$3,'manual')", [ids.batch, ids.workspace, ids.brand]);

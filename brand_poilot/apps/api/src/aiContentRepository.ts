@@ -7,7 +7,7 @@ import {
   type AiContentManifest,
   type CompleteAiContentJobInput,
   type CardManuscriptContractV1,
-  type ReelStoryboardContractV1,
+  type ReelStoryboardContractV2,
   type ContentChannelV2,
   type ContentFinalizationDraftV2,
   type ContentGenerationStartV2,
@@ -73,8 +73,8 @@ import {
   parseCardManuscriptPlanV1,
 } from "@brand-pilot/content-contracts/card-manuscript-plan";
 import { cardManuscriptPlanSha256 } from "@brand-pilot/content-contracts/card-manuscript-plan/node";
-import { compileReelStoryboardDraftV1, parseReelStoryboardV1 } from "@brand-pilot/content-contracts/reel-storyboard";
-import { reelStoryboardSha256 } from "@brand-pilot/content-contracts/reel-storyboard/node";
+import { compileReelStoryboardDraftV2, parseReelStoryboardV2 } from "@brand-pilot/content-contracts/reel-storyboard";
+import { reelStoryboardV2Sha256 } from "@brand-pilot/content-contracts/reel-storyboard/node";
 import {
   assembleAiContentFixedInput,
   type AiContentFixedInputSource,
@@ -532,7 +532,7 @@ function validateCardManuscriptContract(
 function validateReelStoryboardContract(
   input: CompleteAiContentJobInput,
   finalInput: ReturnType<typeof parseCanonicalContentGenerationInputV3>,
-): ReelStoryboardContractV1 | null {
+): ReelStoryboardContractV2 | null {
   if (finalInput.outputSettings.outputFormat !== "reel") {
     if (input.reelStoryboardContract !== undefined) throw new Error("ai_content_reel_storyboard_contract_invalid");
     return null;
@@ -541,24 +541,27 @@ function validateReelStoryboardContract(
     || input.cardManuscriptContract !== undefined) {
     throw new Error("ai_content_reel_storyboard_contract_invalid");
   }
-  const storyboard = parseReelStoryboardV1(input.reelStoryboardContract.storyboard);
-  if (input.reelStoryboardContract.contractVersion !== "reel-storyboard.v1"
+  if (input.reelStoryboardContract.contractVersion !== "reel-storyboard.v2") {
+    throw new Error("ai_content_reel_storyboard_contract_invalid");
+  }
+  const storyboard = parseReelStoryboardV2(input.reelStoryboardContract.storyboard, finalInput);
+  if (input.reelStoryboardContract.contractVersion !== "reel-storyboard.v2"
     || !/^[0-9a-f]{64}$/.test(input.reelStoryboardContract.storyboardSha256)
-    || reelStoryboardSha256(storyboard) !== input.reelStoryboardContract.storyboardSha256) {
+    || reelStoryboardV2Sha256(storyboard) !== input.reelStoryboardContract.storyboardSha256) {
     throw new Error("ai_content_reel_storyboard_hash_mismatch");
   }
-  const compiled = compileReelStoryboardDraftV1(storyboard, finalInput.selectedProposal.outline);
+  const compiled = compileReelStoryboardDraftV2(storyboard, finalInput.selectedProposal.outline);
   if (canonicalJson(compiled) !== canonicalJson(input.planDraft)) {
     throw new Error("ai_content_reel_storyboard_compilation_mismatch");
   }
   return {
-    contractVersion: "reel-storyboard.v1",
+    contractVersion: "reel-storyboard.v2",
     storyboardSha256: input.reelStoryboardContract.storyboardSha256,
     storyboard,
   };
 }
 
-function assertStoredReelStoryboardContract(payload: unknown, storyboard: ReelStoryboardContractV1 | null): void {
+function assertStoredReelStoryboardContract(payload: unknown, storyboard: ReelStoryboardContractV2 | null): void {
   const stored = payload && typeof payload === "object" && !Array.isArray(payload)
     ? (payload as Record<string, unknown>).reelStoryboardContract
     : undefined;
@@ -583,7 +586,7 @@ function assertStoredCardManuscriptContract(payload: unknown, manuscript: CardMa
 function parseStoredReelStoryboardContract(
   payload: unknown,
   finalInput: ReturnType<typeof parseCanonicalContentGenerationInputV3>,
-): ReelStoryboardContractV1 {
+): ReelStoryboardContractV2 {
   const source = object(payload);
   if (finalInput.outputSettings.outputFormat !== "reel" || source.cardManuscriptContract !== undefined) {
     throw new Error("ai_content_generation_retry_parent_invalid");
@@ -592,14 +595,17 @@ function parseStoredReelStoryboardContract(
   if (!isDeepStrictEqual(Object.keys(stored).sort(), ["contractVersion", "storyboard", "storyboardSha256"])) {
     throw new Error("ai_content_generation_retry_parent_invalid");
   }
-  const storyboard = parseReelStoryboardV1(stored.storyboard);
-  if (stored.contractVersion !== "reel-storyboard.v1"
+  if (stored.contractVersion !== "reel-storyboard.v2") {
+    throw new Error("ai_content_generation_retry_parent_invalid");
+  }
+  const storyboard = parseReelStoryboardV2(stored.storyboard, finalInput);
+  if (stored.contractVersion !== "reel-storyboard.v2"
     || typeof stored.storyboardSha256 !== "string"
-    || reelStoryboardSha256(storyboard) !== stored.storyboardSha256) {
+    || reelStoryboardV2Sha256(storyboard) !== stored.storyboardSha256) {
     throw new Error("ai_content_generation_retry_parent_invalid");
   }
   return {
-    contractVersion: "reel-storyboard.v1",
+    contractVersion: "reel-storyboard.v2",
     storyboardSha256: stored.storyboardSha256,
     storyboard,
   };
@@ -3897,7 +3903,7 @@ export function createAiContentRepository(pool: Pool, options: AiContentReposito
         }
         const storedPlanValue = failedOutput.rows[0].plan_json;
         let storedParentPlan: ContentPlanResultV2 | null = null;
-        let storedReelStoryboardContract: ReelStoryboardContractV1 | null = null;
+        let storedReelStoryboardContract: ReelStoryboardContractV2 | null = null;
         if (parentInput.outputSettings.outputFormat === "reel"
           && storedPlanValue !== null && storedPlanValue !== undefined) {
           if (typeof parent.parent_skill_version !== "string" || !parent.parent_skill_version.trim()) {

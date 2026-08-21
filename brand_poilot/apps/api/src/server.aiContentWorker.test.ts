@@ -188,28 +188,24 @@ describe("AI content worker routes", () => {
       assets: [{ index: 1, role: "scene", copy: "결론", visualDirection: "세로 구성", evidenceIds: [], productImageAssetIds: [] }],
     };
     const storyboard = {
-      contractVersion: "reel-storyboard.v1",
+      contractVersion: "reel-storyboard.v2",
       content: planDraft.content,
       storyNarrative: "결론을 먼저 제시한다.",
-      visualSystem: {
-        paletteDirection: "white red black", typographyDirection: "large vertical type",
-        graphicLanguage: "editorial", imageryDirection: "numbers first", invariants: ["same margins"],
-      },
+      evidenceSelection: { selectedEvidenceIds: [], excludedEvidenceIds: [] },
       scenes: [{
         index: 1, editorialRole: "hook", purpose: "결론을 먼저 제시한다.", coreMessage: "핵심", headline: "결론",
-        keyVisual: { type: "none", entries: [] }, supportingTexts: [], footnote: null,
-        visualThesis: "결론이 가장 먼저 보인다.", layoutArchetype: "vertical_hook",
+        informationRelation: { type: "none", entries: [] }, supportingTexts: [], footnote: null,
         evidenceIds: [], productImageAssetIds: [], avatarImageAssetIds: [],
       }],
     };
     const reelStoryboardContract = {
-      contractVersion: "reel-storyboard.v1", storyboardSha256: "a".repeat(64), storyboard,
+      contractVersion: "reel-storyboard.v2", storyboardSha256: "a".repeat(64), storyboard,
     };
     const response = await app.inject({
       method: "POST", url: "/worker/ai-content-jobs/job-1/complete",
       headers: { authorization: "Bearer worker-token" },
       payload: {
-        workerId: "worker-1", leaseToken: "lease-1", skillVersion: "reel-storyboard-skill.v1",
+        workerId: "worker-1", leaseToken: "lease-1", skillVersion: "reel-storyboard-skill.v4",
         jobType: "generate", planDraft, reelStoryboardContract,
       },
     });
@@ -218,6 +214,30 @@ describe("AI content worker routes", () => {
     expect(repository.completeAiContentJob).toHaveBeenCalledWith(expect.objectContaining({
       planDraft, reelStoryboardContract,
     }));
+    await app.close();
+  });
+
+  it("rejects a new Reel completion that still submits the retired v1 planner contract", async () => {
+    const { app, repository } = setup();
+    const response = await app.inject({
+      method: "POST", url: "/worker/ai-content-jobs/job-1/complete",
+      headers: { authorization: "Bearer worker-token" },
+      payload: {
+        workerId: "worker-1", leaseToken: "lease-1", skillVersion: "reel-storyboard-skill.v1", jobType: "generate",
+        planDraft: {
+          contractVersion: "reel-plan-draft.v1",
+          content: { caption: "Caption", hashtags: ["guide"], cta: "Save" },
+          assets: [{ index: 1, role: "scene", copy: "결론", visualDirection: "세로 구성", evidenceIds: [], productImageAssetIds: [] }],
+        },
+        reelStoryboardContract: {
+          contractVersion: "reel-storyboard.v1", storyboardSha256: "a".repeat(64), storyboard: {},
+        },
+      },
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toEqual({ error: "ai_content_reel_storyboard_contract_invalid" });
+    expect(repository.completeAiContentJob).not.toHaveBeenCalled();
     await app.close();
   });
 

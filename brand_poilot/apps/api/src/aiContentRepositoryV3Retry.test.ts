@@ -2,8 +2,8 @@ import { describe, expect, it, vi } from "vitest";
 import { createAiContentRepository } from "./aiContentRepository.js";
 import { proposalSha256 } from "./aiContentProposalV2Service.js";
 import { assembleContentPlanResultV2 } from "./aiContentPlanContracts.js";
-import { compileReelStoryboardDraftV1, type ReelStoryboardV1 } from "@brand-pilot/content-contracts/reel-storyboard";
-import { reelStoryboardSha256 } from "@brand-pilot/content-contracts/reel-storyboard/node";
+import { compileReelStoryboardDraftV2, type ReelStoryboardV2 } from "@brand-pilot/content-contracts/reel-storyboard";
+import { reelStoryboardV2Sha256 } from "@brand-pilot/content-contracts/reel-storyboard/node";
 
 const UUID = {
   workspace: "10000000-0000-4000-8000-000000000001", brand: "10000000-0000-4000-8000-000000000002",
@@ -54,40 +54,32 @@ const promptBinding = {
   model: "gpt-5.6-terra",
 } as const;
 
-const frozenStoryboard: ReelStoryboardV1 = {
-  contractVersion: "reel-storyboard.v1",
+const frozenStoryboard: ReelStoryboardV2 = {
+  contractVersion: "reel-storyboard.v2",
   content: { caption: "핵심을 설명합니다.", hashtags: ["#가이드"], cta: "저장해 두세요." },
   storyNarrative: "검증된 핵심을 한 장면에 전달한다.",
-  visualSystem: {
-    paletteDirection: "high contrast",
-    typographyDirection: "large vertical type",
-    graphicLanguage: "editorial infographic",
-    imageryDirection: "evidence-led imagery",
-    invariants: ["consistent spacing"],
-  },
+  evidenceSelection: { selectedEvidenceIds: [], excludedEvidenceIds: [] },
   scenes: [{
     index: 1,
-    editorialRole: "scene",
+    editorialRole: "transition",
     purpose: "검증된 핵심을 설명한다.",
     coreMessage: "핵심을 명확히 전달합니다.",
     headline: "핵심을 확인하세요",
-    keyVisual: { type: "none", entries: [] },
+    informationRelation: { type: "none", entries: [] },
     supportingTexts: ["검증된 내용을 그대로 사용합니다."],
     footnote: null,
-    visualThesis: "세로 화면에서 핵심을 강조한다.",
-    layoutArchetype: "editorial_freeform",
     evidenceIds: [],
     productImageAssetIds: [],
     avatarImageAssetIds: [],
   }],
 };
 const frozenStoryboardContract = {
-  contractVersion: "reel-storyboard.v1",
-  storyboardSha256: reelStoryboardSha256(frozenStoryboard),
+  contractVersion: "reel-storyboard.v2",
+  storyboardSha256: reelStoryboardV2Sha256(frozenStoryboard),
   storyboard: frozenStoryboard,
 } as const;
 const frozenPlan = assembleContentPlanResultV2(
-  compileReelStoryboardDraftV1(frozenStoryboard, frozenInput.selectedProposal.outline),
+  compileReelStoryboardDraftV2(frozenStoryboard, frozenInput.selectedProposal.outline),
   frozenInput,
 );
 
@@ -138,7 +130,7 @@ function harness(options: {
         ? { ...frozenStoryboardContract, storyboardSha256: "0".repeat(64) }
         : frozenStoryboardContract,
     } : { generationId: UUID.parent, manualVisualSelection: frozenManualVisualSelection },
-    parent_skill_version: options.renderReady && !options.missingParentSkill ? "reel-storyboard-skill.v2" : null,
+    parent_skill_version: options.renderReady && !options.missingParentSkill ? "reel-storyboard-skill.v4" : null,
     attachments_locked_at: "2026-08-06T00:00:00.000Z", terminal_at: "2026-08-06T00:00:00.000Z",
     error_code: "failed", error_message: "failed", created_at: "2026-08-06T00:00:00.000Z", updated_at: "2026-08-06T00:00:00.000Z", completed_at: "2026-08-06T00:00:00.000Z",
   };

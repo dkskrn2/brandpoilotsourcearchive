@@ -314,6 +314,9 @@ test("Card Manuscript visual session selects exactly its five coordinated server
     "brand_poilot/packages/brand-pilot-content-contracts/src/cardManuscriptPlan.ts",
     "brand_poilot/packages/brand-pilot-content-contracts/src/cardDeckEditorialPlan.ts",
     "brand_poilot/packages/brand-pilot-content-contracts/src/researchSourceAcquisition.ts",
+    "brand_poilot/packages/brand-pilot-content-contracts/src/reelStoryboard.test.ts",
+    "brand_poilot/packages/brand-pilot-content-contracts/src/reelStoryboard.ts",
+    "brand_poilot/packages/brand-pilot-content-contracts/src/reelStoryboardNode.ts",
     "brand_poilot/packages/brand-pilot-content-contracts/src/structuredSceneCopy.test.ts",
     "brand_poilot/packages/brand-pilot-content-contracts/src/structuredSceneCopy.ts",
     "brand_poilot/packages/brand-pilot-content-contracts/src/visualRenderSession.ts",
@@ -322,9 +325,18 @@ test("Card Manuscript visual session selects exactly its five coordinated server
     "brand_poilot/workers/brand-pilot-worker-runtime/src/controlledSearch.ts",
     "brand_poilot/workers/brand-pilot-card-news-worker/src/manuscriptPlan.ts",
     "brand_poilot/workers/brand-pilot-reel-worker/src/promptBuilder.ts",
+    "brand_poilot/workers/brand-pilot-reel-worker/Dockerfile",
     "brand_poilot/workers/brand-pilot-reel-worker/scripts/reel-storyboard-v1.schema.json",
+    "brand_poilot/workers/brand-pilot-reel-worker/scripts/reel-storyboard-v2.schema.json",
+    "brand_poilot/workers/brand-pilot-reel-worker/scripts/run-codex-reel-plan.mjs",
+    "brand_poilot/workers/brand-pilot-reel-worker/src/contracts.test.ts",
+    "brand_poilot/workers/brand-pilot-reel-worker/src/contracts.ts",
+    "brand_poilot/workers/brand-pilot-reel-worker/src/productionRuntime.test.ts",
+    "brand_poilot/workers/brand-pilot-reel-worker/src/worker.test.ts",
     "brand_poilot/workers/brand-pilot-image-worker/src/aiContentVisualSessionPromptCompiler.ts",
     "brand_poilot/docs/superpowers/plans/2026-08-18-card-manuscript-shared-visual-session.md",
+    "brand_poilot/docs/superpowers/plans/2026-08-21-reel-card-contract-sync.md",
+    "brand_poilot/docs/superpowers/specs/2026-08-21-reel-card-contract-sync-design.md",
   ], { profile: CARD_MANUSCRIPT_VISUAL_SESSION_PROFILE });
 
   assert.deepEqual(enabled(impact), ["api", "cardNewsWorker", "contentProposalWorker", "imageWorker", "reelWorker"]);

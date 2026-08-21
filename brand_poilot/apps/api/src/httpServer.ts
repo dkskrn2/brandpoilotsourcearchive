@@ -43,7 +43,7 @@ import {
   parseCancelUploadSessionInput,
   parseConfirmAttachmentInput,
   parseContentGenerationRetryV1,
-  parseReelStoryboardContractV1,
+  parseReelStoryboardContractV2,
   parseCardManuscriptContractV1,
   parseV3AttachmentUploadTokenInput,
   type AiContentType,
@@ -5071,7 +5071,7 @@ export function createServer(
         ? parseCardManuscriptContractV1(body.cardManuscriptContract)
         : undefined;
       const reelStoryboardContract = hasReelStoryboardContract
-        ? parseReelStoryboardContractV1(body.reelStoryboardContract)
+        ? parseReelStoryboardContractV2(body.reelStoryboardContract)
         : undefined;
       const completion: CompleteAiContentJobInput = hasPlan
         ? {

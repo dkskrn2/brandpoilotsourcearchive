@@ -4,11 +4,11 @@ import {
 } from "@brand-pilot/content-contracts";
 import { parseFrozenManualVisualSelectionV1, type FrozenManualVisualSelectionV1 } from "@brand-pilot/content-contracts/manual-visual-selection";
 import {
-  compileReelStoryboardDraftV1,
-  parseReelStoryboardV1,
-  type ReelStoryboardV1,
+  compileReelStoryboardDraftV2,
+  parseReelStoryboardV2,
+  type ReelStoryboardV2,
 } from "@brand-pilot/content-contracts/reel-storyboard";
-import { reelStoryboardSha256 } from "@brand-pilot/content-contracts/reel-storyboard/node";
+import { reelStoryboardV2Sha256 } from "@brand-pilot/content-contracts/reel-storyboard/node";
 import {
   parseReelPlanDraftV1,
   type ReelPlanDraftV1,
@@ -121,9 +121,9 @@ export function parseReelPlanDraftForInput(value: unknown, input: ContentGenerat
 export type ReelStoryboardSubmission = {
   planDraft: ReelPlanDraftV1;
   reelStoryboardContract: {
-    contractVersion: "reel-storyboard.v1";
+    contractVersion: "reel-storyboard.v2";
     storyboardSha256: string;
-    storyboard: ReelStoryboardV1;
+    storyboard: ReelStoryboardV2;
   };
 };
 
@@ -132,7 +132,7 @@ export function parseReelStoryboardSubmissionForInput(
   input: ContentGenerationInputV3,
 ): ReelStoryboardSubmission {
   try {
-    const storyboard = parseReelStoryboardV1(value);
+    const storyboard = parseReelStoryboardV2(value, input);
     const avatarImageIds = new Set(input.references.brandStyleImages
       .filter(({ tags }) => tags.includes("avatar"))
       .map(({ referenceItemId }) => referenceItemId));
@@ -143,14 +143,14 @@ export function parseReelStoryboardSubmissionForInput(
       );
     }
     const planDraft = parseReelPlanDraftForInput(
-      compileReelStoryboardDraftV1(storyboard, input.selectedProposal.outline),
+      compileReelStoryboardDraftV2(storyboard, input.selectedProposal.outline),
       input,
     );
     return {
       planDraft,
       reelStoryboardContract: {
-        contractVersion: "reel-storyboard.v1",
-        storyboardSha256: reelStoryboardSha256(storyboard),
+        contractVersion: "reel-storyboard.v2",
+        storyboardSha256: reelStoryboardV2Sha256(storyboard),
         storyboard,
       },
     };

@@ -1,0 +1,251 @@
+{
+  "additionalProperties": false,
+  "type": "object",
+  "required": [
+    "contractVersion",
+    "content",
+    "storyNarrative",
+    "evidenceSelection",
+    "scenes"
+  ],
+  "properties": {
+    "contractVersion": {
+      "const": "reel-storyboard.v2",
+      "type": "string"
+    },
+    "content": {
+      "additionalProperties": false,
+      "type": "object",
+      "required": [
+        "caption",
+        "hashtags",
+        "cta"
+      ],
+      "properties": {
+        "caption": {
+          "minLength": 1,
+          "maxLength": 20000,
+          "type": "string"
+        },
+        "hashtags": {
+          "maxItems": 30,
+          "type": "array",
+          "items": {
+            "minLength": 1,
+            "maxLength": 100,
+            "type": "string"
+          }
+        },
+        "cta": {
+          "minLength": 1,
+          "maxLength": 2000,
+          "type": "string"
+        }
+      }
+    },
+    "storyNarrative": {
+      "minLength": 1,
+      "maxLength": 4000,
+      "type": "string"
+    },
+    "evidenceSelection": {
+      "additionalProperties": false,
+      "type": "object",
+      "required": [
+        "selectedEvidenceIds",
+        "excludedEvidenceIds"
+      ],
+      "properties": {
+        "selectedEvidenceIds": {
+          "maxItems": 8,
+          "type": "array",
+          "items": {
+            "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$",
+            "type": "string"
+          }
+        },
+        "excludedEvidenceIds": {
+          "maxItems": 8,
+          "type": "array",
+          "items": {
+            "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$",
+            "type": "string"
+          }
+        }
+      }
+    },
+    "scenes": {
+      "minItems": 1,
+      "maxItems": 5,
+      "type": "array",
+      "items": {
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "index",
+          "editorialRole",
+          "purpose",
+          "coreMessage",
+          "headline",
+          "informationRelation",
+          "supportingTexts",
+          "footnote",
+          "evidenceIds",
+          "productImageAssetIds",
+          "avatarImageAssetIds"
+        ],
+        "properties": {
+          "index": {
+            "minimum": 1,
+            "maximum": 5,
+            "type": "integer"
+          },
+          "editorialRole": {
+            "minLength": 1,
+            "maxLength": 200,
+            "type": "string"
+          },
+          "purpose": {
+            "minLength": 1,
+            "maxLength": 500,
+            "type": "string"
+          },
+          "coreMessage": {
+            "minLength": 1,
+            "maxLength": 500,
+            "type": "string"
+          },
+          "headline": {
+            "minLength": 1,
+            "maxLength": 300,
+            "type": "string"
+          },
+          "informationRelation": {
+            "additionalProperties": false,
+            "type": "object",
+            "required": [
+              "type",
+              "entries"
+            ],
+            "properties": {
+              "type": {
+                "anyOf": [
+                  {
+                    "const": "none",
+                    "type": "string"
+                  },
+                  {
+                    "const": "number",
+                    "type": "string"
+                  },
+                  {
+                    "const": "before_after",
+                    "type": "string"
+                  },
+                  {
+                    "const": "comparison",
+                    "type": "string"
+                  },
+                  {
+                    "const": "steps",
+                    "type": "string"
+                  },
+                  {
+                    "const": "quote",
+                    "type": "string"
+                  },
+                  {
+                    "const": "related_facts",
+                    "type": "string"
+                  }
+                ]
+              },
+              "entries": {
+                "maxItems": 4,
+                "type": "array",
+                "items": {
+                  "additionalProperties": false,
+                  "type": "object",
+                  "required": [
+                    "role",
+                    "label",
+                    "value"
+                  ],
+                  "properties": {
+                    "role": {
+                      "minLength": 1,
+                      "maxLength": 100,
+                      "type": "string"
+                    },
+                    "label": {
+                      "anyOf": [
+                        {
+                          "type": "null"
+                        },
+                        {
+                          "minLength": 1,
+                          "maxLength": 100,
+                          "type": "string"
+                        }
+                      ]
+                    },
+                    "value": {
+                      "minLength": 1,
+                      "maxLength": 300,
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "supportingTexts": {
+            "maxItems": 2,
+            "type": "array",
+            "items": {
+              "minLength": 1,
+              "maxLength": 300,
+              "type": "string"
+            }
+          },
+          "footnote": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "minLength": 1,
+                "maxLength": 300,
+                "type": "string"
+              }
+            ]
+          },
+          "evidenceIds": {
+            "maxItems": 8,
+            "type": "array",
+            "items": {
+              "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$",
+              "type": "string"
+            }
+          },
+          "productImageAssetIds": {
+            "maxItems": 20,
+            "type": "array",
+            "items": {
+              "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$",
+              "type": "string"
+            }
+          },
+          "avatarImageAssetIds": {
+            "maxItems": 5,
+            "type": "array",
+            "items": {
+              "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$",
+              "type": "string"
+            }
+          }
+        }
+      }
+    }
+  }
+}

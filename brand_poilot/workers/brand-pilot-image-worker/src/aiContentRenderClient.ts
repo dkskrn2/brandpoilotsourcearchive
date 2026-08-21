@@ -46,7 +46,7 @@ export interface AiContentVisualSessionImageAssetJob extends AiContentRenderJobB
     assetKey: string;
     storagePath: string;
     rendererPromptVersion: "image-visual-session.v1";
-    visualSessionBinding: { sourceContractVersion: "card-manuscript-plan.v1" | "reel-storyboard.v1"; sourceSha256: string; sceneIndex: number };
+    visualSessionBinding: { sourceContractVersion: "card-manuscript-plan.v1" | "reel-storyboard.v1" | "reel-storyboard.v2"; sourceSha256: string; sceneIndex: number };
     contentGenerationInput: ContentGenerationInputV3;
     contentPlan: Record<string, unknown>;
     visualSession: AiContentVisualSessionV1;
@@ -184,7 +184,7 @@ function parseVisualJob(value: unknown, session: AiContentVisualSessionV1, outpu
   return { ...base, jobKind: "image_asset", assetIndex, payload: {
     contractVersion: "ai-content-visual-session-render-job.v1", jobKind: "image_asset", generationId: text(payload.generationId), outputId,
     imagePackage: record(payload.imagePackage) as ImageGenerationPackageV1, assetIndex, assetKey: text(payload.assetKey), storagePath: text(payload.storagePath), rendererPromptVersion: "image-visual-session.v1",
-    visualSessionBinding: { sourceContractVersion: binding.sourceContractVersion as "card-manuscript-plan.v1" | "reel-storyboard.v1", sourceSha256: text(binding.sourceSha256), sceneIndex: assetIndex },
+    visualSessionBinding: { sourceContractVersion: binding.sourceContractVersion as "card-manuscript-plan.v1" | "reel-storyboard.v1" | "reel-storyboard.v2", sourceSha256: text(binding.sourceSha256), sceneIndex: assetIndex },
     contentGenerationInput: record(payload.contentGenerationInput) as ContentGenerationInputV3, contentPlan: record(payload.contentPlan), visualSession: parsedSession,
   } };
 }

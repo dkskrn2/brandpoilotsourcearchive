@@ -147,7 +147,7 @@ describe("reel purpose prompt", () => {
     );
 
     expect(prompt).toContain(purpose === "informational" ? "정보성 릴스" : "마케팅성 릴스");
-    expect(prompt).toContain("reel-storyboard.v1");
+    expect(prompt).toContain("reel-storyboard.v2");
     expect(prompt).toContain("Practical source title");
     expect(prompt).toContain("Evidence-backed claim for the scene.");
     expect(prompt).toContain("Selected reel concept");
@@ -182,13 +182,16 @@ describe("reel purpose prompt", () => {
   it("asks for one storyboard from a proposal lens without exposing the proposal outline", () => {
     const prompt = buildReelPlanPrompt(promptInput("informational"), frozenManualVisualSelection);
 
-    expect(prompt).toContain('"contractVersion": "reel-storyboard.v1"');
+    expect(prompt).toContain('"contractVersion": "reel-storyboard.v2"');
     expect(prompt).toContain('"index": 1');
     expect(prompt).toContain('"editorialRole"');
     expect(prompt).toContain('"storyNarrative"');
-    expect(prompt).toContain('"visualSystem"');
-    expect(prompt).toContain('"visualThesis"');
-    expect(prompt).toContain('"layoutArchetype"');
+    expect(prompt).toContain('"evidenceSelection"');
+    expect(prompt).not.toContain('"visualSystem"');
+    expect(prompt).not.toContain('"visualThesis"');
+    expect(prompt).not.toContain('"layoutArchetype"');
+    expect(prompt).not.toContain("정보 순서와 레이아웃을 다시 결정");
+    expect(prompt).toContain("정보 순서와 장면 배분을 다시 결정");
     expect(prompt).not.toContain("outline의 headline, role, order, evidenceIds는 편집 참고값");
     expect(prompt).toContain("Proposal Lens는 방향·대상·목적·질문·의도만 제공");
     expect(prompt).toContain("동결된 전체 researchEvidence를 다시 검토");
@@ -197,9 +200,9 @@ describe("reel purpose prompt", () => {
     expect(prompt).not.toContain("index와 role은 선택 proposal outline의 같은 순번 값과 정확히 같아야");
     expect(prompt).toContain("coreMessage");
     expect(prompt).toContain("headline");
-    expect(prompt).toContain("keyVisual");
+    expect(prompt).toContain("informationRelation");
     expect(prompt).toContain("related_facts");
-    expect(prompt).toContain('related_facts는 role="fact"');
+    expect(prompt).toContain("related_facts는 서로 관련되지만");
     expect(prompt).toContain('"entries": []');
     expect(prompt).not.toContain('"texts": []');
     expect(prompt).toContain("supportingTexts");
@@ -215,6 +218,8 @@ describe("reel purpose prompt", () => {
     expect(prompt).toContain("페이지 번호, 장면 번호, 현재/전체 장수, 진행률 배지 또는 페이지 인디케이터를 기획하거나 출력하지 마세요");
     expect(prompt).not.toContain("장면을 채우기 위한 문장");
     expect(prompt).toContain("attachment 선택");
+    expect(prompt).toContain("selectedEvidenceIds는 모든 Scene evidenceIds 합집합과 정확히 일치");
+    expect(prompt).toContain("transition과 cta만 Evidence 없이 허용");
   });
 
   it("treats the complete frozen source as authoritative while keeping the proposal directional", () => {

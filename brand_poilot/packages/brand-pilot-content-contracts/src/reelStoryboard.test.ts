@@ -4,7 +4,10 @@ import {
   compileReelStoryboardDraftV1,
   compileReelStoryboardSceneV1,
   parseReelStoryboardV1,
+  compileReelStoryboardDraftV2,
+  parseReelStoryboardV2,
 } from "./reelStoryboard.js";
+import type { ContentGenerationInputV3 } from "./generation.js";
 import { reelStoryboardSha256 } from "./reelStoryboardNode.js";
 
 const uuid = (suffix: number): string => `00000000-0000-4000-8000-${suffix.toString().padStart(12, "0")}`;
@@ -118,5 +121,99 @@ describe("reel-storyboard.v1", () => {
 
     expect(() => compileReelStoryboardDraftV1(storyboard, [{ index: 1, role: "hook" }]))
       .toThrow("reel_storyboard_outline_mismatch");
+  });
+});
+
+function v2Input(): ContentGenerationInputV3 {
+  const source = structuredClone((awaitlessCardInput as unknown) as ContentGenerationInputV3);
+  source.outputSettings = { ...source.outputSettings, outputFormat: "reel", aspectRatio: "9:16" };
+  source.selectedProposal = { ...source.selectedProposal, outputFormat: "reel" };
+  return source;
+}
+
+const awaitlessCardInput = {
+  contractVersion: "content-generation-input.v3", generationId: uuid(100),
+  brandCore: { versionId: uuid(101), companyOverview: "브랜드", businessDescription: "설명", primaryCategory: "교육", detailedCategory: "AI", primaryTarget: "실무자", differentiator: "정확성", coreAppeal: "실행" },
+  brandRules: { versionId: uuid(102), version: 1, content: { contractVersion: "brand-rules.v1", requiredPhrases: [], forbiddenPhrases: [], exaggerationRules: [], ctaRules: { defaultCta: "확인", allowed: ["확인"] }, channelRules: { instagram: [] }, designRules: { colors: [], fonts: [], notes: [], referenceImages: [] }, autoApprovalRules: { enabled: false, conditions: [] } }, contentSha256: "c".repeat(64) },
+  subject: { kind: "topic_text", title: "AI 활용" }, contentInstruction: null, product: null,
+  researchEvidence: { contractVersion: "research-evidence.v1", decision: "searched", reason: "근거", queries: ["AI"], capturedAt: "2026-08-21T00:00:00.000Z", items: [
+    { id: uuid(1), title: "도입", url: "https://source.example/1", publisher: "Source", publishedAt: null, capturedAt: "2026-08-21T00:00:00.000Z", claimSummary: "도입률 80%", contentHash: "a".repeat(64) },
+    { id: uuid(2), title: "격차", url: "https://source.example/2", publisher: "Source", publishedAt: null, capturedAt: "2026-08-21T00:00:00.000Z", claimSummary: "격차 3.2%p", contentHash: "b".repeat(64) },
+  ] },
+  references: { selected: [], brandStyleImages: [], avatarStyleImageId: null, attachments: [] },
+  selectedProposal: { id: uuid(103), conceptKey: "evidence", title: "근거 중심", informationalType: "trend_insight", oneLineIntent: "핵심", differentiator: "수치", differentiationAxes: ["narrative"], target: "실무자", customerContext: "검토", keyMessage: "근거", hook: "변화", selectionReason: "정보", evidenceIds: [uuid(1)], referenceIds: [], outputFormat: "reel", channelTargets: ["instagram"], assetCount: 1, outline: [{ index: 1, role: "hook", headline: "현황", purpose: "핵심" }], purposeDetails: { kind: "informational", question: "무엇", value: "판단", whyNow: "지금", learningPoints: ["도입"] } },
+  userImageInstruction: null, outputSettings: { outputFormat: "reel", channelTargets: ["instagram"], aspectRatio: "9:16", outputCount: 1, purpose: "informational" }, capturedAt: "2026-08-21T00:00:00.000Z",
+} as const;
+
+function v2Storyboard() {
+  return {
+    contractVersion: "reel-storyboard.v2",
+    content: { caption: "캡션", hashtags: ["#AI"], cta: "확인" },
+    storyNarrative: "핵심 사실에서 의미로 전진한다.",
+    evidenceSelection: { selectedEvidenceIds: [uuid(1)], excludedEvidenceIds: [uuid(2)] },
+    scenes: [{ index: 1, editorialRole: "hook", purpose: "핵심 발견", coreMessage: "도입과 격차를 확인한다.", headline: "AI 도입, 숫자로 확인", informationRelation: { type: "related_facts", entries: [{ role: "adoption", label: "도입", value: "80%" }, { role: "gap", label: "격차", value: "3.2%p" }] }, supportingTexts: [], footnote: null, evidenceIds: [uuid(1)], productImageAssetIds: [], avatarImageAssetIds: [] }],
+  };
+}
+
+describe("reel-storyboard.v2", () => {
+  it("partitions the complete Evidence pool and binds selected Evidence to the scene union", () => {
+    const input = v2Input();
+    expect(parseReelStoryboardV2(v2Storyboard(), input).evidenceSelection.excludedEvidenceIds).toEqual([uuid(2)]);
+    expect(() => parseReelStoryboardV2({ ...v2Storyboard(), evidenceSelection: { selectedEvidenceIds: [uuid(1)], excludedEvidenceIds: [] } }, input)).toThrow("reel_storyboard_evidence_partition_invalid");
+    expect(() => parseReelStoryboardV2({ ...v2Storyboard(), scenes: [{ ...v2Storyboard().scenes[0], evidenceIds: [] }] }, input)).toThrow("reel_storyboard_evidence_partition_invalid");
+  });
+
+  it("requires Evidence for informational factual scenes and validates Card-equivalent relations", () => {
+    const input = v2Input();
+    const empty = { ...v2Storyboard(), evidenceSelection: { selectedEvidenceIds: [], excludedEvidenceIds: [uuid(1), uuid(2)] }, scenes: [{ ...v2Storyboard().scenes[0], editorialRole: "analysis", evidenceIds: [] }] };
+    expect(() => parseReelStoryboardV2(empty, input)).toThrow("reel_storyboard_scene_evidence_required");
+    expect(parseReelStoryboardV2({ ...empty, scenes: [{ ...empty.scenes[0], editorialRole: "cta" }] }, input).scenes[0]?.evidenceIds).toEqual([]);
+    expect(() => parseReelStoryboardV2({ ...v2Storyboard(), scenes: [{ ...v2Storyboard().scenes[0], informationRelation: { type: "before_after", entries: [{ role: "left", label: null, value: "80%" }, { role: "right", label: null, value: "83%" }] } }] }, input)).toThrow("card_manuscript_information_relation_invalid");
+  });
+
+  it("rejects planner design fields and projects semantic copy deterministically", () => {
+    const input = v2Input();
+    expect(() => parseReelStoryboardV2({ ...v2Storyboard(), visualSystem: {} }, input)).toThrow("reel_storyboard_v2_invalid");
+    const parsed = parseReelStoryboardV2(v2Storyboard(), input);
+    const draft = compileReelStoryboardDraftV2(parsed, input.selectedProposal.outline);
+    expect(draft.assets[0]?.copy).toContain("도입\n80%\n격차\n3.2%p");
+    expect(draft.assets[0]?.visualDirection).toContain("image model owns composition");
+  });
+
+  it("rejects repeated scene headlines and core messages like the Card contract", () => {
+    const input = v2Input();
+    input.selectedProposal = {
+      ...input.selectedProposal,
+      assetCount: 2,
+      outline: [
+        input.selectedProposal.outline[0]!,
+        { index: 2, role: "detail", headline: "격차", purpose: "격차 설명" },
+      ],
+    };
+    const first = v2Storyboard().scenes[0]!;
+    const second = {
+      ...first,
+      index: 2,
+      editorialRole: "detail",
+      purpose: "격차 설명",
+      coreMessage: "격차를 설명한다.",
+      headline: "격차는 3.2%p",
+      evidenceIds: [uuid(2)],
+    };
+    const storyboard = {
+      ...v2Storyboard(),
+      evidenceSelection: { selectedEvidenceIds: [uuid(1), uuid(2)], excludedEvidenceIds: [] },
+      scenes: [first, second],
+    };
+
+    expect(parseReelStoryboardV2(storyboard, input).scenes).toHaveLength(2);
+    expect(() => parseReelStoryboardV2({
+      ...storyboard,
+      scenes: [first, { ...second, headline: first.headline }],
+    }, input)).toThrow("reel_storyboard_v2_invalid");
+    expect(() => parseReelStoryboardV2({
+      ...storyboard,
+      scenes: [first, { ...second, coreMessage: first.coreMessage }],
+    }, input)).toThrow("reel_storyboard_v2_invalid");
   });
 });

@@ -38,29 +38,22 @@ function job(): ReelJob {
 
 function reelDraft() {
   return {
-    contractVersion: "reel-storyboard.v1",
+    contractVersion: "reel-storyboard.v2",
     content: { caption: "Useful caption", hashtags: ["guide"], cta: "Save" },
     storyNarrative: "검증된 근거를 한 장면에 명확히 전달한다.",
-    visualSystem: {
-      paletteDirection: "high contrast",
-      typographyDirection: "large vertical type",
-      graphicLanguage: "editorial infographic",
-      imageryDirection: "evidence-led imagery",
-      invariants: ["consistent spacing"],
-    },
+    evidenceSelection: { selectedEvidenceIds: [uid(4)], excludedEvidenceIds: [] },
     scenes: [{
       index: 1,
       editorialRole: "scene",
       purpose: "검증된 근거를 설명한다.",
       coreMessage: "Explain the fixed evidence clearly.",
       headline: "Use the verified process",
-      keyVisual: { type: "none", entries: [] },
+      informationRelation: { type: "none", entries: [] },
       supportingTexts: ["Explain the fixed evidence clearly."],
       footnote: null,
-      visualThesis: "Vertical editorial scene.",
-      layoutArchetype: "editorial_freeform",
       evidenceIds: [uid(4)],
       productImageAssetIds: [],
+      avatarImageAssetIds: [],
     }],
   };
 }
@@ -97,7 +90,7 @@ describe("reel worker", () => {
     expect(client.complete).toHaveBeenCalledWith(item.id, {
       workerId: "worker",
       leaseToken: "lease",
-      skillVersion: "reel-storyboard-skill.v3",
+      skillVersion: "reel-storyboard-skill.v4",
       jobType: "generate",
       planDraft: compiledDraft().planDraft,
       reelStoryboardContract: compiledDraft().reelStoryboardContract,

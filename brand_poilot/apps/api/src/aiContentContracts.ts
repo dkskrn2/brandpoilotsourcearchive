@@ -8,7 +8,9 @@ import {
 import { Value } from "@sinclair/typebox/value";
 import {
   parseReelStoryboardV1,
+  ReelStoryboardV2Schema,
   type ReelStoryboardV1,
+  type ReelStoryboardV2,
 } from "@brand-pilot/content-contracts/reel-storyboard";
 
 export type AiContentType = "card_news" | "blog" | "marketing";
@@ -533,6 +535,13 @@ export interface ReelStoryboardContractV1 {
   storyboard: ReelStoryboardV1;
 }
 
+export interface ReelStoryboardContractV2 {
+  contractVersion: "reel-storyboard.v2";
+  storyboardSha256: string;
+  storyboard: ReelStoryboardV2;
+}
+export type ReelStoryboardContract = ReelStoryboardContractV1 | ReelStoryboardContractV2;
+
 export interface CompleteAiContentAnalysisJobInput extends CompleteAiContentJobBase {
   jobType: "analyze";
   analysisJson: Record<string, unknown>;
@@ -548,14 +557,14 @@ export interface CompleteAiContentCanonicalPlanningJobInput extends CompleteAiCo
   jobType: "generate";
   plan: import("./aiContentPlanContracts.js").ContentPlanResultV2;
   cardManuscriptContract?: CardManuscriptContractV1;
-  reelStoryboardContract?: ReelStoryboardContractV1;
+  reelStoryboardContract?: ReelStoryboardContractV2;
 }
 
 export interface CompleteAiContentDraftPlanningJobInput extends CompleteAiContentJobBase {
   jobType: "generate";
   planDraft: ContentPlanDraftV1;
   cardManuscriptContract?: CardManuscriptContractV1;
-  reelStoryboardContract?: ReelStoryboardContractV1;
+  reelStoryboardContract?: ReelStoryboardContractV2;
 }
 
 export type CompleteAiContentPlanningJobInput =
@@ -622,6 +631,29 @@ export function parseReelStoryboardContractV1(value: unknown): ReelStoryboardCon
   } catch {
     return fail("ai_content_reel_storyboard_contract_invalid");
   }
+}
+
+export function parseReelStoryboardContractV2(value: unknown): ReelStoryboardContractV2 {
+  const source = inputObject(value, "ai_content_reel_storyboard_contract_invalid");
+  const keys = ["contractVersion", "storyboardSha256", "storyboard"];
+  if (Object.keys(source).length !== keys.length || keys.some((key) => !(key in source))
+    || source.contractVersion !== "reel-storyboard.v2"
+    || typeof source.storyboardSha256 !== "string" || !/^[0-9a-f]{64}$/.test(source.storyboardSha256)
+    || !Value.Check(ReelStoryboardV2Schema, source.storyboard)) {
+    fail("ai_content_reel_storyboard_contract_invalid");
+  }
+  return {
+    contractVersion: "reel-storyboard.v2",
+    storyboardSha256: source.storyboardSha256,
+    storyboard: source.storyboard as ReelStoryboardV2,
+  };
+}
+
+export function parseReelStoryboardContract(value: unknown): ReelStoryboardContract {
+  const source = inputObject(value, "ai_content_reel_storyboard_contract_invalid");
+  return source.contractVersion === "reel-storyboard.v2"
+    ? parseReelStoryboardContractV2(value)
+    : parseReelStoryboardContractV1(value);
 }
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;

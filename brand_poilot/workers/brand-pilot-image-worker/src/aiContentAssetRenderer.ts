@@ -30,7 +30,7 @@ export interface LocallyRenderedAiContentAsset {
 
 export interface AiContentEditorialRenderDiagnostic {
   contractVersion: "ai-content-editorial-render-diagnostic.v1";
-  sourceContractVersion: "card-manuscript-plan.v1" | "reel-storyboard.v1";
+  sourceContractVersion: "card-manuscript-plan.v1" | "reel-storyboard.v1" | "reel-storyboard.v2";
   sourceSha256: string;
   sceneIndex: number;
   compiledPromptVersion: "image-visual-session.v1";

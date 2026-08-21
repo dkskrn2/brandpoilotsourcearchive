@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { parseReelStoryboardV1, type ReelStoryboardV1 } from "./reelStoryboard.js";
+import { parseReelStoryboardV1, type ReelStoryboardV1, type ReelStoryboardV2 } from "./reelStoryboard.js";
 
 function canonicalJson(value: unknown): string {
   const normalize = (item: unknown): unknown => {
@@ -14,4 +14,8 @@ function canonicalJson(value: unknown): string {
 
 export function reelStoryboardSha256(storyboard: ReelStoryboardV1): string {
   return createHash("sha256").update(canonicalJson(parseReelStoryboardV1(storyboard)), "utf8").digest("hex");
+}
+
+export function reelStoryboardV2Sha256(storyboard: ReelStoryboardV2): string {
+  return createHash("sha256").update(canonicalJson(storyboard), "utf8").digest("hex");
 }

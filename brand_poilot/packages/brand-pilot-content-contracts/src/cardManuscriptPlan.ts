@@ -121,6 +121,11 @@ function normalizeRelation(source: CardInformationRelationV1): CardInformationRe
   return relation;
 }
 
+export function parseCardInformationRelationV1(value: unknown): CardInformationRelationV1 {
+  if (!Value.Check(CardInformationRelationV1Schema, value)) relationInvalid();
+  return normalizeRelation(value as CardInformationRelationV1);
+}
+
 function normalizeScene(source: CardManuscriptSceneV1): CardManuscriptSceneV1 {
   const scene: CardManuscriptSceneV1 = {
     index: source.index,
@@ -128,7 +133,7 @@ function normalizeScene(source: CardManuscriptSceneV1): CardManuscriptSceneV1 {
     purpose: trimmed(source.purpose),
     coreMessage: trimmed(source.coreMessage),
     headline: trimmed(source.headline),
-    informationRelation: normalizeRelation(source.informationRelation),
+    informationRelation: parseCardInformationRelationV1(source.informationRelation),
     supportingTexts: source.supportingTexts.map(trimmed),
     footnote: source.footnote === null ? null : trimmed(source.footnote),
     evidenceIds: [...source.evidenceIds],

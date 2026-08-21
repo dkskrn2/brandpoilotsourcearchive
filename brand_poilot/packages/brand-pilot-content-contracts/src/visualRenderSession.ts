@@ -2,7 +2,7 @@ import { Type, type Static } from "@sinclair/typebox";
 import { Value } from "@sinclair/typebox/value";
 import type { ContentGenerationInputV3 } from "./generation.js";
 import type { CardManuscriptPlanV1 } from "./cardManuscriptPlan.js";
-import type { ReelStoryboardV1 } from "./reelStoryboard.js";
+import type { ReelStoryboardV1, ReelStoryboardV2 } from "./reelStoryboard.js";
 
 const Sha256Schema = Type.String({ pattern: "^[0-9a-f]{64}$" });
 const UuidSchema = Type.String({ pattern: "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$" });
@@ -11,7 +11,7 @@ export const AiContentVisualSessionV1Schema = Type.Object({
   contractVersion: Type.Literal("ai-content-visual-session.v1"),
   outputFormat: Type.Union([Type.Literal("card_news"), Type.Literal("reel")]),
   source: Type.Object({
-    contractVersion: Type.Union([Type.Literal("card-manuscript-plan.v1"), Type.Literal("reel-storyboard.v1")]),
+    contractVersion: Type.Union([Type.Literal("card-manuscript-plan.v1"), Type.Literal("reel-storyboard.v1"), Type.Literal("reel-storyboard.v2")]),
     sha256: Sha256Schema,
   }, { additionalProperties: false }),
   narrative: Type.String({ minLength: 1, maxLength: 4_000 }),
@@ -59,12 +59,13 @@ export function projectCardVisualRenderSession(input: { sourceSha256: string; re
   });
 }
 
-export function projectReelVisualRenderSession(input: { sourceSha256: string; references: References; storyboard: ReelStoryboardV1 }): AiContentVisualSessionV1 {
+export function projectReelVisualRenderSession(input: { sourceSha256: string; references: References; storyboard: ReelStoryboardV1 | ReelStoryboardV2 }): AiContentVisualSessionV1 {
+  const v2 = input.storyboard.contractVersion === "reel-storyboard.v2";
   return checked({
     contractVersion: "ai-content-visual-session.v1", outputFormat: "reel",
-    source: { contractVersion: "reel-storyboard.v1", sha256: input.sourceSha256 }, narrative: input.storyboard.storyNarrative,
+    source: { contractVersion: input.storyboard.contractVersion, sha256: input.sourceSha256 }, narrative: input.storyboard.storyNarrative,
     primaryMediumPolicy: mediumPolicy(input.references),
-    scenes: input.storyboard.scenes.map((scene) => ({ index: scene.index, editorialContext: { editorialRole: scene.editorialRole, purpose: scene.purpose, coreMessage: scene.coreMessage }, lockedDisplay: { headline: scene.headline, relation: scene.keyVisual, supportingTexts: scene.supportingTexts, footnote: scene.footnote }, referenceBindings: { productImageAssetIds: scene.productImageAssetIds, avatarImageAssetIds: scene.avatarImageAssetIds ?? [] } })),
+    scenes: input.storyboard.scenes.map((scene) => ({ index: scene.index, editorialContext: { editorialRole: scene.editorialRole, purpose: scene.purpose, coreMessage: scene.coreMessage }, lockedDisplay: { headline: scene.headline, relation: v2 ? (scene as ReelStoryboardV2["scenes"][number]).informationRelation : (scene as ReelStoryboardV1["scenes"][number]).keyVisual, supportingTexts: scene.supportingTexts, footnote: scene.footnote }, referenceBindings: { productImageAssetIds: scene.productImageAssetIds, avatarImageAssetIds: scene.avatarImageAssetIds ?? [] } })),
   });
 }
 

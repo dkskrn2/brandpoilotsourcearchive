@@ -98,7 +98,7 @@ const STRUCTURED_SOCIAL_CARD_PATHS = new Set([
 const STRUCTURED_SOCIAL_REEL_PATHS = new Set([
   "workers/brand-pilot-reel-worker/Dockerfile",
   "workers/brand-pilot-reel-worker/scripts/reel-plan-draft-v2.schema.json",
-  "workers/brand-pilot-reel-worker/scripts/reel-storyboard-v1.schema.json",
+  "workers/brand-pilot-reel-worker/scripts/reel-storyboard-v2.schema.json",
   "workers/brand-pilot-reel-worker/scripts/run-codex-reel-plan.mjs",
   "workers/brand-pilot-reel-worker/src/contracts.test.ts",
   "workers/brand-pilot-reel-worker/src/contracts.ts",
@@ -150,6 +150,9 @@ const CARD_MANUSCRIPT_CONTRACT_PATHS = new Set([
   "packages/brand-pilot-content-contracts/src/generatedArtifacts.test.ts",
   "packages/brand-pilot-content-contracts/src/researchSourceAcquisition.test.ts",
   "packages/brand-pilot-content-contracts/src/researchSourceAcquisition.ts",
+  "packages/brand-pilot-content-contracts/src/reelStoryboard.test.ts",
+  "packages/brand-pilot-content-contracts/src/reelStoryboard.ts",
+  "packages/brand-pilot-content-contracts/src/reelStoryboardNode.ts",
   "packages/brand-pilot-content-contracts/src/structuredSceneCopy.test.ts",
   "packages/brand-pilot-content-contracts/src/structuredSceneCopy.ts",
   "packages/brand-pilot-content-contracts/src/visualRenderSession.test.ts",
@@ -165,8 +168,10 @@ const RETIRED_CARD_DECK_CONTRACT_PATHS = new Set([
 const CARD_MANUSCRIPT_DOC_PATHS = new Set([
   "docs/superpowers/plans/2026-08-18-card-manuscript-shared-visual-session.md",
   "docs/superpowers/plans/2026-08-19-no-crop-social-images-card-runner.md",
+  "docs/superpowers/plans/2026-08-21-reel-card-contract-sync.md",
   "docs/superpowers/specs/2026-08-18-card-manuscript-plan-design.md",
   "docs/superpowers/specs/2026-08-19-no-crop-social-images-card-runner-design.md",
+  "docs/superpowers/specs/2026-08-21-reel-card-contract-sync-design.md",
 ]);
 
 const CARD_MANUSCRIPT_TOOLING_PATHS = new Set([
@@ -186,9 +191,16 @@ const CARD_MANUSCRIPT_TOOLING_PATHS = new Set([
 ]);
 
 const CARD_MANUSCRIPT_REEL_PATHS = new Set([
+  "workers/brand-pilot-reel-worker/Dockerfile",
   "workers/brand-pilot-reel-worker/scripts/reel-storyboard-v1.schema.json",
+  "workers/brand-pilot-reel-worker/scripts/reel-storyboard-v2.schema.json",
+  "workers/brand-pilot-reel-worker/scripts/run-codex-reel-plan.mjs",
+  "workers/brand-pilot-reel-worker/src/contracts.test.ts",
+  "workers/brand-pilot-reel-worker/src/contracts.ts",
+  "workers/brand-pilot-reel-worker/src/productionRuntime.test.ts",
   "workers/brand-pilot-reel-worker/src/promptBuilder.test.ts",
   "workers/brand-pilot-reel-worker/src/promptBuilder.ts",
+  "workers/brand-pilot-reel-worker/src/worker.test.ts",
 ]);
 
 const FAQ_UTTERANCE_DEPLOY_PATHS = new Set([

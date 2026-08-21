@@ -38,4 +38,18 @@ describe("ai-content-visual-session.v1", () => {
     expect(JSON.stringify(result)).not.toContain("visualThesis");
     expect(JSON.stringify(result)).not.toContain("layoutArchetype");
   });
+
+  it("projects Reel v2 semantic relations without adding planner design fields", () => {
+    const result = projectReelVisualRenderSession({
+      sourceSha256: "c".repeat(64), references: references(false),
+      storyboard: {
+        contractVersion: "reel-storyboard.v2", content: { caption: "c", hashtags: [], cta: "x" }, storyNarrative: "n",
+        evidenceSelection: { selectedEvidenceIds: [], excludedEvidenceIds: [] },
+        scenes: [{ index: 1, editorialRole: "cta", purpose: "p", coreMessage: "m", headline: "h", informationRelation: { type: "related_facts", entries: [{ role: "first", label: "A", value: "1" }, { role: "second", label: "B", value: "2" }] }, supportingTexts: [], footnote: null, evidenceIds: [], productImageAssetIds: [], avatarImageAssetIds: [] }],
+      },
+    } as never);
+    expect(result.source.contractVersion).toBe("reel-storyboard.v2");
+    expect(result.scenes[0]?.lockedDisplay.relation).toMatchObject({ type: "related_facts" });
+    expect(JSON.stringify(result)).not.toContain("visualSystem");
+  });
 });

@@ -4,7 +4,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 
 describe("reel production runtime", () => {
-  it("writes and uses the Reel Storyboard v1 output schema", async () => {
+  it("writes and uses the Reel Storyboard v2 output schema", async () => {
     const outputDir = await mkdtemp(path.join(os.tmpdir(), "reel-draft-schema-"));
     try {
       const runner = await import(new URL("../scripts/run-codex-reel-plan.mjs", import.meta.url).href) as {
@@ -22,17 +22,17 @@ describe("reel production runtime", () => {
       };
 
       expect(schema.additionalProperties).toBe(false);
-      expect(schema.required).toEqual(["contractVersion", "content", "storyNarrative", "visualSystem", "scenes"]);
-      expect(Object.keys(schema.properties)).toEqual(["contractVersion", "content", "storyNarrative", "visualSystem", "scenes"]);
+      expect(schema.required).toEqual(["contractVersion", "content", "storyNarrative", "evidenceSelection", "scenes"]);
+      expect(Object.keys(schema.properties)).toEqual(["contractVersion", "content", "storyNarrative", "evidenceSelection", "scenes"]);
       expect(schema.properties.scenes.items.additionalProperties).toBe(false);
       expect(Object.keys(schema.properties.scenes.items.properties)).toEqual([
-        "index", "editorialRole", "purpose", "coreMessage", "headline", "keyVisual", "supportingTexts", "footnote",
-        "visualThesis", "layoutArchetype", "evidenceIds", "productImageAssetIds",
+        "index", "editorialRole", "purpose", "coreMessage", "headline", "informationRelation", "supportingTexts", "footnote",
+        "evidenceIds", "productImageAssetIds", "avatarImageAssetIds",
       ]);
       expect(args[args.indexOf("--output-schema") + 1]).toBe(schemaPath);
       expect(args).toEqual(expect.arrayContaining(["--model", "gpt-5.6-sol"]));
       expect(args).toEqual(expect.arrayContaining(["-c", 'model_reasoning_effort="high"']));
-      expect(schemaPath).toContain("reel-storyboard-v1.schema.json");
+      expect(schemaPath).toContain("reel-storyboard-v2.schema.json");
       expect(args.join(" ")).not.toContain("reel-plan-v2.schema.json");
       expect(args.join(" ")).not.toContain("reel-plan-draft-v2.schema.json");
     } finally {

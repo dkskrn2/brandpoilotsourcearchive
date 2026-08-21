@@ -22,15 +22,21 @@ import {
 } from "@brand-pilot/content-contracts/visual-render-session";
 import {
   compileReelStoryboardSceneV1,
+  compileReelStoryboardSceneV2,
   parseReelStoryboardV1,
+  parseReelStoryboardV2,
+  type ReelStoryboardSceneV1,
+  type ReelStoryboardSceneV2,
 } from "@brand-pilot/content-contracts/reel-storyboard";
-import { reelStoryboardSha256 } from "@brand-pilot/content-contracts/reel-storyboard/node";
+import { reelStoryboardSha256, reelStoryboardV2Sha256 } from "@brand-pilot/content-contracts/reel-storyboard/node";
 import type { AiContentGenerationRecord } from "./aiContentRepository.js";
 import {
   parseCardManuscriptContractV1,
+  parseReelStoryboardContract,
   parseReelStoryboardContractV1,
+  parseReelStoryboardContractV2,
   type CardManuscriptContractV1,
-  type ReelStoryboardContractV1,
+  type ReelStoryboardContract,
 } from "./aiContentContracts.js";
 import {
   BLOG_PASSIVE_HTML_FORBIDDEN_ATTRIBUTES,
@@ -146,7 +152,7 @@ export interface EditorialRenderDiagnosticAppend {
   leaseToken: string;
   diagnostic: {
     contractVersion: "ai-content-editorial-render-diagnostic.v1";
-    sourceContractVersion: "card-manuscript-plan.v1" | "reel-storyboard.v1";
+    sourceContractVersion: "card-manuscript-plan.v1" | "reel-storyboard.v1" | "reel-storyboard.v2";
     sourceSha256: string;
     sceneIndex: number;
     compiledPromptVersion: "image-visual-session.v1";
@@ -308,7 +314,7 @@ export async function enqueueAiContentRenderJobs(client: Queryable, input: {
   plan: ContentPlanResultV2;
   finalInput: ContentGenerationInputV3;
   cardManuscriptContract?: CardManuscriptContractV1 | null;
-  reelStoryboardContract?: ReelStoryboardContractV1 | null;
+  reelStoryboardContract?: ReelStoryboardContract | null;
 }): Promise<void> {
   const imagePackage = input.plan.imagePackage;
   if (imagePackage) {
@@ -319,7 +325,7 @@ export async function enqueueAiContentRenderJobs(client: Queryable, input: {
       throw new Error("ai_content_card_manuscript_contract_invalid");
     }
     const reelStoryboard = imagePackage.outputFormat === "reel" && input.reelStoryboardContract
-      ? parseReelStoryboardContractV1(input.reelStoryboardContract)
+      ? parseReelStoryboardContract(input.reelStoryboardContract)
       : null;
     if (input.reelStoryboardContract && imagePackage.outputFormat !== "reel") {
       throw new Error("ai_content_reel_storyboard_contract_invalid");
@@ -339,15 +345,23 @@ export async function enqueueAiContentRenderJobs(client: Queryable, input: {
       throw new Error("ai_content_reel_storyboard_contract_invalid");
     }
     if (reelStoryboard) {
-      if (reelStoryboardSha256(reelStoryboard.storyboard) !== reelStoryboard.storyboardSha256
+      const parsedStoryboard = reelStoryboard.contractVersion === "reel-storyboard.v2"
+        ? parseReelStoryboardV2(reelStoryboard.storyboard, input.finalInput)
+        : parseReelStoryboardV1(reelStoryboard.storyboard);
+      const sourceHash = reelStoryboard.contractVersion === "reel-storyboard.v2"
+        ? reelStoryboardV2Sha256(parsedStoryboard as never)
+        : reelStoryboardSha256(parsedStoryboard as never);
+      if (sourceHash !== reelStoryboard.storyboardSha256
         || reelStoryboard.storyboard.scenes.length !== imagePackage.assets.length) {
         throw new Error("ai_content_reel_storyboard_compilation_mismatch");
       }
-      for (const [offset, scene] of reelStoryboard.storyboard.scenes.entries()) {
+      for (const [offset, scene] of parsedStoryboard.scenes.entries()) {
         const asset = imagePackage.assets[offset];
         const outline = input.finalInput.selectedProposal.outline[offset];
         if (!asset || !outline) throw new Error("ai_content_reel_storyboard_compilation_mismatch");
-        const compiled = compileReelStoryboardSceneV1(reelStoryboard.storyboard, scene, outline.role);
+        const compiled = parsedStoryboard.contractVersion === "reel-storyboard.v2"
+          ? compileReelStoryboardSceneV2(scene as ReelStoryboardSceneV2, outline.role)
+          : compileReelStoryboardSceneV1(parsedStoryboard, scene as ReelStoryboardSceneV1, outline.role);
         const { attachmentIds: _attachmentIds, ...assetWithoutAttachments } = asset;
         if (canonicalJson(compileStructuredScene(compiled)) !== canonicalJson(assetWithoutAttachments)) {
           throw new Error("ai_content_reel_storyboard_compilation_mismatch");
@@ -379,7 +393,7 @@ export async function enqueueAiContentRenderJobs(client: Queryable, input: {
           ? {
               rendererPromptVersion: "image-visual-session.v1",
               visualSessionBinding: {
-                sourceContractVersion: "reel-storyboard.v1",
+                sourceContractVersion: reelStoryboard.contractVersion,
                 sourceSha256: reelStoryboard.storyboardSha256,
                 sceneIndex: asset.index,
               },
@@ -531,7 +545,7 @@ async function visualSessionImageAssetPayloadV1(
       outputId: String(row.output_id), assetIndex,
     })
     || storedPayload.rendererPromptVersion !== "image-visual-session.v1"
-    || !["card-manuscript-plan.v1", "reel-storyboard.v1"].includes(String(binding.sourceContractVersion))
+    || !["card-manuscript-plan.v1", "reel-storyboard.v1", "reel-storyboard.v2"].includes(String(binding.sourceContractVersion))
     || binding.sceneIndex !== assetIndex
     || typeof binding.sourceSha256 !== "string"
     || !/^[0-9a-f]{64}$/.test(binding.sourceSha256)
@@ -588,11 +602,18 @@ async function visualSessionImageAssetPayloadV1(
   }
   const generationPayload = record(state.rows[0].generation_job_payload);
   let visualSession: AiContentVisualSessionV1;
-  if (binding.sourceContractVersion === "reel-storyboard.v1") {
-    const contract = parseReelStoryboardContractV1(generationPayload.reelStoryboardContract);
-    const storyboard = parseReelStoryboardV1(contract.storyboard);
+  if (binding.sourceContractVersion === "reel-storyboard.v1" || binding.sourceContractVersion === "reel-storyboard.v2") {
+    const contract = binding.sourceContractVersion === "reel-storyboard.v2"
+      ? parseReelStoryboardContractV2(generationPayload.reelStoryboardContract)
+      : parseReelStoryboardContractV1(generationPayload.reelStoryboardContract);
+    const storyboard = contract.contractVersion === "reel-storyboard.v2"
+      ? parseReelStoryboardV2(contract.storyboard, contentGenerationInput)
+      : parseReelStoryboardV1(contract.storyboard);
+    const sourceHash = contract.contractVersion === "reel-storyboard.v2"
+      ? reelStoryboardV2Sha256(storyboard as never)
+      : reelStoryboardSha256(storyboard as never);
     if (contentPlan.imagePackage.outputFormat !== "reel"
-      || reelStoryboardSha256(storyboard) !== contract.storyboardSha256
+      || sourceHash !== contract.storyboardSha256
       || contract.storyboardSha256 !== binding.sourceSha256) throw new Error("ai_content_render_snapshot_mismatch");
     visualSession = projectReelVisualRenderSession({ sourceSha256: contract.storyboardSha256, references: contentGenerationInput.references, storyboard });
   } else {

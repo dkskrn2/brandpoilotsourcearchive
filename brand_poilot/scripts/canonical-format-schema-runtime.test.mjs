@@ -19,7 +19,7 @@ const formats = Object.freeze([
     format: "reel",
     worker: "brand-pilot-reel-worker",
     runner: "run-codex-reel-plan.mjs",
-    schema: "reel-storyboard-v1.schema.json",
+    schema: "reel-storyboard-v2.schema.json",
   },
 ]);
 

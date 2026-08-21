@@ -4,9 +4,12 @@ import { cloneManualBlogImageJobV2 } from "../test/fixtures/manualRender.js";
 
 const uid = (n: number) => `10000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 
-function visualClaim(outputFormat: "card_news" | "reel" = "card_news") {
+function visualClaim(
+  outputFormat: "card_news" | "reel" = "card_news",
+  reelContractVersion: "reel-storyboard.v1" | "reel-storyboard.v2" = "reel-storyboard.v1",
+) {
   const base = cloneManualBlogImageJobV2();
-  const sourceContractVersion = outputFormat === "card_news" ? "card-manuscript-plan.v1" as const : "reel-storyboard.v1" as const;
+  const sourceContractVersion = outputFormat === "card_news" ? "card-manuscript-plan.v1" as const : reelContractVersion;
   const visualSession = {
     contractVersion: "ai-content-visual-session.v1" as const, outputFormat,
     source: { contractVersion: sourceContractVersion, sha256: "a".repeat(64) }, narrative: "Narrative",
@@ -164,6 +167,22 @@ describe("AI content render API client", () => {
       kind: "visual_session", outputFormat: "reel",
       visualSession: { source: { contractVersion: "reel-storyboard.v1" } },
       jobs: [{ assetIndex: 1 }, { assetIndex: 2 }],
+    });
+  });
+
+  it("strictly parses a Reel Storyboard v2 visual-session claim", async () => {
+    const job = visualClaim("reel", "reel-storyboard.v2");
+    const fetchImpl = vi.fn(async () => new Response(JSON.stringify({ job }), { status: 200 }));
+    const client = createAiContentRenderClient({ apiUrl: "https://api.example", token: "token", fetchImpl });
+
+    const claim = await client.claim("worker", 180);
+    expect(claim).toMatchObject({
+      kind: "visual_session", outputFormat: "reel",
+      visualSession: { source: { contractVersion: "reel-storyboard.v2" } },
+    });
+    expect(claim && "jobs" in claim ? claim.jobs : []).toHaveLength(2);
+    expect(claim && "jobs" in claim ? claim.jobs[0] : null).toMatchObject({
+      payload: { visualSessionBinding: { sourceContractVersion: "reel-storyboard.v2" } },
     });
   });
 

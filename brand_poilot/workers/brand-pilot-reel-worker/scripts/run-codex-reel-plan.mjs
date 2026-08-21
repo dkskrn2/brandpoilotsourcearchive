@@ -31,15 +31,15 @@ export function buildCodexArgs(outputDir) {
     "-c", "permissions.planner.network.enabled=false",
     "--disable", "shell_tool", "--disable", "image_generation", "--disable", "browser_use", "--disable", "multi_agent", "--disable", "plugins",
     "--ask-for-approval", "never", "exec", "--model", "gpt-5.6-sol", "--ignore-user-config", "--skip-git-repo-check", "--ignore-rules", "--ephemeral",
-    "--output-schema", path.join(path.resolve(outputDir), "reel-storyboard-v1.schema.json"),
+    "--output-schema", path.join(path.resolve(outputDir), "reel-storyboard-v2.schema.json"),
     "--output-last-message", path.join(outputDir, "reel-plan.json"), "-C", outputDir, "-",
   ];
 }
 
 export async function writeReelStoryboardSchema(outputDir) {
-  const schemaPath = path.join(path.resolve(outputDir), "reel-storyboard-v1.schema.json");
+  const schemaPath = path.join(path.resolve(outputDir), "reel-storyboard-v2.schema.json");
   await mkdir(outputDir, { recursive: true });
-  await copyFile(fileURLToPath(new URL("./reel-storyboard-v1.schema.json", import.meta.url)), schemaPath);
+  await copyFile(fileURLToPath(new URL("./reel-storyboard-v2.schema.json", import.meta.url)), schemaPath);
   return schemaPath;
 }
 
