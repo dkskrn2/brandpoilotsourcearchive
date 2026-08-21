@@ -10,6 +10,12 @@ export interface ContentSuggestion {
   title: string;
   whyNow: string;
   contentBrief: string;
+  sources?: Array<{
+    url: string;
+    title: string;
+    publisher: string;
+    publishedAt: string | null;
+  }>;
 }
 
 export interface ContentSuggestionList {
@@ -20,6 +26,12 @@ export interface ContentSuggestionList {
 
 export interface ContentSuggestionGateway {
   list(brandId: string, signal?: AbortSignal): Promise<ContentSuggestionList>;
+  listForSelection(
+    brandId: string,
+    categoryCode: string,
+    subcategoryCodes: string[],
+    signal?: AbortSignal,
+  ): Promise<ContentSuggestionList>;
   get(brandId: string, suggestionId: string, signal?: AbortSignal): Promise<ContentSuggestion>;
 }
 
@@ -31,6 +43,16 @@ export function createContentSuggestionGateway(options: { baseUrl?: string; fetc
         method: "GET",
         signal,
       });
+    },
+    listForSelection(brandId, categoryCode, subcategoryCodes, signal) {
+      const query = new URLSearchParams({
+        categoryCode,
+        subcategoryCodes: subcategoryCodes.join(","),
+      });
+      return client.requestJson<ContentSuggestionList>(
+        `/brands/${brandId}/content-suggestions?${query.toString()}`,
+        { method: "GET", signal },
+      );
     },
     get(brandId, suggestionId, signal) {
       return client.requestJson<ContentSuggestion>(

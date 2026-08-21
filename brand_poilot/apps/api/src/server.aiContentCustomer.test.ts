@@ -117,6 +117,7 @@ function setup(
     uploadSessionsEnabled?: boolean;
     actorUserId?: string | null;
     app?: FastifyInstance;
+    onboardingContent?: { start: ReturnType<typeof vi.fn>; reconcile: ReturnType<typeof vi.fn> };
   } = {},
 ) {
   const events: string[] = [];
@@ -247,6 +248,7 @@ function setup(
       uploadSessionsEnabled: options.uploadSessionsEnabled ?? false,
     },
     aiContentLimits: { dailyGenerationLimit: 10, dailyDownloadLimit: 20 },
+    onboardingContent: options.onboardingContent as never,
     readinessPolicy: {
       schedulerEnabled: false,
       publishingEnabled: false,
@@ -256,6 +258,73 @@ function setup(
   }, options.app);
   return { app, repository, kakaoAuth, generateClientToken, events, sessionExpiresAt };
 }
+
+describe("onboarding content HTTP routes", () => {
+  it("starts and reconciles the analysis-scoped parallel card news state", async () => {
+    const onboardingContent = {
+      start: vi.fn(async () => ({
+        state: "preparing", proposalBatchId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        generationId: null, title: "추천 주제", progress: null, outputs: [],
+        errorCode: null, errorMessage: null,
+      })),
+      reconcile: vi.fn(async () => ({
+        state: "generating", proposalBatchId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        generationId, title: "추천 주제", progress: { percent: 40 }, outputs: [],
+        errorCode: null, errorMessage: null,
+      })),
+    };
+    const harness = setup(true, { onboardingContent });
+    const start = await harness.app.inject({
+      method: "POST",
+      url: `/brands/${brandId}/brand-analyses/${analysisId}/onboarding-content`,
+      headers: { cookie: "bp_session=session-1" },
+      payload: {
+        categoryCode: "marketing",
+        subcategoryCodes: ["content"],
+        suggestionId: "99999999-9999-4999-8999-999999999999",
+        contentInstruction: null,
+        idempotencyKey: "onboarding-1",
+      },
+    });
+    const status = await harness.app.inject({
+      method: "POST",
+      url: `/brands/${brandId}/brand-analyses/${analysisId}/onboarding-content/reconcile`,
+      headers: { cookie: "bp_session=session-1" },
+    });
+
+    expect(start.statusCode).toBe(202);
+    expect(status.statusCode).toBe(200);
+    expect(status.json()).toMatchObject({ state: "generating", generationId });
+    expect(onboardingContent.start).toHaveBeenCalledWith(expect.objectContaining({
+      workspaceId, brandId, actorUserId, analysisId,
+    }));
+    expect(onboardingContent.reconcile).toHaveBeenCalledWith({
+      workspaceId, brandId, actorUserId, analysisId,
+    });
+    await harness.app.close();
+  });
+
+  it.each([
+    ["onboarding_content_subcategories_invalid", 400],
+    ["onboarding_content_request_conflict", 409],
+    ["onboarding_content_not_configured", 503],
+  ] as const)("maps %s to a public client status", async (errorCode, statusCode) => {
+    const onboardingContent = {
+      start: vi.fn(async () => { throw new Error(errorCode); }),
+      reconcile: vi.fn(),
+    };
+    const harness = setup(true, { onboardingContent });
+    const response = await harness.app.inject({
+      method: "POST",
+      url: `/brands/${brandId}/brand-analyses/${analysisId}/onboarding-content`,
+      headers: { cookie: "bp_session=session-1" },
+      payload: {},
+    });
+    expect(response.statusCode).toBe(statusCode);
+    expect(response.json()).toEqual({ error: errorCode });
+    await harness.app.close();
+  });
+});
 
 describe("AI content maintenance HTTP fence", () => {
   it.each([

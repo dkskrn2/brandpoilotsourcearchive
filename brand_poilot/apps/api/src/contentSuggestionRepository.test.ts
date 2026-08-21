@@ -160,6 +160,7 @@ describe("brand-scoped suggestion reads", () => {
       title: `주제 ${index + 1}`,
       why_now: `이유 ${index + 1}`,
       content_brief: `구성 ${index + 1}`,
+      sources_json: batch.items[0].sources,
       selected: index < 7,
     }));
     const { pool } = fakePool((sql) => {
@@ -178,7 +179,7 @@ describe("brand-scoped suggestion reads", () => {
     expect(listed.general).toHaveLength(2);
     const personalIds = new Set(listed.personal.map((entry) => entry.id));
     expect(listed.general.some((entry) => personalIds.has(entry.id))).toBe(false);
-    expect(JSON.stringify(listed)).not.toContain("sources");
+    expect(listed.personal[0].sources).toEqual(batch.items[0].sources);
     expect(JSON.stringify(listed)).not.toContain("generationDate");
   });
 
@@ -202,6 +203,7 @@ describe("brand-scoped suggestion reads", () => {
         title: "주제",
         why_now: "이유",
         content_brief: "구성",
+        sources_json: batch.items[0].sources,
       }])
       : result());
     const repository = createContentSuggestionRepository(pool);
@@ -213,6 +215,48 @@ describe("brand-scoped suggestion reads", () => {
       title: "주제",
       whyNow: "이유",
       contentBrief: "구성",
+      sources: batch.items[0].sources,
     });
+  });
+
+  it("lists the latest recommendations for an onboarding category selection", async () => {
+    const { pool, statements } = fakePool((sql) => {
+      if (sql.includes("from content_categories")) {
+        return result([{ id: "category-1", code: "travel_tourism", name: "여행·관광" }]);
+      }
+      if (sql.includes("from content_subcategories") && !sql.includes("content_suggestions")) {
+        return result([{ id: "subcategory-1", code: "domestic_travel", name: "국내여행" }]);
+      }
+      if (sql.includes("from content_suggestion_batches")) return result([{ id: "batch-1" }]);
+      if (sql.includes("from content_suggestions suggestion")) {
+        return result([{
+          id: "suggestion-1",
+          subcategory_code: "domestic_travel",
+          subcategory_name: "국내여행",
+          intent: "trend",
+          title: "주제",
+          why_now: "이유",
+          content_brief: "구성",
+          sources_json: batch.items[0].sources,
+        }]);
+      }
+      return result();
+    });
+    const repository = createContentSuggestionRepository(pool);
+
+    await expect(repository.listForSelection({
+      brandId: "brand-1",
+      categoryCode: "travel_tourism",
+      subcategoryCodes: ["domestic_travel"],
+    })).resolves.toEqual({
+      category: { code: "travel_tourism", name: "여행·관광" },
+      personal: [expect.objectContaining({
+        id: "suggestion-1",
+        subcategoryCode: "domestic_travel",
+        sources: batch.items[0].sources,
+      })],
+      general: [],
+    });
+    expect(statements.at(-1)?.params).toEqual(["batch-1", ["domestic_travel"]]);
   });
 });

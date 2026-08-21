@@ -14,6 +14,9 @@ import {
 } from "../features/brand-center-preview/previewReducer";
 import type { PreviewFile } from "../features/brand-center-preview/types";
 import type { BrandIntelligenceGateway } from "../features/brand-intelligence/types";
+import type { OnboardingContentGateway } from "../features/brand-intelligence/onboardingContentGateway";
+import type { ContentSuggestionGateway } from "../features/content-suggestions/contentSuggestionGateway";
+import type { AiContentGateway } from "../features/ai-content/types";
 import {
   LiveBrandCenterOnboarding,
   type BrandIntelligenceStorageScope,
@@ -26,12 +29,18 @@ export function BrandCenterPreviewPage({
   gateway,
   brandId,
   storageScope,
+  onboardingContentGateway,
+  suggestionGateway,
+  aiContentGateway,
 }: {
   adapter?: PreviewAdapter;
   mode?: "mock" | "live";
   gateway?: BrandIntelligenceGateway;
   brandId?: string;
   storageScope?: BrandIntelligenceStorageScope;
+  onboardingContentGateway?: OnboardingContentGateway;
+  suggestionGateway?: ContentSuggestionGateway;
+  aiContentGateway?: AiContentGateway;
 }) {
   if (mode === "live") {
     return (
@@ -39,6 +48,9 @@ export function BrandCenterPreviewPage({
         gateway={gateway}
         brandId={brandId}
         storageScope={storageScope}
+        onboardingContentGateway={onboardingContentGateway}
+        suggestionGateway={suggestionGateway}
+        aiContentGateway={aiContentGateway}
       />
     );
   }

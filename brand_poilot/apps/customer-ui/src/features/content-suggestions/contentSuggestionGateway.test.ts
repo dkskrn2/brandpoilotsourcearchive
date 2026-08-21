@@ -11,6 +11,12 @@ const response = {
     title: "장벽 케어 루틴",
     whyNow: "환절기 검색량이 늘고 있습니다.",
     contentBrief: "민감 피부가 실천할 수 있는 순서로 정리합니다.",
+    sources: [{
+      url: "https://example.org/skin",
+      title: "피부 자료",
+      publisher: "예시 기관",
+      publishedAt: null,
+    }],
   }],
   general: [],
 };
@@ -26,6 +32,21 @@ describe("contentSuggestionGateway", () => {
     await expect(gateway.list("brand-1")).resolves.toEqual(response);
     expect(fetcher).toHaveBeenCalledWith(
       "https://api.example.test/brands/brand-1/content-suggestions",
+      expect.objectContaining({ method: "GET", credentials: "include" }),
+    );
+  });
+
+  it("loads recommendations for the onboarding selection", async () => {
+    const fetcher = vi.fn(async () => new Response(JSON.stringify(response), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    }));
+    const gateway = createContentSuggestionGateway({ baseUrl: "https://api.example.test", fetcher });
+
+    await gateway.listForSelection("brand-1", "beauty", ["skin_care", "makeup"]);
+
+    expect(fetcher).toHaveBeenCalledWith(
+      "https://api.example.test/brands/brand-1/content-suggestions?categoryCode=beauty&subcategoryCodes=skin_care%2Cmakeup",
       expect.objectContaining({ method: "GET", credentials: "include" }),
     );
   });

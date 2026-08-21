@@ -403,6 +403,8 @@ function selectionHarness(options: {
             },
             generation_id: ids.generation,
             purpose: "informational",
+            origin: "manual",
+            performance_audit_id: null,
             input_snapshot_json: {
               baseInput: proposalBaseInput,
               replayFingerprint: "a".repeat(64),

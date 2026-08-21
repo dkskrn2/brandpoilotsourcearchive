@@ -219,6 +219,7 @@ function renderFlow(options: {
   };
   const suggestionGateway = {
     list: vi.fn().mockResolvedValue(suggestionList),
+    listForSelection: vi.fn().mockResolvedValue(suggestionList),
     get: vi.fn().mockImplementation(async (_brandId: string, suggestionId: string) => {
       const item = [...suggestionList.personal, ...suggestionList.general].find((candidate) => candidate.id === suggestionId);
       if (!item) throw new Error("content_suggestion_not_found");

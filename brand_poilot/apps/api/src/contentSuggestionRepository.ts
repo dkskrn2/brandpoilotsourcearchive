@@ -5,6 +5,7 @@ import {
   CONTENT_SUGGESTION_SCOPE_VERSION,
   parseContentSuggestionBatch,
   parseContentSuggestionCategoryCode,
+  parseStoredContentSuggestionSources,
   type ContentSuggestionBatchInput,
   type ContentSuggestionItemDto,
   type ContentSuggestionListDto,
@@ -17,6 +18,11 @@ export interface ContentSuggestionRepository {
   getScope(categoryCode: string, now?: Date): Promise<ContentSuggestionScopeDto>;
   publish(input: ContentSuggestionBatchInput, now?: Date): Promise<ContentSuggestionPublishResultDto>;
   listForBrand(brandId: string): Promise<ContentSuggestionListDto>;
+  listForSelection(input: {
+    brandId: string;
+    categoryCode: string;
+    subcategoryCodes: string[];
+  }): Promise<ContentSuggestionListDto>;
   getForBrand(brandId: string, suggestionId: string): Promise<ContentSuggestionItemDto | null>;
 }
 
@@ -72,6 +78,7 @@ function itemDto(row: Record<string, unknown>): ContentSuggestionItemDto {
     title: String(row.title),
     whyNow: String(row.why_now),
     contentBrief: String(row.content_brief),
+    sources: parseStoredContentSuggestionSources(row.sources_json),
   };
 }
 
@@ -261,6 +268,7 @@ export function createContentSuggestionRepository(pool: Pool): ContentSuggestion
                 subcategory.sort_order as subcategory_sort_order,
                 suggestion.intent, suggestion.position, suggestion.title,
                 suggestion.why_now, suggestion.content_brief,
+                suggestion.sources_json,
                 exists (
                   select 1
                     from brand_profile_subcategories selected
@@ -289,11 +297,72 @@ export function createContentSuggestionRepository(pool: Pool): ContentSuggestion
       };
     },
 
+    async listForSelection(input) {
+      const categoryCode = parseContentSuggestionCategoryCode(input.categoryCode);
+      const subcategoryCodes = [...new Set(
+        input.subcategoryCodes.map(parseContentSuggestionCategoryCode),
+      )];
+      if (subcategoryCodes.length === 0 || subcategoryCodes.length > 5) {
+        throw new Error("content_suggestion_subcategories_invalid");
+      }
+      const categoryResult = await pool.query(
+        `select id, code, name
+           from content_categories
+          where code = $1 and active = true`,
+        [categoryCode],
+      );
+      if (!categoryResult.rowCount) throw new Error("content_suggestion_category_unavailable");
+      const category = categoryResult.rows[0] as CategoryRow;
+      const subcategories = await pool.query(
+        `select id, code, name
+           from content_subcategories
+          where category_id = $1::uuid
+            and active = true
+            and code = any($2::text[])`,
+        [category.id, subcategoryCodes],
+      );
+      if (subcategories.rowCount !== subcategoryCodes.length) {
+        throw new Error("content_suggestion_subcategory_unavailable");
+      }
+      const batchResult = await pool.query(
+        `select id
+           from content_suggestion_batches
+          where category_id = $1::uuid
+          order by generation_date desc, published_at desc, id desc
+          limit 1`,
+        [category.id],
+      );
+      const categoryDto = { code: category.code, name: category.name };
+      if (!batchResult.rowCount) return emptyList(categoryDto);
+      const suggestions = await pool.query(
+        `select suggestion.id, subcategory.code as subcategory_code,
+                subcategory.name as subcategory_name, suggestion.intent,
+                suggestion.title, suggestion.why_now, suggestion.content_brief,
+                suggestion.sources_json
+           from content_suggestions suggestion
+           join content_subcategories subcategory
+             on subcategory.id = suggestion.subcategory_id and subcategory.active = true
+          where suggestion.batch_id = $1::uuid
+            and subcategory.code = any($2::text[])
+          order by subcategory.sort_order,
+                   suggestion.position,
+                   case suggestion.intent when 'informational' then 0 else 1 end,
+                   suggestion.id`,
+        [batchResult.rows[0].id, subcategoryCodes],
+      );
+      return {
+        category: categoryDto,
+        personal: (suggestions.rows as Array<Record<string, unknown>>).map(itemDto),
+        general: [],
+      };
+    },
+
     async getForBrand(brandId, suggestionId) {
       const result = await pool.query(
         `select suggestion.id, subcategory.code as subcategory_code,
                 subcategory.name as subcategory_name, suggestion.intent,
                 suggestion.title, suggestion.why_now, suggestion.content_brief
+                , suggestion.sources_json
            from content_suggestions suggestion
            join content_suggestion_batches batch on batch.id = suggestion.batch_id
            join content_subcategories subcategory

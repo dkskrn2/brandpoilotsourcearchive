@@ -13,6 +13,11 @@ import {
 import { toBrandIntelligenceCommonView } from "./brandIntelligenceV2Contracts.js";
 import { ensureActiveApprovedBrandRules } from "./brandRulesReadiness.js";
 import { hashSourceUrl, normalizeSourceDomain, normalizeSourceUrl } from "./sourceUrl.js";
+import {
+  isOnboardingContentStartUnavailableStatus,
+  parseOnboardingContentSnapshot,
+  type OnboardingContentSnapshot,
+} from "./onboardingContent.js";
 
 export interface BrandAnalysisScope { workspaceId: string; brandId: string }
 
@@ -105,6 +110,23 @@ export interface BrandIntelligenceRepository {
   startBrandAnalysis(input: BrandAnalysisScope & { analysisId: string }): Promise<BrandAnalysisRecord>;
   cleanupBrandAnalysisRuns?(): Promise<{ attempted: number; completed: number }>;
   getBrandAnalysis(input: BrandAnalysisScope & { analysisId: string }): Promise<BrandAnalysisRecord | null>;
+  getOnboardingContent(input: BrandAnalysisScope & {
+    analysisId: string;
+  }): Promise<OnboardingContentSnapshot | null>;
+  saveOnboardingContentSelection(input: BrandAnalysisScope & {
+    analysisId: string;
+    snapshot: OnboardingContentSnapshot;
+  }): Promise<OnboardingContentSnapshot>;
+  linkOnboardingProposalBatch(input: BrandAnalysisScope & {
+    analysisId: string;
+    requestFingerprint: string;
+    proposalBatchId: string;
+  }): Promise<OnboardingContentSnapshot>;
+  linkOnboardingGeneration(input: BrandAnalysisScope & {
+    analysisId: string;
+    requestFingerprint: string;
+    generationId: string;
+  }): Promise<OnboardingContentSnapshot>;
   getOpenBrandAnalysis(input: BrandAnalysisScope): Promise<BrandAnalysisRecord | null>;
   getCurrentBrandIntelligence(input: BrandAnalysisScope): Promise<BrandAnalysisRecord | null>;
   updateBrandAnalysisDraft(input: BrandAnalysisScope & {
@@ -395,6 +417,46 @@ async function transaction<T>(pool: Pool, operation: (client: PoolClient) => Pro
     await client.query("rollback");
     throw error;
   } finally { client.release(); }
+}
+
+async function updateOnboardingContentLink(
+  pool: Pool,
+  input: BrandAnalysisScope & {
+    analysisId: string;
+    requestFingerprint: string;
+  },
+  key: "proposalBatchId" | "generationId",
+  value: string,
+): Promise<OnboardingContentSnapshot> {
+  return transaction(pool, async (client) => {
+    const found = await client.query(
+      `select input_json
+         from brand_analysis_runs
+        where id = $1 and workspace_id = $2 and brand_id = $3
+        for update`,
+      [input.analysisId, input.workspaceId, input.brandId],
+    );
+    if (!found.rowCount) throw new Error("brand_analysis_not_found");
+    const inputJson = json<Record<string, unknown>>(found.rows[0]!.input_json, {});
+    if (!inputJson.onboardingContent) throw new Error("onboarding_content_not_started");
+    const current = parseOnboardingContentSnapshot(inputJson.onboardingContent);
+    if (current.requestFingerprint !== input.requestFingerprint) {
+      throw new Error("onboarding_content_request_conflict");
+    }
+    if (current[key] !== null && current[key] !== value) {
+      throw new Error("onboarding_content_link_conflict");
+    }
+    if (current[key] === value) return current;
+    const updated = parseOnboardingContentSnapshot({ ...current, [key]: value });
+    await client.query(
+      `update brand_analysis_runs
+          set input_json = jsonb_set(input_json, '{onboardingContent}', $4::jsonb, true),
+              updated_at = now()
+        where id = $1 and workspace_id = $2 and brand_id = $3`,
+      [input.analysisId, input.workspaceId, input.brandId, JSON.stringify(updated)],
+    );
+    return updated;
+  });
 }
 
 function assertLease(row: Record<string, unknown> | undefined, input: {
@@ -757,6 +819,56 @@ export function createBrandIntelligenceRepository(
       return found.rowCount ? mapRun(found.rows[0] as Record<string, unknown>) : null;
     },
 
+    async getOnboardingContent(input) {
+      const found = await pool.query(
+        `select input_json->'onboardingContent' as onboarding_content
+           from brand_analysis_runs
+          where id = $1 and workspace_id = $2 and brand_id = $3`,
+        [input.analysisId, input.workspaceId, input.brandId],
+      );
+      if (!found.rowCount || found.rows[0]?.onboarding_content === null) return null;
+      return parseOnboardingContentSnapshot(found.rows[0]!.onboarding_content);
+    },
+
+    async saveOnboardingContentSelection(input) {
+      const snapshot = parseOnboardingContentSnapshot(input.snapshot);
+      return transaction(pool, async (client) => {
+        const found = await client.query(
+          `select status,input_json
+             from brand_analysis_runs
+            where id = $1 and workspace_id = $2 and brand_id = $3
+            for update`,
+          [input.analysisId, input.workspaceId, input.brandId],
+        );
+        if (!found.rowCount) throw new Error("brand_analysis_not_found");
+        const currentJson = json<Record<string, unknown>>(found.rows[0]!.input_json, {});
+        const current = currentJson.onboardingContent
+          ? parseOnboardingContentSnapshot(currentJson.onboardingContent)
+          : null;
+        if (current?.requestFingerprint === snapshot.requestFingerprint) return current;
+        if (current) throw new Error("onboarding_content_request_conflict");
+        if (isOnboardingContentStartUnavailableStatus(found.rows[0]!.status)) {
+          throw new Error("brand_analysis_not_available");
+        }
+        await client.query(
+          `update brand_analysis_runs
+              set input_json = jsonb_set(input_json, '{onboardingContent}', $4::jsonb, true),
+                  updated_at = now()
+            where id = $1 and workspace_id = $2 and brand_id = $3`,
+          [input.analysisId, input.workspaceId, input.brandId, JSON.stringify(snapshot)],
+        );
+        return snapshot;
+      });
+    },
+
+    async linkOnboardingProposalBatch(input) {
+      return updateOnboardingContentLink(pool, input, "proposalBatchId", input.proposalBatchId);
+    },
+
+    async linkOnboardingGeneration(input) {
+      return updateOnboardingContentLink(pool, input, "generationId", input.generationId);
+    },
+
     async getOpenBrandAnalysis(input) {
       return loadOpenRun(pool, input);
     },
@@ -915,10 +1027,14 @@ export function createBrandIntelligenceRepository(
           [input.analysisId],
         );
         const cancelled = await client.query(
-          `update brand_analysis_runs
-           set status = 'cancelled',
-               input_json = '{}'::jsonb,
-               evidence_json = '[]'::jsonb,
+           `update brand_analysis_runs
+            set status = 'cancelled',
+                input_json = case
+                  when input_json ? 'onboardingContent'
+                    then jsonb_build_object('onboardingContent', input_json -> 'onboardingContent')
+                  else '{}'::jsonb
+                end,
+                evidence_json = '[]'::jsonb,
                result_json = null,
                edited_result_json = null,
                completed_at = coalesce(completed_at, now()),

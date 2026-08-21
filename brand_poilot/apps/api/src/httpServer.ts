@@ -106,6 +106,7 @@ import {
 import type { ContentSuggestionRepository } from "./contentSuggestionRepository.js";
 import type { OAuthTokenVerifier } from "@modelcontextprotocol/sdk/server/auth/provider.js";
 import type { ContentSuggestionOAuthConfig } from "./contentSuggestionOAuth.js";
+import type { OnboardingContentPublicState } from "./onboardingContent.js";
 
 export type { ApiHttpRuntimePolicy } from "./runtimeConfig.js";
 
@@ -195,8 +196,9 @@ function instagramLoginCallbackUrl(
   frontendUrl: string,
   outcome: "connected" | "cancelled" | "failed",
   reason?: InstagramLoginCallbackFailureReason,
+  returnTo?: string | null,
 ) {
-  const url = new URL("/channels", frontendUrl);
+  const url = new URL(returnTo ?? "/channels", frontendUrl);
   url.searchParams.set("instagram", outcome);
   if (outcome === "failed") url.searchParams.set("reason", reason ?? "connection_failed");
   return url.toString();
@@ -211,6 +213,14 @@ interface CreateServerOptions {
   aiContentProposalV2?: {
     service: AiContentProposalV2Service;
     snapshotRepository: AiContentSnapshotRepository;
+  };
+  onboardingContent?: {
+    start(input: {
+      workspaceId: string; brandId: string; actorUserId: string; analysisId: string; body: unknown;
+    }): Promise<OnboardingContentPublicState>;
+    reconcile(input: {
+      workspaceId: string; brandId: string; actorUserId: string; analysisId: string;
+    }): Promise<OnboardingContentPublicState>;
   };
   workerApiToken?: string;
   contentProposalWorkerApiToken?: string;
@@ -279,11 +289,16 @@ const aiContentUploadRouteRepositoryMethods = [
 type AuthSession = Awaited<ReturnType<NonNullable<CreateServerOptions["kakaoAuth"]>["getSession"]>>;
 
 interface InstagramLoginBinding {
-  version: 1;
+  version: 1 | 2;
   mode: "session" | "development";
   stateDigest: string;
   sessionDigest: string | null;
   identityDigest: string;
+  returnTo: string | null;
+}
+
+function safeInstagramLoginReturnTo(value: unknown): string | null {
+  return value === "/onboarding/brand-intelligence" ? value : null;
 }
 
 function keyedDigest(secret: string, label: string, value: string) {
@@ -300,9 +315,10 @@ function encodeInstagramLoginBinding(input: {
   sessionToken: string | null;
   session: AuthSession;
   developmentBrandId: string;
+  returnTo: string | null;
 }) {
   const binding: InstagramLoginBinding = {
-    version: 1,
+    version: 2,
     mode: input.session ? "session" : "development",
     stateDigest: keyedDigest(input.appSecret, "state", input.state),
     sessionDigest: input.sessionToken
@@ -315,6 +331,7 @@ function encodeInstagramLoginBinding(input: {
         ? instagramLoginIdentity(input.session)
         : `development\0${input.developmentBrandId}`,
     ),
+    returnTo: input.returnTo,
   };
   const payload = Buffer.from(JSON.stringify(binding)).toString("base64url");
   const signature = keyedDigest(input.appSecret, "binding", payload);
@@ -330,15 +347,19 @@ function decodeInstagramLoginBinding(value: string | null, appSecret: string): I
   try {
     const parsed = JSON.parse(Buffer.from(payload, "base64url").toString("utf8")) as Partial<InstagramLoginBinding>;
     if (
-      parsed.version !== 1
+      (parsed.version !== 1 && parsed.version !== 2)
       || (parsed.mode !== "session" && parsed.mode !== "development")
       || typeof parsed.stateDigest !== "string"
       || (typeof parsed.sessionDigest !== "string" && parsed.sessionDigest !== null)
       || typeof parsed.identityDigest !== "string"
+      || (parsed.version === 2 && safeInstagramLoginReturnTo(parsed.returnTo) !== parsed.returnTo)
     ) {
       return null;
     }
-    return parsed as InstagramLoginBinding;
+    return {
+      ...(parsed as Omit<InstagramLoginBinding, "returnTo">),
+      returnTo: parsed.version === 2 ? safeInstagramLoginReturnTo(parsed.returnTo) : null,
+    };
   } catch {
     return null;
   }
@@ -884,7 +905,7 @@ export function createFastifyOptions(logger?: boolean | FastifyLoggerOptions) {
 }
 
 export function createServer(
-  { repository, contentSuggestions, aiContentProposalV2, workerApiToken, contentProposalWorkerApiToken, cronSecret, kakaoAuth, kakao, instagramLogin, facebookLogin, metaWebhook, brandLogoService, aiContentUpload, aiContentAttachmentGc, assetLibraryUpload, aiContentLimits, subjectAnalysis, brandIntelligenceRepository, brandAnalysisUpload, runtimePolicy, readinessPolicy, logger }: CreateServerOptions,
+  { repository, contentSuggestions, aiContentProposalV2, onboardingContent, workerApiToken, contentProposalWorkerApiToken, cronSecret, kakaoAuth, kakao, instagramLogin, facebookLogin, metaWebhook, brandLogoService, aiContentUpload, aiContentAttachmentGc, assetLibraryUpload, aiContentLimits, subjectAnalysis, brandIntelligenceRepository, brandAnalysisUpload, runtimePolicy, readinessPolicy, logger }: CreateServerOptions,
   app: FastifyInstance = Fastify(createFastifyOptions(logger))
 ) {
   const aiContentAttachmentRepository = aiContentUpload
@@ -1220,6 +1241,26 @@ export function createServer(
       || message.startsWith("faq_utterance_validation_failed:")) {
       const separator = message.indexOf(":");
       reply.code(400).send({ error: message.slice(0, separator), field: message.slice(separator + 1) });
+      return;
+    }
+    if (message === "onboarding_content_not_configured") {
+      reply.code(503).send({ error: message });
+      return;
+    }
+    if ([
+      "onboarding_content_request_conflict",
+      "onboarding_content_link_conflict",
+      "onboarding_content_not_started",
+      "onboarding_content_suggestion_mismatch",
+    ].includes(message)) {
+      reply.code(409).send({ error: message });
+      return;
+    }
+    if (message.startsWith("onboarding_content_")
+      && message !== "onboarding_content_authority_invalid"
+      && message !== "onboarding_content_snapshot_invalid"
+      && !message.endsWith("_not_found")) {
+      reply.code(400).send({ error: message });
       return;
     }
     if (message.endsWith("_not_found")) {
@@ -1803,7 +1844,7 @@ export function createServer(
     return { ok: true };
   });
 
-  app.get("/auth/meta/start", async (request, reply) => {
+  app.get<{ Querystring: { returnTo?: string } }>("/auth/meta/start", async (request, reply) => {
     if (!instagramLogin?.appId || !instagramLogin.appSecret || !instagramLogin.redirectUri) {
       reply.code(503);
       return { error: "instagram_login_not_configured" };
@@ -1826,6 +1867,7 @@ export function createServer(
       sessionToken,
       session,
       developmentBrandId,
+      returnTo: safeInstagramLoginReturnTo(request.query.returnTo),
     });
     reply.header("set-cookie", [
       cookie(instagramLoginStateCookie, state, 10 * 60, httpPolicy.cookieSecure),
@@ -1900,6 +1942,7 @@ export function createServer(
           instagramLogin.frontendUrl,
           "failed",
           "invalid_callback",
+          binding.returnTo,
         ));
       }
       brandId = currentSession.brandId;
@@ -1915,18 +1958,25 @@ export function createServer(
           instagramLogin.frontendUrl,
           "failed",
           "invalid_callback",
+          binding.returnTo,
         ));
       }
     }
     reply.header("set-cookie", clearPending);
     if (request.query.error) {
-      return reply.redirect(instagramLoginCallbackUrl(instagramLogin.frontendUrl, "cancelled"));
+      return reply.redirect(instagramLoginCallbackUrl(
+        instagramLogin.frontendUrl,
+        "cancelled",
+        undefined,
+        binding.returnTo,
+      ));
     }
     if (!request.query.code) {
       return reply.redirect(instagramLoginCallbackUrl(
         instagramLogin.frontendUrl,
         "failed",
         "invalid_callback",
+        binding.returnTo,
       ));
     }
     let failureReason: InstagramLoginCallbackFailureReason = "token_exchange_failed";
@@ -1959,13 +2009,19 @@ export function createServer(
         secretValue: token.accessToken,
         authMode: "instagram_login",
       });
-      return reply.redirect(instagramLoginCallbackUrl(instagramLogin.frontendUrl, "connected"));
+      return reply.redirect(instagramLoginCallbackUrl(
+        instagramLogin.frontendUrl,
+        "connected",
+        undefined,
+        binding.returnTo,
+      ));
     } catch (error) {
       request.log.warn({ event: "instagram_login_callback_failed", errorCode: safeInternalErrorCode(error) }, "instagram_login_callback_failed");
       return reply.redirect(instagramLoginCallbackUrl(
         instagramLogin.frontendUrl,
         "failed",
         failureReason,
+        binding.returnTo,
       ));
     }
   });
@@ -3009,6 +3065,34 @@ export function createServer(
       });
       if (!analysis) throw new Error("brand_analysis_not_found");
       return toPublicBrandAnalysis(analysis);
+    },
+  );
+
+  app.post<{ Params: { brandId: string; analysisId: string }; Body: unknown }>(
+    "/brands/:brandId/brand-analyses/:analysisId/onboarding-content",
+    async (request, reply) => {
+      if (!onboardingContent) throw new Error("onboarding_content_not_configured");
+      const scope = aiContentScope(request, request.params.brandId);
+      const result = await onboardingContent.start({
+        ...scope,
+        actorUserId: requiredAiContentActorUserId(request),
+        analysisId: request.params.analysisId,
+        body: request.body,
+      });
+      reply.code(202);
+      return result;
+    },
+  );
+
+  app.post<{ Params: { brandId: string; analysisId: string } }>(
+    "/brands/:brandId/brand-analyses/:analysisId/onboarding-content/reconcile",
+    async (request) => {
+      if (!onboardingContent) throw new Error("onboarding_content_not_configured");
+      return onboardingContent.reconcile({
+        ...aiContentScope(request, request.params.brandId),
+        actorUserId: requiredAiContentActorUserId(request),
+        analysisId: request.params.analysisId,
+      });
     },
   );
 

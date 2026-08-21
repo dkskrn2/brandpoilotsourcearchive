@@ -9,6 +9,7 @@ import {
   type ProposalV2CreationPorts,
   type ProposalV2Transaction,
 } from "./aiContentProposalV2Service.js";
+import type { OnboardingProposalAuthority } from "./onboardingContent.js";
 
 const workspaceId = "00000000-0000-4000-8000-000000000001";
 const brandId = "00000000-0000-4000-8000-000000000002";
@@ -124,7 +125,62 @@ function manualCommand() {
   };
 }
 
+function onboardingAuthority(): OnboardingProposalAuthority {
+  const content = {
+    contractVersion: "brand-rules.v1" as const,
+    requiredPhrases: [],
+    forbiddenPhrases: [],
+    exaggerationRules: ["단정 금지"],
+    ctaRules: { defaultCta: "확인해 주세요.", allowed: [] },
+    channelRules: { instagram: ["사실 우선"] },
+    designRules: { colors: [], fonts: [], notes: [], referenceImages: [] },
+    autoApprovalRules: { enabled: false, conditions: [] },
+  };
+  return {
+    kind: "onboarding_provisional",
+    analysisId: baseInput().brandCore.versionId,
+    ownedUrl: "https://brand.example/",
+    categoryCode: "fashion",
+    subcategoryCodes: ["sustainable_fashion"],
+    suggestionId: "00000000-0000-4000-8000-000000000060",
+    sourceUrls: ["https://source.example/article"],
+    brandRules: {
+      versionId: "00000000-0000-4000-8000-000000000060",
+      version: 1,
+      content,
+      contentSha256: proposalSha256(content),
+    },
+  };
+}
+
 describe("Proposal V2 creation service", () => {
+  it("enqueues a trusted onboarding base input without resolving approved brand rows", async () => {
+    const fixture = ports();
+    const service = createAiContentProposalV2Service(fixture.ports);
+
+    await service.create({
+      source: "onboarding",
+      workspaceId,
+      brandId,
+      actorUserId,
+      request: request(),
+      baseInput: baseInput(),
+      authority: onboardingAuthority(),
+      idempotencyKey: "onboarding:analysis-1",
+    });
+
+    expect(fixture.ports.resolve).not.toHaveBeenCalled();
+    expect(fixture.ports.enqueue).toHaveBeenCalledWith(
+      fixture.tx,
+      expect.objectContaining({
+        source: "onboarding",
+        baseInput: baseInput(),
+        brandContextAuthority: onboardingAuthority(),
+        researchSourceAcquisition,
+      }),
+    );
+  });
+
   it("orders committed replay, readiness, lock/recheck, mutable resolution, and atomic enqueue", async () => {
     const fixture = ports();
     const service = createAiContentProposalV2Service(fixture.ports);

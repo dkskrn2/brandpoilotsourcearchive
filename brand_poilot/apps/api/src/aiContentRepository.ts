@@ -95,6 +95,11 @@ import {
   type ProposalV2ReplayIdentity,
   type ProposalV2Transaction,
 } from "./aiContentProposalV2Service.js";
+import {
+  parseOnboardingContentSnapshot,
+  parseOnboardingProposalAuthority,
+  type OnboardingContentSnapshot,
+} from "./onboardingContent.js";
 
 export interface BrandScope {
   workspaceId: string;
@@ -422,6 +427,7 @@ export interface AiContentRepository extends AiContentAttachmentLifecycleReposit
 interface AiContentRepositoryOptions {
   brandIntelligenceProvider?: {
     getConfirmed(input: BrandScope): Promise<ConfirmedBrandIntelligence | null>;
+    getOnboardingContent(input: BrandScope & { analysisId: string }): Promise<OnboardingContentSnapshot | null>;
   };
   afterRenderPackageCompleted?: (input: {
     workspaceId: string;
@@ -459,9 +465,14 @@ function object(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
 }
 
-function parseManualProposalBatchEnvelope(value: unknown, requireFingerprint = true): {
+function parseManualProposalBatchEnvelope(
+  value: unknown,
+  requireFingerprint = true,
+  requireResearchSourceAcquisition = true,
+): {
   baseInput: ReturnType<typeof parseCanonicalProposalBaseInputSnapshotV2>;
   resumeInput: CanonicalContentOrchestrationV2;
+  brandContextAuthority: ReturnType<typeof parseOnboardingProposalAuthority> | null;
 } {
   const envelope = object(value);
   let baseInput: ReturnType<typeof parseCanonicalProposalBaseInputSnapshotV2>;
@@ -472,11 +483,17 @@ function parseManualProposalBatchEnvelope(value: unknown, requireFingerprint = t
   } catch {
     throw new Error("manual_proposal_batch_envelope_invalid");
   }
-  const requiresAcquisition = baseInput.outputSettings.outputFormat === "card_news"
-    || baseInput.outputSettings.outputFormat === "reel";
-  const expectedKeys = requiresAcquisition
-    ? ["baseInput", "replayFingerprint", "researchSourceAcquisition", "resumeInput"]
-    : ["baseInput", "replayFingerprint", "resumeInput"];
+  const requiresAcquisition = requireResearchSourceAcquisition
+    && (baseInput.outputSettings.outputFormat === "card_news"
+      || baseInput.outputSettings.outputFormat === "reel");
+  const hasAuthority = envelope.brandContextAuthority !== undefined;
+  const expectedKeys = [
+    "baseInput",
+    ...(hasAuthority ? ["brandContextAuthority"] : []),
+    "replayFingerprint",
+    ...(requiresAcquisition ? ["researchSourceAcquisition"] : []),
+    "resumeInput",
+  ];
   if (!isDeepStrictEqual(Object.keys(envelope).sort(), expectedKeys.sort())
     || (requireFingerprint && !/^[0-9a-f]{64}$/.test(String(envelope.replayFingerprint ?? "")))) {
     throw new Error("manual_proposal_batch_envelope_invalid");
@@ -488,7 +505,15 @@ function parseManualProposalBatchEnvelope(value: unknown, requireFingerprint = t
       throw new Error("manual_proposal_batch_envelope_invalid");
     }
   }
-  return { baseInput, resumeInput };
+  let brandContextAuthority = null;
+  if (hasAuthority) {
+    try {
+      brandContextAuthority = parseOnboardingProposalAuthority(envelope.brandContextAuthority);
+    } catch {
+      throw new Error("manual_proposal_batch_envelope_invalid");
+    }
+  }
+  return { baseInput, resumeInput, brandContextAuthority };
 }
 
 function canonicalJson(value: unknown): string {
@@ -760,6 +785,9 @@ export function createAiContentProposalV2Repository(pool: Pool): ProposalV2Repos
         ...(input.researchSourceAcquisition === undefined
           ? {}
           : { researchSourceAcquisition: input.researchSourceAcquisition }),
+        ...(input.brandContextAuthority
+          ? { brandContextAuthority: input.brandContextAuthority }
+          : {}),
       });
       const requestSha256 = proposalSha256(input.workerRequest);
       const baseInputSha256 = proposalSha256(input.baseInput);
@@ -1861,11 +1889,17 @@ async function loadAiContentFixedInputSource(input: {
   batch: Record<string, unknown>;
   selection: Record<string, unknown>;
   finalization: ContentFinalizationDraftV2;
+  brandIntelligenceProvider?: AiContentRepositoryOptions["brandIntelligenceProvider"];
 }): Promise<AiContentFixedInputSource> {
-  const { client, scope, generation, batch, selection, finalization, snapshots } = input;
+  const { client, scope, generation, batch, selection, finalization, snapshots, brandIntelligenceProvider } = input;
   let baseInput: ReturnType<typeof parseCanonicalProposalBaseInputSnapshotV2>;
+  let brandContextAuthority: ReturnType<typeof parseOnboardingProposalAuthority> | null;
   try {
-    ({ baseInput } = parseManualProposalBatchEnvelope(batch.input_snapshot_json, false));
+    ({ baseInput, brandContextAuthority } = parseManualProposalBatchEnvelope(
+      batch.input_snapshot_json,
+      false,
+      batch.origin === "manual" && batch.performance_audit_id == null,
+    ));
   } catch {
     throw new Error("fixed_input_batch_contract_invalid");
   }
@@ -1936,109 +1970,143 @@ async function loadAiContentFixedInputSource(input: {
 
   const referenceIds = baseInput.references.map(({ referenceItemId }) => referenceItemId);
   const referenceSnapshotIds = baseInput.references.map(({ snapshotId }) => snapshotId);
-  const lockedSources = await client.query(
-    `select lock_ai_content_fixed_input_sources(
-       $1,$2,$3,$4,$5,$6::uuid[],$7::uuid[]
-     ) locked`,
-    [scope.workspaceId, scope.brandId, baseInput.brandCore.versionId,
-      baseInput.product?.id ?? null, baseInput.product?.versionId ?? null,
-      referenceIds, referenceSnapshotIds],
-  );
-  if (lockedSources.rows[0]?.locked !== true) throw new Error("fixed_input_source_lock_failed");
-
-  const coreResult = await client.query(
-    `select id,status from brand_core_versions
-      where id=$3 and workspace_id=$1 and brand_id=$2 and status='approved'`,
-    [scope.workspaceId, scope.brandId, baseInput.brandCore.versionId],
-  );
-  if (coreResult.rows.length !== 1) throw new Error("fixed_input_brand_core_unavailable");
-
-  if (baseInput.product !== null) {
-    const productResult = await client.query(
-      `select item.id
-         from product_services item
-         join product_service_versions version
-           on version.id=$4 and version.product_service_id=item.id
-          and version.workspace_id=item.workspace_id and version.brand_id=item.brand_id
-          and version.status='approved'
-         where item.id=$3 and item.workspace_id=$1 and item.brand_id=$2 and item.status='active'`,
-      [scope.workspaceId, scope.brandId, baseInput.product.id, baseInput.product.versionId],
+  let onboardingContent = null;
+  if (brandContextAuthority === null) {
+    const lockedSources = await client.query(
+      `select lock_ai_content_fixed_input_sources(
+         $1,$2,$3,$4,$5,$6::uuid[],$7::uuid[]
+       ) locked`,
+      [scope.workspaceId, scope.brandId, baseInput.brandCore.versionId,
+        baseInput.product?.id ?? null, baseInput.product?.versionId ?? null,
+        referenceIds, referenceSnapshotIds],
     );
-    if (productResult.rows.length !== 1) throw new Error("fixed_input_product_unavailable");
-  }
+    if (lockedSources.rows[0]?.locked !== true) throw new Error("fixed_input_source_lock_failed");
 
-  if (referenceIds.length > 0) {
-    const referencesResult = await client.query(
-      `select requested.reference_item_id
-         from unnest($3::uuid[],$4::uuid[]) with ordinality
-              requested(reference_item_id,snapshot_id,position)
-         join reference_items item
-           on item.id=requested.reference_item_id and item.workspace_id=$1 and item.brand_id=$2
-          and item.archived_at is null
-         join reference_snapshots snapshot
-           on snapshot.id=requested.snapshot_id and snapshot.reference_item_id=item.id
-          and snapshot.workspace_id=item.workspace_id and snapshot.brand_id=item.brand_id
-        where snapshot.snapshot_json #>> '{permittedUse,modelInput}'='true'
-          and snapshot.snapshot_json #>> '{permittedUse,derivativeInspiration}'='true'
-        order by requested.position`,
-      [scope.workspaceId, scope.brandId, referenceIds, referenceSnapshotIds],
+    const coreResult = await client.query(
+      `select id,status from brand_core_versions
+        where id=$3 and workspace_id=$1 and brand_id=$2 and status='approved'`,
+      [scope.workspaceId, scope.brandId, baseInput.brandCore.versionId],
     );
-    if (referencesResult.rows.length !== referenceIds.length) {
-      throw new Error("fixed_input_reference_unavailable");
+    if (coreResult.rows.length !== 1) throw new Error("fixed_input_brand_core_unavailable");
+
+    if (baseInput.product !== null) {
+      const productResult = await client.query(
+        `select item.id
+           from product_services item
+           join product_service_versions version
+             on version.id=$4 and version.product_service_id=item.id
+            and version.workspace_id=item.workspace_id and version.brand_id=item.brand_id
+            and version.status='approved'
+           where item.id=$3 and item.workspace_id=$1 and item.brand_id=$2 and item.status='active'`,
+        [scope.workspaceId, scope.brandId, baseInput.product.id, baseInput.product.versionId],
+      );
+      if (productResult.rows.length !== 1) throw new Error("fixed_input_product_unavailable");
     }
-  }
 
-  const rulesResult = await client.query(
-    `select rules.id,rules.version,rules.status,rules.rules_json
-       from brand_profiles profile
-       join brand_rule_sets rules
-         on rules.id=profile.active_brand_rule_set_id
-        and rules.workspace_id=profile.workspace_id and rules.brand_id=profile.brand_id
-        and rules.status='approved'
-      where profile.workspace_id=$1 and profile.brand_id=$2`,
-    [scope.workspaceId, scope.brandId],
-  );
-  if (rulesResult.rows.length !== 1) throw new Error("ai_content_brand_rules_required");
-  const rules = rulesResult.rows[0] as Record<string, unknown>;
-  let canonicalRules;
-  try {
-    canonicalRules = parseBrandRulesContentV1(rules.rules_json);
-  } catch {
-    throw new Error("ai_content_brand_rules_required");
-  }
-  const styleResult = await client.query(
-    `select item.id reference_item_id,style.image->>'description' description,
-            style.image->'tags' tags,artifact.public_url storage_url,artifact.path storage_path,
-            lower(artifact.mime_type) mime_type,artifact.checksum
-       from jsonb_array_elements(coalesce($3::jsonb #> '{designRules,referenceImages}','[]'::jsonb))
-            with ordinality style(image,position)
-       join reference_items item
-         on item.id::text=style.image->>'referenceItemId'
-        and item.workspace_id=$1 and item.brand_id=$2 and item.kind='upload' and item.archived_at is null
-       join storage_artifacts artifact
-         on artifact.id=item.storage_artifact_id and artifact.workspace_id=item.workspace_id
-        and artifact.brand_id=item.brand_id and artifact.deleted_at is null
-        and artifact.public_url is not null and artifact.path is not null
-        and artifact.checksum ~ '^[0-9a-f]{64}$'
-        and lower(artifact.mime_type) in ('image/png','image/jpeg','image/webp')
-      order by style.position`,
-    [scope.workspaceId, scope.brandId, JSON.stringify(canonicalRules)],
-  );
-  const configuredStyleCount = canonicalRules.designRules.referenceImages.length;
-  if (styleResult.rows.length !== configuredStyleCount) {
-    throw new Error("ai_content_brand_style_required");
-  }
-  const styleImages = configuredStyleCount === 0
-    ? []
-    : await snapshots.loadApprovedStyleImages({
+    if (referenceIds.length > 0) {
+      const referencesResult = await client.query(
+        `select requested.reference_item_id
+           from unnest($3::uuid[],$4::uuid[]) with ordinality
+                requested(reference_item_id,snapshot_id,position)
+           join reference_items item
+             on item.id=requested.reference_item_id and item.workspace_id=$1 and item.brand_id=$2
+            and item.archived_at is null
+           join reference_snapshots snapshot
+             on snapshot.id=requested.snapshot_id and snapshot.reference_item_id=item.id
+            and snapshot.workspace_id=item.workspace_id and snapshot.brand_id=item.brand_id
+          where snapshot.snapshot_json #>> '{permittedUse,modelInput}'='true'
+            and snapshot.snapshot_json #>> '{permittedUse,derivativeInspiration}'='true'
+          order by requested.position`,
+        [scope.workspaceId, scope.brandId, referenceIds, referenceSnapshotIds],
+      );
+      if (referencesResult.rows.length !== referenceIds.length) {
+        throw new Error("fixed_input_reference_unavailable");
+      }
+    }
+  } else {
+    if (baseInput.product !== null || referenceIds.length !== 0
+      || brandContextAuthority.analysisId !== baseInput.brandCore.versionId) {
+      throw new Error("fixed_input_onboarding_authority_mismatch");
+    }
+    if (!brandIntelligenceProvider) {
+      throw new Error("fixed_input_onboarding_authority_mismatch");
+    }
+    const stored = await brandIntelligenceProvider.getOnboardingContent({
       workspaceId: scope.workspaceId,
       brandId: scope.brandId,
-    }, client);
-  if (styleImages.length !== styleResult.rows.length
-    || styleImages.some((image, index) => (
-      image.referenceItemId !== String(styleResult.rows[index]?.reference_item_id ?? "")
-    ))) {
-    throw new Error("ai_content_brand_style_required");
+      analysisId: brandContextAuthority.analysisId,
+    });
+    if (!stored) throw new Error("fixed_input_onboarding_authority_mismatch");
+    onboardingContent = parseOnboardingContentSnapshot(stored);
+  }
+
+  let rules: Record<string, unknown>;
+  let canonicalRules: ReturnType<typeof parseBrandRulesContentV1>;
+  let styleImages: Awaited<ReturnType<AiContentSnapshotRepository["loadApprovedStyleImages"]>>;
+  if (brandContextAuthority !== null) {
+    if (finalization.avatarStyleImageId !== null) {
+      throw new Error("fixed_input_onboarding_authority_mismatch");
+    }
+    rules = {
+      id: brandContextAuthority.brandRules.versionId,
+      version: brandContextAuthority.brandRules.version,
+      status: "provisional",
+      rules_json: brandContextAuthority.brandRules.content,
+    };
+    canonicalRules = parseBrandRulesContentV1(brandContextAuthority.brandRules.content);
+    styleImages = [];
+  } else {
+    const rulesResult = await client.query(
+      `select rules.id,rules.version,rules.status,rules.rules_json
+         from brand_profiles profile
+         join brand_rule_sets rules
+           on rules.id=profile.active_brand_rule_set_id
+          and rules.workspace_id=profile.workspace_id and rules.brand_id=profile.brand_id
+          and rules.status='approved'
+        where profile.workspace_id=$1 and profile.brand_id=$2`,
+      [scope.workspaceId, scope.brandId],
+    );
+    if (rulesResult.rows.length !== 1) throw new Error("ai_content_brand_rules_required");
+    rules = rulesResult.rows[0] as Record<string, unknown>;
+    try {
+      canonicalRules = parseBrandRulesContentV1(rules.rules_json);
+    } catch {
+      throw new Error("ai_content_brand_rules_required");
+    }
+    const styleResult = await client.query(
+      `select item.id reference_item_id,style.image->>'description' description,
+              style.image->'tags' tags,artifact.public_url storage_url,artifact.path storage_path,
+              lower(artifact.mime_type) mime_type,artifact.checksum
+         from jsonb_array_elements(coalesce($3::jsonb #> '{designRules,referenceImages}','[]'::jsonb))
+              with ordinality style(image,position)
+         join reference_items item
+           on item.id::text=style.image->>'referenceItemId'
+          and item.workspace_id=$1 and item.brand_id=$2 and item.kind='upload' and item.archived_at is null
+         join storage_artifacts artifact
+           on artifact.id=item.storage_artifact_id and artifact.workspace_id=item.workspace_id
+          and artifact.brand_id=item.brand_id and artifact.deleted_at is null
+          and artifact.public_url is not null and artifact.path is not null
+          and artifact.checksum ~ '^[0-9a-f]{64}$'
+          and lower(artifact.mime_type) in ('image/png','image/jpeg','image/webp')
+        order by style.position`,
+      [scope.workspaceId, scope.brandId, JSON.stringify(canonicalRules)],
+    );
+    const configuredStyleCount = canonicalRules.designRules.referenceImages.length;
+    if (styleResult.rows.length !== configuredStyleCount) {
+      throw new Error("ai_content_brand_style_required");
+    }
+    styleImages = configuredStyleCount === 0
+      ? []
+      : await snapshots.loadApprovedStyleImages({
+        workspaceId: scope.workspaceId,
+        brandId: scope.brandId,
+      }, client);
+    if (styleImages.length !== styleResult.rows.length
+      || styleImages.some((image, index) => (
+        image.referenceItemId !== String(styleResult.rows[index]?.reference_item_id ?? "")
+      ))) {
+      throw new Error("ai_content_brand_style_required");
+    }
   }
 
   const attachmentResult = finalization.attachmentIds.length === 0
@@ -2145,13 +2213,18 @@ async function loadAiContentFixedInputSource(input: {
       composedInputSha256: String(lineage.event_composed_sha256), outputSha256: String(lineage.output_sha256),
       parserSha256: String(lineage.parser_sha256), parserValid: true,
     } as AiContentFixedInputSource["successEvent"],
+    brandContextAuthority,
+    onboardingContent,
     approvedBrandCore: {
       workspaceId: scope.workspaceId, brandId: scope.brandId,
-      status: "approved", deletedAt: null, snapshot: baseInput.brandCore,
+      status: brandContextAuthority === null ? "approved" : "provisional",
+      deletedAt: null, snapshot: baseInput.brandCore,
     },
     approvedBrandRules: {
       workspaceId: scope.workspaceId, brandId: scope.brandId, versionId: String(rules.id),
-      version: Number(rules.version), status: "approved", deletedAt: null,
+      version: Number(rules.version),
+      status: brandContextAuthority === null ? "approved" : "provisional",
+      deletedAt: null,
       content: canonicalRules,
       contentSha256: proposalSha256(canonicalRules),
     },
@@ -2188,8 +2261,9 @@ async function startAiContentGenerationV3Transaction(input: {
     dailyGenerationLimit: number;
   };
   now: () => Date;
+  brandIntelligenceProvider?: AiContentRepositoryOptions["brandIntelligenceProvider"];
 }): Promise<AiContentGenerationRecord> {
-  const { pool, catalog, snapshots, command, now } = input;
+  const { pool, catalog, snapshots, command, now, brandIntelligenceProvider } = input;
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
@@ -2206,10 +2280,16 @@ async function startAiContentGenerationV3Transaction(input: {
     }
 
     const batchResult = await client.query(
-      `select id,workspace_id,brand_id,status,purpose,input_snapshot_json,request_json
-         from ai_content_proposal_batches
-        where id=$1 and workspace_id=$2 and brand_id=$3
-        for update`,
+      `select batch.id,batch.workspace_id,batch.brand_id,batch.status,batch.origin,batch.purpose,
+              batch.input_snapshot_json,batch.request_json,
+              performance_audit.id performance_audit_id
+         from ai_content_proposal_batches batch
+         left join ai_content_proposal_performance_audits performance_audit
+           on performance_audit.batch_id=batch.id
+          and performance_audit.workspace_id=batch.workspace_id
+          and performance_audit.brand_id=batch.brand_id
+        where batch.id=$1 and batch.workspace_id=$2 and batch.brand_id=$3
+        for update of batch`,
       [proposalBatchId, command.workspaceId, command.brandId],
     );
     const batch = batchResult.rows[0] as Record<string, unknown> | undefined;
@@ -2347,6 +2427,7 @@ async function startAiContentGenerationV3Transaction(input: {
       batch,
       selection,
       finalization,
+      brandIntelligenceProvider,
     });
     const baseAssembly = assembleAiContentFixedInput(source);
     const materializedVisualAssets = await materializeFrozenManualVisualAssets(
@@ -2637,8 +2718,13 @@ export function createAiContentRepository(pool: Pool, options: AiContentReposito
         if (observedSelection.current_selected_id
           && observedSelection.current_selected_id !== input.proposalId) {
           const lockedBatch = await client.query(
-            `select batch.id batch_id,batch.origin,batch.purpose,batch.input_snapshot_json
+            `select batch.id batch_id,batch.origin,batch.purpose,batch.input_snapshot_json,
+                    performance_audit.id performance_audit_id
                from ai_content_proposal_batches batch
+               left join ai_content_proposal_performance_audits performance_audit
+                 on performance_audit.batch_id=batch.id
+                and performance_audit.workspace_id=batch.workspace_id
+                and performance_audit.brand_id=batch.brand_id
               where batch.id=$1 and batch.workspace_id=$2 and batch.brand_id=$3 and batch.status='ready'
               for update of batch`,
             [observedSelection.batch_id, input.workspaceId, input.brandId],
@@ -2674,7 +2760,11 @@ export function createAiContentRepository(pool: Pool, options: AiContentReposito
           let baseInput: ReturnType<typeof parseCanonicalProposalBaseInputSnapshotV2>;
           let resumeInput: CanonicalContentOrchestrationV2;
           try {
-            ({ baseInput, resumeInput } = parseManualProposalBatchEnvelope(batch.input_snapshot_json));
+            ({ baseInput, resumeInput } = parseManualProposalBatchEnvelope(
+              batch.input_snapshot_json,
+              true,
+              batch.origin === "manual" && batch.performance_audit_id == null,
+            ));
           } catch {
             throw new Error("ai_content_proposal_selection_conflict");
           }
@@ -2787,12 +2877,17 @@ export function createAiContentRepository(pool: Pool, options: AiContentReposito
         );
         const selected = await client.query(
           `select proposal.id,proposal.batch_id,proposal.proposal_json,proposal.generation_id,
-                  batch.purpose,batch.input_snapshot_json
+                  batch.purpose,batch.origin,batch.input_snapshot_json,
+                  performance_audit.id performance_audit_id
              from ai_content_proposals proposal
              join ai_content_proposal_batches batch
-               on batch.id=proposal.batch_id
-              and batch.workspace_id=proposal.workspace_id
-              and batch.brand_id=proposal.brand_id
+                on batch.id=proposal.batch_id
+               and batch.workspace_id=proposal.workspace_id
+               and batch.brand_id=proposal.brand_id
+             left join ai_content_proposal_performance_audits performance_audit
+               on performance_audit.batch_id=batch.id
+              and performance_audit.workspace_id=batch.workspace_id
+              and performance_audit.brand_id=batch.brand_id
             where proposal.id=$1 and proposal.workspace_id=$2 and proposal.brand_id=$3
             for update of proposal`,
           [input.proposalId, input.workspaceId, input.brandId],
@@ -2802,7 +2897,11 @@ export function createAiContentRepository(pool: Pool, options: AiContentReposito
         let baseInput: ReturnType<typeof parseCanonicalProposalBaseInputSnapshotV2>;
         let resumeInput: CanonicalContentOrchestrationV2;
         try {
-          ({ baseInput, resumeInput } = parseManualProposalBatchEnvelope(proposal.input_snapshot_json));
+          ({ baseInput, resumeInput } = parseManualProposalBatchEnvelope(
+            proposal.input_snapshot_json,
+            true,
+            proposal.origin === "manual" && proposal.performance_audit_id == null,
+          ));
         } catch {
           throw new Error("ai_content_proposal_selection_conflict");
         }
@@ -3103,6 +3202,7 @@ export function createAiContentRepository(pool: Pool, options: AiContentReposito
         snapshots,
         command: input,
         now,
+        brandIntelligenceProvider: options.brandIntelligenceProvider,
       });
     },
 

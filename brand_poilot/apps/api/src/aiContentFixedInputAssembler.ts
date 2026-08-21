@@ -31,6 +31,12 @@ import {
 } from "@brand-pilot/content-contracts";
 import { parseBrandRules } from "./brandCoreContracts.js";
 import { canonicalProposalJson, proposalSha256 } from "./aiContentProposalV2Service.js";
+import {
+  parseOnboardingContentSnapshot,
+  parseOnboardingProposalAuthority,
+  type OnboardingContentSnapshot,
+  type OnboardingProposalAuthority,
+} from "./onboardingContent.js";
 
 type Scope = { workspaceId: string; brandId: string };
 type ScopedStatus = Scope & { status: string; deletedAt: string | null };
@@ -143,6 +149,8 @@ export interface AiContentFixedInputSource {
     parserSha256: string;
     parserValid: true;
   };
+  brandContextAuthority: OnboardingProposalAuthority | null;
+  onboardingContent: OnboardingContentSnapshot | null;
   approvedBrandCore: ScopedStatus & { snapshot: ApprovedBrandCoreSnapshotV2 };
   approvedBrandRules: ScopedStatus & {
     versionId: string;
@@ -202,7 +210,8 @@ function assertExactIds(actual: readonly string[], expected: readonly string[], 
 function validateSourceShape(source: AiContentFixedInputSource): void {
   exactObject(source, [
     "catalog", "catalogSha256", "startedAt", "scope", "draft", "batch", "selection", "proposalJob",
-    "composition", "successfulAttempt", "successEvent", "approvedBrandCore", "approvedBrandRules", "approvedProduct", "evidence",
+    "composition", "successfulAttempt", "successEvent", "brandContextAuthority", "onboardingContent",
+    "approvedBrandCore", "approvedBrandRules", "approvedProduct", "evidence",
     "references", "brandStyleImages", "attachments",
   ]);
   exactObject(source.scope, ["workspaceId", "brandId", "actorUserId"]);
@@ -424,22 +433,53 @@ export function assembleAiContentFixedInput(source: AiContentFixedInputSource): 
   }
 
   assertScope(scope, source.approvedBrandCore);
-  assertAvailable(source.approvedBrandCore, "approved", "fixed_input_brand_core_unavailable");
-  if (!same(source.approvedBrandCore.snapshot, baseInput.brandCore)) fail("fixed_input_brand_core_mismatch");
-
   assertScope(scope, source.approvedBrandRules);
-  assertAvailable(source.approvedBrandRules, "approved", "fixed_input_brand_rules_unavailable");
-  const canonicalRules = parseBrandRules(source.approvedBrandRules.content);
-  if (!same(canonicalRules, source.approvedBrandRules.content)
-    || source.approvedBrandRules.contentSha256 !== proposalSha256(canonicalRules)) {
-    fail("fixed_input_brand_rules_hash_mismatch");
+  let brandRules: ApprovedBrandRulesSnapshotV1;
+  if (source.brandContextAuthority === null) {
+    if (source.onboardingContent !== null) fail("fixed_input_source_invalid");
+    assertAvailable(source.approvedBrandCore, "approved", "fixed_input_brand_core_unavailable");
+    assertAvailable(source.approvedBrandRules, "approved", "fixed_input_brand_rules_unavailable");
+    const canonicalRules = parseBrandRules(source.approvedBrandRules.content);
+    if (!same(canonicalRules, source.approvedBrandRules.content)
+      || source.approvedBrandRules.contentSha256 !== proposalSha256(canonicalRules)) {
+      fail("fixed_input_brand_rules_hash_mismatch");
+    }
+    brandRules = {
+      versionId: source.approvedBrandRules.versionId,
+      version: source.approvedBrandRules.version,
+      content: canonicalRules,
+      contentSha256: source.approvedBrandRules.contentSha256,
+    };
+  } else {
+    if (source.onboardingContent === null) fail("fixed_input_onboarding_authority_mismatch");
+    const authority = parseOnboardingProposalAuthority(source.brandContextAuthority);
+    const onboarding = parseOnboardingContentSnapshot(source.onboardingContent);
+    const sourceUrls = onboarding.suggestion.sources.map((item) => item.url);
+    if (authority.analysisId !== baseInput.brandCore.versionId
+      || authority.categoryCode !== onboarding.categoryCode
+      || !same(authority.subcategoryCodes, onboarding.subcategoryCodes)
+      || authority.suggestionId !== onboarding.suggestion.id
+      || !same(authority.sourceUrls, sourceUrls)
+      || onboarding.proposalBatchId !== batch.id
+      || onboarding.generationId !== draft.generationId
+      || source.approvedBrandCore.status !== "provisional"
+      || source.approvedBrandCore.deletedAt !== null
+      || source.approvedBrandRules.status !== "provisional"
+      || source.approvedBrandRules.deletedAt !== null
+      || !same(source.approvedBrandRules, {
+        workspaceId: scope.workspaceId,
+        brandId: scope.brandId,
+        status: "provisional",
+        deletedAt: null,
+        ...authority.brandRules,
+      })) {
+      fail("fixed_input_onboarding_authority_mismatch");
+    }
+    brandRules = authority.brandRules;
   }
-  const brandRules: ApprovedBrandRulesSnapshotV1 = {
-    versionId: source.approvedBrandRules.versionId,
-    version: source.approvedBrandRules.version,
-    content: canonicalRules,
-    contentSha256: source.approvedBrandRules.contentSha256,
-  };
+  if (!same(source.approvedBrandCore.snapshot, baseInput.brandCore)) {
+    fail("fixed_input_brand_core_mismatch");
+  }
 
   if (baseInput.product === null) {
     if (source.approvedProduct !== null) fail("fixed_input_product_mismatch");

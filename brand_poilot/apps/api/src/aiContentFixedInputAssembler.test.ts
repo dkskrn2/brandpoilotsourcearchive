@@ -315,6 +315,8 @@ function source() {
       parserSha256: "2".repeat(64),
       parserValid: true,
     },
+    brandContextAuthority: null,
+    onboardingContent: null,
     approvedBrandCore: {
       workspaceId: ids.workspace,
       brandId: ids.brand,
@@ -386,6 +388,59 @@ function source() {
 }
 
 describe("assembleAiContentFixedInput", () => {
+  it("accepts provisional Core and Rules only when they match the owning onboarding snapshot", () => {
+    const value: any = source();
+    const authority = {
+      kind: "onboarding_provisional",
+      analysisId: ids.core,
+      ownedUrl: "https://brand.example/",
+      categoryCode: "food",
+      subcategoryCodes: ["tea"],
+      suggestionId: ids.rules,
+      sourceUrls: ["https://example.com/evidence"],
+      brandRules: {
+        versionId: ids.rules,
+        version: 1,
+        content: brandRulesContent(),
+        contentSha256: proposalSha256(brandRulesContent()),
+      },
+    };
+    value.brandContextAuthority = authority;
+    value.onboardingContent = {
+      categoryCode: "food",
+      subcategoryCodes: ["tea"],
+      suggestion: {
+        id: ids.rules,
+        subcategoryCode: "tea",
+        subcategoryName: "차",
+        intent: "trend",
+        title: "차 고르는 법",
+        whyNow: "선택지가 많습니다.",
+        contentBrief: "선택 기준을 설명합니다.",
+        sources: [{
+          url: "https://example.com/evidence",
+          title: "차 근거",
+          publisher: "Example",
+          publishedAt: null,
+        }],
+      },
+      contentInstruction: "쉽게 설명",
+      requestFingerprint: "a".repeat(64),
+      proposalBatchId: ids.batch,
+      generationId: ids.generation,
+      requestedAt: NOW,
+    };
+    value.approvedBrandCore.status = "provisional";
+    value.approvedBrandRules.status = "provisional";
+
+    expect(assembleAiContentFixedInput(value).input.brandRules)
+      .toEqual(authority.brandRules);
+
+    value.onboardingContent.suggestion.id = ids.evidence;
+    expect(() => assembleAiContentFixedInput(value))
+      .toThrow("fixed_input_onboarding_authority_mismatch");
+  });
+
   it("assembles canonical V3 and a catalog-owned prompt binding from locked immutable sources", () => {
     const result = assembleAiContentFixedInput(source() as never);
 

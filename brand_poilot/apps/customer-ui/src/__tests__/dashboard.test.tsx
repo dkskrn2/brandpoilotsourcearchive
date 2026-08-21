@@ -125,6 +125,7 @@ async function renderDashboardPage(
       if (suggestionList instanceof Error) return suggestionRetryList;
       return suggestionList;
     }),
+    listForSelection: vi.fn(),
     get: vi.fn(),
   };
   render(

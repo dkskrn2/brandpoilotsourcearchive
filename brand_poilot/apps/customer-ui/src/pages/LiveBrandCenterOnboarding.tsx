@@ -4,6 +4,8 @@ import { AnalysisStep } from "../components/brand-center-preview/AnalysisStep";
 import { PreviewShell } from "../components/brand-center-preview/PreviewShell";
 import { SourceIntakeStep } from "../components/brand-center-preview/SourceIntakeStep";
 import { BrandAnalysisReviewStep } from "../components/brand-intelligence/BrandAnalysisReviewStep";
+import { OnboardingContentSetup } from "../components/brand-center-preview/OnboardingContentSetup";
+import { OnboardingContentResult } from "../components/brand-center-preview/OnboardingContentResult";
 import { Alert } from "../components/ui/Alert";
 import {
   ANALYSIS_POLL_DEADLINE_MS,
@@ -14,6 +16,17 @@ import {
   nextAnalysisPollDelay,
 } from "../features/brand-intelligence/boundedAnalysisPoller";
 import { brandIntelligenceGateway } from "../features/brand-intelligence/brandIntelligenceGateway";
+import {
+  onboardingContentGateway as defaultOnboardingContentGateway,
+  type OnboardingContentGateway,
+  type OnboardingContentState,
+} from "../features/brand-intelligence/onboardingContentGateway";
+import {
+  contentSuggestionGateway as defaultContentSuggestionGateway,
+  type ContentSuggestionGateway,
+} from "../features/content-suggestions/contentSuggestionGateway";
+import { aiContentApiGateway } from "../features/ai-content/aiContentApiGateway";
+import type { AiContentGateway, AiContentGeneration } from "../features/ai-content/types";
 import type {
   BrandAnalysis,
   BrandIntelligenceGateway,
@@ -28,7 +41,7 @@ import type {
 } from "../features/brand-center-preview/types";
 import { useAuth } from "../lib/auth";
 import { ApiRequestError, DEMO_BRAND_ID } from "../lib/apiClient";
-import type { ContentCategory } from "../types";
+import type { ChannelConnection, ContentCategory } from "../types";
 
 export interface BrandIntelligenceStorageScope {
   workspaceId: string;
@@ -39,7 +52,21 @@ interface LiveBrandCenterOnboardingProps {
   gateway?: BrandIntelligenceGateway;
   brandId?: string;
   storageScope?: BrandIntelligenceStorageScope;
+  onboardingContentGateway?: OnboardingContentGateway;
+  suggestionGateway?: ContentSuggestionGateway;
+  aiContentGateway?: AiContentGateway;
 }
+
+const emptyOnboardingContentState: OnboardingContentState = {
+  state: "not_started",
+  proposalBatchId: null,
+  generationId: null,
+  title: null,
+  progress: null,
+  outputs: [],
+  errorCode: null,
+  errorMessage: null,
+};
 
 const pendingStatuses: BrandAnalysis["status"][] = [
   "queued", "accepting_uploads", "waiting_for_resource", "extracting",
@@ -137,6 +164,9 @@ export function LiveBrandCenterOnboarding({
   gateway = brandIntelligenceGateway,
   brandId: brandIdProp,
   storageScope: storageScopeProp,
+  onboardingContentGateway: onboardingContentGatewayProp,
+  suggestionGateway: suggestionGatewayProp,
+  aiContentGateway: aiContentGatewayProp,
 }: LiveBrandCenterOnboardingProps) {
   const { session } = useAuth();
   const brandId = brandIdProp ?? session?.brand.id ?? DEMO_BRAND_ID;
@@ -147,6 +177,7 @@ export function LiveBrandCenterOnboarding({
   const stateOwnerKey = scope
     ? `${scope.workspaceId}:${scope.userId}:${brandId}`
     : `anonymous:${brandId}`;
+  const useProductionGateways = gateway === brandIntelligenceGateway;
 
   return (
     <LiveBrandCenterOnboardingState
@@ -154,6 +185,12 @@ export function LiveBrandCenterOnboarding({
       gateway={gateway}
       brandId={brandId}
       storageScope={scope}
+      onboardingContentGateway={onboardingContentGatewayProp
+        ?? (useProductionGateways ? defaultOnboardingContentGateway : null)}
+      suggestionGateway={suggestionGatewayProp
+        ?? (useProductionGateways ? defaultContentSuggestionGateway : null)}
+      aiContentGateway={aiContentGatewayProp
+        ?? (useProductionGateways ? aiContentApiGateway : null)}
     />
   );
 }
@@ -162,10 +199,16 @@ function LiveBrandCenterOnboardingState({
   gateway,
   brandId,
   storageScope: scope,
+  onboardingContentGateway,
+  suggestionGateway,
+  aiContentGateway,
 }: {
   gateway: BrandIntelligenceGateway;
   brandId: string;
   storageScope: BrandIntelligenceStorageScope | null;
+  onboardingContentGateway: OnboardingContentGateway | null;
+  suggestionGateway: ContentSuggestionGateway | null;
+  aiContentGateway: AiContentGateway | null;
 }) {
   const persistenceKey = useMemo(
     () => scope ? storageKey(scope, brandId) : null,
@@ -193,7 +236,16 @@ function LiveBrandCenterOnboardingState({
   const [bootstrapComplete, setBootstrapComplete] = useState(false);
   const [bootstrapAttempt, setBootstrapAttempt] = useState(0);
   const [pollingRequired, setPollingRequired] = useState(false);
+  const [onboardingContent, setOnboardingContent] = useState<OnboardingContentState>(emptyOnboardingContentState);
+  const [onboardingContentLoaded, setOnboardingContentLoaded] = useState(false);
+  const [onboardingContentStarting, setOnboardingContentStarting] = useState(false);
+  const [onboardingContentError, setOnboardingContentError] = useState<string | null>(null);
+  const [onboardingContentPollAttempt, setOnboardingContentPollAttempt] = useState(0);
+  const [onboardingGeneration, setOnboardingGeneration] = useState<AiContentGeneration | null>(null);
+  const [channels, setChannels] = useState<ChannelConnection[]>([]);
+  const [channelStatus, setChannelStatus] = useState<"loading" | "ready" | "failed">("loading");
   const requestRef = useRef(0);
+  const contentAnalysisId = analysisId ?? activeAnalysis?.id ?? null;
 
   useEffect(() => {
     let active = true;
@@ -207,6 +259,114 @@ function LiveBrandCenterOnboardingState({
       });
     return () => { active = false; };
   }, [gateway]);
+
+  useEffect(() => {
+    setOnboardingContent(emptyOnboardingContentState);
+    setOnboardingContentLoaded(false);
+    setOnboardingContentError(null);
+    setOnboardingGeneration(null);
+  }, [brandId, contentAnalysisId]);
+
+  useEffect(() => {
+    if (!onboardingContentGateway || !contentAnalysisId) return;
+    let active = true;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let controller: AbortController | null = null;
+    let inFlight = false;
+    let resumeRequested = false;
+    const schedule = () => {
+      if (!active || document.hidden) return;
+      timer = setTimeout(() => void poll(), 3_000);
+    };
+    const poll = async () => {
+      if (!active || document.hidden || inFlight) return;
+      inFlight = true;
+      const requestController = new AbortController();
+      controller = requestController;
+      try {
+        const next = await onboardingContentGateway.reconcile(
+          brandId,
+          contentAnalysisId,
+          requestController.signal,
+        );
+        if (!active) return;
+        setOnboardingContent(next);
+        setOnboardingContentLoaded(true);
+        setOnboardingContentError(null);
+        if (next.state === "preparing" || next.state === "generating") {
+          schedule();
+        }
+      } catch (error) {
+        if (!active || (error as { name?: string }).name === "AbortError") return;
+        setOnboardingContentError("카드뉴스 생성 상태를 확인하지 못했습니다.");
+        schedule();
+      } finally {
+        if (controller === requestController) controller = null;
+        inFlight = false;
+        if (active && !document.hidden && resumeRequested) {
+          resumeRequested = false;
+          void poll();
+        }
+      }
+    };
+    const handleVisibilityChange = () => {
+      if (document.hidden) {
+        if (timer) clearTimeout(timer);
+        timer = undefined;
+        controller?.abort();
+        return;
+      }
+      if (inFlight) resumeRequested = true;
+      else void poll();
+    };
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    void poll();
+    return () => {
+      active = false;
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+      controller?.abort();
+      if (timer) clearTimeout(timer);
+    };
+  }, [brandId, contentAnalysisId, onboardingContentGateway, onboardingContentPollAttempt]);
+
+  useEffect(() => {
+    if (!aiContentGateway || currentStep !== "generation") return;
+    let active = true;
+    let generationTimer: ReturnType<typeof setTimeout> | undefined;
+    let channelTimer: ReturnType<typeof setTimeout> | undefined;
+    setChannelStatus("loading");
+    const loadChannels = () => void aiContentGateway.listChannels(brandId)
+      .then((items) => {
+        if (!active) return;
+        setChannels(items);
+        setChannelStatus("ready");
+      })
+      .catch(() => {
+        if (!active) return;
+        setChannels([]);
+        setChannelStatus("failed");
+        channelTimer = setTimeout(loadChannels, 3_000);
+      });
+    loadChannels();
+    if (onboardingContent.state === "completed" && onboardingContent.generationId) {
+      const loadGeneration = () => void aiContentGateway.getGeneration(
+        brandId,
+        onboardingContent.generationId!,
+      ).then((generation) => {
+        if (active) setOnboardingGeneration(generation);
+      }).catch(() => {
+        if (!active) return;
+        setOnboardingGeneration(null);
+        generationTimer = setTimeout(loadGeneration, 3_000);
+      });
+      loadGeneration();
+    }
+    return () => {
+      active = false;
+      if (generationTimer) clearTimeout(generationTimer);
+      if (channelTimer) clearTimeout(channelTimer);
+    };
+  }, [aiContentGateway, brandId, currentStep, onboardingContent.generationId, onboardingContent.state]);
 
   const resumeWorkflow = useCallback((workflow: BrandAnalysis) => {
     setActiveAnalysis(workflow);
@@ -635,7 +795,40 @@ function LiveBrandCenterOnboardingState({
     }
   }
 
+  async function startOnboardingCardNews(input: {
+    categoryCode: string;
+    subcategoryCodes: string[];
+    suggestionId: string;
+    contentInstruction: string | null;
+  }) {
+    if (!onboardingContentGateway || !contentAnalysisId || onboardingContentStarting) return;
+    setOnboardingContentStarting(true);
+    setOnboardingContentError(null);
+    try {
+      const next = await onboardingContentGateway.start(brandId, contentAnalysisId, {
+        ...input,
+        idempotencyKey: crypto.randomUUID(),
+      });
+      setOnboardingContent(next);
+      setOnboardingContentLoaded(true);
+      setOnboardingContentPollAttempt((attempt) => attempt + 1);
+    } catch {
+      setOnboardingContentError("카드뉴스 생성을 시작하지 못했습니다. 선택 내용을 확인한 뒤 다시 시도해 주세요.");
+    } finally {
+      setOnboardingContentStarting(false);
+    }
+  }
+
   const fallbackCore = draft ? previewCore(draft) : createPreviewState().brandCore;
+  const onboardingContentForResult: OnboardingContentState = onboardingContentGateway
+    && contentAnalysisId
+    && !onboardingContentLoaded
+    ? {
+        ...emptyOnboardingContentState,
+        state: "preparing",
+        title: onboardingContentError ?? "이전 카드뉴스 생성 상태 확인 중",
+      }
+    : onboardingContent;
   const canEnter = (step: PreviewStep) => {
     if (step === "sources") {
       return bootstrapComplete && !analysisId && analysisState !== "loading";
@@ -730,14 +923,59 @@ function LiveBrandCenterOnboardingState({
           onComplete={() => void complete()}
         />
       ) : null}
-      {currentStep === "generation" && confirmed ? (
-        <section className="brand-center-preview__card">
+      {currentStep === "analysis"
+        && onboardingContentLoaded
+        && onboardingContent.state === "not_started"
+        && activeAnalysis
+        && activeAnalysis.status !== "cancel_requested"
+        && activeAnalysis.status !== "purging"
+        && activeAnalysis.status !== "cancelled"
+        && activeAnalysis.status !== "failed"
+        && suggestionGateway
+        && contentAnalysisId ? (
+        <OnboardingContentSetup
+          brandId={brandId}
+          categories={categories}
+          suggestionGateway={suggestionGateway}
+          starting={onboardingContentStarting}
+          onStart={startOnboardingCardNews}
+        />
+      ) : null}
+      {currentStep === "analysis" && onboardingContentError ? (
+        <Alert title="카드뉴스 생성 상태 오류" variant="bad">{onboardingContentError}</Alert>
+      ) : null}
+      {currentStep === "analysis"
+        && onboardingContentGateway
+        && contentAnalysisId
+        && !onboardingContentLoaded
+        && !onboardingContentError ? (
+        <section className="brand-center-preview__card onboarding-content-inline-status" role="status">
           <div className="brand-center-preview__card-heading">
-            <p className="brand-center-preview__eyebrow">완료</p>
-            <h2>브랜드 준비가 완료되었습니다</h2>
-            <p>확정한 브랜드 정보가 콘텐츠 생성과 브랜드 운영 기준에 저장되었습니다.</p>
+            <p className="brand-center-preview__eyebrow">첫 카드뉴스</p>
+            <h2>이전 카드뉴스 생성 상태를 확인하고 있습니다</h2>
           </div>
         </section>
+      ) : null}
+      {currentStep === "analysis" && onboardingContent.state !== "not_started" ? (
+        <section className="brand-center-preview__card onboarding-content-inline-status" aria-live="polite">
+          <div className="brand-center-preview__card-heading">
+            <p className="brand-center-preview__eyebrow">첫 카드뉴스</p>
+            <h2>{onboardingContent.state === "completed"
+              ? "카드뉴스가 완성되었습니다"
+              : onboardingContent.state === "failed"
+                ? "카드뉴스 생성을 완료하지 못했습니다"
+                : "브랜드 분석과 함께 카드뉴스를 만들고 있습니다"}</h2>
+            <p>{onboardingContent.title ?? "선택한 주제"}</p>
+          </div>
+        </section>
+      ) : null}
+      {currentStep === "generation" && confirmed ? (
+        <OnboardingContentResult
+          state={onboardingContentForResult}
+          generation={onboardingGeneration}
+          channels={channels}
+          channelStatus={channelStatus}
+        />
       ) : null}
     </PreviewShell>
   );

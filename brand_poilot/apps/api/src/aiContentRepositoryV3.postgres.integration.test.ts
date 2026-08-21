@@ -22,6 +22,8 @@ import {
   type ContentProposalResearchClaim,
 } from "./contentProposalJobs.js";
 import { parseProposalInputSnapshotV2 } from "./aiContentGenerationInputV3.js";
+import { createBrandIntelligenceProvider } from "./brandIntelligenceProvider.js";
+import { createBrandIntelligenceRepository } from "./brandIntelligenceRepository.js";
 
 type FixtureIds = {
   actor: string;
@@ -72,6 +74,7 @@ const operatorPassword = "content-operator-test-password";
 const migrationPassword = "content-migration-test-password";
 const cleanupPassword = "content-cleanup-test-password";
 const legacyMainPassword = "legacy-main-test-password";
+const brandIntelligenceApplicationPassword = "brand-intelligence-application-test-password";
 
 function connectionStringForRole(connectionString: string, roleName: string, password: string) {
   const value = new URL(connectionString);
@@ -140,6 +143,34 @@ async function applyMigrationsThrough075(pool: Pool): Promise<RoleBootstrapPlan>
     for (const file of files) {
       if (skipped.has(file)) continue;
       if (file === "074_ai_content_maintenance_write_fence.sql") {
+        // The current role catalog already includes the three post-075 visual
+        // relations. Create relation shells before the historical 074/075 harness
+        // runs; their real migration and constraints have independent PostgreSQL
+        // coverage, while this suite needs the current role catalog and read shape.
+        await client.query(`
+          create table brand_style_presets (
+            id uuid primary key default gen_random_uuid(), workspace_id uuid not null,
+            brand_id uuid not null, name text not null, description text not null default '',
+            visual_tokens_json jsonb not null default '{}'::jsonb, status text not null default 'active',
+            revision integer not null default 1, is_default boolean not null default false,
+            created_by_user_id uuid not null, created_at timestamptz not null default now(),
+            updated_at timestamptz not null default now()
+          );
+          create table brand_style_preset_references (
+            id uuid primary key default gen_random_uuid(), workspace_id uuid not null,
+            brand_id uuid not null, preset_id uuid not null, reference_item_id uuid not null,
+            position integer not null, created_at timestamptz not null default now()
+          );
+          create table manual_ai_content_visual_selections (
+            generation_id uuid primary key, workspace_id uuid not null, brand_id uuid not null,
+            contract_version text not null, product_service_id uuid null,
+            product_service_version_id uuid null, style_preset_id uuid null,
+            style_preset_revision integer null, avatar_id uuid null, avatar_revision integer null,
+            selection_json jsonb not null, selection_sha256 text not null,
+            frozen_json jsonb null, frozen_sha256 text null, frozen_at timestamptz null,
+            created_at timestamptz not null default now()
+          )
+        `);
         const database = await client.query(
           `select current_database() database_name,
                   pg_get_userbyid(history.relowner)::text migration_history_owner_role_name
@@ -238,6 +269,13 @@ async function applyMigrationsThrough075(pool: Pool): Promise<RoleBootstrapPlan>
     await client.query(
       `grant select on table public.ai_content_maintenance_state to "${names.applicationRoleName}"`,
     );
+    await client.query(
+      `grant insert,select on table public.ai_content_usage_ledger to "${names.applicationRoleName}"`,
+    );
+    await client.query(await readFile(
+      resolve(directory, "084_ai_content_usage_reversal_identity_invoker.sql"),
+      "utf8",
+    ));
     await client.query("revoke all on function public.assert_ai_content_writable() from public");
     await client.query(
       `grant execute on function public.assert_ai_content_writable() to "${names.applicationRoleName}"`,
@@ -270,65 +308,6 @@ async function applyMigrationsThrough075(pool: Pool): Promise<RoleBootstrapPlan>
     await client.query(`revoke all on table public.ai_content_cutovers
       from public,content_schema_owner,content_application,content_operator,content_migration,content_cleanup`);
     await client.query("grant references on table public.ai_content_cutovers to content_schema_owner");
-    await client.query("set session authorization postgres");
-    const restoreEvidence = await databaseRoles.restoreSharedRelationOwners(client, plan);
-    const restoreReplayEvidence = await databaseRoles.restoreSharedRelationOwners(client, plan);
-    expect(restoreEvidence).toMatchObject({
-      contractVersion: "ai-content-shared-owner-restore-evidence.v1",
-      restoredRelationCount: plan.sharedOwnerTransfers.length,
-    });
-    expect(restoreReplayEvidence).toEqual(restoreEvidence);
-
-    const retirementCutoverId = "8c8046c2-95c8-4fd3-8f82-a809fd801b04";
-    const proposalPreflightIdentity = {
-      preflightCandidateSha: "a".repeat(40),
-      contentProposalWorkerImageDigest: `sha256:${"b".repeat(64)}`,
-      proposalWorkerSourceSha: "c".repeat(40),
-      proposalWorkerTreeSha: "d".repeat(40),
-      proposalContractSourceSha256: "e".repeat(64),
-      proposalSchemaSha256: "f".repeat(64),
-      proposalCatalogSha256: "1".repeat(64),
-      proposalModelId: "gpt-5.6-terra",
-      proposalCommandDescriptorSha256: "2".repeat(64),
-      migrationSha256: migration075Checksum,
-    };
-    await client.query(
-      `insert into public.ai_content_cutovers(
-         id,status,migration_id,schema_owner_role_name,application_role_name,operator_role_name,
-         migration_role_name,cleanup_role_name,bypass_token_sha256,cleanup_token_sha256,
-         database_role_catalog_sha256,provider_backup_id,provider_snapshot_created_at,
-         incident_bundle_sha256,preserved_data_manifest_sha256,proposal_preflight_identity_json,
-         proposal_preflight_identity_sha256,proposal_preflight_transfer_sha256,
-         intended_release_sha,latest_status_event_sha256
-       ) values(
-         $1::uuid,'backend_verified','075_ai_content_three_format_cutover.sql',$2::name,$3::name,$4::name,
-         $5::name,$6::name,repeat('3',64),repeat('4',64),repeat('5',64),'postgres-test-backup',now(),
-         repeat('6',64),repeat('7',64),$7::jsonb,repeat('8',64),repeat('9',64),repeat('a',40),repeat('b',64)
-       )`,
-      [retirementCutoverId, names.schemaOwnerRoleName, names.applicationRoleName,
-        names.operatorRoleName, names.migrationRoleName, names.cleanupRoleName,
-        JSON.stringify(proposalPreflightIdentity)],
-    );
-    const retirementEvidence = await databaseRoles.retireCleanupRole(client, plan, retirementCutoverId);
-    const retirementReplayEvidence = await databaseRoles.retireCleanupRole(client, plan, retirementCutoverId);
-    expect(retirementReplayEvidence).toEqual(retirementEvidence);
-    expect(retirementEvidence).toMatchObject({
-      contractVersion: "ai-content-cleanup-role-retirement-evidence.v1",
-      cutoverId: retirementCutoverId,
-      cleanupRoleName: names.cleanupRoleName,
-    });
-    const retirementSeal = await client.query(
-      `select cleanup_credential_revoked_at,cleanup_revocation_evidence_sha256
-         from public.ai_content_cutovers where id=$1::uuid`,
-      [retirementCutoverId],
-    );
-    expect(retirementSeal.rows[0]?.cleanup_credential_revoked_at.toISOString()).toBe(retirementEvidence.retiredAt);
-    expect(retirementSeal.rows[0]?.cleanup_revocation_evidence_sha256).toBe(retirementEvidence.evidenceSha256);
-    expect((await client.query(
-      "select rolcanlogin,rolpassword is null password_is_null from pg_authid where rolname=$1::name",
-      [names.cleanupRoleName],
-    )).rows[0]).toEqual({ rolcanlogin: false, password_is_null: true });
-    await client.query("reset session authorization");
     return plan;
   } finally {
     if (schemaOwnerActive) await client.query("reset role").catch(() => undefined);
@@ -373,7 +352,11 @@ async function waitForBlockedBackends(
   return false;
 }
 
-function request(ids: FixtureIds, outputCount: 1 = 1): ContentOrchestrationV2 {
+function request(
+  ids: FixtureIds,
+  outputCount: 1 = 1,
+  outputFormat: "reel" | "card_news" = "reel",
+): ContentOrchestrationV2 {
   return {
     contractVersion: "content-orchestration.v2",
     brandId: ids.brand,
@@ -382,15 +365,19 @@ function request(ids: FixtureIds, outputCount: 1 = 1): ContentOrchestrationV2 {
     contentInstruction: null,
     productId: null,
     outputSettings: {
-      outputFormat: "reel",
+      outputFormat,
       channelTargets: ["instagram"],
-      aspectRatio: "9:16",
+      aspectRatio: outputFormat === "reel" ? "9:16" : "1:1",
       outputCount,
     },
   };
 }
 
-function baseInput(ids: FixtureIds, outputCount: 1 = 1) {
+function baseInput(
+  ids: FixtureIds,
+  outputCount: 1 = 1,
+  outputFormat: "reel" | "card_news" = "reel",
+) {
   return {
     contractVersion: "proposal-base-input.v2" as const,
     brandCore: {
@@ -408,9 +395,9 @@ function baseInput(ids: FixtureIds, outputCount: 1 = 1) {
     product: null,
     references: [],
     outputSettings: {
-      outputFormat: "reel" as const,
+      outputFormat,
       channelTargets: ["instagram" as const],
-      aspectRatio: "9:16" as const,
+      aspectRatio: outputFormat === "reel" ? "9:16" as const : "1:1" as const,
       outputCount,
       purpose: "informational" as const,
     },
@@ -441,7 +428,11 @@ function researchEvidence(ids: FixtureIds) {
   };
 }
 
-function proposal(ids: FixtureIds, index: number) {
+function proposal(
+  ids: FixtureIds,
+  index: number,
+  outputFormat: "reel" | "card_news" = "reel",
+) {
   return {
     conceptKey: `v3-concurrency-${index}`,
     title: `V3 동시성 ${index}`,
@@ -456,7 +447,7 @@ function proposal(ids: FixtureIds, index: number) {
     selectionReason: `운영 안전 ${index}`,
     evidenceIds: [ids.evidence],
     referenceIds: [],
-    outputFormat: "reel",
+    outputFormat,
     channelTargets: ["instagram"],
     assetCount: 1,
     outline: [{ index: 1, role: "scene", headline: `안전한 잠금 ${index}`, purpose: "설명" }],
@@ -576,6 +567,7 @@ describe.skipIf(process.env.RUN_POSTGRES_INTEGRATION !== "true")(
     let container: StartedPostgreSqlContainer | null = null;
     let pool: Pool;
     let applicationPool: Pool;
+    let brandIntelligenceApplicationPool: Pool;
     let legacyMainPool: Pool;
     let catalog: VerifiedGeneratedContentCatalog;
 
@@ -592,6 +584,20 @@ describe.skipIf(process.env.RUN_POSTGRES_INTEGRATION !== "true")(
       });
       await pool.query("create extension if not exists pgcrypto");
       const plan = await applyMigrationsThrough075(pool);
+      await pool.query(`
+        create role brand_intelligence_application login inherit nosuperuser nobypassrls
+          nocreatedb nocreaterole noreplication password '${brandIntelligenceApplicationPassword}'
+      `);
+      await pool.query("grant usage on schema public to brand_intelligence_application");
+      await pool.query(
+        "grant select,update on table public.brand_analysis_runs to brand_intelligence_application",
+      );
+      await pool.query(
+        "grant select,update,delete on table public.brand_analysis_uploads to brand_intelligence_application",
+      );
+      await pool.query(
+        "grant select,update on table public.brand_analysis_upload_attempts to brand_intelligence_application",
+      );
       applicationPool = new Pool({
         connectionString: connectionStringForRole(
           container.getConnectionUri(),
@@ -600,6 +606,15 @@ describe.skipIf(process.env.RUN_POSTGRES_INTEGRATION !== "true")(
         ),
         max: 10,
         application_name: "ai-content-v3-restricted-application",
+      });
+      brandIntelligenceApplicationPool = new Pool({
+        connectionString: connectionStringForRole(
+          container.getConnectionUri(),
+          "brand_intelligence_application",
+          brandIntelligenceApplicationPassword,
+        ),
+        max: 4,
+        application_name: "brand-intelligence-restricted-application",
       });
       legacyMainPool = new Pool({
         connectionString: connectionStringForRole(
@@ -622,14 +637,132 @@ describe.skipIf(process.env.RUN_POSTGRES_INTEGRATION !== "true")(
 
     afterAll(async () => {
       await applicationPool?.end();
+      await brandIntelligenceApplicationPool?.end();
       await legacyMainPool?.end();
       await pool?.end();
       await container?.stop();
     }, 120_000);
 
+    it("runs onboarding selection, linking, and cancellation as the minimum brand-intelligence role", async () => {
+      const ids: FixtureIds = {
+        actor: randomUUID(),
+        workspace: randomUUID(),
+        brand: randomUUID(),
+        core: randomUUID(),
+        rules: randomUUID(),
+        evidence: randomUUID(),
+      };
+      await pool.query("insert into app_users(id,email) values($1,$2)", [ids.actor, `${ids.actor}@example.test`]);
+      await pool.query(
+        "insert into workspaces(id,name,slug,created_by_user_id) values($1,'Onboarding role',$2,$3)",
+        [ids.workspace, `onboarding-role-${ids.workspace}`, ids.actor],
+      );
+      await pool.query(
+        "insert into workspace_members(workspace_id,user_id,role,status) values($1,$2,'owner','active')",
+        [ids.workspace, ids.actor],
+      );
+      await pool.query(
+        "insert into brands(id,workspace_id,name,created_by_user_id) values($1,$2,'Onboarding role brand',$3)",
+        [ids.brand, ids.workspace, ids.actor],
+      );
+      const adminRepository = createBrandIntelligenceRepository(pool);
+      const requested = await adminRepository.requestBrandAnalysis({
+        workspaceId: ids.workspace,
+        brandId: ids.brand,
+        companyName: "카드뉴스 병렬 생성 회사",
+        ownedUrl: "https://example.com",
+        uploadIds: [],
+        idempotencyKey: `onboarding-role-${ids.brand}`,
+      });
+      const requestFingerprint = "c".repeat(64);
+      const snapshot = {
+        categoryCode: "marketing",
+        subcategoryCodes: ["content_marketing"],
+        suggestion: {
+          id: ids.rules,
+          subcategoryCode: "content_marketing",
+          subcategoryName: "콘텐츠 마케팅",
+          intent: "trend" as const,
+          title: "분석 취소 후에도 완성할 콘텐츠",
+          whyNow: "온보딩과 카드뉴스는 병렬로 실행됩니다.",
+          contentBrief: "분석과 독립적으로 카드뉴스를 생성합니다.",
+          sources: [{
+            url: "https://source.example/article",
+            title: "자료",
+            publisher: "Source",
+            publishedAt: null,
+          }],
+        },
+        contentInstruction: null,
+        requestFingerprint,
+        proposalBatchId: null,
+        generationId: null,
+        requestedAt: "2026-08-14T00:00:00.000Z",
+        proposalBaseInput: null,
+        proposalAuthority: null,
+      };
+      const repository = createBrandIntelligenceRepository(brandIntelligenceApplicationPool);
+      expect((await brandIntelligenceApplicationPool.query(
+        "select session_user,current_user",
+      )).rows[0]).toEqual({
+        session_user: "brand_intelligence_application",
+        current_user: "brand_intelligence_application",
+      });
+      await expect(repository.saveOnboardingContentSelection({
+        workspaceId: ids.workspace,
+        brandId: ids.brand,
+        analysisId: requested.id,
+        snapshot,
+      })).resolves.toEqual(snapshot);
+      const proposalBatchId = randomUUID();
+      await expect(repository.linkOnboardingProposalBatch({
+        workspaceId: ids.workspace,
+        brandId: ids.brand,
+        analysisId: requested.id,
+        requestFingerprint,
+        proposalBatchId,
+      })).resolves.toMatchObject({ proposalBatchId });
+      const generationId = randomUUID();
+      await expect(repository.linkOnboardingGeneration({
+        workspaceId: ids.workspace,
+        brandId: ids.brand,
+        analysisId: requested.id,
+        requestFingerprint,
+        generationId,
+      })).resolves.toMatchObject({ generationId });
+      await expect(repository.cancelBrandAnalysis({
+        workspaceId: ids.workspace,
+        brandId: ids.brand,
+        analysisId: requested.id,
+      })).resolves.toMatchObject({ status: "cancelled" });
+
+      const stored = await pool.query(
+        `select input_json,evidence_json,result_json,edited_result_json,
+                has_table_privilege('content_application','public.brand_analysis_runs','SELECT')
+                  as content_application_can_select_brand_analysis
+           from brand_analysis_runs
+          where id=$1`,
+        [requested.id],
+      );
+      expect(stored.rows[0]).toMatchObject({
+        input_json: {
+          onboardingContent: {
+            requestFingerprint,
+            proposalBatchId,
+            generationId,
+          },
+        },
+        evidence_json: [],
+        result_json: null,
+        edited_result_json: null,
+        content_application_can_select_brand_analysis: false,
+      });
+      expect(Object.keys(stored.rows[0]!.input_json)).toEqual(["onboardingContent"]);
+    }, 30_000);
+
     async function createDraft(
       outputCount: 1 = 1,
-      source: "performance" | "manual" = "performance",
+      source: "performance" | "manual" | "onboarding" = "performance",
     ): Promise<DraftFixture> {
       const ids: FixtureIds = {
         actor: randomUUID(),
@@ -652,22 +785,34 @@ describe.skipIf(process.env.RUN_POSTGRES_INTEGRATION !== "true")(
         "insert into brands(id,workspace_id,name,created_by_user_id) values($1,$2,'V3 concurrency brand',$3)",
         [ids.brand, ids.workspace, ids.actor],
       );
-      const frozenBaseInput = baseInput(ids, outputCount);
-      await pool.query(
+      if (source === "onboarding") {
+        const analysis = await createBrandIntelligenceRepository(pool).requestBrandAnalysis({
+          workspaceId: ids.workspace,
+          brandId: ids.brand,
+          companyName: "온보딩 카드뉴스 브랜드",
+          ownedUrl: "https://brand.example/",
+          uploadIds: [],
+          idempotencyKey: `onboarding-analysis-${ids.brand}`,
+        });
+        ids.core = analysis.id;
+      }
+      const outputFormat = source === "onboarding" ? "card_news" : "reel";
+      const frozenBaseInput = baseInput(ids, outputCount, outputFormat);
+      if (source !== "onboarding") await pool.query(
         `insert into brand_core_versions(
            id,workspace_id,brand_id,version,status,core_json,created_by,
            created_by_user_id,approved_by_user_id,approved_at
          ) values($1,$2,$3,1,'approved',$4::jsonb,'user',$5,$5,now())`,
         [ids.core, ids.workspace, ids.brand, JSON.stringify(frozenBaseInput.brandCore), ids.actor],
       );
-      await pool.query(
+      if (source !== "onboarding") await pool.query(
         `insert into brand_rule_sets(
            id,workspace_id,brand_id,version,status,rules_json,created_by,
            created_by_user_id,approved_by_user_id,approved_at
          ) values($1,$2,$3,1,'approved',$4::jsonb,'user',$5,$5,now())`,
         [ids.rules, ids.workspace, ids.brand, JSON.stringify(rules), ids.actor],
       );
-      await pool.query(
+      if (source !== "onboarding") await pool.query(
         `insert into brand_profiles(workspace_id,brand_id,active_brand_core_id,active_brand_rule_set_id)
          values($1,$2,$3,$4)`,
         [ids.workspace, ids.brand, ids.core, ids.rules],
@@ -678,13 +823,38 @@ describe.skipIf(process.env.RUN_POSTGRES_INTEGRATION !== "true")(
       const { contractVersion: _baseContractVersion, ...baseFields } = frozenBaseInput;
       const experimentId = randomUUID();
       const evidenceVersion = "b".repeat(64);
+      const onboardingAuthority = source === "onboarding" ? {
+        kind: "onboarding_provisional" as const,
+        analysisId: ids.core,
+        ownedUrl: "https://brand.example/",
+        categoryCode: "marketing",
+        subcategoryCodes: ["content_marketing"],
+        suggestionId: ids.rules,
+        sourceUrls: ["https://source.example/concurrency"],
+        brandRules: {
+          versionId: ids.rules,
+          version: 1 as const,
+          content: rules,
+          contentSha256: proposalSha256(rules),
+        },
+      } : null;
       const proposalService = createAiContentProposalV2Service({
         ...proposalRepository,
         assertReady: async () => undefined,
         resolve: async () => ({
-          request: request(ids, outputCount),
+          request: request(ids, outputCount, outputFormat),
           baseInput: frozenBaseInput,
           sourceSnapshots: [],
+          ...(source === "manual" ? {
+            researchSourceAcquisition: {
+              contractVersion: "research-source-acquisition.v1" as const,
+              status: "not_applicable" as const,
+              requestedUrl: null,
+              canonicalUrl: null,
+              contentHash: null,
+              capturedAt: frozenBaseInput.capturedAt,
+            },
+          } : {}),
           performanceAudit: source === "performance" ? {
             experimentId,
             evidenceVersion,
@@ -714,16 +884,25 @@ describe.skipIf(process.env.RUN_POSTGRES_INTEGRATION !== "true")(
           experimentId,
           evidenceVersion,
         })
-        : await proposalService.create({
+        : source === "manual" ? await proposalService.create({
           source: "manual",
           workspaceId: ids.workspace,
           brandId: ids.brand,
           actorUserId: ids.actor,
           idempotencyKey: `v3-concurrency-${ids.brand}`,
-          request: request(ids, outputCount),
+          request: request(ids, outputCount, outputFormat),
+        }) : await proposalService.create({
+          source: "onboarding",
+          workspaceId: ids.workspace,
+          brandId: ids.brand,
+          actorUserId: ids.actor,
+          idempotencyKey: `onboarding-${ids.brand}`,
+          request: request(ids, outputCount, outputFormat),
+          baseInput: frozenBaseInput,
+          authority: onboardingAuthority!,
         });
       const jobs = createContentProposalJobsRepository(applicationPool);
-      if (source === "manual") {
+      if (source === "manual" || source === "onboarding") {
         const research = await jobs.claimContentProposalJob({
           workerId: "v3-research",
           leaseSeconds: 180,
@@ -783,7 +962,11 @@ describe.skipIf(process.env.RUN_POSTGRES_INTEGRATION !== "true")(
         parserSha256: "3".repeat(64),
         proposalSet: {
           contractVersion: "content-proposal.v2",
-          proposals: [proposal(ids, 1), proposal(ids, 2), proposal(ids, 3)],
+          proposals: [
+            proposal(ids, 1, outputFormat),
+            proposal(ids, 2, outputFormat),
+            proposal(ids, 3, outputFormat),
+          ],
         },
       });
       const proposalRow = await pool.query(
@@ -799,6 +982,39 @@ describe.skipIf(process.env.RUN_POSTGRES_INTEGRATION !== "true")(
         proposalId,
         idempotencyKey: selectIdempotencyKey,
       });
+      if (source === "onboarding") {
+        await createBrandIntelligenceRepository(pool).saveOnboardingContentSelection({
+          workspaceId: ids.workspace,
+          brandId: ids.brand,
+          analysisId: ids.core,
+          snapshot: {
+            categoryCode: "marketing",
+            subcategoryCodes: ["content_marketing"],
+            suggestion: {
+              id: ids.rules,
+              subcategoryCode: "content_marketing",
+              subcategoryName: "콘텐츠 마케팅",
+              intent: "informational",
+              title: "V3 동시성",
+              whyNow: "온보딩 중 병렬 생성을 검증합니다.",
+              contentBrief: "온보딩 카드뉴스 생성 경로를 검증합니다.",
+              sources: [{
+                url: "https://source.example/concurrency",
+                title: "검증 자료",
+                publisher: "Source",
+                publishedAt: null,
+              }],
+            },
+            contentInstruction: null,
+            requestFingerprint: "d".repeat(64),
+            proposalBatchId: created.proposalBatchId,
+            generationId: selected.id,
+            requestedAt: frozenBaseInput.capturedAt,
+            proposalBaseInput: frozenBaseInput,
+            proposalAuthority: onboardingAuthority!,
+          },
+        });
+      }
       return {
         ...ids,
         batchId: created.proposalBatchId,
@@ -917,6 +1133,12 @@ describe.skipIf(process.env.RUN_POSTGRES_INTEGRATION !== "true")(
                 contentGenerationInput: generationInput,
                 planningMode: "selected_proposal",
                 operationId,
+                manualVisualSelection: {
+                  contractVersion: "manual-visual-selection-frozen.v1",
+                  product: null,
+                  stylePreset: null,
+                  avatar: null,
+                },
               })],
           );
         }
@@ -942,6 +1164,77 @@ describe.skipIf(process.env.RUN_POSTGRES_INTEGRATION !== "true")(
       }
       return { ...fixture, operationId, outputIds, jobIds };
     }
+
+    it("starts an onboarding card-news draft through the content role without brand-analysis SELECT", async () => {
+      const fixture = await createDraft(1, "onboarding");
+      const provider = createBrandIntelligenceProvider(
+        createBrandIntelligenceRepository(brandIntelligenceApplicationPool),
+      );
+      const repository = createAiContentRepository(applicationPool, {
+        brandIntelligenceProvider: provider,
+      });
+      await expect(repository.startAiContentGenerationV3({
+        workspaceId: fixture.workspace,
+        brandId: fixture.brand,
+        actorUserId: fixture.actor,
+        generationId: fixture.generationId,
+        contractVersion: "content-generation-start.v2",
+        idempotencyKey: `onboarding-start-${fixture.brand}`,
+        usageDate: "2026-08-06",
+        dailyGenerationLimit: 10,
+      }, {
+        assertApprovedBrandRulesAvailable: async () => {
+          throw new Error("approved_brand_rules_must_not_be_loaded");
+        },
+        loadApprovedCore: async () => {
+          throw new Error("approved_brand_core_must_not_be_loaded");
+        },
+        loadApprovedProduct: async () => {
+          throw new Error("unexpected_product_snapshot_load");
+        },
+        freezeReferences: async () => [],
+        revalidateFrozenResources: async () => undefined,
+        loadApprovedStyleImages: async () => [],
+      })).resolves.toMatchObject({ id: fixture.generationId, status: "queued" });
+      await expect(applicationPool.query(
+        `update ai_content_usage_ledger
+            set quantity=quantity
+          where generation_id=$1`,
+        [fixture.generationId],
+      )).rejects.toMatchObject({ code: "42501" });
+
+      const stored = await pool.query(
+        `select batch.input_snapshot_json,generation.output_format,generation.status,
+                has_table_privilege('content_application','public.brand_analysis_runs','SELECT')
+                  as content_application_can_select_brand_analysis
+           from ai_content_proposal_batches batch
+           join ai_content_generations generation on generation.id=$2
+          where batch.id=$1`,
+        [fixture.batchId, fixture.generationId],
+      );
+      expect(Object.keys(stored.rows[0]!.input_snapshot_json).sort()).toEqual([
+        "baseInput",
+        "brandContextAuthority",
+        "replayFingerprint",
+        "researchSourceAcquisition",
+        "resumeInput",
+      ]);
+      expect(stored.rows[0]).toMatchObject({
+        output_format: "card_news",
+        status: "queued",
+        content_application_can_select_brand_analysis: false,
+        input_snapshot_json: {
+          brandContextAuthority: { kind: "onboarding_provisional", analysisId: fixture.core },
+          researchSourceAcquisition: {
+            contractVersion: "research-source-acquisition.v1",
+            status: "not_applicable",
+            requestedUrl: null,
+            canonicalUrl: null,
+            contentHash: null,
+          },
+        },
+      });
+    }, 30_000);
 
     it("lets selection replay finish while final V3 start waits on the shared batch lock", async () => {
       const fixture = await createDraft(1, "manual");

@@ -16,6 +16,12 @@ import type {
 import { ApiRequestError } from "../lib/apiClient";
 import { BrandCenterPreviewPage } from "../pages/BrandCenterPreviewPage";
 import type { ContentCategory } from "../types";
+import type {
+  OnboardingContentGateway,
+  OnboardingContentState,
+} from "../features/brand-intelligence/onboardingContentGateway";
+import type { ContentSuggestionGateway } from "../features/content-suggestions/contentSuggestionGateway";
+import type { AiContentGateway } from "../features/ai-content/types";
 
 const storageScope = { workspaceId: "workspace-1", userId: "user-1" };
 const persistenceKey = "brand-pilot:brand-intelligence:workspace-1:user-1:brand-1";
@@ -123,10 +129,16 @@ function LiveView({
   api,
   brandId = "brand-1",
   scope = storageScope,
+  onboardingContentGateway,
+  suggestionGateway,
+  aiContentGateway,
 }: {
   api: BrandIntelligenceGateway;
   brandId?: string;
   scope?: typeof storageScope;
+  onboardingContentGateway?: OnboardingContentGateway;
+  suggestionGateway?: ContentSuggestionGateway;
+  aiContentGateway?: AiContentGateway;
 }) {
   return (
     <>
@@ -135,6 +147,9 @@ function LiveView({
         gateway={api}
         brandId={brandId}
         storageScope={scope}
+        onboardingContentGateway={onboardingContentGateway}
+        suggestionGateway={suggestionGateway}
+        aiContentGateway={aiContentGateway}
       />
       <LocationProbe />
     </>
@@ -145,10 +160,15 @@ function renderLive(
   api: BrandIntelligenceGateway,
   initialEntry = "/onboarding/brand-intelligence?analysisId=analysis-1",
   scope = storageScope,
+  contentGateways: {
+    onboardingContentGateway?: OnboardingContentGateway;
+    suggestionGateway?: ContentSuggestionGateway;
+    aiContentGateway?: AiContentGateway;
+  } = {},
 ) {
   return render(
     <MemoryRouter initialEntries={[initialEntry]}>
-      <LiveView api={api} scope={scope} />
+      <LiveView api={api} scope={scope} {...contentGateways} />
     </MemoryRouter>,
   );
 }
@@ -266,6 +286,179 @@ describe("live Brand Center onboarding", () => {
       .toHaveAttribute("aria-disabled", "true");
     expect(getWorkflow).toHaveBeenCalledTimes(1);
     expect(getAnalysis).toHaveBeenCalledWith("brand-1", "analysis-1", expect.anything());
+  });
+
+  it("keeps analysis progress visible while starting the selected onboarding card news", async () => {
+    const notStarted: OnboardingContentState = {
+      state: "not_started", proposalBatchId: null, generationId: null, title: null,
+      progress: null, outputs: [], errorCode: null, errorMessage: null,
+    };
+    const preparing: OnboardingContentState = {
+      state: "preparing", proposalBatchId: "batch-1", generationId: null,
+      title: "브랜드 운영 기준", progress: null, outputs: [], errorCode: null, errorMessage: null,
+    };
+    const onboardingGateway: OnboardingContentGateway = {
+      reconcile: vi.fn().mockResolvedValueOnce(notStarted).mockResolvedValue(preparing),
+      start: vi.fn(async (): Promise<OnboardingContentState> => preparing),
+    };
+    const suggestion = {
+      id: "11111111-1111-4111-8111-111111111111",
+      subcategoryCode: "brand-ops", subcategoryName: "브랜드 운영",
+      intent: "informational" as const, title: "브랜드 운영 기준", whyNow: "오늘 필요한 기준",
+      contentBrief: "기준을 설명합니다.",
+      sources: [{ url: "https://source.example/report", title: "운영 보고서", publisher: "Example", publishedAt: null }],
+    };
+    const suggestions: ContentSuggestionGateway = {
+      list: vi.fn(), get: vi.fn(),
+      listForSelection: vi.fn(async () => ({
+        category: { code: "software", name: "소프트웨어" }, personal: [suggestion], general: [],
+      })),
+    };
+    renderLive(gateway({
+      getWorkflow: vi.fn().mockResolvedValue(analysis("queued")),
+      getAnalysis: vi.fn(() => new Promise<BrandAnalysis>(() => undefined)),
+    }), "/onboarding/brand-intelligence", storageScope, {
+      onboardingContentGateway: onboardingGateway,
+      suggestionGateway: suggestions,
+    });
+    const user = userEvent.setup();
+
+    expect(await screen.findByText("자료를 읽는 중")).toBeVisible();
+    await user.selectOptions(await screen.findByRole("combobox", { name: "분야" }), "software");
+    await user.click(screen.getByRole("checkbox", { name: "브랜드 운영" }));
+    await user.click(await screen.findByRole("button", { name: "AI 콘텐츠로 만들기" }));
+    await user.click(screen.getByRole("button", { name: "카드뉴스 만들기" }));
+
+    expect(onboardingGateway.start).toHaveBeenCalledWith("brand-1", "analysis-1", expect.objectContaining({
+      categoryCode: "software",
+      subcategoryCodes: ["brand-ops"],
+      suggestionId: suggestion.id,
+      contentInstruction: null,
+      idempotencyKey: expect.any(String),
+    }));
+    expect(await screen.findByText("브랜드 분석과 함께 카드뉴스를 만들고 있습니다")).toBeVisible();
+    expect(screen.getByRole("status", { name: "브랜드 자료를 분석하고 있습니다." })).toBeVisible();
+  });
+
+  it("keeps the onboarding selection available after a start request fails", async () => {
+    const notStarted: OnboardingContentState = {
+      state: "not_started", proposalBatchId: null, generationId: null, title: null,
+      progress: null, outputs: [], errorCode: null, errorMessage: null,
+    };
+    const onboardingGateway: OnboardingContentGateway = {
+      reconcile: vi.fn(async () => notStarted),
+      start: vi.fn(async () => { throw new Error("temporary start failure"); }),
+    };
+    const suggestion = {
+      id: "11111111-1111-4111-8111-111111111111",
+      subcategoryCode: "brand-ops", subcategoryName: "브랜드 운영",
+      intent: "informational" as const, title: "브랜드 운영 기준", whyNow: "오늘 필요한 기준",
+      contentBrief: "기준을 설명합니다.",
+      sources: [{ url: "https://source.example/report", title: "운영 보고서", publisher: "Example", publishedAt: null }],
+    };
+    const suggestions: ContentSuggestionGateway = {
+      list: vi.fn(), get: vi.fn(),
+      listForSelection: vi.fn(async () => ({
+        category: { code: "software", name: "소프트웨어" }, personal: [suggestion], general: [],
+      })),
+    };
+    renderLive(gateway({
+      getWorkflow: vi.fn().mockResolvedValue(analysis("queued")),
+      getAnalysis: vi.fn(() => new Promise<BrandAnalysis>(() => undefined)),
+    }), "/onboarding/brand-intelligence", storageScope, {
+      onboardingContentGateway: onboardingGateway,
+      suggestionGateway: suggestions,
+    });
+    const user = userEvent.setup();
+
+    await user.selectOptions(await screen.findByRole("combobox", { name: "분야" }), "software");
+    await user.click(screen.getByRole("checkbox", { name: "브랜드 운영" }));
+    await user.click(await screen.findByRole("button", { name: "AI 콘텐츠로 만들기" }));
+    await user.click(screen.getByRole("button", { name: "카드뉴스 만들기" }));
+
+    expect(await screen.findByText(/카드뉴스 생성을 시작하지 못했습니다/)).toBeVisible();
+    expect(screen.getByRole("combobox", { name: "분야" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "카드뉴스 만들기" })).toBeVisible();
+  });
+
+  it("does not offer onboarding content selection after analysis failure", async () => {
+    const onboardingGateway: OnboardingContentGateway = {
+      reconcile: vi.fn(async (): Promise<OnboardingContentState> => ({
+        state: "not_started", proposalBatchId: null, generationId: null, title: null,
+        progress: null, outputs: [], errorCode: null, errorMessage: null,
+      })),
+      start: vi.fn(),
+    };
+    const suggestions: ContentSuggestionGateway = {
+      list: vi.fn(), get: vi.fn(), listForSelection: vi.fn(),
+    };
+    renderLive(gateway({
+      getWorkflow: vi.fn().mockResolvedValue(analysis("failed")),
+      getAnalysis: vi.fn(() => new Promise<BrandAnalysis>(() => undefined)),
+    }), "/onboarding/brand-intelligence", storageScope, {
+      onboardingContentGateway: onboardingGateway,
+      suggestionGateway: suggestions,
+    });
+
+    await waitFor(() => expect(onboardingGateway.reconcile).toHaveBeenCalled());
+    expect(screen.queryByRole("combobox", { name: "분야" })).not.toBeInTheDocument();
+  });
+
+  it("restores a completed onboarding card and exposes publishing for connected Instagram", async () => {
+    const onboardingGateway: OnboardingContentGateway = {
+      reconcile: vi.fn(async (): Promise<OnboardingContentState> => ({
+        state: "completed", proposalBatchId: "batch-1", generationId: "generation-1",
+        title: "첫 카드뉴스", progress: null, outputs: [], errorCode: null, errorMessage: null,
+      })),
+      start: vi.fn(),
+    };
+    const aiGateway = {
+      listChannels: vi.fn(async () => [{
+        type: "instagram", label: "Instagram", enabled: true, oauthState: "connected",
+        status: "connected", accountLabel: "@brand", lastHealthyAt: "", lastPublishedAt: "",
+      }]),
+      getGeneration: vi.fn(async () => ({
+        id: "generation-1", brandId: "brand-1", title: "첫 카드뉴스", outputFormat: "card_news",
+        purpose: "informational", status: "completed", currentStep: 5, draft: {}, outputs: [],
+        attachmentsLockedAt: null, terminalAt: null, retryableUntil: null, createdAt: "", updatedAt: "",
+      })),
+    } as unknown as AiContentGateway;
+    renderLive(gateway({
+      getWorkflow: vi.fn().mockResolvedValue(null),
+      getCurrent: vi.fn().mockResolvedValue(analysis("confirmed")),
+    }), "/onboarding/brand-intelligence", storageScope, {
+      onboardingContentGateway: onboardingGateway,
+      aiContentGateway: aiGateway,
+    });
+
+    expect(await screen.findByRole("link", { name: "게시하러 가기" }))
+      .toHaveAttribute("href", "/ai-content/generation-1");
+    expect(onboardingGateway.reconcile).toHaveBeenCalledWith("brand-1", "analysis-1", expect.any(AbortSignal));
+  });
+
+  it("pauses onboarding content polling while the tab is hidden and resumes when visible", async () => {
+    vi.useFakeTimers();
+    const preparing: OnboardingContentState = {
+      state: "preparing", proposalBatchId: "batch-1", generationId: null,
+      title: "첫 카드뉴스", progress: null, outputs: [], errorCode: null, errorMessage: null,
+    };
+    const getContent = vi.fn(async () => preparing);
+    renderLive(gateway({
+      getWorkflow: vi.fn().mockResolvedValue(analysis("queued")),
+      getAnalysis: vi.fn(() => new Promise<BrandAnalysis>(() => undefined)),
+    }), "/onboarding/brand-intelligence", storageScope, {
+      onboardingContentGateway: { reconcile: getContent, start: vi.fn() },
+    });
+    await flushEffects();
+    expect(getContent).toHaveBeenCalledTimes(1);
+
+    act(() => setHidden(true));
+    await act(() => vi.advanceTimersByTimeAsync(30_000));
+    expect(getContent).toHaveBeenCalledTimes(1);
+
+    act(() => setHidden(false));
+    await flushEffects();
+    expect(getContent).toHaveBeenCalledTimes(2);
   });
 
   it("shows Step 1 when the server has no workflow or scoped resume pointer", async () => {

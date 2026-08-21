@@ -38,6 +38,8 @@ import { parseContentOrchestrationV2 } from "./aiContentGenerationInputV3.js";
 import { createPerformanceProposalAdapter } from "./performanceProposalAdapter.js";
 import { createContentSuggestionRepository } from "./contentSuggestionRepository.js";
 import { createContentSuggestionOAuthTokenVerifier } from "./contentSuggestionOAuth.js";
+import { createOnboardingContentService } from "./onboardingContent.js";
+import { kstDateKey } from "./publishSchedule.js";
 
 const runtimeConfig = loadApiRuntimeConfig();
 const port = Number(process.env.PORT ?? 4000);
@@ -236,6 +238,40 @@ const brandLogoService = createBrandLogoService({
   store: createPostgresBrandLogoStore(pool, (brandId) => repository.getBrandProfile(brandId))
 });
 const contentSuggestionRepository = createContentSuggestionRepository(pool);
+const onboardingContent = createOnboardingContentService({
+  brandIntelligence: {
+    getBrandAnalysis: (input) => brandIntelligenceRepository.getBrandAnalysis(input),
+    getBrandCompanyName: (input) => brandIntelligenceRepository.getBrandCompanyName?.(input)
+      ?? Promise.resolve(null),
+    getOnboardingContent: (input) => brandIntelligenceRepository.getOnboardingContent(input),
+    saveOnboardingContentSelection: (input) => (
+      brandIntelligenceRepository.saveOnboardingContentSelection(input)
+    ),
+    linkOnboardingProposalBatch: (input) => (
+      brandIntelligenceRepository.linkOnboardingProposalBatch(input)
+    ),
+    linkOnboardingGeneration: (input) => (
+      brandIntelligenceRepository.linkOnboardingGeneration(input)
+    ),
+  },
+  suggestions: contentSuggestionRepository,
+  categories: {
+    list: () => repository.listContentCategories(),
+  },
+  proposals: aiContentProposalV2Service,
+  content: {
+    getAiContentProposalBatch: (input) => repository.getAiContentProposalBatch!(input),
+    selectAiContentProposal: (input) => repository.selectAiContentProposal!(input),
+    startAiContentGenerationV3: (input, snapshots) => (
+      repository.startAiContentGenerationV3!(input, snapshots)
+    ),
+    getAiContentGeneration: (input) => repository.getAiContentGeneration(input),
+  },
+  snapshots: aiContentSnapshotRepository,
+  now: () => new Date(),
+  usageDate: () => kstDateKey(new Date()),
+  dailyGenerationLimit: Number(process.env.AI_CONTENT_DAILY_GENERATION_LIMIT ?? 10),
+});
 const serverOptions: Parameters<typeof createServer>[0] & {
   runtimePolicy: typeof runtimeConfig.http;
 } = {
@@ -254,6 +290,7 @@ const serverOptions: Parameters<typeof createServer>[0] & {
       } : {}),
     },
     aiContentProposalV2,
+    onboardingContent,
     brandLogoService,
     workerApiToken: process.env.WORKER_API_TOKEN,
     contentProposalWorkerApiToken: process.env.CONTENT_PROPOSAL_WORKER_API_TOKEN,

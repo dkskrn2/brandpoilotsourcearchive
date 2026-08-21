@@ -27,6 +27,7 @@ function repository(): ContentSuggestionRepository {
       generationDate: input.generationDate,
     })),
     listForBrand: vi.fn(async () => ({ category: null, personal: [], general: [] })),
+    listForSelection: vi.fn(async () => ({ category: null, personal: [], general: [] })),
     getForBrand: vi.fn(async () => null),
   };
 }

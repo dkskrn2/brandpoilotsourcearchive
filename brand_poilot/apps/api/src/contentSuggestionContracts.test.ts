@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   parseContentSuggestionBatch,
   parseContentSuggestionCategoryCode,
+  parseStoredContentSuggestionSources,
 } from "./contentSuggestionContracts.js";
 
 const source = {
@@ -36,6 +37,14 @@ describe("parseContentSuggestionCategoryCode", () => {
   it("rejects a code outside the catalog format", () => {
     expect(() => parseContentSuggestionCategoryCode("Travel Tourism"))
       .toThrow("content_suggestion_category_code_invalid");
+  });
+});
+
+describe("parseStoredContentSuggestionSources", () => {
+  it("returns one to three exact persisted sources", () => {
+    expect(parseStoredContentSuggestionSources([source])).toEqual([source]);
+    expect(() => parseStoredContentSuggestionSources([]))
+      .toThrow("content_suggestion_sources_invalid");
   });
 });
 

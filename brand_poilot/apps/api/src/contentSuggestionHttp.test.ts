@@ -12,6 +12,12 @@ const suggestion = {
   title: "실내 여행 코스",
   whyNow: "비 예보가 이어집니다.",
   contentBrief: "실내 동선으로 구성합니다.",
+  sources: [{
+    url: "https://example.org/travel",
+    title: "여행 자료",
+    publisher: "예시 기관",
+    publishedAt: null,
+  }],
 };
 
 function contentRepository(): ContentSuggestionRepository {
@@ -34,6 +40,11 @@ function contentRepository(): ContentSuggestionRepository {
       generationDate: input.generationDate,
     })),
     listForBrand: vi.fn(async () => ({
+      category: { code: "travel_tourism", name: "여행·관광" },
+      personal: [suggestion],
+      general: [],
+    })),
+    listForSelection: vi.fn(async () => ({
       category: { code: "travel_tourism", name: "여행·관광" },
       personal: [suggestion],
       general: [],
@@ -259,7 +270,7 @@ describe("content suggestion HTTP routes", () => {
     expect(response.json()).toEqual({ error: "authentication_required" });
   });
 
-  it("returns brand-scoped suggestions without dates or sources", async () => {
+  it("returns brand-scoped suggestions with frozen sources but without dates", async () => {
     const { app, suggestions } = appWithSuggestions();
     const response = await app.inject({
       method: "GET",
@@ -272,9 +283,26 @@ describe("content suggestion HTTP routes", () => {
       personal: [suggestion],
       general: [],
     });
-    expect(response.body).not.toContain("sources");
+    expect(response.json().personal[0].sources).toEqual(suggestion.sources);
     expect(response.body).not.toContain("generationDate");
     expect(suggestions.listForBrand).toHaveBeenCalledWith(brandId);
+  });
+
+  it("loads suggestions from the selected onboarding category and subcategories", async () => {
+    const { app, suggestions } = appWithSuggestions();
+    const response = await app.inject({
+      method: "GET",
+      url: `/brands/${brandId}/content-suggestions?categoryCode=travel_tourism&subcategoryCodes=domestic_travel`,
+      headers: { cookie: "bp_session=session-token" },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(suggestions.listForSelection).toHaveBeenCalledWith({
+      brandId,
+      categoryCode: "travel_tourism",
+      subcategoryCodes: ["domestic_travel"],
+    });
+    expect(suggestions.listForBrand).not.toHaveBeenCalled();
   });
 
   it("hides a missing or cross-category suggestion", async () => {

@@ -53,6 +53,44 @@ const brandRules = {
   },
   contentSha256: HASH,
 };
+const onboardingBrandRules = {
+  ...brandRules,
+  contentSha256: proposalSha256(brandRules.content),
+};
+const onboardingAuthority = {
+  kind: "onboarding_provisional" as const,
+  analysisId: id.core,
+  ownedUrl: "https://brand.example/",
+  categoryCode: "technology_software",
+  subcategoryCodes: ["productivity_software"],
+  suggestionId: id.rules,
+  sourceUrls: ["https://source.example/report"],
+  brandRules: onboardingBrandRules,
+};
+const onboardingSnapshot = {
+  categoryCode: onboardingAuthority.categoryCode,
+  subcategoryCodes: onboardingAuthority.subcategoryCodes,
+  suggestion: {
+    id: onboardingAuthority.suggestionId,
+    subcategoryCode: "productivity_software",
+    subcategoryName: "생산성 소프트웨어",
+    intent: "informational" as const,
+    title: "생산성 업무 가이드",
+    whyNow: "업무 자동화 수요가 늘었습니다.",
+    contentBrief: "실무 체크리스트를 제공합니다.",
+    sources: [{
+      url: onboardingAuthority.sourceUrls[0],
+      title: "생산성 보고서",
+      publisher: "Example",
+      publishedAt: null,
+    }],
+  },
+  contentInstruction: null,
+  requestFingerprint: "b".repeat(64),
+  proposalBatchId: id.batch,
+  generationId: null,
+  requestedAt: NOW,
+};
 const evidence = {
   contractVersion: "research-evidence.v1", decision: "not_needed", reason: "evergreen",
   queries: [], capturedAt: NOW, items: [],
@@ -115,6 +153,7 @@ function harness(options: {
   malformedFinalization?: boolean;
   unavailableAttachment?: boolean;
   styleReference?: boolean;
+  onboarding?: boolean;
 } = {}) {
   const statements: Array<{ sql: string; params: unknown[] }> = [];
   let replayBinding: Awaited<ReturnType<typeof binding>>;
@@ -157,7 +196,7 @@ function harness(options: {
       }
       if (sql.startsWith("update ai_content_generations")) return { rows: [{ ...generation, status: "queued", operation_id: id.operation, generation_input_snapshot: frozenInput, attachments_locked_at: NOW }], rowCount: 1 };
       if (sql.includes("from ai_content_generations")) return { rows: [generation], rowCount: 1 };
-      if (sql.includes("from ai_content_proposal_batches")) return { rows: [{ id: id.batch, workspace_id: id.workspace, brand_id: id.brand, status: "ready", purpose: "informational", input_snapshot_json: { baseInput, replayFingerprint: HASH, researchSourceAcquisition, resumeInput: { contractVersion: "content-orchestration.v2", brandId: id.brand, purpose: "informational", seed: { kind: "topic_text", title: "주제" }, contentInstruction: null, productId: null, outputSettings: { outputFormat: "reel", channelTargets: ["instagram"], aspectRatio: "9:16", outputCount: 1 } } }, request_json: {} }], rowCount: 1 };
+      if (sql.includes("from ai_content_proposal_batches")) return { rows: [{ id: id.batch, workspace_id: id.workspace, brand_id: id.brand, status: "ready", origin: "manual", performance_audit_id: null, purpose: "informational", input_snapshot_json: { baseInput, ...(options.onboarding ? { brandContextAuthority: onboardingAuthority } : {}), replayFingerprint: HASH, researchSourceAcquisition, resumeInput: { contractVersion: "content-orchestration.v2", brandId: id.brand, purpose: "informational", seed: { kind: "topic_text", title: "주제" }, contentInstruction: null, productId: null, outputSettings: { outputFormat: "reel", channelTargets: ["instagram"], aspectRatio: "9:16", outputCount: 1 } } }, request_json: {} }], rowCount: 1 };
       if (sql.includes("from ai_content_proposals") && sql.includes("for update")) return { rows: [{ id: id.proposal, batch_id: id.batch, workspace_id: id.workspace, brand_id: id.brand, status: "selected", generation_id: id.generation, proposal_json: selectedProposal, successful_model_attempt_id: id.attempt, successful_proposal_job_id: id.job, final_invocation_ordinal: 1 }], rowCount: 1 };
       if (sql.includes("from ai_content_generation_operations")) {
         return options.replay ? { rows: [{ id: id.operation, workspace_id: id.workspace, brand_id: id.brand, generation_id: options.operationGenerationId ?? id.generation, request_fingerprint_sha256: options.operationFingerprint ?? proposalSha256({ generationId: id.generation, contractVersion: "content-generation-start.v2", workspaceId: id.workspace, brandId: id.brand, proposalBatchId: id.batch, proposalId: id.proposal, outputFormat: "reel", purpose: "informational", finalization, manualVisualSelection: frozenManualVisualSelection }), status: "started" }], rowCount: 1 } : { rows: [], rowCount: 0 };
@@ -168,6 +207,7 @@ function harness(options: {
         return { rows: [{ input_json: frozenInput, content_hash: proposalSha256(frozenInput), binding_json: value, binding_sha256: proposalSha256(value), binding_hash_matches: true, selected_proposal_id: id.proposal, proposal_job_id: id.job, successful_model_attempt_id: id.attempt, final_invocation_ordinal: 1, output_format: "reel", purpose: "informational", generation_input_version: "content-generation-input.v3", reservation_id: "10000000-0000-4000-8000-00000000000e", quantity: 1, output_count: 1, job_count: 1 }], rowCount: 1 };
       }
       if (sql.includes("from ai_content_proposal_jobs job")) return { rows: [{ job_id: id.job, batch_id: id.batch, job_status: "completed", request_json: {}, contract_id: id.contract, request_contract_version: "content-proposal-request.v2", base_input_contract_version: "proposal-base-input.v2", research_contract_version: "research-evidence.v1", proposal_contract_version: "content-proposal.v2", proposal_prompt_version: "proposal.writer.v2", proposal_output_schema_sha256: HASH, proposal_model_id: "gpt-5.6-terra", command_descriptor_sha256: HASH, request_sha256: HASH, base_input_sha256: HASH, contract_source_sha256: HASH, catalog_sha256: HASH, enqueue_contract_sha256: HASH, composition_id: id.composition, composed_input_json: { researchEvidence: evidence }, research_evidence_set_sha256: HASH, composed_input_sha256: HASH, final_invocation_aggregate_sha256: HASH, attempt_id: id.attempt, aggregate_contract_sha256: HASH, model_id: "gpt-5.6-terra", model_sha256: HASH, attempt_command_sha256: HASH, attempt_schema_sha256: HASH, attempt_composed_sha256: HASH, event_type: "attempt_succeeded", invocation_ordinal: 1, event_aggregate_sha256: HASH, event_model_sha256: HASH, event_command_sha256: HASH, event_schema_sha256: HASH, event_composed_sha256: HASH, output_sha256: HASH, parser_sha256: HASH, parser_valid: true, evidence_json: evidence }], rowCount: 1 };
+      if (sql.includes("from brand_analysis_runs")) throw new Error("ai_content_role_cannot_read_brand_analysis_runs");
       if (sql.includes("lock_ai_content_fixed_input_sources")) return { rows: [{ locked: true }], rowCount: 1 };
       if (sql.includes("from brand_core_versions")) return options.coreMissing ? { rows: [], rowCount: 0 } : { rows: [{ id: id.core, status: "approved" }], rowCount: 1 };
       if (sql.includes("from brand_profiles profile")) return options.rulesMissing ? { rows: [], rowCount: 0 } : { rows: [{
@@ -197,9 +237,13 @@ function harness(options: {
     }),
     release: vi.fn(),
   };
-  const repository = createAiContentRepository({ connect: async () => client, query: client.query } as never);
+  const getOnboardingContent = vi.fn(async () => onboardingSnapshot);
+  const repository = createAiContentRepository(
+    { connect: async () => client, query: client.query } as never,
+    options.onboarding ? { brandIntelligenceProvider: { getConfirmed: vi.fn(), getOnboardingContent } } as never : {},
+  );
   const command = { workspaceId: id.workspace, brandId: id.brand, generationId: id.generation, actorUserId: id.actor, contractVersion: "content-generation-start.v2", idempotencyKey: "start-key", usageDate: "2026-08-06", dailyGenerationLimit: 10 };
-  return { client, statements, repository, command };
+  return { client, statements, repository, command, getOnboardingContent };
 }
 
 describe("V3 generation start transaction", () => {
@@ -342,6 +386,21 @@ describe("V3 generation start transaction", () => {
     expect(sql.findIndex((value) => value.includes("from brand_core_versions")))
       .toBeLessThan(sql.findIndex((value) => value.includes("from ai_content_usage_ledger")));
     expect(assembler.assemble).toHaveBeenCalled();
+  });
+
+  it("loads provisional onboarding authority through the owning repository instead of the AI-content role", async () => {
+    const promptBinding = await binding();
+    assembler.assemble.mockReturnValue({ input: frozenInput, canonicalJson: JSON.stringify(frozenInput), contentHash: proposalSha256(frozenInput), binding: promptBinding, provenance: { selectedProposalId: id.proposal, proposalJobId: id.job, proposalContractId: id.contract, successfulModelAttemptId: id.attempt } });
+    const run = harness({ onboarding: true });
+
+    await run.repository.startAiContentGenerationV3(run.command as never, {} as never, () => new Date(NOW));
+
+    expect(run.getOnboardingContent).toHaveBeenCalledWith({
+      workspaceId: id.workspace,
+      brandId: id.brand,
+      analysisId: id.core,
+    });
+    expect(run.statements.map(({ sql }) => sql).join("\n")).not.toContain("brand_analysis_runs");
   });
 
   it("freezes approved style image bytes through the snapshot repository before sealing V3 input", async () => {

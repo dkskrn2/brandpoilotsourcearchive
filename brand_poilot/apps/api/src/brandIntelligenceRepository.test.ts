@@ -429,6 +429,151 @@ describe("brand intelligence repository", () => {
     }]);
   });
 
+  it("stores onboarding content state inside input_json without replacing analysis input", async () => {
+    const repository = createBrandIntelligenceRepository(pglitePool(database));
+    const requested = await repository.requestBrandAnalysis({
+      workspaceId,
+      brandId,
+      companyName: "테스트 회사",
+      ownedUrl: "https://example.com",
+      uploadIds: [],
+      idempotencyKey: "analysis-with-content",
+    });
+    const selection = {
+      categoryCode: "marketing",
+      subcategoryCodes: ["content_marketing"],
+      suggestion: {
+        id: "30000000-0000-4000-8000-000000000001",
+        subcategoryCode: "content_marketing",
+        subcategoryName: "콘텐츠 마케팅",
+        intent: "trend" as const,
+        title: "저장하는 콘텐츠",
+        whyNow: "저장형 콘텐츠 수요가 높습니다.",
+        contentBrief: "체크리스트로 구성합니다.",
+        sources: [{
+          url: "https://source.example/article",
+          title: "자료",
+          publisher: "Source",
+          publishedAt: null,
+        }],
+      },
+      contentInstruction: null,
+      requestFingerprint: "a".repeat(64),
+      proposalBatchId: null,
+      proposalBaseInput: null,
+      proposalAuthority: null,
+      generationId: null,
+      requestedAt: "2026-08-14T00:00:00.000Z",
+    };
+
+    await expect(repository.saveOnboardingContentSelection({
+      workspaceId,
+      brandId,
+      analysisId: requested.id,
+      snapshot: selection,
+    })).resolves.toEqual(selection);
+    await expect(repository.saveOnboardingContentSelection({
+      workspaceId,
+      brandId,
+      analysisId: requested.id,
+      snapshot: selection,
+    })).resolves.toEqual(selection);
+    await expect(repository.saveOnboardingContentSelection({
+      workspaceId,
+      brandId,
+      analysisId: requested.id,
+      snapshot: { ...selection, requestFingerprint: "b".repeat(64) },
+    })).rejects.toThrow("onboarding_content_request_conflict");
+    await expect(repository.linkOnboardingProposalBatch({
+      workspaceId,
+      brandId,
+      analysisId: requested.id,
+      requestFingerprint: selection.requestFingerprint,
+      proposalBatchId: "40000000-0000-4000-8000-000000000001",
+    })).resolves.toMatchObject({ proposalBatchId: "40000000-0000-4000-8000-000000000001" });
+    await expect(repository.linkOnboardingGeneration({
+      workspaceId,
+      brandId,
+      analysisId: requested.id,
+      requestFingerprint: selection.requestFingerprint,
+      generationId: "50000000-0000-4000-8000-000000000001",
+    })).resolves.toMatchObject({
+      proposalBatchId: "40000000-0000-4000-8000-000000000001",
+      generationId: "50000000-0000-4000-8000-000000000001",
+    });
+    await expect(repository.saveOnboardingContentSelection({
+      workspaceId,
+      brandId,
+      analysisId: requested.id,
+      snapshot: { ...selection, requestFingerprint: "b".repeat(64) },
+    })).rejects.toThrow("onboarding_content_request_conflict");
+
+    const stored = await database.query<{ input_json: Record<string, unknown> }>(
+      "select input_json from brand_analysis_runs where id = $1",
+      [requested.id],
+    );
+    expect(stored.rows[0]?.input_json).toMatchObject({
+      companyName: "테스트 회사",
+      ownedUrl: "https://example.com",
+      uploadIds: [],
+      onboardingContent: { requestFingerprint: selection.requestFingerprint },
+    });
+  });
+
+  it("rejects a first onboarding selection after the locked analysis row enters cancellation", async () => {
+    const repository = createBrandIntelligenceRepository(pglitePool(database));
+    const requested = await repository.requestBrandAnalysis({
+      workspaceId,
+      brandId,
+      companyName: "취소 경쟁 회사",
+      ownedUrl: "https://example.com",
+      uploadIds: [],
+      idempotencyKey: "cancel-race-before-content-save",
+    });
+    await database.query(
+      "update brand_analysis_runs set status = 'cancel_requested' where id = $1",
+      [requested.id],
+    );
+    const selection = {
+      categoryCode: "marketing",
+      subcategoryCodes: ["content_marketing"],
+      suggestion: {
+        id: "30000000-0000-4000-8000-000000000001",
+        subcategoryCode: "content_marketing",
+        subcategoryName: "콘텐츠 마케팅",
+        intent: "trend" as const,
+        title: "취소 경쟁 중인 콘텐츠",
+        whyNow: "취소와 저장의 순서를 검증합니다.",
+        contentBrief: "신규 저장을 차단합니다.",
+        sources: [{
+          url: "https://source.example/article",
+          title: "자료",
+          publisher: "Source",
+          publishedAt: null,
+        }],
+      },
+      contentInstruction: null,
+      requestFingerprint: "d".repeat(64),
+      proposalBatchId: null,
+      proposalBaseInput: null,
+      proposalAuthority: null,
+      generationId: null,
+      requestedAt: "2026-08-14T00:00:00.000Z",
+    };
+
+    await expect(repository.saveOnboardingContentSelection({
+      workspaceId,
+      brandId,
+      analysisId: requested.id,
+      snapshot: selection,
+    })).rejects.toThrow("brand_analysis_not_available");
+    const stored = await database.query<{ input_json: Record<string, unknown> }>(
+      "select input_json from brand_analysis_runs where id = $1",
+      [requested.id],
+    );
+    expect(stored.rows[0]?.input_json).not.toHaveProperty("onboardingContent");
+  });
+
   it.each([
     ["unknown primary code", { primaryCategory: { code: "unknown", name: "미등록" } }],
     ["mismatched primary name", { primaryCategory: { code: "marketing", name: "다른 이름" } }],
@@ -826,6 +971,83 @@ describe("brand intelligence repository", () => {
       [requested.id],
     );
     expect(uploads.rows).toEqual([]);
+  });
+
+  it("preserves started onboarding content while purging analysis input on cancel", async () => {
+    const repository = createBrandIntelligenceRepository(pglitePool(database));
+    const requested = await repository.requestBrandAnalysis({
+      workspaceId,
+      brandId,
+      companyName: "카드뉴스 병렬 생성 회사",
+      ownedUrl: "https://example.com",
+      uploadIds: [],
+      idempotencyKey: "cancel-analysis-keep-onboarding-content",
+    });
+    const selection = {
+      categoryCode: "marketing",
+      subcategoryCodes: ["content_marketing"],
+      suggestion: {
+        id: "30000000-0000-4000-8000-000000000001",
+        subcategoryCode: "content_marketing",
+        subcategoryName: "콘텐츠 마케팅",
+        intent: "trend" as const,
+        title: "분석 취소 후에도 완성할 콘텐츠",
+        whyNow: "온보딩과 카드뉴스는 병렬로 실행됩니다.",
+        contentBrief: "분석과 독립적으로 카드뉴스를 생성합니다.",
+        sources: [{
+          url: "https://source.example/article",
+          title: "자료",
+          publisher: "Source",
+          publishedAt: null,
+        }],
+      },
+      contentInstruction: "차분한 어조로 작성해 주세요.",
+      requestFingerprint: "c".repeat(64),
+      proposalBatchId: "40000000-0000-4000-8000-000000000001",
+      proposalBaseInput: null,
+      proposalAuthority: null,
+      generationId: null,
+      requestedAt: "2026-08-14T00:00:00.000Z",
+    };
+    await repository.saveOnboardingContentSelection({
+      workspaceId,
+      brandId,
+      analysisId: requested.id,
+      snapshot: selection,
+    });
+
+    const cancelled = await repository.cancelBrandAnalysis({
+      workspaceId,
+      brandId,
+      analysisId: requested.id,
+    });
+
+    expect(cancelled).toMatchObject({
+      status: "cancelled",
+      input: { companyName: null, ownedUrl: null, uploadIds: [] },
+    });
+    const stored = await database.query<{
+      input_json: Record<string, unknown>;
+      evidence_json: unknown[];
+      result_json: unknown;
+      edited_result_json: unknown;
+    }>(
+      `select input_json, evidence_json, result_json, edited_result_json
+         from brand_analysis_runs
+        where id = $1`,
+      [requested.id],
+    );
+    expect(stored.rows[0]).toEqual({
+      input_json: { onboardingContent: selection },
+      evidence_json: [],
+      result_json: null,
+      edited_result_json: null,
+    });
+    await expect(repository.getOnboardingContent({
+      workspaceId,
+      brandId,
+      analysisId: requested.id,
+    })).resolves.toEqual(selection);
   });
 
   it("resets the whole-run lease budget and stage metrics for an explicit retry", async () => {

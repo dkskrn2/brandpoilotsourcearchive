@@ -55,6 +55,7 @@ export interface ContentSuggestionItemDto {
   title: string;
   whyNow: string;
   contentBrief: string;
+  sources: ContentSuggestionSource[];
 }
 
 export interface ContentSuggestionListDto {
@@ -123,6 +124,13 @@ function parseSource(value: unknown): ContentSuggestionSource {
     publisher: normalizedString(value.publisher, "content_suggestion_source_publisher_invalid", 120),
     publishedAt: value.publishedAt,
   };
+}
+
+export function parseStoredContentSuggestionSources(value: unknown): ContentSuggestionSource[] {
+  if (!Array.isArray(value) || value.length < 1 || value.length > 3) {
+    throw new Error("content_suggestion_sources_invalid");
+  }
+  return value.map(parseSource);
 }
 
 function parseItem(value: unknown): ContentSuggestionBatchItemInput {

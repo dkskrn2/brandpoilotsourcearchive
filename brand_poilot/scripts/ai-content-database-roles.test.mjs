@@ -60,6 +60,10 @@ test("role bootstrap plan is closed over five distinct least-privilege identitie
     { relationName: "ai_content_generations", privileges: ["INSERT", "SELECT", "UPDATE"] },
   );
   assert.deepEqual(
+    plan.applicationRelationGrants.find(({ relationName }) => relationName === "ai_content_usage_ledger"),
+    { relationName: "ai_content_usage_ledger", privileges: ["INSERT", "SELECT"] },
+  );
+  assert.deepEqual(
     plan.applicationRelationGrants.find(({ relationName }) => relationName === "workspace_members"),
     { relationName: "workspace_members", privileges: ["SELECT"] },
   );
@@ -373,7 +377,11 @@ test("role bootstrap applies only the closed role/schema/relation ownership plan
       return { rows: plan.applicationOwnedFunctions.map((identity) => ({ identity })) };
     }
     if (String(sql).includes("ai_content_application_relation_acl")) {
-      return { rows: plan.applicationRelationGrants.map(({ relationName, privileges }) => ({ relation_name: relationName, privileges, column_acl_count: 0 })) };
+      return { rows: values[0].map((relationName) => ({
+        relation_name: relationName,
+        privileges: plan.applicationRelationGrants.find((grant) => grant.relationName === relationName)?.privileges ?? [],
+        column_acl_count: 0,
+      })) };
     }
     if (String(sql).includes("ai_content_application_sequence_acl")) return { rows: [] };
     if (String(sql).includes("ai_content_application_schema_acl")) {

@@ -25,6 +25,7 @@ export function createBrandIntelligenceProvider(repository: BrandIntelligenceRep
   };
   return {
     getConfirmed,
+    getOnboardingContent: repository.getOnboardingContent.bind(repository),
     async requireConfirmed(input: BrandAnalysisScope): Promise<ConfirmedBrandIntelligence> {
       const current = await getConfirmed(input);
       if (!current) throw new Error("brand_intelligence_required");

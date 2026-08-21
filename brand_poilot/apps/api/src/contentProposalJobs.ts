@@ -188,11 +188,16 @@ function frozenInputEnvelope(
   researchSourceAcquisition?: ResearchSourceAcquisitionV1;
 } {
   const envelope = object(row.input_snapshot_json);
-  const requiresAcquisition = row.origin === "manual"
+  const requiresAcquisition = row.origin === "manual" && row.performance_audit_id == null
     && (request.outputFormat === "card_news" || request.outputFormat === "reel");
-  const expectedKeys = requiresAcquisition
-    ? ["baseInput", "replayFingerprint", "researchSourceAcquisition", "resumeInput"]
-    : ["baseInput", "replayFingerprint", "resumeInput"];
+  const hasAuthority = envelope.brandContextAuthority !== undefined;
+  const expectedKeys = [
+    "baseInput",
+    ...(hasAuthority ? ["brandContextAuthority"] : []),
+    "replayFingerprint",
+    ...(requiresAcquisition ? ["researchSourceAcquisition"] : []),
+    "resumeInput",
+  ];
   if (Object.keys(envelope).sort().join("\0") !== expectedKeys.sort().join("\0")) {
     throw new Error("content_proposal_input_envelope_invalid");
   }
@@ -350,7 +355,7 @@ const claimColumns = `
   contract.proposal_prompt_version,contract.proposal_output_schema_sha256,
   contract.proposal_model_id,contract.command_descriptor_sha256,contract.request_sha256,
   contract.base_input_sha256,contract.contract_source_sha256,contract.catalog_sha256,
-  contract.enqueue_contract_sha256,
+  contract.enqueue_contract_sha256,performance_audit.id performance_audit_id,
   composition.id composition_id,composition.research_evidence_set_sha256,
   composition.composed_input_json,composition.composed_input_sha256,
   composition.final_invocation_aggregate_sha256`;
@@ -559,9 +564,13 @@ export function createContentProposalJobsRepository(pool: Pool): ContentProposal
              join ai_content_proposal_job_contracts contract
                on contract.job_id=job.id and contract.batch_id=job.batch_id
               and contract.workspace_id=job.workspace_id and contract.brand_id=job.brand_id
-             left join ai_content_proposal_compositions composition
-               on composition.job_id=job.id and composition.batch_id=job.batch_id
-              and composition.workspace_id=job.workspace_id and composition.brand_id=job.brand_id
+              left join ai_content_proposal_compositions composition
+                on composition.job_id=job.id and composition.batch_id=job.batch_id
+               and composition.workspace_id=job.workspace_id and composition.brand_id=job.brand_id
+              left join ai_content_proposal_performance_audits performance_audit
+                on performance_audit.batch_id=batch.id
+               and performance_audit.workspace_id=batch.workspace_id
+               and performance_audit.brand_id=batch.brand_id
             where job.status='queued' and job.available_at<=clock_timestamp()
               and (composition.id is null or job.attempt_count<job.max_attempts)
             order by job.available_at,job.created_at,job.id
@@ -699,8 +708,12 @@ export function createContentProposalJobsRepository(pool: Pool): ContentProposal
              from ai_content_proposal_jobs job
              join ai_content_proposal_batches batch
                on batch.id=job.batch_id and batch.workspace_id=job.workspace_id and batch.brand_id=job.brand_id
-             join ai_content_proposal_job_contracts contract on contract.job_id=job.id
-             join ai_content_proposal_research_attempts attempt
+              join ai_content_proposal_job_contracts contract on contract.job_id=job.id
+              left join ai_content_proposal_performance_audits performance_audit
+                on performance_audit.batch_id=batch.id
+               and performance_audit.workspace_id=batch.workspace_id
+               and performance_audit.brand_id=batch.brand_id
+              join ai_content_proposal_research_attempts attempt
                on attempt.id=$2 and attempt.job_id=job.id
               left join ai_content_proposal_compositions composition on composition.job_id=job.id
               left join ai_content_proposal_research_snapshots research on research.batch_id=job.batch_id
@@ -884,9 +897,13 @@ export function createContentProposalJobsRepository(pool: Pool): ContentProposal
                   succeeded.event_sha256 succeeded_event_sha256
              from ai_content_proposal_jobs job
              join ai_content_proposal_batches batch on batch.id=job.batch_id
-             join ai_content_proposal_job_contracts contract on contract.job_id=job.id
-             join ai_content_proposal_compositions composition on composition.job_id=job.id
-             join ai_content_proposal_model_attempts attempt
+              join ai_content_proposal_job_contracts contract on contract.job_id=job.id
+              join ai_content_proposal_compositions composition on composition.job_id=job.id
+              left join ai_content_proposal_performance_audits performance_audit
+                on performance_audit.batch_id=batch.id
+               and performance_audit.workspace_id=batch.workspace_id
+               and performance_audit.brand_id=batch.brand_id
+              join ai_content_proposal_model_attempts attempt
                on attempt.id=$2 and attempt.job_id=job.id and attempt.composition_id=composition.id
              left join lateral (
                select event.* from ai_content_proposal_attempt_events event

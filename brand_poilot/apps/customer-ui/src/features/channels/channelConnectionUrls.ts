@@ -24,10 +24,14 @@ const channelConnectionFailureReasons = new Set<ChannelConnectionFailureReason>(
   "token_exchange_failed"
 ]);
 
-export function channelConnectionUrl(channel: ChannelType) {
+export function channelConnectionUrl(channel: ChannelType, returnTo?: string) {
   if (channel !== "instagram") return null;
-  return import.meta.env.VITE_META_OAUTH_START_URL
+  const raw = import.meta.env.VITE_META_OAUTH_START_URL
     ?? `${import.meta.env.VITE_API_BASE_URL ?? "http://localhost:4000"}/auth/meta/start`;
+  if (!returnTo) return raw;
+  const url = new URL(raw, window.location.origin);
+  url.searchParams.set("returnTo", returnTo);
+  return url.toString();
 }
 
 export function channelConnectionAction(channel: ChannelType, connected: boolean) {

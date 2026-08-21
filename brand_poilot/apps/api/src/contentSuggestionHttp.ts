@@ -4,6 +4,7 @@ import type { AuthInfo } from "@modelcontextprotocol/sdk/server/auth/types.js";
 import type { FastifyInstance } from "fastify";
 import { createContentSuggestionMcpServer } from "./contentSuggestionMcp.js";
 import type { ContentSuggestionRepository } from "./contentSuggestionRepository.js";
+import { parseContentSuggestionCategoryCode } from "./contentSuggestionContracts.js";
 import {
   contentSuggestionOAuthScopes,
   type ContentSuggestionOAuthConfig,
@@ -99,9 +100,25 @@ export function registerContentSuggestionRoutes(
     }
   });
 
-  app.get<{ Params: { brandId: string } }>(
+  app.get<{
+    Params: { brandId: string };
+    Querystring: { categoryCode?: string; subcategoryCodes?: string };
+  }>(
     "/brands/:brandId/content-suggestions",
-    async (request) => options.repository.listForBrand(request.params.brandId),
+    async (request) => {
+      if (request.query.categoryCode === undefined && request.query.subcategoryCodes === undefined) {
+        return options.repository.listForBrand(request.params.brandId);
+      }
+      const categoryCode = parseContentSuggestionCategoryCode(request.query.categoryCode);
+      const subcategoryCodes = String(request.query.subcategoryCodes ?? "")
+        .split(",")
+        .map((value) => parseContentSuggestionCategoryCode(value));
+      return options.repository.listForSelection({
+        brandId: request.params.brandId,
+        categoryCode,
+        subcategoryCodes,
+      });
+    },
   );
 
   app.get<{ Params: { brandId: string; suggestionId: string } }>(

@@ -2271,6 +2271,47 @@ describe("API server", () => {
     expect(String(callback.headers["set-cookie"])).toContain("Max-Age=0");
   });
 
+  it("returns a signed Instagram OAuth attempt to onboarding and rejects external return targets", async () => {
+    const app = createServer({
+      repository: createRepository(),
+      instagramLogin: {
+        appId: "instagram-app-id",
+        appSecret: "instagram-app-secret",
+        redirectUri: "http://localhost:4000/auth/meta/callback",
+        frontendUrl: "http://localhost:5173",
+      },
+      logger: false,
+    });
+
+    const start = await app.inject({
+      method: "GET",
+      url: "/auth/meta/start?returnTo=%2Fonboarding%2Fbrand-intelligence",
+    });
+    const state = new URL(start.headers.location ?? "").searchParams.get("state");
+    const callback = await app.inject({
+      method: "GET",
+      url: `/auth/meta/callback?error=access_denied&state=${state}`,
+      headers: { cookie: requestCookieHeader(start.headers["set-cookie"]) },
+    });
+    expect(callback.headers.location).toBe(
+      "http://localhost:5173/onboarding/brand-intelligence?instagram=cancelled",
+    );
+
+    const unsafe = await app.inject({
+      method: "GET",
+      url: "/auth/meta/start?returnTo=https%3A%2F%2Fevil.example%2Fsteal",
+    });
+    const unsafeState = new URL(unsafe.headers.location ?? "").searchParams.get("state");
+    const unsafeCallback = await app.inject({
+      method: "GET",
+      url: `/auth/meta/callback?error=access_denied&state=${unsafeState}`,
+      headers: { cookie: requestCookieHeader(unsafe.headers["set-cookie"]) },
+    });
+    expect(unsafeCallback.headers.location).toBe(
+      "http://localhost:5173/channels?instagram=cancelled",
+    );
+  });
+
   it("does not let a forged provider error consume a legitimate state and rejects replay after valid denial", async () => {
     const app = createServer({
       repository: createRepository(),

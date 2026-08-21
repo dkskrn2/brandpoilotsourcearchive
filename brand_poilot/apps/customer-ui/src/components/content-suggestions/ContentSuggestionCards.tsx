@@ -8,10 +8,12 @@ const intentLabels: Record<ContentSuggestion["intent"], string> = {
 export function ContentSuggestionCards({
   items,
   selectedId = null,
+  disabled = false,
   onSelect,
 }: {
   items: ContentSuggestion[];
   selectedId?: string | null;
+  disabled?: boolean;
   onSelect(item: ContentSuggestion): void;
 }) {
   return <div className="content-suggestion-grid">
@@ -29,6 +31,7 @@ export function ContentSuggestionCards({
         type="button"
         className="button primary"
         aria-pressed={selectedId === item.id}
+        disabled={disabled}
         onClick={() => onSelect(item)}
       >AI 콘텐츠로 만들기</button>
     </article>)}

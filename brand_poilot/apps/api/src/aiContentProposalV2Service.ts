@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import type { PoolClient } from "pg";
 import {
   parseContentOrchestrationV2,
@@ -13,6 +12,13 @@ import {
   parseResearchSourceAcquisitionV1,
   type ResearchSourceAcquisitionV1,
 } from "@brand-pilot/content-contracts/research-source-acquisition";
+import {
+  parseOnboardingProposalAuthority,
+  type OnboardingProposalAuthority,
+} from "./onboardingContent.js";
+import { canonicalProposalJson, proposalSha256 } from "./proposalHash.js";
+
+export { canonicalProposalJson, proposalSha256 } from "./proposalHash.js";
 
 export type CreateProposalBatchV2Command = {
   workspaceId: string;
@@ -29,6 +35,14 @@ export type CreateProposalBatchV2Command = {
       actorUserId: string;
       experimentId: string;
       evidenceVersion: string;
+    }
+  | {
+      source: "onboarding";
+      actorUserId: string;
+      request: ContentOrchestrationV2;
+      baseInput: ProposalBaseInputSnapshotV2;
+      authority: OnboardingProposalAuthority;
+      idempotencyKey: string;
     }
   | {
       source: "scheduled_crawl";
@@ -85,6 +99,7 @@ export interface EnqueueProposalV2Input extends ProposalV2ReplayIdentity {
   researchSourceAcquisition?: ResearchSourceAcquisitionV1;
   proposalRunId: string | null;
   performanceAudit: ResolvedProposalV2Creation["performanceAudit"];
+  brandContextAuthority?: OnboardingProposalAuthority | null;
 }
 
 export interface ProposalV2CreationPorts {
@@ -115,23 +130,6 @@ export interface AiContentProposalV2Service {
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
-export function canonicalProposalJson(value: unknown): string {
-  const normalize = (current: unknown): unknown => {
-    if (Array.isArray(current)) return current.map(normalize);
-    if (!current || typeof current !== "object") return current;
-    return Object.fromEntries(
-      Object.entries(current as Record<string, unknown>)
-        .sort(([left], [right]) => left.localeCompare(right))
-        .map(([key, child]) => [key, normalize(child)]),
-    );
-  };
-  return JSON.stringify(normalize(value));
-}
-
-export function proposalSha256(value: unknown): string {
-  return createHash("sha256").update(canonicalProposalJson(value)).digest("hex");
-}
-
 function requiredText(value: unknown, code: string): string {
   if (typeof value !== "string" || value.trim().length === 0) throw new Error(code);
   return value.trim();
@@ -146,9 +144,26 @@ function normalizedUuid(value: unknown, code: string): string {
 function normalizedCommand(command: CreateProposalBatchV2Command): CreateProposalBatchV2Command {
   const workspaceId = normalizedUuid(command.workspaceId, "proposal_v2_scope_invalid");
   const brandId = normalizedUuid(command.brandId, "proposal_v2_scope_invalid");
-  if (command.source === "manual") {
+  if (command.source === "manual" || command.source === "onboarding") {
     const parsed = parseContentOrchestrationV2(parseApiContentOrchestrationV2(command.request));
     if (parsed.brandId !== brandId) throw new Error("content_orchestration_v2_invalid");
+    if (command.source === "onboarding") {
+      const baseInput = parseProposalBaseInputSnapshotV2(command.baseInput);
+      const authority = parseOnboardingProposalAuthority(command.authority);
+      if (authority.analysisId !== baseInput.brandCore.versionId) {
+        throw new Error("proposal_v2_onboarding_authority_invalid");
+      }
+      return {
+        ...command,
+        workspaceId,
+        brandId,
+        actorUserId: normalizedUuid(command.actorUserId, "ai_content_actor_required"),
+        idempotencyKey: requiredText(command.idempotencyKey, "idempotency_key_required"),
+        request: parsed,
+        baseInput,
+        authority,
+      };
+    }
     return {
       ...command,
       workspaceId,
@@ -192,13 +207,23 @@ function normalizedCommand(command: CreateProposalBatchV2Command): CreateProposa
 
 function replayIdentity(command: CreateProposalBatchV2Command): ProposalV2ReplayIdentity {
   const actorUserId = command.source === "scheduled_crawl" ? null : command.actorUserId;
-  const idempotencyKey = command.source === "manual"
+  const idempotencyKey = command.source === "manual" || command.source === "onboarding"
     ? command.idempotencyKey
     : command.source === "performance_experiment"
       ? `performance:${command.actorUserId}:${command.experimentId}:${command.evidenceVersion}`
       : command.callerOperationKey;
   const replayMaterial = command.source === "manual"
     ? { source: command.source, workspaceId: command.workspaceId, brandId: command.brandId, actorUserId, request: command.request }
+    : command.source === "onboarding"
+      ? {
+          source: command.source,
+          workspaceId: command.workspaceId,
+          brandId: command.brandId,
+          actorUserId,
+          request: command.request,
+          baseInput: command.baseInput,
+          authority: command.authority,
+        }
     : command.source === "performance_experiment"
       ? {
           source: command.source,
@@ -240,7 +265,7 @@ function assertResolvedCommand(
     throw new Error("proposal_v2_resolved_request_mismatch");
   }
   if (!Array.isArray(resolved.sourceSnapshots)) throw new Error("proposal_v2_source_snapshots_invalid");
-  const requiresAcquisition = command.source === "manual"
+  const requiresAcquisition = (command.source === "manual" || command.source === "onboarding")
     && (request.outputSettings.outputFormat === "card_news" || request.outputSettings.outputFormat === "reel");
   if (requiresAcquisition && resolved.researchSourceAcquisition === undefined) {
     throw new Error("proposal_v2_research_source_acquisition_required");
@@ -275,7 +300,21 @@ export function createAiContentProposalV2Service(
         await ports.lockIdempotencyKey(tx, identity);
         const lockedReplay = await ports.findReplay(tx, identity);
         if (lockedReplay) return { ...lockedReplay, disposition: "replayed" as const };
-        const resolved = assertResolvedCommand(command, await ports.resolve(command, tx));
+        const resolved = assertResolvedCommand(command, command.source === "onboarding"
+          ? {
+              request: command.request,
+              baseInput: command.baseInput,
+              sourceSnapshots: [],
+              researchSourceAcquisition: {
+                contractVersion: "research-source-acquisition.v1",
+                status: "not_applicable",
+                requestedUrl: null,
+                canonicalUrl: null,
+                contentHash: null,
+                capturedAt: command.baseInput.capturedAt,
+              },
+            }
+          : await ports.resolve(command, tx));
         const workerRequest: ContentProposalRequestV2 = {
           contractVersion: "content-proposal-request.v2",
           purpose: resolved.request.purpose,
@@ -295,6 +334,7 @@ export function createAiContentProposalV2Service(
             : { researchSourceAcquisition: structuredClone(resolved.researchSourceAcquisition) }),
           proposalRunId: resolved.proposalRunId ?? null,
           performanceAudit: resolved.performanceAudit ?? null,
+          brandContextAuthority: command.source === "onboarding" ? command.authority : null,
         });
       };
       return options.tx ? createInside(options.tx) : ports.withTransaction(createInside);
