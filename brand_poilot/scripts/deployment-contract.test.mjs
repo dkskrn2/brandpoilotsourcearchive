@@ -1162,6 +1162,8 @@ test("Task 6 gives every CLI worker an isolated explicit Compose profile and wri
   const codexMount = "${CODEX_HOME_PATH:-/opt/brand-pilot/shared/codex}:/codex";
   const accountPoolMount =
     "${CODEX_ACCOUNT_POOL_ROOT_PATH:-/opt/brand-pilot/shared/codex-accounts}:/codex-accounts";
+  const primaryAccountMount =
+    "${CODEX_ACCOUNT_POOL_ROOT_PATH:-/opt/brand-pilot/shared/codex-accounts}/primary:/codex-accounts/primary";
   const pooledServices = new Set([
     "content-proposal-worker-1",
     "image-worker-1",
@@ -1181,6 +1183,9 @@ test("Task 6 gives every CLI worker an isolated explicit Compose profile and wri
       assert.match(block.text, /^ {6}CODEX_HOME:\s+\/codex-accounts\/primary$/m);
       assert.match(block.text, /^ {6}CODEX_ACCOUNT_POOL_ROOT:\s+\/codex-accounts$/m);
       assert.match(block.text, /^ {6}CODEX_ACCOUNT_PROFILES:\s+primary,secondary$/m);
+    } else if (name === "brand-intelligence-worker-1") {
+      assert.match(block.text, /^ {6}CODEX_HOME:\s+\/codex-accounts\/primary$/m);
+      assert.doesNotMatch(block.text, /^ {6}CODEX_ACCOUNT_(?:POOL_ROOT|PROFILES):/m);
     } else {
       assert.match(block.text, /^ {6}CODEX_HOME:\s+\/codex$/m);
       assert.doesNotMatch(block.text, /CODEX_ACCOUNT_PROFILES|:\/codex-accounts/);
@@ -1188,7 +1193,11 @@ test("Task 6 gives every CLI worker an isolated explicit Compose profile and wri
     assert.match(block.text, new RegExp(`^ {4}user:\\s+${runtimeUser.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, "m"));
     assert.deepEqual(
       parseServiceList(block, "volumes"),
-      [pooledServices.has(name) ? accountPoolMount : codexMount],
+      [pooledServices.has(name)
+        ? accountPoolMount
+        : name === "brand-intelligence-worker-1"
+          ? primaryAccountMount
+          : codexMount],
     );
     assert.match(block.text, /^ {4}read_only:\s+true$/m);
     assert.deepEqual(parseServiceList(block, "cap_drop"), ["ALL"]);
@@ -1437,6 +1446,9 @@ test("all CLI worker images install the pinned Codex runtime and run real entryp
     if (["content proposal", "image", "card news", "blog", "reel"].includes(name)) {
       assert.match(dockerfile, /CODEX_HOME=\/codex-accounts\/primary/, `${name} must default to the primary profile`);
       assert.match(dockerfile, /CODEX_ACCOUNT_PROFILES=primary,secondary/, `${name} must declare the account pool`);
+    } else if (name === "brand intelligence") {
+      assert.match(dockerfile, /CODEX_HOME=\/codex-accounts\/primary/, `${name} must use the authenticated primary profile`);
+      assert.doesNotMatch(dockerfile, /CODEX_ACCOUNT_POOL_ROOT|CODEX_ACCOUNT_PROFILES/);
     } else {
       assert.match(dockerfile, /CODEX_HOME=\/codex(?:\s|$)/, `${name} must isolate the shared auth home`);
     }

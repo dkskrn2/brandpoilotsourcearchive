@@ -240,14 +240,14 @@ services:
     env_file:
       - ${BRAND_INTELLIGENCE_WORKER_1_ENV_FILE:-/opt/brand-pilot/shared/env/brand-intelligence-worker-1.env}
     environment:
-      CODEX_HOME: /codex
+      CODEX_HOME: /codex-accounts/primary
       BRAND_INTELLIGENCE_WORKER_ID: brand-intelligence-worker-1
     user: "${CODEX_RUNTIME_UID:?CODEX_RUNTIME_UID is required}:${CODEX_RUNTIME_GID:?CODEX_RUNTIME_GID is required}"
     restart: unless-stopped
     init: true
     read_only: true
     volumes:
-      - ${CODEX_HOME_PATH:-/opt/brand-pilot/shared/codex}:/codex
+      - ${CODEX_ACCOUNT_POOL_ROOT_PATH:-/opt/brand-pilot/shared/codex-accounts}/primary:/codex-accounts/primary
     tmpfs:
       - /tmp:size=512m,mode=1777
     cap_drop:

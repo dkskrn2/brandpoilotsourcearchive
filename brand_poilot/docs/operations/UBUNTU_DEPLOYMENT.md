@@ -566,7 +566,9 @@ card-news, blog, and reel workers use the two persisted aliases `primary` and
 `secondary` under `/opt/brand-pilot/shared/codex-accounts`. Those five workers
 mount the parent at `/codex-accounts` and automatically try `secondary` only
 when `primary` returns a verified usage-exhaustion failure before producing any
-accepted output. Other workers keep their existing single `/codex` contract.
+accepted output. The brand-intelligence worker mounts only the authenticated
+`primary` profile at `/codex-accounts/primary`; it does not use automatic account
+failover. Other workers keep their existing single `/codex` contract.
 
 The pool and both profile directories must be `bpdeploy:bpdeploy` mode `700`.
 Each `auth.json` must be a regular, non-symlink file owned by
@@ -1324,8 +1326,10 @@ unset so preflight can prove that a normal deploy cannot auto-start workers.
 All worker root filesystems are read-only. The five manual-content workers mount
 `/opt/brand-pilot/shared/codex-accounts` at `/codex-accounts`; generated-image
 directories for both profiles are mode-0700, 512MB tmpfs mounts so generated
-PNGs do not persist beside either `auth.json`. Unrelated workers retain the
-single-profile `/codex` mount.
+PNGs do not persist beside either `auth.json`. The brand-intelligence worker
+mounts only `/opt/brand-pilot/shared/codex-accounts/primary` at
+`/codex-accounts/primary`. Unrelated workers retain the single-profile `/codex`
+mount.
 
 ### [bpdeploy Tailscale SSH] Prepare the immutable Compose command
 
