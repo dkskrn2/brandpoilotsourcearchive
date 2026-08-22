@@ -122,7 +122,7 @@ export function PublishSchedulePanel({ item, options, optionsError, optionsLoadi
         <div><dt>선택 콘텐츠</dt><dd>{item.title}</dd></div>
         <div><dt>콘텐츠 상태</dt><dd>{sourceLabel(source)}</dd></div>
         <div><dt>콘텐츠 형식</dt><dd>{item.contentFormat ? contentFormatLabel[item.contentFormat] : "설정 전"}</dd></div>
-        <div><dt>게시 채널</dt><dd>{connected ? "Instagram 연결됨" : "Instagram 연결 필요"}</dd></div>
+        <div><dt>게시 채널</dt><dd>{options ? (connected ? "Instagram 연결됨" : "Instagram 연결 필요") : "Instagram"}</dd></div>
       </dl>
       {optionsLoading ? <p role="status">게시 설정을 불러오는 중입니다.</p> : null}
       {optionsError ? <div><p role="alert">{optionsError}</p><button className="button" type="button" onClick={onRetryOptions}>게시 설정 다시 불러오기</button></div> : null}
