@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { automaticSlotKey } from "./publishCalendarIdempotency.js";
 import { createPublishCalendarRepository } from "./publishCalendarRepository.js";
 
 type QueryResult = { rows: Array<Record<string, unknown>>; rowCount?: number };
@@ -38,6 +39,7 @@ const slotRow = (overrides: Record<string, unknown> = {}) => ({
   generation_id: null,
   generation_output_id: null,
   topic_publish_group_id: null,
+  idempotency_key: null,
   title: null,
   last_error: null,
   updated_at: "2026-08-13T00:00:00Z",
@@ -189,6 +191,95 @@ describe("publish calendar repository settings and slot validation", () => {
     const sql = run.statements.map(({ sql }) => sql);
     expect(sql.findIndex((value) => value.includes("pg_advisory_xact_lock")))
       .toBeLessThan(sql.findIndex((value) => value.includes("from brand_subscriptions subscription")));
+  });
+
+  it("stores an internal automatic key without applying customer spacing", async () => {
+    const run = harness((sql, values) => {
+      if (sql.includes("idempotency_key=$3::text")) return { rows: [], rowCount: 0 };
+      if (sql.includes("clock_timestamp()")) return { rows: [{ future: true }], rowCount: 1 };
+      if (sql.includes("from brand_channels")) return { rows: [{ channel: "instagram" }], rowCount: 1 };
+      if (sql.includes("abs(extract(epoch")) throw new Error("automatic_spacing_must_be_bypassed");
+      const subscription = activeSubscription(sql);
+      if (subscription) return subscription;
+      if (sql.includes("calendar_usage") && sql.includes("direct_publish_groups")) {
+        return { rows: [{ published_count: 0, reserved_count: 0 }], rowCount: 1 };
+      }
+      if (sql.startsWith("insert into publish_calendar_slots")) return {
+        rows: [slotRow({ idempotency_key: values[8] })],
+        rowCount: 1,
+      };
+      throw new Error(`unexpected query: ${sql}`);
+    });
+    const idempotencyKey = automaticSlotKey({ kstDate: "2099-08-15", time: "11:30", occurrence: 1 });
+
+    await expect(createPublishCalendarRepository(run.pool).createSlot({
+      ...scope,
+      scheduledFor: new Date("2099-08-15T11:30:00+09:00"),
+      assignmentMode: "automatic",
+      recommendationKind: "trend",
+      contentFormat: "reel",
+      channels: ["instagram"],
+      idempotencyKey,
+    })).resolves.toMatchObject({ idempotencyKey });
+
+    const insert = run.statements.find(({ sql }) => sql.startsWith("insert into publish_calendar_slots"));
+    expect(insert?.sql).toContain("idempotency_key");
+    expect(insert?.sql).toContain("on conflict(brand_id,idempotency_key)");
+  });
+
+  it("returns an existing automatic key before time, channel, and quota checks", async () => {
+    const idempotencyKey = automaticSlotKey({ kstDate: "2000-01-01", time: "11:30", occurrence: 0 });
+    const run = harness((sql) => {
+      if (sql.includes("idempotency_key=$3::text")) return {
+        rows: [slotRow({
+          scheduled_for: "2000-01-01T02:30:00.000Z",
+          idempotency_key: idempotencyKey,
+        })],
+        rowCount: 1,
+      };
+      throw new Error(`mutable policy must not run during replay: ${sql}`);
+    });
+
+    await expect(createPublishCalendarRepository(run.pool).createSlot({
+      ...scope,
+      scheduledFor: new Date("2000-01-01T11:30:00+09:00"),
+      assignmentMode: "automatic",
+      recommendationKind: "trend",
+      contentFormat: "reel",
+      channels: ["instagram"],
+      idempotencyKey,
+    })).resolves.toMatchObject({ idempotencyKey, scheduledFor: "2000-01-01T02:30:00.000Z" });
+
+    expect(run.statements.some(({ sql }) => sql.includes("clock_timestamp()"))).toBe(false);
+    expect(run.statements.some(({ sql }) => sql.includes("from brand_channels"))).toBe(false);
+  });
+
+  it("finds the matching legacy no-key row across every active same-time slot", async () => {
+    const matching = slotRow({
+      id: "30000000-0000-4000-8000-000000000099",
+      assignment_mode: "manual",
+      recommendation_kind: null,
+      content_format: "card_news",
+      channels: ["instagram"],
+    });
+    const run = harness((sql) => {
+      if (sql.includes("clock_timestamp()")) return { rows: [{ future: true }], rowCount: 1 };
+      if (sql.includes("from brand_channels")) return { rows: [{ channel: "instagram" }], rowCount: 1 };
+      if (sql.includes("slot.scheduled_for=$3::timestamptz") && sql.includes("order by slot.id")) {
+        return { rows: [slotRow(), matching], rowCount: 2 };
+      }
+      if (sql.includes("abs(extract(epoch")) throw new Error("legacy_exact_replay_must_precede_spacing");
+      throw new Error(`unexpected query: ${sql}`);
+    });
+
+    await expect(createPublishCalendarRepository(run.pool).createSlot({
+      ...scope,
+      scheduledFor: new Date("2099-08-15T11:30:00+09:00"),
+      assignmentMode: "manual",
+      recommendationKind: null,
+      contentFormat: "card_news",
+      channels: ["instagram"],
+    })).resolves.toMatchObject({ id: matching.id, assignmentMode: "manual" });
   });
 
   it("rechecks future time with the database clock after waiting for the brand lock", async () => {
@@ -371,10 +462,70 @@ describe("publish calendar manual provisioning catalogs", () => {
 });
 
 describe("publish calendar content-backed manual provisioning", () => {
+  it("checks a keyed replay immediately after the brand lock and before mutable policy", async () => {
+    const run = harness((sql, values) => {
+      if (sql.includes("idempotency_key=$3::text")) return { rows: [], rowCount: 0 };
+      if (sql.includes("clock_timestamp()")) return { rows: [{ future: true }], rowCount: 1 };
+      if (sql.includes("from brand_channels")) return { rows: [{ channel: "instagram" }], rowCount: 1 };
+      if (sql.includes("slot.scheduled_for=$3::timestamptz") || sql.includes("abs(extract(epoch")) {
+        return { rows: [], rowCount: 0 };
+      }
+      if (sql.includes("from ai_content_generations generation") && sql.includes("for key share")) return {
+        rows: [{
+          generation_id: "40000000-0000-4000-8000-000000000001",
+          generation_output_id: null,
+          topic_publish_group_id: null,
+          title: "사장님 SNS 콘텐츠",
+          content_format: "card_news",
+        }],
+        rowCount: 1,
+      };
+      if (sql.includes("and (slot.generation_id=$3::uuid")) return { rows: [], rowCount: 0 };
+      const subscription = activeSubscription(sql);
+      if (subscription) return subscription;
+      if (sql.includes("calendar_usage") && sql.includes("direct_publish_groups")) {
+        return { rows: [{ published_count: 0, reserved_count: 0 }], rowCount: 1 };
+      }
+      if (sql.startsWith("insert into publish_calendar_slots")) return {
+        rows: [slotRow({
+          assignment_mode: "manual",
+          status: "generation_pending",
+          recommendation_kind: null,
+          generation_id: values[5],
+          idempotency_key: values[10],
+          title: "사장님 SNS 콘텐츠",
+        })],
+        rowCount: 1,
+      };
+      throw new Error(`unexpected query: ${sql}`);
+    });
+
+    await createPublishCalendarRepository(run.pool).provisionManualSlot({
+      ...scope,
+      scheduledFor: new Date("2099-08-15T11:30:00+09:00"),
+      channel: "instagram",
+      contentFormat: "card_news",
+      idempotencyKey: "manual-order",
+      source: { kind: "existing_generation", generationId: "40000000-0000-4000-8000-000000000001" },
+    });
+
+    const sql = run.statements.map(({ sql }) => sql);
+    const lockIndex = sql.findIndex((value) => value.includes("pg_advisory_xact_lock"));
+    const replayIndex = sql.findIndex((value) => value.includes("idempotency_key=$3::text"));
+    const futureIndex = sql.findIndex((value) => value.includes("clock_timestamp()"));
+    const channelIndex = sql.findIndex((value) => value.includes("from brand_channels"));
+    const quotaIndex = sql.findIndex((value) => value.includes("from brand_subscriptions subscription"));
+    expect(lockIndex).toBeLessThan(replayIndex);
+    expect(replayIndex).toBeLessThan(futureIndex);
+    expect(replayIndex).toBeLessThan(channelIndex);
+    expect(replayIndex).toBeLessThan(quotaIndex);
+  });
+
   it("prepares a completed output only after its calendar slot commits", async () => {
     const outputId = "40000000-0000-4000-8000-000000000002";
     const generationId = "40000000-0000-4000-8000-000000000001";
     const run = harness((sql) => {
+      if (sql.includes("idempotency_key=$3::text")) return { rows: [], rowCount: 0 };
       if (sql.includes("clock_timestamp()")) return { rows: [{ future: true }], rowCount: 1 };
       if (sql.includes("from brand_channels")) return { rows: [{ channel: "instagram" }], rowCount: 1 };
       if (sql.includes("slot.scheduled_for=$3::timestamptz") || sql.includes("abs(extract(epoch")) {
@@ -450,8 +601,86 @@ describe("publish calendar content-backed manual provisioning", () => {
     });
   });
 
+  it("retries completed-output preparation when a durable manual slot is replayed", async () => {
+    const generationId = "30000000-0000-4000-8000-000000000011";
+    const outputId = "40000000-0000-4000-8000-000000000011";
+    const existing = slotRow({
+      assignment_mode: "manual",
+      status: "generation_pending",
+      recommendation_kind: null,
+      generation_id: generationId,
+      generation_output_id: outputId,
+      content_format: "card_news",
+      channels: ["instagram"],
+      scheduled_for: "2099-08-15T02:30:00.000Z",
+      idempotency_key: `manual:v1:${"a".repeat(64)}`,
+      title: "완료된 카드뉴스",
+    });
+    const run = harness((sql) => {
+      if (sql.includes("idempotency_key=$3::text")) return { rows: [existing], rowCount: 1 };
+      if (sql.includes("where slot.workspace_id=$1::uuid and slot.brand_id=$2::uuid and slot.id=$3::uuid")) {
+        return { rows: [existing], rowCount: 1 };
+      }
+      throw new Error(`unexpected query: ${sql}`);
+    });
+    const afterManualSlotProvisioned = vi.fn(async () => undefined);
+    const repository = createPublishCalendarRepository(run.pool, { afterManualSlotProvisioned });
+
+    await repository.provisionManualSlot({
+      ...scope,
+      scheduledFor: new Date("2099-08-15T11:30:00+09:00"),
+      channel: "instagram",
+      contentFormat: "card_news",
+      idempotencyKey: "completed-output-retry",
+      source: { kind: "existing_output", generationOutputId: outputId },
+    });
+
+    expect(afterManualSlotProvisioned).toHaveBeenCalledOnce();
+  });
+
+  it("retries completed-output preparation for replayed rows in a durable batch", async () => {
+    const generationId = "30000000-0000-4000-8000-000000000012";
+    const outputId = "40000000-0000-4000-8000-000000000012";
+    const existing = slotRow({
+      assignment_mode: "manual",
+      status: "generation_pending",
+      recommendation_kind: null,
+      generation_id: generationId,
+      generation_output_id: outputId,
+      content_format: "card_news",
+      channels: ["instagram"],
+      scheduled_for: "2099-08-15T03:00:00.000Z",
+      idempotency_key: `batch:v1:${"b".repeat(64)}`,
+      title: "완료된 카드뉴스",
+    });
+    const run = harness((sql) => {
+      if (sql.includes("idempotency_key=$3::text")) return { rows: [existing], rowCount: 1 };
+      if (sql.includes("where slot.workspace_id=$1::uuid and slot.brand_id=$2::uuid and slot.id=$3::uuid")) {
+        return { rows: [existing], rowCount: 1 };
+      }
+      throw new Error(`unexpected query: ${sql}`);
+    });
+    const afterManualSlotProvisioned = vi.fn(async () => undefined);
+    const repository = createPublishCalendarRepository(run.pool, { afterManualSlotProvisioned });
+
+    await repository.provisionManualSlotsBatch({
+      ...scope,
+      idempotencyKey: "completed-output-batch-retry",
+      rows: [{
+        clientRowId: "row-1",
+        scheduledFor: new Date("2099-08-15T12:00:00+09:00"),
+        channel: "instagram",
+        contentFormat: "card_news",
+        source: { kind: "existing_output", generationOutputId: outputId },
+      }],
+    });
+
+    expect(afterManualSlotProvisioned).toHaveBeenCalledOnce();
+  });
+
   it("fails closed when a completed output already has any publish queue", async () => {
     const run = harness((sql) => {
+      if (sql.includes("idempotency_key=$3::text")) return { rows: [], rowCount: 0 };
       if (sql.includes("clock_timestamp()")) return { rows: [{ future: true }], rowCount: 1 };
       if (sql.includes("from brand_channels")) return { rows: [{ channel: "instagram" }], rowCount: 1 };
       if (sql.includes("slot.scheduled_for=$3::timestamptz") || sql.includes("abs(extract(epoch")) return { rows: [], rowCount: 0 };
@@ -476,6 +705,9 @@ describe("publish calendar content-backed manual provisioning", () => {
     const run = harness((sql) => {
       if (sql.includes("clock_timestamp()")) return { rows: [{ future: true }], rowCount: 1 };
       if (sql.includes("from brand_channels")) return { rows: [{ channel: "instagram" }], rowCount: 1 };
+      if (sql.includes("slot.scheduled_for=$3::timestamptz") && sql.includes("order by slot.id")) {
+        return { rows: [], rowCount: 0 };
+      }
       if (sql.includes("abs(extract(epoch")) return { rows: [{ id: "near-slot" }], rowCount: 1 };
       const subscription = activeSubscription(sql);
       if (subscription) return subscription;
@@ -504,6 +736,7 @@ describe("publish calendar content-backed manual provisioning", () => {
 
   it("creates a generation-backed slot without ever inserting an open slot", async () => {
     const run = harness((sql) => {
+      if (sql.includes("idempotency_key=$3::text")) return { rows: [], rowCount: 0 };
       if (sql.includes("clock_timestamp()")) return { rows: [{ future: true }], rowCount: 1 };
       if (sql.includes("from brand_channels")) return { rows: [{ channel: "instagram" }], rowCount: 1 };
       if (sql.includes("abs(extract(epoch")) return { rows: [], rowCount: 0 };
@@ -558,14 +791,16 @@ describe("publish calendar content-backed manual provisioning", () => {
     })).resolves.toMatchObject({ status: "generation_pending", generationId: "40000000-0000-4000-8000-000000000001" });
 
     const insert = run.statements.find(({ sql }) => sql.startsWith("insert into publish_calendar_slots"));
-    expect(insert?.sql).toContain("'manual',$11,null");
-    expect(insert?.values[10]).toBe("generation_pending");
+    expect(insert?.sql).toContain("'manual',$12,null");
+    expect(insert?.values[9]).toMatch(/^manual:v1:[0-9a-f]{64}$/);
+    expect(insert?.values[11]).toBe("generation_pending");
     expect(insert?.sql).not.toContain("'open'");
   });
 
   it("creates a 30-minute-spaced batch in one transaction and one brand lock", async () => {
     let inserts = 0;
     const run = harness((sql, values) => {
+      if (sql.includes("idempotency_key=$3::text")) return { rows: [], rowCount: 0 };
       if (sql.includes("clock_timestamp()")) return { rows: [{ future: true }], rowCount: 1 };
       if (sql.includes("from brand_channels")) return { rows: [{ channel: "instagram" }], rowCount: 1 };
       if (sql.includes("slot.scheduled_for=$3::timestamptz")) return { rows: [], rowCount: 0 };
@@ -976,7 +1211,12 @@ describe("publish calendar usage and subscription renewal", () => {
 
     expect(usage.publishing).toMatchObject({ succeeded: 2, reserved: 1, remaining: 1, additionalAvailable: 0 });
     const directSql = run.statements.find(({ sql }) => sql.includes("direct_publish_groups"))?.sql ?? "";
-    expect(directSql).toContain("group by queue.topic_publish_group_id");
+    expect(directSql).toContain("'ai-output:' || output.ai_content_generation_output_id::text");
+    expect(directSql).toContain("'topic:' || output.content_topic_id::text");
+    expect(directSql).toContain("'group:' || queue.topic_publish_group_id::text");
+    expect(directSql).toContain("'channel-output:' || output.id::text");
+    expect(directSql).toContain("'queue:' || queue.id::text");
+    expect(directSql).toContain("group by publication_unit_key");
     expect(directSql).toContain("bool_or(queue.status='published')");
     expect(directSql).toContain("not exists ( select 1 from publish_calendar_slots linked_slot");
     expect(directSql).toContain("linked_slot.status<>'cancelled'");

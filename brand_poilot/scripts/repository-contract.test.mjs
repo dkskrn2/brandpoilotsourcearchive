@@ -299,7 +299,7 @@ test("API 패키지는 타입 검사와 tsup 빌드 및 배포 시작 명령을 
   assert.equal(packageJson.scripts.start, "node dist/index.js");
 });
 
-test("데이터베이스 마이그레이션 registry는 게시 캘린더 079부터 usage reversal 권한 보정 084까지 순서대로 포함한다", async () => {
+test("데이터베이스 마이그레이션 registry는 게시 캘린더 079부터 usage reversal 권한 보정 084와 idempotency 확장 085까지 순서대로 포함한다", async () => {
   const migrationFiles = (await readdir("db/migrations"))
     .filter((file) => file.endsWith(".sql"))
     .sort();
@@ -391,6 +391,7 @@ test("데이터베이스 마이그레이션 registry는 게시 캘린더 079부�
     "082_manual_brand_visual_assets.sql",
     "083_manual_visual_selection_write_fence_invoker.sql",
     "084_ai_content_usage_reversal_identity_invoker.sql",
+    "085_publish_calendar_idempotency_expand.sql",
   ]);
   assert.ok(reservedProgramMigrations.filter((file) => file.startsWith("059_")).length <= 1);
   assert.ok(reservedProgramMigrations.filter((file) => file.startsWith("060_")).length <= 1);

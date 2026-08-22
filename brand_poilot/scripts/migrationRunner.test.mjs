@@ -4611,6 +4611,7 @@ test("an installation applied through 064 has every later migration pending", as
       "082_manual_brand_visual_assets.sql",
       "083_manual_visual_selection_write_fence_invoker.sql",
       "084_ai_content_usage_reversal_identity_invoker.sql",
+      "085_publish_calendar_idempotency_expand.sql",
     ],
   );
 });
@@ -4657,6 +4658,21 @@ test("reference archive schema migrations follow the current production schema c
   assert.equal(migrationRunner.validatePost075SchemaMigration(loaded[metaAdIndex]), true);
 });
 
+test("publish calendar idempotency expansion follows operating migration 084 deterministically", async () => {
+  const loaded = await migrationRunner.loadMigrations();
+  const ids = loaded.map(({ id }) => id);
+  const migration085Index = ids.indexOf("085_publish_calendar_idempotency_expand.sql");
+
+  assert.equal(
+    migration085Index,
+    ids.indexOf("084_ai_content_usage_reversal_identity_invoker.sql") + 1,
+  );
+  assert.match(
+    migrationRunner.post075SchemaMigrationChecksums["085_publish_calendar_idempotency_expand.sql"],
+    /^[0-9a-f]{64}$/,
+  );
+});
+
 const post076SchemaMigrationIdsForTests = [
   "077_content_suggestion_batches.sql",
   "078_faq_utterance_matching.sql",
@@ -4666,6 +4682,7 @@ const post076SchemaMigrationIdsForTests = [
   "082_manual_brand_visual_assets.sql",
   "083_manual_visual_selection_write_fence_invoker.sql",
   "084_ai_content_usage_reversal_identity_invoker.sql",
+  "085_publish_calendar_idempotency_expand.sql",
 ];
 
 test("post-075 data migrations are a closed DML-only contract", async () => {

@@ -4,7 +4,7 @@ import test from "node:test";
 import { Client } from "pg";
 import * as migrationRunner from "./migrationRunner.mjs";
 
-test("post-cutover schemas 077 through 084 are an ordered sealed schema plan", async () => {
+test("post-cutover schemas 077 through 085 are an ordered sealed schema plan", async () => {
   const migrations = await migrationRunner.loadMigrations();
   const migration077 = migrations.find(({ id }) => id === "077_content_suggestion_batches.sql");
   const migration078 = migrations.find(({ id }) => id === "078_faq_utterance_matching.sql");
@@ -14,6 +14,7 @@ test("post-cutover schemas 077 through 084 are an ordered sealed schema plan", a
   const migration082 = migrations.find(({ id }) => id === "082_manual_brand_visual_assets.sql");
   const migration083 = migrations.find(({ id }) => id === "083_manual_visual_selection_write_fence_invoker.sql");
   const migration084 = migrations.find(({ id }) => id === "084_ai_content_usage_reversal_identity_invoker.sql");
+  const migration085 = migrations.find(({ id }) => id === "085_publish_calendar_idempotency_expand.sql");
   assert.ok(migration077);
   assert.ok(migration078);
   assert.ok(migration079);
@@ -22,6 +23,7 @@ test("post-cutover schemas 077 through 084 are an ordered sealed schema plan", a
   assert.ok(migration082);
   assert.ok(migration083);
   assert.ok(migration084);
+  assert.ok(migration085);
   assert.equal(migrationRunner.validatePost075SchemaMigration(migration077), true);
   assert.equal(migrationRunner.validatePost075SchemaMigration(migration078), true);
   assert.equal(migrationRunner.validatePost075SchemaMigration(migration079), true);
@@ -30,8 +32,9 @@ test("post-cutover schemas 077 through 084 are an ordered sealed schema plan", a
   assert.equal(migrationRunner.validatePost075SchemaMigration(migration082), true);
   assert.equal(migrationRunner.validatePost075SchemaMigration(migration083), true);
   assert.equal(migrationRunner.validatePost075SchemaMigration(migration084), true);
+  assert.equal(migrationRunner.validatePost075SchemaMigration(migration085), true);
 
-  const pendingMigrations = [migration077, migration078, migration079, migration080, migration081, migration082, migration083, migration084];
+  const pendingMigrations = [migration077, migration078, migration079, migration080, migration081, migration082, migration083, migration084, migration085];
 
   const history = migrations
     .filter(({ id }) => !pendingMigrations.some((migration) => migration.id === id))
@@ -131,6 +134,7 @@ test("content suggestion schema runner accepts the exact managed provider sessio
   const migration082 = migrations.find(({ id }) => id === "082_manual_brand_visual_assets.sql");
   const migration083 = migrations.find(({ id }) => id === "083_manual_visual_selection_write_fence_invoker.sql");
   const migration084 = migrations.find(({ id }) => id === "084_ai_content_usage_reversal_identity_invoker.sql");
+  const migration085 = migrations.find(({ id }) => id === "085_publish_calendar_idempotency_expand.sql");
   assert.ok(migration077);
   assert.ok(migration078);
   assert.ok(migration079);
@@ -139,7 +143,8 @@ test("content suggestion schema runner accepts the exact managed provider sessio
   assert.ok(migration082);
   assert.ok(migration083);
   assert.ok(migration084);
-  const pendingMigrations = [migration077, migration078, migration079, migration080, migration081, migration082, migration083, migration084];
+  assert.ok(migration085);
+  const pendingMigrations = [migration077, migration078, migration079, migration080, migration081, migration082, migration083, migration084, migration085];
   const history = migrations
     .filter(({ id }) => !pendingMigrations.some((migration) => migration.id === id))
     .map(({ id, checksum }) => ({ id, checksum }));
@@ -226,9 +231,12 @@ test("content suggestion schema runner accepts the exact managed provider sessio
           public_calendar_settings_privilege: false,
           public_calendar_slot_privilege: false,
           runtime_columns_valid: true,
+          idempotency_column_valid: true,
           enabled_default_false: true,
           constraint_catalog_valid: true,
+          idempotency_constraint_valid: true,
           index_catalog_valid: true,
+          idempotency_index_catalog_valid: true,
           trigger_catalog_valid: true,
           write_fence_row_count: 4,
           function_owner_count: 2,
@@ -313,6 +321,9 @@ test("content suggestion schema runner accepts the exact managed provider sessio
   const calendarCatalogSql = calls.find(({ sql }) => sql.includes("publish_calendar_schema_catalog_v1"))?.sql ?? "";
   for (const marker of [
     "publish_calendar_settings", "publish_calendar_slots", "enabled_default_false",
+    "idempotency_key", "publish_calendar_slots_idempotency_key_check",
+    "publish_calendar_slots_brand_idempotency_unique", "publish_calendar_slots_generation_output_unique",
+    "idempotency_column_valid", "idempotency_constraint_valid", "idempotency_index_catalog_valid",
     "expected_constraint", "constraint_catalog_valid", "pg_get_constraintdef",
     "expected_index", "index_catalog_valid", "pg_get_indexdef",
     "expected_trigger", "trigger_catalog_valid", "pg_get_triggerdef",
@@ -320,6 +331,148 @@ test("content suggestion schema runner accepts the exact managed provider sessio
     "billing_plan_count",
   ]) assert.match(calendarCatalogSql, new RegExp(marker));
   assert.doesNotMatch(calendarCatalogSql, /required_(?:constraint|index|trigger)_count/);
+});
+
+test("publish calendar catalog verification rejects 085 idempotency schema drift", async () => {
+  const migrations = await migrationRunner.loadMigrations();
+  const client = {
+    async query(sql) {
+      const normalized = sql.replace(/\s+/g, " ").trim();
+      if (normalized === "select id, checksum from public.schema_migrations order by id asc") {
+        return { rows: migrations.map(({ id, checksum }) => ({ id, checksum })) };
+      }
+      if (normalized.includes("post_075_schema_provider_session_v1")) {
+        return { rows: [{
+          session_user_name: "postgres",
+          current_user_name: "postgres",
+          event_trigger_name: "ai_content_ddl_guard_074",
+          event_trigger_enabled: "O",
+          event_trigger_owner: "postgres",
+          schema_owner_role_name: "content_schema_owner",
+          application_role_name: "content_app",
+        }] };
+      }
+      if (normalized.includes("post_075_schema_catalog_v1")) {
+        return { rows: [{
+          guard_enabled: "O",
+          batch_owner: "content_schema_owner",
+          suggestion_owner: "content_schema_owner",
+          app_batch_select: true,
+          app_batch_insert: true,
+          app_batch_update: true,
+          app_batch_delete: true,
+          app_suggestion_select: true,
+          app_suggestion_insert: true,
+          app_suggestion_update: true,
+          app_suggestion_delete: true,
+          public_batch_privilege: false,
+          public_suggestion_privilege: false,
+        }] };
+      }
+      if (normalized.includes("faq_utterance_schema_catalog_v1")) {
+        return { rows: [{
+          manual_aliases_valid: true,
+          example_utterances_valid: true,
+          suggestion_run_columns_valid: true,
+          alias_result_table_valid: true,
+          confirmation_table_valid: true,
+          index_definition_count: 4,
+          trigger_count: 1,
+          reason_constraint_definition_count: 2,
+          named_constraint_definition_count: 20,
+          missing_named_constraints: [],
+          faq_count_constraint_definition_count: 3,
+          owner_count: 1,
+          owned_relation_count: 2,
+          public_privilege_count: 0,
+          application_privilege_count: 8,
+        }] };
+      }
+      if (normalized.includes("publish_calendar_schema_catalog_v1")) {
+        return { rows: [{
+          billing_plan_owner: "content_schema_owner",
+          brand_subscription_owner: "content_schema_owner",
+          calendar_settings_owner: "content_schema_owner",
+          calendar_slot_owner: "content_schema_owner",
+          app_billing_plan_select: true,
+          app_billing_plan_insert: true,
+          app_billing_plan_update: true,
+          app_billing_plan_delete: false,
+          app_brand_subscription_select: true,
+          app_brand_subscription_insert: true,
+          app_brand_subscription_update: true,
+          app_brand_subscription_delete: false,
+          app_calendar_settings_select: true,
+          app_calendar_settings_insert: true,
+          app_calendar_settings_update: true,
+          app_calendar_settings_delete: false,
+          app_calendar_slot_select: true,
+          app_calendar_slot_insert: true,
+          app_calendar_slot_update: true,
+          app_calendar_slot_delete: false,
+          public_billing_plan_privilege: false,
+          public_brand_subscription_privilege: false,
+          public_calendar_settings_privilege: false,
+          public_calendar_slot_privilege: false,
+          runtime_columns_valid: true,
+          idempotency_column_valid: false,
+          enabled_default_false: true,
+          constraint_catalog_valid: true,
+          idempotency_constraint_valid: false,
+          index_catalog_valid: true,
+          idempotency_index_catalog_valid: false,
+          trigger_catalog_valid: true,
+          write_fence_row_count: 4,
+          function_owner_count: 2,
+          application_function_execute_count: 2,
+          public_function_execute_count: 0,
+          billing_plan_count: 0,
+        }] };
+      }
+      if (normalized.includes("post_075_manual_visual_assets_catalog_v1")) {
+        return { rows: [{
+          guard_enabled: "O",
+          preset_owner: "content_schema_owner",
+          preset_reference_owner: "content_schema_owner",
+          selection_owner: "content_schema_owner",
+          app_preset_select: true,
+          app_preset_insert: true,
+          app_preset_update: true,
+          app_preset_delete: true,
+          app_reference_select: true,
+          app_reference_insert: true,
+          app_reference_update: true,
+          app_reference_delete: true,
+          app_selection_select: true,
+          app_selection_insert: true,
+          app_selection_update: true,
+          app_product_asset_select: true,
+          app_product_asset_insert: true,
+          app_product_asset_delete: true,
+          app_product_asset_role_update: true,
+          app_product_asset_position_update: true,
+          app_product_asset_storage_update: false,
+          app_writable_assert_execute: true,
+          selection_fence_enabled: "A",
+          selection_fence_security_definer: false,
+          selection_fence_owner: "content_schema_owner",
+          public_preset_privilege: false,
+          public_reference_privilege: false,
+          public_selection_privilege: false,
+        }] };
+      }
+      return { rows: [] };
+    },
+  };
+
+  await assert.rejects(
+    migrationRunner.runPost075SchemaMigrationsWithClient({
+      client,
+      migrations,
+      expectedProviderRoleName: "postgres",
+    }),
+    /post_075_schema_catalog_invalid/,
+  );
 });
 
 test("content suggestion schema runner rejects a non-normal DDL guard before mutation", async () => {
@@ -332,6 +485,7 @@ test("content suggestion schema runner rejects a non-normal DDL guard before mut
   const migration082 = migrations.find(({ id }) => id === "082_manual_brand_visual_assets.sql");
   const migration083 = migrations.find(({ id }) => id === "083_manual_visual_selection_write_fence_invoker.sql");
   const migration084 = migrations.find(({ id }) => id === "084_ai_content_usage_reversal_identity_invoker.sql");
+  const migration085 = migrations.find(({ id }) => id === "085_publish_calendar_idempotency_expand.sql");
   assert.ok(migration077);
   assert.ok(migration078);
   assert.ok(migration079);
@@ -340,7 +494,8 @@ test("content suggestion schema runner rejects a non-normal DDL guard before mut
   assert.ok(migration082);
   assert.ok(migration083);
   assert.ok(migration084);
-  const pendingMigrations = [migration077, migration078, migration079, migration080, migration081, migration082, migration083, migration084];
+  assert.ok(migration085);
+  const pendingMigrations = [migration077, migration078, migration079, migration080, migration081, migration082, migration083, migration084, migration085];
   const history = migrations
     .filter(({ id }) => !pendingMigrations.some((migration) => migration.id === id))
     .map(({ id, checksum }) => ({ id, checksum }));
@@ -379,7 +534,7 @@ test("content suggestion schema runner rejects a non-normal DDL guard before mut
   assert.equal(calls.includes("begin"), false);
 });
 
-test("ordered 077 through 084 schemas apply and replay against PostgreSQL 16", {
+test("ordered 077 through 085 schemas apply and replay against PostgreSQL 16", {
   skip: process.env.RUN_FAQ_SCHEMA_POSTGRES_INTEGRATION !== "1",
   timeout: 300_000,
 }, async () => {
@@ -451,6 +606,7 @@ test("ordered 077 through 084 schemas apply and replay against PostgreSQL 16", {
       "082_manual_brand_visual_assets.sql",
       "083_manual_visual_selection_write_fence_invoker.sql",
       "084_ai_content_usage_reversal_identity_invoker.sql",
+      "085_publish_calendar_idempotency_expand.sql",
     ]);
     const topicScope = await client.query(
       `select relation.relname as relation_name,constraint_row.conname,

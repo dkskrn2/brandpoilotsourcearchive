@@ -1,4 +1,5 @@
 import type { Pool } from "pg";
+import { automaticSlotKey } from "./publishCalendarIdempotency.js";
 import type { PublishCalendarRepository } from "./publishCalendarRepository.js";
 import type { PublishCalendarSettingsDto } from "./types.js";
 
@@ -50,6 +51,15 @@ function slotKey(value: Date | string): string {
   return new Date(value).toISOString();
 }
 
+function kstDateKey(value: Date): string {
+  const shifted = new Date(value.getTime() + KST_OFFSET_MILLISECONDS);
+  return [
+    shifted.getUTCFullYear(),
+    String(shifted.getUTCMonth() + 1).padStart(2, "0"),
+    String(shifted.getUTCDate()).padStart(2, "0"),
+  ].join("-");
+}
+
 export function createPublishCalendarAllocator(dependencies: PublishCalendarAllocatorDependencies) {
   async function allocateBrand(brand: AutomaticCalendarBrand, now = new Date()) {
     if (!brand.settings.enabled || brand.settings.channels.length === 0) {
@@ -63,15 +73,29 @@ export function createPublishCalendarAllocator(dependencies: PublishCalendarAllo
       startsAt,
       endsAt,
     });
-    const existing = new Set(slots.map(({ scheduledFor }) => slotKey(scheduledFor)));
+    const existingKeys = new Set(slots.flatMap(({ idempotencyKey }) => (
+      idempotencyKey ? [idempotencyKey] : []
+    )));
+    const legacyTimestamps = new Set(slots.flatMap(({ idempotencyKey, scheduledFor }) => (
+      idempotencyKey ? [] : [slotKey(scheduledFor)]
+    )));
     let openSlotsCreated = 0;
     let sequence = 0;
     for (let day = 0; day < 7; day += 1) {
+      const occurrenceByTime = new Map<string, number>();
       for (const value of [...brand.settings.slotTimes].sort()) {
         const scheduledFor = scheduledInstant(startsAt, day, value);
+        const occurrence = occurrenceByTime.get(value) ?? 0;
+        occurrenceByTime.set(value, occurrence + 1);
+        const idempotencyKey = automaticSlotKey({
+          kstDate: kstDateKey(scheduledFor),
+          time: value,
+          occurrence,
+        });
         const recommendationKind = sequence % 2 === 0 ? "informational" : "trend";
         sequence += 1;
-        if (scheduledFor <= now || existing.has(slotKey(scheduledFor))) continue;
+        if (scheduledFor <= now || existingKeys.has(idempotencyKey)) continue;
+        if (occurrence === 0 && legacyTimestamps.delete(slotKey(scheduledFor))) continue;
         const created = await dependencies.createSlot({
           workspaceId: brand.workspaceId,
           brandId: brand.brandId,
@@ -82,9 +106,10 @@ export function createPublishCalendarAllocator(dependencies: PublishCalendarAllo
             ? brand.settings.trendFormat
             : brand.settings.informationalFormat,
           channels: brand.settings.channels,
+          idempotencyKey,
         });
         slots.push(created);
-        existing.add(slotKey(scheduledFor));
+        existingKeys.add(idempotencyKey);
         openSlotsCreated += 1;
       }
     }

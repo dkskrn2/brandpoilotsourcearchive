@@ -628,6 +628,7 @@ export interface PublishCalendarSlotDto {
   generationId: string | null;
   generationOutputId: string | null;
   topicPublishGroupId: string | null;
+  idempotencyKey: string | null;
   title: string | null;
   lastError: string | null;
   updatedAt: string;

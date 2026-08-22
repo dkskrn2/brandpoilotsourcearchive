@@ -226,6 +226,14 @@ npm run db:migrate -- --dry-run
 
 이 흐름에서 DB migration은 forward-only입니다. image rollback은 schema를 되돌리지 않으므로 기존 image와 호환되는 확장형 migration만 허용합니다. 파괴적 변경이나 기존 image와 호환되지 않는 migration은 별도 expand/migrate/contract 계획과 복구 리허설 없이는 배포하지 않습니다.
 
+### 게시관리 동일 데이터 전환의 2단계 릴리스
+
+- Release A는 운영의 `084_ai_content_usage_reversal_identity_invoker.sql`을 그대로 보존하고, `085_publish_calendar_idempotency_expand.sql`과 호환 API만 포함하는 별도 PR·승격입니다. 085는 트랜잭션 범위의 5초 lock timeout·60초 statement timeout 아래 nullable idempotency 컬럼, CHECK 제약과 unique index를 추가하며 기존 시간·generation index는 제거하지 않습니다.
+- Release A가 운영 DB와 전체 API 컨테이너에 승격되고 keyed/no-key 호출 관측을 마치기 전에는 `086_publish_calendar_same_time_contract.sql`을 pending 상태로 만들거나 Release B를 배포하지 않습니다.
+- Release B는 085와 공통 게시 항목 API/UI를 포함하는 별도 PR·승격입니다. same-time 허용 및 고객 30분 제한 제거는 이 단계에서만 활성화합니다.
+- Release B 롤백 이미지는 Release A의 검증된 API digest로 고정합니다. 085 적용 후 schema 자체는 되돌리지 않으며, Release A API가 085 이후 중복·근접 자동 슬롯과 기존 no-key 요청을 모두 처리할 수 있음을 먼저 검증합니다.
+- Release A 관측에는 기존 `/publish-calendar/slots` no-key 요청 body가 `scheduledFor`, `contentFormat`, `channels` 세 필드 그대로인지와 실제 호출량을 포함합니다.
+
 ## 5. 현재 자동화 의존성
 
 2026-07-28 기준으로 아래 항목은 아직 자동화되지 않았습니다.

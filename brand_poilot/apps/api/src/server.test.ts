@@ -145,6 +145,7 @@ function createRepository(): ApiRepository {
       generationId: null,
       generationOutputId: null,
       topicPublishGroupId: null,
+      idempotencyKey: null,
       title: null,
       lastError: null,
       updatedAt: "2026-08-14T00:00:00.000Z",
@@ -3100,6 +3101,31 @@ describe("API server", () => {
     expect(repository.createSlot).not.toHaveBeenCalled();
   });
 
+  it("keeps the legacy no-key calendar slot request body unchanged", async () => {
+    vi.stubEnv("BRAND_PILOT_DEV_WORKSPACE_ID", "22222222-2222-4222-8222-222222222222");
+    vi.stubEnv("BRAND_PILOT_DEV_USER_ID", "33333333-3333-4333-8333-333333333333");
+    const repository = createRepository();
+    const app = createServer({ repository, logger: false });
+    const capturedBody = {
+      scheduledFor: "2099-08-15T02:30:00.000Z",
+      contentFormat: "card_news",
+      channels: ["instagram"],
+    };
+
+    const response = await app.inject({
+      method: "POST",
+      url: `/brands/${brandId}/publish-calendar/slots`,
+      payload: capturedBody,
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(Object.keys(capturedBody).sort()).toEqual(["channels", "contentFormat", "scheduledFor"]);
+    expect(repository.createSlot).toHaveBeenCalledWith(expect.objectContaining({
+      assignmentMode: "manual",
+      recommendationKind: null,
+    }));
+  });
+
   it("returns brand-scoped authoritative manual calendar options", async () => {
     vi.stubEnv("BRAND_PILOT_DEV_WORKSPACE_ID", "22222222-2222-4222-8222-222222222222");
     const repository = createRepository();
@@ -3190,6 +3216,7 @@ describe("API server", () => {
       generationId: input.source.kind === "existing_generation" ? input.source.generationId : "generation-1",
       generationOutputId: input.source.kind === "existing_output" ? input.source.generationOutputId : null,
       topicPublishGroupId: null,
+      idempotencyKey: "manual:v1:test",
       title: "SNS 마케팅 콘텐츠",
       lastError: null,
       updatedAt: "2026-08-16T00:00:00.000Z",

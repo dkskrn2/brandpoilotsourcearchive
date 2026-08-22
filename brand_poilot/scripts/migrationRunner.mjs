@@ -101,6 +101,7 @@ export const fullSourceMigrationIds = Object.freeze([
   "082_manual_brand_visual_assets.sql",
   "083_manual_visual_selection_write_fence_invoker.sql",
   "084_ai_content_usage_reversal_identity_invoker.sql",
+  "085_publish_calendar_idempotency_expand.sql",
 ]);
 const legacyTriggerSearchPathMigrationId = "073a_legacy_trigger_function_search_path.sql";
 export const legacyTriggerSearchPathMigrationChecksum =
@@ -122,6 +123,7 @@ const post075SchemaMigrationIds = Object.freeze([
   "082_manual_brand_visual_assets.sql",
   "083_manual_visual_selection_write_fence_invoker.sql",
   "084_ai_content_usage_reversal_identity_invoker.sql",
+  "085_publish_calendar_idempotency_expand.sql",
 ]);
 export const post075SchemaMigrationChecksums = Object.freeze({
   "077_content_suggestion_batches.sql": "3b178464c5ae5c4e220428e0752ab3e79a2ca06b5b2b23f1e89c34e983e63f76",
@@ -132,6 +134,7 @@ export const post075SchemaMigrationChecksums = Object.freeze({
   "082_manual_brand_visual_assets.sql": "9285dbc36d5dc17d33c0d53545e69bc3deb800679ef2409d2727e83dc5230b1e",
   "083_manual_visual_selection_write_fence_invoker.sql": "d2a788802e460ab1815f4e859616dc0e9a702f6cb45d0f6578b7fba4a6a74296",
   "084_ai_content_usage_reversal_identity_invoker.sql": "31938a77b6b2b278b608e32de48cc463ceda24b7c96622b0662aacc3c0978f12",
+  "085_publish_calendar_idempotency_expand.sql": "1601035eee057da39cac63c6e9a187fcd3331d590414005d2971a943306d22de",
 });
 const post075DeferredMigrationIds = Object.freeze([
   ...post075DataMigrationIds,
@@ -4444,7 +4447,8 @@ async function verifyPublishCalendarSchemaCatalog(client, {
        ('publish_calendar_slots','scheduled_for'),('publish_calendar_slots','assignment_mode'),
        ('publish_calendar_slots','status'),('publish_calendar_slots','content_suggestion_id'),
        ('publish_calendar_slots','proposal_id'),('publish_calendar_slots','generation_id'),
-       ('publish_calendar_slots','generation_output_id'),('publish_calendar_slots','topic_publish_group_id')
+       ('publish_calendar_slots','generation_output_id'),('publish_calendar_slots','topic_publish_group_id'),
+       ('publish_calendar_slots','idempotency_key')
      ), expected_constraint(relation_name,constraint_name,constraint_type,definition_fragments) as (values
        ('billing_plan_catalog','billing_plan_catalog_code_check','c',array['check','code','^[a-z][a-z0-9_]{1,31}$']::text[]),
        ('billing_plan_catalog','billing_plan_catalog_name_check','c',array['check','length','trim','>= 1','<= 100']::text[]),
@@ -4467,6 +4471,7 @@ async function verifyPublishCalendarSchemaCatalog(client, {
        ('publish_calendar_slots','publish_calendar_slots_open_assignment_check','c',array['check','status','open','content_suggestion_id','topic_publish_group_id']::text[]),
        ('publish_calendar_slots','publish_calendar_slots_proposal_assignment_check','c',array['check','proposal_assigned','content_suggestion_id','proposal_id']::text[]),
        ('publish_calendar_slots','publish_calendar_slots_manual_recommendation_check','c',array['check','assignment_mode','manual','recommendation_kind']::text[]),
+       ('publish_calendar_slots','publish_calendar_slots_idempotency_key_check','c',array['check','idempotency_key','is null','char_length','>= 1','<= 200','btrim']::text[]),
        ('publish_calendar_slots','publish_calendar_slots_topic_publish_group_scope_fk','f',array['foreign key','topic_publish_group_id','workspace_id','brand_id','references topic_publish_groups','on delete restrict']::text[])
      ), expected_index(relation_name,index_name,is_unique,key_columns,predicate_fragments) as (values
        ('brand_subscriptions','brand_subscriptions_due_renewal_idx',false,array['current_period_end']::text[],array['status','active','cancel_scheduled']::text[]),
@@ -4476,8 +4481,14 @@ async function verifyPublishCalendarSchemaCatalog(client, {
        ('publish_calendar_slots','publish_calendar_slots_proposal_unique',true,array['proposal_id']::text[],array['proposal_id is not null','status','cancelled']::text[]),
        ('publish_calendar_slots','publish_calendar_slots_content_suggestion_unique',true,array['brand_id','content_suggestion_id']::text[],array['content_suggestion_id is not null','status','cancelled']::text[]),
        ('publish_calendar_slots','publish_calendar_slots_generation_unique',true,array['brand_id','generation_id']::text[],array['generation_id is not null','status','cancelled']::text[]),
+       ('publish_calendar_slots','publish_calendar_slots_brand_idempotency_unique',true,array['brand_id','idempotency_key']::text[],array['idempotency_key is not null']::text[]),
+       ('publish_calendar_slots','publish_calendar_slots_generation_output_unique',true,array['brand_id','generation_output_id']::text[],array['generation_output_id is not null','status','cancelled']::text[]),
        ('publish_calendar_slots','publish_calendar_slots_publish_group_unique',true,array['brand_id','topic_publish_group_id']::text[],array['topic_publish_group_id is not null','status','cancelled']::text[]),
        ('publish_calendar_slots','publish_calendar_slots_active_reservation_idx',false,array['brand_id','scheduled_for']::text[],array['status','proposal_assigned','quota_blocked']::text[])
+     ), expected_idempotency_index(index_name,key_columns,predicate_expression) as (values
+       ('publish_calendar_slots_brand_idempotency_unique',array['brand_id','idempotency_key']::text[],'idempotency_keyisnotnull'),
+       ('publish_calendar_slots_generation_output_unique',array['brand_id','generation_output_id']::text[],
+        'generation_output_idisnotnullandstatus<>''cancelled''::text')
      ), expected_trigger(relation_name,trigger_name,definition_fragments) as (values
        ('billing_plan_catalog','billing_plan_catalog_set_updated_at',array['before update','execute function set_updated_at()']::text[]),
        ('brand_subscriptions','brand_subscriptions_set_updated_at',array['before update','execute function set_updated_at()']::text[]),
@@ -4537,6 +4548,14 @@ async function verifyPublishCalendarSchemaCatalog(client, {
             exists (
               select 1 from information_schema.columns column_row
                where column_row.table_schema='public'
+                 and column_row.table_name='publish_calendar_slots'
+                 and column_row.column_name='idempotency_key'
+                 and column_row.data_type='text' and column_row.is_nullable='YES'
+                 and column_row.column_default is null
+            ) as idempotency_column_valid,
+            exists (
+              select 1 from information_schema.columns column_row
+               where column_row.table_schema='public'
                  and column_row.table_name='publish_calendar_settings'
                  and column_row.column_name='enabled' and column_row.is_nullable='NO'
                  and lower(column_row.column_default)='false'
@@ -4559,6 +4578,24 @@ async function verifyPublishCalendarSchemaCatalog(client, {
                   )
                )
             ) as constraint_catalog_valid,
+            exists (
+              select 1 from pg_constraint constraint_row
+              join pg_class relation on relation.oid=constraint_row.conrelid
+              join pg_namespace namespace on namespace.oid=relation.relnamespace
+               and namespace.nspname='public'
+             where relation.relname='publish_calendar_slots'
+               and constraint_row.conname='publish_calendar_slots_idempotency_key_check'
+               and constraint_row.contype='c' and constraint_row.convalidated
+               and constraint_row.conkey=array[(
+                 select attribute.attnum::smallint from pg_attribute attribute
+                  where attribute.attrelid=relation.oid and attribute.attname='idempotency_key'
+                    and not attribute.attisdropped
+               )]
+               and regexp_replace(
+                 lower(pg_get_expr(constraint_row.conbin,constraint_row.conrelid,true)),
+                 '[[:space:]()]','','g'
+               )='idempotency_keyisnullorchar_lengthidempotency_key>=1andchar_lengthidempotency_key<=200andidempotency_key=btrimidempotency_key'
+            ) as idempotency_constraint_valid,
             not exists (
               select 1 from expected_index expected
                where not exists (
@@ -4584,6 +4621,30 @@ async function verifyPublishCalendarSchemaCatalog(client, {
                       )))
                )
             ) as index_catalog_valid,
+            not exists (
+              select 1 from expected_idempotency_index expected
+               where not exists (
+                 select 1 from pg_index index_row
+                 join pg_class index_relation on index_relation.oid=index_row.indexrelid
+                 join pg_class relation on relation.oid=index_row.indrelid
+                 join pg_namespace namespace on namespace.oid=relation.relnamespace
+                  and namespace.nspname='public'
+                where relation.relname='publish_calendar_slots'
+                  and index_relation.relname=expected.index_name
+                  and index_row.indisvalid and index_row.indisready and index_row.indisunique
+                  and index_row.indexprs is null
+                  and index_row.indnkeyatts=cardinality(expected.key_columns)
+                  and index_row.indnatts=cardinality(expected.key_columns)
+                  and array(
+                    select lower(pg_get_indexdef(index_row.indexrelid,ordinal,true))
+                      from generate_series(1,index_row.indnkeyatts) ordinal order by ordinal
+                  )=expected.key_columns
+                  and regexp_replace(
+                    lower(pg_get_expr(index_row.indpred,index_row.indrelid,true)),
+                    '[[:space:]()]','','g'
+                  )=expected.predicate_expression
+               )
+            ) as idempotency_index_catalog_valid,
             not exists (
               select 1 from expected_trigger expected
                where not exists (
@@ -4646,8 +4707,10 @@ async function verifyPublishCalendarSchemaCatalog(client, {
     || sealed.public_brand_subscription_privilege !== false
     || sealed.public_calendar_settings_privilege !== false
     || sealed.public_calendar_slot_privilege !== false
-    || sealed.runtime_columns_valid !== true || sealed.enabled_default_false !== true
-    || sealed.constraint_catalog_valid !== true || sealed.index_catalog_valid !== true
+    || sealed.runtime_columns_valid !== true || sealed.idempotency_column_valid !== true
+    || sealed.enabled_default_false !== true
+    || sealed.constraint_catalog_valid !== true || sealed.idempotency_constraint_valid !== true
+    || sealed.index_catalog_valid !== true || sealed.idempotency_index_catalog_valid !== true
     || sealed.trigger_catalog_valid !== true || sealed.write_fence_row_count !== 4
     || sealed.function_owner_count !== 2 || sealed.application_function_execute_count !== 2
     || sealed.public_function_execute_count !== 0

@@ -4,6 +4,7 @@ import {
   createDatabasePublishCalendarAllocator,
   createPublishCalendarAllocator,
 } from "./publishCalendarAllocator.js";
+import { automaticSlotKey } from "./publishCalendarIdempotency.js";
 
 const brand = {
   workspaceId: "10000000-0000-4000-8000-000000000001",
@@ -121,6 +122,107 @@ describe("publish calendar allocator", () => {
     const second = await allocator.allocateBrand(brand, new Date("2026-08-12T19:00:00.000Z"));
 
     expect(second.openSlotsCreated).toBe(0);
+  });
+
+  it("extends the rollback horizon past the existing seven days without failing the brand", async () => {
+    const deps = dependencies();
+    const allocator = createPublishCalendarAllocator(deps);
+    await allocator.allocateAll(new Date("2026-08-12T19:00:00.000Z"));
+    deps.listUnassignedRecommendations.mockResolvedValue([]);
+    deps.createSlot.mockClear();
+
+    const result = await allocator.allocateAll(new Date("2026-08-13T19:00:00.000Z"));
+
+    expect(result).toMatchObject({ openSlotsCreated: 4, brandsFailed: 0 });
+    expect(deps.createSlot).toHaveBeenCalledTimes(4);
+    expect(deps.createSlot).toHaveBeenCalledWith(expect.objectContaining({
+      scheduledFor: new Date("2026-08-20T02:30:00.000Z"),
+    }));
+  });
+
+  it("creates distinct deterministic occurrences for duplicate automatic times", async () => {
+    const duplicateBrand = {
+      ...brand,
+      settings: { ...brand.settings, slotTimes: ["11:30", "11:30"] },
+    };
+    const deps = dependencies();
+
+    const result = await createPublishCalendarAllocator(deps)
+      .allocateBrand(duplicateBrand, new Date("2026-08-12T19:00:00.000Z"));
+
+    const keys = deps.createSlot.mock.calls.map(([input]) => input.idempotencyKey);
+    expect(result.openSlotsCreated).toBe(14);
+    expect(keys).toHaveLength(14);
+    expect(new Set(keys).size).toBe(14);
+    expect(keys).toContain(automaticSlotKey({ kstDate: "2026-08-13", time: "11:30", occurrence: 0 }));
+    expect(keys).toContain(automaticSlotKey({ kstDate: "2026-08-13", time: "11:30", occurrence: 1 }));
+  });
+
+  it("preserves an existing keyed occurrence while creating the missing same-time occurrence", async () => {
+    const occurrenceOneKey = automaticSlotKey({
+      kstDate: "2026-08-13",
+      time: "11:30",
+      occurrence: 1,
+    });
+    const existingSlot = {
+      id: "existing-occurrence-one",
+      assignmentMode: "automatic",
+      status: "open",
+      recommendationKind: "trend",
+      contentFormat: "card_news",
+      channels: ["instagram"],
+      scheduledFor: "2026-08-13T02:30:00.000Z",
+      idempotencyKey: occurrenceOneKey,
+    };
+    const duplicateBrand = {
+      ...brand,
+      settings: {
+        ...brand.settings,
+        informationalFormat: "reel" as const,
+        trendFormat: "reel" as const,
+        slotTimes: ["11:30", "11:30"],
+      },
+    };
+    const deps = dependencies({ existing: [existingSlot] });
+
+    await createPublishCalendarAllocator(deps)
+      .allocateBrand(duplicateBrand, new Date("2026-08-12T19:00:00.000Z"));
+
+    expect(existingSlot).toMatchObject({ contentFormat: "card_news", recommendationKind: "trend" });
+    expect(deps.createSlot).toHaveBeenCalledWith(expect.objectContaining({
+      scheduledFor: new Date("2026-08-13T02:30:00.000Z"),
+      idempotencyKey: automaticSlotKey({ kstDate: "2026-08-13", time: "11:30", occurrence: 0 }),
+    }));
+    expect(deps.createSlot).not.toHaveBeenCalledWith(expect.objectContaining({ idempotencyKey: occurrenceOneKey }));
+  });
+
+  it("uses one matching pre-084 timestamp as occurrence zero", async () => {
+    const deps = dependencies({
+      existing: [{
+        id: "legacy-occurrence-zero",
+        assignmentMode: "automatic",
+        status: "open",
+        recommendationKind: "informational",
+        contentFormat: "card_news",
+        channels: ["instagram"],
+        scheduledFor: "2026-08-13T02:30:00.000Z",
+        idempotencyKey: null,
+      }],
+    });
+    const duplicateBrand = {
+      ...brand,
+      settings: { ...brand.settings, slotTimes: ["11:30", "11:30"] },
+    };
+
+    await createPublishCalendarAllocator(deps)
+      .allocateBrand(duplicateBrand, new Date("2026-08-12T19:00:00.000Z"));
+
+    expect(deps.createSlot).not.toHaveBeenCalledWith(expect.objectContaining({
+      idempotencyKey: automaticSlotKey({ kstDate: "2026-08-13", time: "11:30", occurrence: 0 }),
+    }));
+    expect(deps.createSlot).toHaveBeenCalledWith(expect.objectContaining({
+      idempotencyKey: automaticSlotKey({ kstDate: "2026-08-13", time: "11:30", occurrence: 1 }),
+    }));
   });
 
   it("does no work for settings that are off", async () => {
