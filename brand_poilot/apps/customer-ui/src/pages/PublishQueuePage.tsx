@@ -10,7 +10,7 @@ import { Alert } from "../components/ui/Alert";
 import { Badge } from "../components/ui/Badge";
 import { EmptyState } from "../components/ui/EmptyState";
 import { PublishCalendar } from "../components/publish/PublishCalendar";
-import { canSchedulePublishItem, PublishSchedulePanel } from "../components/publish/PublishSchedulePanel";
+import { canSchedulePublishItem, PublishSchedulePanel, scheduleErrorMessage } from "../components/publish/PublishSchedulePanel";
 import {
   countPublishManagementFilters,
   matchesPublishManagementFilter,
@@ -592,8 +592,14 @@ export function PublishQueuePage() {
     try {
       const options = await api.getPublishCalendarManualOptions(DEMO_BRAND_ID);
       if (manualOptionsRequestRef.current === requestId) setCalendarManualOptions(options);
-    } catch {
-      if (manualOptionsRequestRef.current === requestId) setCalendarManualOptionsError("게시 설정 선택 항목을 불러오지 못했습니다.");
+    } catch (error) {
+      const errorCode = error && typeof error === "object" && "errorCode" in error
+        && typeof error.errorCode === "string" ? error.errorCode : null;
+      if (manualOptionsRequestRef.current === requestId) {
+        setCalendarManualOptionsError(errorCode === "publish_calendar_subscription_inactive"
+          ? scheduleErrorMessage(errorCode, null)
+          : "게시 설정 선택 항목을 불러오지 못했습니다.");
+      }
     } finally {
       if (manualOptionsRequestRef.current === requestId) setCalendarManualOptionsLoading(false);
     }

@@ -333,7 +333,7 @@ describe("AppShell navigation", () => {
     expect(usage).not.toHaveTextContent("다운로드");
   });
 
-  it("drops stale publish usage when a refresh fails while keeping legacy generation", async () => {
+  it("drops stale publish usage silently when a refresh fails while keeping generation", async () => {
     vi.spyOn(api, "getPublishCalendarUsage")
       .mockResolvedValueOnce({ startsAt: "2026-07-27T00:00:00.000Z", endsAt: "2026-08-03T00:00:00.000Z", generation: { limit: 10, succeeded: 1, reserved: 0, remaining: 7, additionalAvailable: 0 }, publishing: { limit: 20, succeeded: 3, reserved: 0, remaining: 17, additionalAvailable: 0 } })
       .mockRejectedValueOnce(new Error("usage_down"));
@@ -341,8 +341,8 @@ describe("AppShell navigation", () => {
     render(<MemoryRouter><BrandStatusProvider initialStatus={completeStatus}><AiContentUsageProvider gateway={gateway}><Sidebar /></AiContentUsageProvider></BrandStatusProvider></MemoryRouter>);
     const usage = await screen.findByLabelText("게시 운영 잔여 사용량");
     window.dispatchEvent(new Event("brand-pilot:publish-calendar-usage-changed"));
-    expect(await within(usage).findByText("게시 사용량을 불러올 수 없습니다.")).toBeVisible();
-    expect(usage).toHaveTextContent("생성 9건 남음");
+    await waitFor(() => expect(usage).toHaveTextContent("생성 9건 남음"));
+    expect(usage).not.toHaveTextContent("게시 사용량을 불러올 수 없습니다.");
     expect(usage).not.toHaveTextContent("게시 17건 남음");
   });
 
@@ -356,10 +356,11 @@ describe("AppShell navigation", () => {
     render(<MemoryRouter><BrandStatusProvider initialStatus={completeStatus}><AiContentUsageProvider gateway={gateway}><Sidebar /></AiContentUsageProvider></BrandStatusProvider></MemoryRouter>);
     const usage = await screen.findByLabelText("게시 운영 잔여 사용량");
     window.dispatchEvent(new Event("brand-pilot:publish-calendar-usage-changed"));
-    expect(await within(usage).findByText("게시 사용량을 불러올 수 없습니다.")).toBeVisible();
+    await waitFor(() => expect(usage).not.toHaveTextContent("게시 17건 남음"));
+    expect(usage).not.toHaveTextContent("게시 사용량을 불러올 수 없습니다.");
 
     await act(async () => { resolveOlderUsage!({ startsAt: "2026-07-27T00:00:00.000Z", endsAt: "2026-08-03T00:00:00.000Z", generation: { limit: 10, succeeded: 1, reserved: 0, remaining: 7, additionalAvailable: 0 }, publishing: { limit: 20, succeeded: 3, reserved: 0, remaining: 17, additionalAvailable: 0 } }); });
-    await waitFor(() => expect(within(usage).getByText("게시 사용량을 불러올 수 없습니다.")).toBeVisible());
+    expect(usage).not.toHaveTextContent("게시 사용량을 불러올 수 없습니다.");
     expect(usage).not.toHaveTextContent("게시 17건 남음");
   });
 

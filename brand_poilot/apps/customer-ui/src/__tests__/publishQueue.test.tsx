@@ -300,6 +300,22 @@ describe("PublishQueuePage canonical collection", () => {
     expect(screen.getByRole("table", { name: "일괄 주제 설정" })).toBeVisible();
   });
 
+  it("explains that a subscription plan is required when manual options are unavailable", async () => {
+    const inactiveSubscription = Object.assign(new Error("inactive subscription"), {
+      errorCode: "publish_calendar_subscription_inactive",
+    });
+    await renderPage({
+      getPublishCalendarManualOptions: vi.fn(async () => Promise.reject(inactiveSubscription)),
+      listPublishItems: vi.fn(async () => []),
+    });
+
+    await userEvent.click(await screen.findByRole("tab", { name: "캘린더" }));
+    await userEvent.click(screen.getByRole("button", { name: "새 콘텐츠·일괄 등록" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("게시 예약을 사용하려면 구독 플랜을 확인해 주세요.");
+    expect(screen.queryByText("게시 설정 선택 항목을 불러오지 못했습니다.")).not.toBeInTheDocument();
+  });
+
   it("keeps an unavailable settings dialog read-only and restores trigger focus", async () => {
     await renderPage({
       listPublishItems: vi.fn(async () => [item()]),
