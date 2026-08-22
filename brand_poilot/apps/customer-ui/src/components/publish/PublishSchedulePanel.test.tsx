@@ -96,6 +96,15 @@ describe("PublishSchedulePanel", () => {
     expect(onSubmit).not.toHaveBeenCalled();
   });
 
+  it("does not report Instagram as disconnected when subscription options are unavailable", () => {
+    render(<PublishSchedulePanel item={item()} options={null} optionsError="게시 예약을 사용하려면 구독 플랜을 확인해 주세요." optionsLoading={false} initialDateKey="2099-08-23" onSubmit={vi.fn()} onSaved={vi.fn()} onOpenExistingReservation={vi.fn()} onRetryOptions={vi.fn()} onClose={vi.fn()} />);
+
+    expect(screen.getByText("Instagram")).toBeVisible();
+    expect(screen.getByText("게시 예약을 사용하려면 구독 플랜을 확인해 주세요.")).toBeVisible();
+    expect(screen.queryByText("Instagram 연결 필요")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "게시 예약" })).toBeDisabled();
+  });
+
   it("maps fixed server errors and opens an existing reservation", async () => {
     expect(scheduleErrorMessage("publish_calendar_subscription_inactive", options)).toMatch(/구독 플랜/);
     expect(scheduleErrorMessage("publish_weekly_quota_exceeded", options)).toMatch(/남은 예약 한도/);
