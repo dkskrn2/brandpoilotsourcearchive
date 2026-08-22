@@ -49,6 +49,14 @@ const AI_CONTENT_PLANNER_DRAFT_CONTRACT_PATHS = new Set([
   "packages/brand-pilot-content-contracts/src/plannerDrafts.ts",
 ]);
 
+const ACTIVE_REEL_MANIFEST_CONTRACT_PATHS = new Set([
+  "packages/brand-pilot-content-contracts/src/manifest.ts",
+]);
+
+const ACTIVE_REEL_MANIFEST_CONTRACT_TEST_PATHS = new Set([
+  "packages/brand-pilot-content-contracts/src/schemas.test.ts",
+]);
+
 const AI_CONTENT_SCOPED_TOOLING_PATHS = new Set([
   "scripts/check-local-env.mjs",
   "scripts/three-format-cutover-static-check.mjs",
@@ -647,6 +655,13 @@ export function classifyChangedPaths(values, options = {}) {
       components.reelWorker = true;
       continue;
     }
+    if (ACTIVE_REEL_MANIFEST_CONTRACT_PATHS.has(path)) {
+      components.api = true;
+      components.customerUi = true;
+      components.imageWorker = true;
+      continue;
+    }
+    if (ACTIVE_REEL_MANIFEST_CONTRACT_TEST_PATHS.has(path)) continue;
     if (AI_CONTENT_SCOPED_TOOLING_PATHS.has(path)) continue;
     if (path === "package-lock.json" && appWorkspaceOnlyLockUpdate) {
       if (packageManifestPaths.includes("apps/api/package.json")) components.api = true;

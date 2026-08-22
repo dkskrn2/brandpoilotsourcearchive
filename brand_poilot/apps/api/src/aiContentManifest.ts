@@ -20,6 +20,9 @@ import {
 
 type UnknownObject = Record<string, unknown>;
 
+const activeReelSecondsPerScene = 3;
+const previousActiveReelSecondsPerScene = 4;
+
 function fail(code: string): never {
   throw new Error(code);
 }
@@ -596,8 +599,12 @@ export function parseActiveAiContentManifestV3(
     fail("ai_content_reel_scene_dimensions_invalid");
   }
   const video = videos[0]!;
+  const isActiveVideo = video.audioCodec === "aac"
+    && Math.abs(video.durationSeconds - scenes.length * activeReelSecondsPerScene) <= 1 / 30;
+  const isPreviousVideo = video.audioCodec === null
+    && Math.abs(video.durationSeconds - scenes.length * previousActiveReelSecondsPerScene) <= 1 / 30;
   if (video.index !== 1 || video.width * 16 !== video.height * 9
-    || Math.abs(video.durationSeconds - scenes.length * 4) > 1 / 30) {
+    || (!isActiveVideo && !isPreviousVideo)) {
     fail("ai_content_reel_video_metadata_invalid");
   }
   return manifest;

@@ -9,12 +9,17 @@ function normalizeParagraphs(caption: string) {
 
 function normalizeHashtags(hashtags: unknown) {
   if (!Array.isArray(hashtags)) throw new Error("instagram_caption_hashtags_invalid");
-  const normalized = hashtags.map((tag) => typeof tag === "string" ? tag.trim() : "");
-  if (
-    normalized.some((tag) => !/^#[^\s#]+$/.test(tag)) ||
-    new Set(normalized).size !== normalized.length
-  ) {
-    throw new Error("instagram_caption_hashtags_invalid");
+  const normalized: string[] = [];
+  const seen = new Set<string>();
+  for (const tag of hashtags) {
+    if (typeof tag !== "string") throw new Error("instagram_caption_hashtags_invalid");
+    const value = tag.trim().replace(/^#/, "");
+    if (!value || /[\s#]/.test(value)) throw new Error("instagram_caption_hashtags_invalid");
+    const canonical = `#${value}`;
+    const key = canonical.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    normalized.push(canonical);
   }
   return normalized.slice(0, 5);
 }

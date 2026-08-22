@@ -1426,7 +1426,12 @@ test("all CLI worker images install the pinned Codex runtime and run real entryp
     ["image", {
       path: "workers/brand-pilot-image-worker/Dockerfile",
       entrypoint: /workers\/brand-pilot-image-worker\/dist\/index\.js/,
-      assets: [/render-reel\.py/, /image-render\/SKILL\.md/, /threads-text\/SKILL\.md/],
+      assets: [
+        /render-reel\.py/,
+        /image-render\/SKILL\.md/,
+        /threads-text\/SKILL\.md/,
+        /assets\/mixkit-a-very-happy-christmas-897\.mp3/,
+      ],
     }],
     ["card news", {
       path: "workers/brand-pilot-card-news-worker/Dockerfile",
@@ -1472,6 +1477,8 @@ test("all CLI worker images install the pinned Codex runtime and run real entryp
   assert.match(imageDockerfile, /python3/);
   assert.match(imageDockerfile, /ffmpeg/);
   assert.match(imageDockerfile, /PYTHON=python3/);
+  assert.match(imageDockerfile, /714baa43f1c04e8ca77a8268825ea7e68e958917f5f5fe4c656d83811e1d0c98/);
+  assert.match(imageDockerfile, /sha256sum -c/);
   assert.doesNotMatch(imageDockerfile, /tsx\/esm\/api|src\/[A-Za-z0-9_.-]+\.ts/);
 });
 

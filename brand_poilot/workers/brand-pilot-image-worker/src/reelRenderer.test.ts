@@ -191,11 +191,11 @@ describe("Studio V3 Reel renderer", () => {
     width: 1080,
     height: 1920,
     videoCodec: "h264",
-    audioCodec: null,
+    audioCodec: "aac",
     videoStreamCount: 1,
-    audioStreamCount: 0,
+    audioStreamCount: 1,
     fps: 30,
-    duration: count * 4
+    duration: count * 3
   }) {
     const runPython = vi.fn(async (_executable: string, args: readonly string[]) => {
       const valueAfter = (flag: string) => args[args.indexOf(flag) + 1];
@@ -206,7 +206,7 @@ describe("Studio V3 Reel renderer", () => {
     return { renderer: createAiContentReelRenderer({ runPython, probe }), runPython, probe };
   }
 
-  it.each([1, 5])("renders %i ordered scenes as silent four-second slots without music arguments", async (count) => {
+  it.each([1, 5])("renders %i ordered three-second scenes with the bundled BGM", async (count) => {
     const { renderer, runPython } = aiContentFixture(count);
     const scenes = Array.from({ length: count }, (_, offset) => scene(offset + 1));
 
@@ -216,21 +216,21 @@ describe("Studio V3 Reel renderer", () => {
     const args = runPython.mock.calls[0]![1];
     expect(args).toEqual(expect.arrayContaining([
       "--contract-version", "studio-reel.v3",
-      "--seconds-per-scene", "4",
+      "--seconds-per-scene", "3",
       "--fade-seconds", "0.25",
+      "--audio", expect.stringMatching(/mixkit-a-very-happy-christmas-897\.mp3$/),
+      "--audio-volume", "0.12",
+      "--audio-fade-seconds", "0.5",
       "--fps", "30"
     ]));
-    expect(args).not.toContain("--audio");
-    expect(args).not.toContain("--audio-volume");
-    expect(args).not.toContain("--audio-fade-seconds");
     expect(result.cover.bytes).toEqual(scenes[0]!.bytes);
     expect(result.video).toMatchObject({
       width: 1080,
       height: 1920,
       videoCodec: "h264",
-      audioCodec: null,
+      audioCodec: "aac",
       fps: 30,
-      durationSeconds: count * 4
+      durationSeconds: count * 3
     });
   });
 
@@ -249,12 +249,14 @@ describe("Studio V3 Reel renderer", () => {
 
   it.each([
     ["extra video", { videoStreamCount: 2 }, "invalid_ai_content_reel_streams"],
-    ["audio", { audioCodec: "aac", audioStreamCount: 1 }, "invalid_ai_content_reel_streams"],
-    ["duration over one frame", { duration: 4 + 1 / 30 + 0.001 }, "invalid_ai_content_reel_duration"]
+    ["missing audio", { audioCodec: null, audioStreamCount: 0 }, "invalid_ai_content_reel_streams"],
+    ["extra audio", { audioCodec: "aac", audioStreamCount: 2 }, "invalid_ai_content_reel_streams"],
+    ["wrong audio codec", { audioCodec: "mp3", audioStreamCount: 1 }, "invalid_ai_content_reel_codec"],
+    ["duration over one frame", { duration: 3 + 1 / 30 + 0.001 }, "invalid_ai_content_reel_duration"]
   ])("rejects %s probe output", async (_name, override, error) => {
     const { renderer } = aiContentFixture(1, {
-      width: 1080, height: 1920, videoCodec: "h264", audioCodec: null,
-      videoStreamCount: 1, audioStreamCount: 0, fps: 30, duration: 4,
+      width: 1080, height: 1920, videoCodec: "h264", audioCodec: "aac",
+      videoStreamCount: 1, audioStreamCount: 1, fps: 30, duration: 3,
       ...override
     });
     await expect(renderer.render({ jobId: "finalizer-1", scenes: [scene(1)] })).rejects.toThrow(error as string);

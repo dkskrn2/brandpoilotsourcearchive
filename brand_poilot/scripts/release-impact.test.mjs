@@ -131,6 +131,18 @@ test("limits private planner draft contracts to the manual V3 plan consumers", (
   assert.deepEqual(impact.unknownPaths, []);
 });
 
+test("limits the active Reel manifest contract to its API, UI, and image worker consumers", () => {
+  const impact = classifyChangedPaths([
+    "brand_poilot/packages/brand-pilot-content-contracts/src/manifest.ts",
+    "brand_poilot/packages/brand-pilot-content-contracts/src/schemas.test.ts",
+  ]);
+
+  assert.deepEqual(enabled(impact), ["api", "customerUi", "imageWorker"]);
+  assert.equal(impact.buildAllServer, false);
+  assert.equal(impact.verifiedScope, true);
+  assert.deepEqual(impact.unknownPaths, []);
+});
+
 test("marks migration changes and never treats them as an automatic deploy", () => {
   const impact = classifyChangedPaths(["brand_poilot/db/migrations/074_example.sql"]);
   assert.equal(impact.migrationChanged, true);

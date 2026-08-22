@@ -8,6 +8,7 @@ import { signalProcessTree } from "./processTermination.mjs";
 import type { ReelRenderer, RenderedReelMedia } from "./worker.js";
 
 const secondsPerScene = 7;
+const aiContentSecondsPerScene = 3;
 const fadeSeconds = 0.25;
 const audioVolume = 0.12;
 const audioFadeSeconds = 0.5;
@@ -44,7 +45,7 @@ export interface AiContentRenderedReelMedia {
     width: number;
     height: number;
     videoCodec: "h264";
-    audioCodec: null;
+    audioCodec: "aac";
     fps: 30;
     durationSeconds: number;
   };
@@ -215,11 +216,11 @@ function validateAiContentScenes(input: AiContentReelRenderInput) {
 }
 
 function validateAiContentProbe(probe: ReelProbe, sceneCount: number, width: number, height: number) {
-  if (probe.videoStreamCount !== 1 || probe.audioStreamCount !== 0) throw new Error("invalid_ai_content_reel_streams");
-  if (probe.videoCodec !== "h264" || probe.audioCodec !== null) throw new Error("invalid_ai_content_reel_codec");
+  if (probe.videoStreamCount !== 1 || probe.audioStreamCount !== 1) throw new Error("invalid_ai_content_reel_streams");
+  if (probe.videoCodec !== "h264" || probe.audioCodec !== "aac") throw new Error("invalid_ai_content_reel_codec");
   if (probe.width !== width || probe.height !== height || probe.width * 16 !== probe.height * 9) throw new Error("invalid_ai_content_reel_dimensions");
   if (!Number.isFinite(probe.fps) || Math.abs(probe.fps - reelFps) > 0.001) throw new Error("invalid_ai_content_reel_fps");
-  const expectedDuration = sceneCount * 4;
+  const expectedDuration = sceneCount * aiContentSecondsPerScene;
   if (!Number.isFinite(probe.duration) || Math.abs(probe.duration - expectedDuration) > 1 / reelFps) {
     throw new Error("invalid_ai_content_reel_duration");
   }
@@ -229,6 +230,7 @@ export function createAiContentReelRenderer({
   pythonExecutable = process.env.PYTHON ?? "python",
   ffprobeExecutable = "ffprobe",
   scriptPath = fileURLToPath(new URL("../scripts/render-reel.py", import.meta.url)),
+  audioPath = fileURLToPath(new URL("../assets/mixkit-a-very-happy-christmas-897.mp3", import.meta.url)),
   runPython = defaultRunPython,
   probe = defaultProbe,
   processTimeoutMs = 5 * 60_000
@@ -236,6 +238,7 @@ export function createAiContentReelRenderer({
   pythonExecutable?: string;
   ffprobeExecutable?: string;
   scriptPath?: string;
+  audioPath?: string;
   runPython?: RunPython;
   probe?: Probe;
   processTimeoutMs?: number;
@@ -263,8 +266,11 @@ export function createAiContentReelRenderer({
             "--manifest", manifestPath,
             "--output", outputPath,
             "--cover", coverPath,
-            "--seconds-per-scene", "4",
+            "--audio", audioPath,
+            "--seconds-per-scene", String(aiContentSecondsPerScene),
             "--fade-seconds", String(fadeSeconds),
+            "--audio-volume", String(audioVolume),
+            "--audio-fade-seconds", String(audioFadeSeconds),
             "--fps", String(reelFps),
             "--width", String(width),
             "--height", String(height)
@@ -281,7 +287,7 @@ export function createAiContentReelRenderer({
         validateAiContentProbe(probeResult, input.scenes.length, width, height);
         return {
           cover: { bytes: coverBytes, mimeType: "image/png", width, height },
-          video: { bytes: videoBytes, mimeType: "video/mp4", width, height, videoCodec: "h264", audioCodec: null, fps: 30, durationSeconds: probeResult.duration }
+          video: { bytes: videoBytes, mimeType: "video/mp4", width, height, videoCodec: "h264", audioCodec: "aac", fps: 30, durationSeconds: probeResult.duration }
         };
       } finally {
         await rm(workDir, { recursive: true, force: true });

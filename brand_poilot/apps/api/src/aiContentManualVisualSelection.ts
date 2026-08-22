@@ -64,7 +64,7 @@ export async function materializeFrozenManualVisualAssets(
           and asset.storage_url is not null and asset.storage_path is not null
           and asset.checksum ~ '^[0-9a-f]{64}$'
           and lower(asset.mime_type) in ('image/png','image/jpeg','image/webp')
-        order by asset.position for share`,
+        order by asset.position`,
       [ids, selection.product.productServiceId, selection.product.versionId, scope.workspaceId, scope.brandId],
     );
     exactIds(assets.rows, "id", ids);
@@ -104,7 +104,7 @@ export async function materializeFrozenManualVisualAssets(
           and artifact.public_url is not null and artifact.path is not null
           and artifact.checksum ~ '^[0-9a-f]{64}$'
           and lower(artifact.mime_type) in ('image/png','image/jpeg','image/webp')
-        order by requested.position for share of item,artifact`,
+        order by requested.position`,
       [ids, scope.workspaceId, scope.brandId],
     );
     exactIds(references.rows, "reference_item_id", ids);
@@ -130,7 +130,7 @@ export async function materializeFrozenManualVisualAssets(
           and image.workspace_id=$3 and image.brand_id=$4
           and image.checksum ~ '^[0-9a-f]{64}$'
           and lower(image.mime_type) in ('image/png','image/jpeg','image/webp')
-        order by image.position for share`,
+        order by image.position`,
       [ids, selection.avatar.avatarId, scope.workspaceId, scope.brandId],
     );
     exactIds(images.rows, "id", ids);
@@ -167,8 +167,7 @@ async function resolveFrozen(
          join product_service_versions version
            on version.id=$2 and version.product_service_id=item.id
           and version.workspace_id=item.workspace_id and version.brand_id=item.brand_id
-        where item.id=$1 and item.workspace_id=$3 and item.brand_id=$4
-        for share of item,version`,
+        where item.id=$1 and item.workspace_id=$3 and item.brand_id=$4`,
       [selection.product.productServiceId, selection.product.versionId, scope.workspaceId, scope.brandId],
     );
     const row = selected.rows[0];
@@ -179,9 +178,21 @@ async function resolveFrozen(
       `select id,role,position from product_service_assets
         where product_service_id=$1 and product_service_version_id=$2
           and workspace_id=$3 and brand_id=$4
-        order by position for share`,
+        order by position`,
       [selection.product.productServiceId, selection.product.versionId, scope.workspaceId, scope.brandId],
     );
+    const confirmed = await client.query(
+      `select item.status,item.active_version_id,version.status version_status
+         from product_services item
+         join product_service_versions version
+           on version.id=$2 and version.product_service_id=item.id
+          and version.workspace_id=item.workspace_id and version.brand_id=item.brand_id
+        where item.id=$1 and item.workspace_id=$3 and item.brand_id=$4`,
+      [selection.product.productServiceId, selection.product.versionId, scope.workspaceId, scope.brandId],
+    );
+    const confirmedRow = confirmed.rows[0];
+    if (!confirmedRow || confirmedRow.status !== "active" || confirmedRow.version_status !== "approved"
+      || String(confirmedRow.active_version_id) !== selection.product.versionId) unavailable();
     product = {
       productServiceId: selection.product.productServiceId,
       versionId: selection.product.versionId,
@@ -203,7 +214,7 @@ async function resolveFrozen(
     const selected = await client.query(
       `select id,revision,name,description,visual_tokens_json,status
          from brand_style_presets
-        where id=$1 and workspace_id=$2 and brand_id=$3 for share`,
+        where id=$1 and workspace_id=$2 and brand_id=$3`,
       [selection.stylePreset.presetId, scope.workspaceId, scope.brandId],
     );
     const row = selected.rows[0];
@@ -216,10 +227,18 @@ async function resolveFrozen(
            on item.id=link.reference_item_id and item.workspace_id=link.workspace_id
           and item.brand_id=link.brand_id and item.archived_at is null
         where link.preset_id=$1 and link.workspace_id=$2 and link.brand_id=$3
-        order by link.position for share of link`,
+        order by link.position`,
       [selection.stylePreset.presetId, scope.workspaceId, scope.brandId],
     );
     if (references.rows.some((reference) => reference.available !== true)) unavailable();
+    const confirmed = await client.query(
+      `select revision,status from brand_style_presets
+        where id=$1 and workspace_id=$2 and brand_id=$3`,
+      [selection.stylePreset.presetId, scope.workspaceId, scope.brandId],
+    );
+    const confirmedRow = confirmed.rows[0];
+    if (!confirmedRow || confirmedRow.status !== "active") unavailable();
+    if (Number(confirmedRow.revision) !== selection.stylePreset.revision) stale();
     stylePreset = {
       presetId: selection.stylePreset.presetId,
       revision: selection.stylePreset.revision,
@@ -234,7 +253,7 @@ async function resolveFrozen(
   if (selection.avatar) {
     const selected = await client.query(
       `select id,revision,name,description,status from brand_avatars
-        where id=$1 and workspace_id=$2 and brand_id=$3 for share`,
+        where id=$1 and workspace_id=$2 and brand_id=$3`,
       [selection.avatar.avatarId, scope.workspaceId, scope.brandId],
     );
     const row = selected.rows[0];
@@ -244,9 +263,17 @@ async function resolveFrozen(
       `select id,position,is_representative,checksum,mime_type,storage_path
          from brand_avatar_images
         where avatar_id=$1 and workspace_id=$2 and brand_id=$3
-        order by position for share`,
+        order by position`,
       [selection.avatar.avatarId, scope.workspaceId, scope.brandId],
     );
+    const confirmed = await client.query(
+      `select revision,status from brand_avatars
+        where id=$1 and workspace_id=$2 and brand_id=$3`,
+      [selection.avatar.avatarId, scope.workspaceId, scope.brandId],
+    );
+    const confirmedRow = confirmed.rows[0];
+    if (!confirmedRow || confirmedRow.status !== "active") unavailable();
+    if (Number(confirmedRow.revision) !== selection.avatar.revision) stale();
     const avatarObject = {
       avatarId: selection.avatar.avatarId,
       revision: selection.avatar.revision,

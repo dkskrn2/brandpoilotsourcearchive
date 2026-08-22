@@ -82,7 +82,7 @@ describe("parseWorkerManifest", () => {
       purpose: "marketing",
       title: "릴스",
       scenes: [1, 2].map((index) => ({ index, url: `https://blob.example/${index}.png`, width: 1080, height: 1920 })),
-      video: { url: "https://blob.example/reel.mp4", width: 1080, height: 1920, durationSeconds: 8 },
+      video: { url: "https://blob.example/reel.mp4", width: 1080, height: 1920, durationSeconds: 6, audioCodec: "aac" },
       content: { caption: "Caption", hashtags: ["#one"], cta: "CTA" }
     });
     expect(manifest).toMatchObject({
@@ -90,7 +90,7 @@ describe("parseWorkerManifest", () => {
       assets: [
         { role: "scene", index: 1 },
         { role: "scene", index: 2 },
-        { role: "video", index: 1, durationSeconds: 8, videoCodec: "h264", fps: 30, audioCodec: null }
+        { role: "video", index: 1, durationSeconds: 6, videoCodec: "h264", fps: 30, audioCodec: "aac" }
       ]
     });
   });

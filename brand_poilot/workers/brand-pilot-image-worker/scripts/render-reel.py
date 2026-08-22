@@ -60,11 +60,11 @@ def main() -> None:
         expected = "1 to 5 scenes" if is_studio_v3 else "exactly 1 scene"
         fail(f"Invalid Reel manifest: expected {expected}.")
     if is_studio_v3:
-        if args.seconds_per_scene != 4 or args.fade_seconds != 0.25 or args.fps != 30:
+        if args.seconds_per_scene != 3 or args.fade_seconds != 0.25 or args.fps != 30:
             fail("Invalid studio-reel.v3 timing settings.")
         if args.width is None or args.height is None or args.width * 16 != args.height * 9:
             fail("Invalid studio-reel.v3 aspect ratio.")
-    elif args.audio is None or args.audio_volume is None or args.audio_fade_seconds is None or not args.audio.is_file() or args.audio.stat().st_size == 0:
+    if args.audio is None or args.audio_volume is None or args.audio_fade_seconds is None or not args.audio.is_file() or args.audio.stat().st_size == 0:
         fail(f"Missing Reel audio: {args.audio}")
 
     scene_paths = []
@@ -87,7 +87,9 @@ def main() -> None:
         if is_studio_v3 and index < len(scene_paths) - 1:
             input_duration += args.fade_seconds
         command.extend(["-loop", "1", "-t", str(input_duration), "-i", str(scene_path)])
-    if not is_studio_v3:
+    if is_studio_v3:
+        command.extend(["-i", str(args.audio)])
+    else:
         command.extend(["-stream_loop", "-1", "-i", str(args.audio)])
 
     target_width = args.width if is_studio_v3 else 1080
@@ -122,14 +124,13 @@ def main() -> None:
     if is_studio_v3:
         filters.append(f"[{video_label}]trim=duration={duration},setpts=PTS-STARTPTS[vout]")
         video_label = "vout"
-    else:
-        audio_index = len(scene_paths)
-        audio_fade_out_start = max(0, duration - args.audio_fade_seconds)
-        filters.append(
-            f"[{audio_index}:a]volume={args.audio_volume},atrim=duration={duration},"
-            f"asetpts=PTS-STARTPTS,afade=t=in:st=0:d={args.audio_fade_seconds},"
-            f"afade=t=out:st={audio_fade_out_start}:d={args.audio_fade_seconds}[aout]"
-        )
+    audio_index = len(scene_paths)
+    audio_fade_out_start = max(0, duration - args.audio_fade_seconds)
+    filters.append(
+        f"[{audio_index}:a]volume={args.audio_volume},atrim=duration={duration},"
+        f"asetpts=PTS-STARTPTS,afade=t=in:st=0:d={args.audio_fade_seconds},"
+        f"afade=t=out:st={audio_fade_out_start}:d={args.audio_fade_seconds}[aout]"
+    )
 
     command.extend([
         "-filter_complex", ";".join(filters),
@@ -138,10 +139,7 @@ def main() -> None:
         "-pix_fmt", "yuv420p",
         "-r", str(args.fps),
     ])
-    if is_studio_v3:
-        command.extend(["-an"])
-    else:
-        command.extend(["-map", "[aout]", "-c:a", "aac", "-ar", "48000", "-ac", "2"])
+    command.extend(["-map", "[aout]", "-c:a", "aac", "-ar", "48000", "-ac", "2"])
     command.extend(["-movflags", "+faststart", "-t", str(duration), str(args.output)])
     try:
         subprocess.run(command, check=True)

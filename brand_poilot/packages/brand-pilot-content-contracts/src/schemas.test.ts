@@ -491,5 +491,14 @@ describe("canonical content schemas", () => {
         videoCodec: "h264", fps: 30, audioCodec: null,
       }],
     })).toBeTruthy();
+    expect(parseAiContentManifestV3({
+      ...manifest,
+      outputFormat: "reel",
+      assets: [{
+        role: "video", index: 1, url: "https://example.com/reel-with-bgm.mp4", fileName: "reel.mp4",
+        mimeType: "video/mp4", width: 1080, height: 1920, durationSeconds: 3,
+        videoCodec: "h264", fps: 30, audioCodec: "aac",
+      }],
+    })).toBeTruthy();
   });
 });

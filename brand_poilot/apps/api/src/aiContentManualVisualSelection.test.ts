@@ -27,8 +27,15 @@ const selection = {
   avatar: { avatarId: ids.avatar, revision: 2 },
 };
 
-function client(options: { avatarRevision?: number; partialPresetReference?: boolean } = {}) {
+function client(options: {
+  avatarRevision?: number;
+  avatarRevisionAfterImages?: number;
+  partialPresetReference?: boolean;
+  presetRevisionAfterReferences?: number;
+} = {}) {
   let stored: Record<string, unknown> | null = null;
+  let presetReads = 0;
+  let avatarReads = 0;
   const query = vi.fn(async (sql: string, params: unknown[] = []) => {
     if (sql.includes("from product_services item")) return { rows: [{
       id: ids.product, kind: "product", display_name: "차 세트", status: "active",
@@ -43,7 +50,9 @@ function client(options: { avatarRevision?: number; partialPresetReference?: boo
       id: ids.productImage, role: "hero", position: 1,
     }], rowCount: 1 };
     if (sql.includes("from brand_style_presets")) return { rows: [{
-      id: ids.preset, revision: 3, name: "에디토리얼", description: "선명한 정보 카드",
+      id: ids.preset,
+      revision: presetReads++ === 0 ? 3 : (options.presetRevisionAfterReferences ?? 3),
+      name: "에디토리얼", description: "선명한 정보 카드",
       visual_tokens_json: { colors: ["red", "white"], fonts: ["sans"], notes: ["high contrast"] },
       status: "active",
     }], rowCount: 1 };
@@ -55,7 +64,11 @@ function client(options: { avatarRevision?: number; partialPresetReference?: boo
       return { rows: [{ reference_item_id: ids.reference, available: true }], rowCount: 1 };
     }
     if (sql.includes("from brand_avatars")) return { rows: [{
-      id: ids.avatar, revision: options.avatarRevision ?? 2, name: "브랜드 모델",
+      id: ids.avatar,
+      revision: avatarReads++ === 0
+        ? (options.avatarRevision ?? 2)
+        : (options.avatarRevisionAfterImages ?? options.avatarRevision ?? 2),
+      name: "브랜드 모델",
       description: "차를 설명하는 인물", status: "active",
     }], rowCount: 1 };
     if (sql.includes("from brand_avatar_images")) return { rows: [{
@@ -82,6 +95,41 @@ function client(options: { avatarRevision?: number; partialPresetReference?: boo
 }
 
 describe("manual visual selection persistence", () => {
+  it("uses SELECT-only catalog reads under the production application ACL", async () => {
+    const backing = client();
+    const database = {
+      query: vi.fn(async (sql: string, params: unknown[] = []) => {
+        if (/\bfor share\b/i.test(sql)
+          && /(product_services|product_service_assets|brand_style_presets|brand_style_preset_references|brand_avatars|brand_avatar_images|reference_items|storage_artifacts)/i.test(sql)) {
+          throw Object.assign(new Error("permission denied for catalog relation"), { code: "42501" });
+        }
+        if (sql.includes("from product_service_assets asset")) return { rows: [{
+          id: ids.productImage, role: "hero", position: 1,
+          storage_url: "https://blob.example/product.png", storage_path: "products/product.png",
+          mime_type: "image/png", checksum: "b".repeat(64),
+        }], rowCount: 1 };
+        if (sql.includes("from unnest($1::uuid[])") && sql.includes("reference_items item")) return { rows: [{
+          reference_item_id: ids.reference, title: "에디토리얼 참고",
+          storage_url: "https://blob.example/style.png", storage_path: "styles/style.png",
+          mime_type: "image/png", checksum: "c".repeat(64),
+        }], rowCount: 1 };
+        if (sql.includes("from brand_avatar_images image")) return { rows: [{
+          id: ids.avatarImage, position: 1, is_representative: true,
+          storage_url: "https://blob.example/avatar.png", storage_path: "avatars/avatar.png",
+          mime_type: "image/png", checksum: "d".repeat(64),
+        }], rowCount: 1 };
+        return backing.query(sql, params);
+      }),
+    };
+
+    await saveManualVisualSelection(database, scope, selection);
+    const frozen = await freezeManualVisualSelection(database, scope);
+    await expect(materializeFrozenManualVisualAssets(database, scope, frozen)).resolves.toMatchObject({
+      product: { id: ids.product, versionId: ids.version },
+      avatarStyleImageId: ids.avatarImage,
+    });
+  });
+
   it("validates tenant-owned revisions, stores the selection, and freezes product text plus optional images", async () => {
     const database = client();
     await saveManualVisualSelection(database, scope, selection);
@@ -98,6 +146,20 @@ describe("manual visual selection persistence", () => {
   it("rejects an avatar revision changed after the user selected it", async () => {
     const database = client({ avatarRevision: 3 });
     await expect(saveManualVisualSelection(database, scope, selection)).rejects.toThrow("manual_visual_selection_stale");
+  });
+
+  it("rejects a style preset changed while its reference images are being frozen", async () => {
+    const database = client({ presetRevisionAfterReferences: 4 });
+    await expect(saveManualVisualSelection(database, scope, selection)).rejects.toThrow(
+      "manual_visual_selection_stale",
+    );
+  });
+
+  it("rejects an avatar changed while its images are being frozen", async () => {
+    const database = client({ avatarRevisionAfterImages: 3 });
+    await expect(saveManualVisualSelection(database, scope, selection)).rejects.toThrow(
+      "manual_visual_selection_stale",
+    );
   });
 
   it("rejects a preset revision when any linked reference has become unavailable", async () => {

@@ -20,6 +20,7 @@ function run(command, args) {
 
 const python = process.env.PYTHON ?? "python";
 const scriptPath = fileURLToPath(new URL("./render-reel.py", import.meta.url));
+const audioPath = fileURLToPath(new URL("../assets/mixkit-a-very-happy-christmas-897.mp3", import.meta.url));
 
 async function verifyScenario(root, sceneCount) {
   const workDir = path.join(root, `${sceneCount}-scenes`);
@@ -33,22 +34,26 @@ async function verifyScenario(root, sceneCount) {
     run("ffmpeg", ["-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi", "-i", `color=c=${colors[index]}:s=1080x1920`, "-frames:v", "1", path.join(inputDir, `scene-${String(index + 1).padStart(2, "0")}.png`)]);
   }
   await writeFile(manifestPath, JSON.stringify({ contractVersion: "studio-reel.v3", scenes: colors.map((color, index) => ({ index: index + 1, role: color })) }, null, 2));
-  run(python, [scriptPath, "--contract-version", "studio-reel.v3", "--input-dir", inputDir, "--manifest", manifestPath, "--output", outputPath, "--cover", coverPath, "--seconds-per-scene", "4", "--fade-seconds", "0.25", "--fps", "30", "--width", "1080", "--height", "1920"]);
+  run(python, [scriptPath, "--contract-version", "studio-reel.v3", "--input-dir", inputDir, "--manifest", manifestPath, "--output", outputPath, "--cover", coverPath, "--audio", audioPath, "--seconds-per-scene", "3", "--fade-seconds", "0.25", "--audio-volume", "0.12", "--audio-fade-seconds", "0.5", "--fps", "30", "--width", "1080", "--height", "1920"]);
 
   assert.deepEqual(await readFile(coverPath), await readFile(path.join(inputDir, "scene-01.png")), "First scene must be reused as cover");
   const probe = JSON.parse(run("ffprobe", ["-v", "error", "-show_streams", "-show_format", "-of", "json", outputPath]));
   const videos = probe.streams.filter((stream) => stream.codec_type === "video");
   const audios = probe.streams.filter((stream) => stream.codec_type === "audio");
   assert.equal(videos.length, 1);
-  assert.equal(audios.length, 0);
+  assert.equal(audios.length, 1);
   const video = videos[0];
+  const audio = audios[0];
   const [fpsNumerator, fpsDenominator] = video.avg_frame_rate.split("/").map(Number);
   const duration = Number(probe.format.duration);
   assert.equal(video.width, 1080);
   assert.equal(video.height, 1920);
   assert.equal(video.codec_name, "h264");
+  assert.equal(audio.codec_name, "aac");
+  assert.equal(Number(audio.sample_rate), 48000);
+  assert.equal(audio.channels, 2);
   assert.equal(fpsNumerator / fpsDenominator, 30);
-  assert.ok(Math.abs(duration - sceneCount * 4) <= 1 / 30, `${sceneCount}-scene duration ${duration} exceeded one frame tolerance`);
+  assert.ok(Math.abs(duration - sceneCount * 3) <= 1 / 30, `${sceneCount}-scene duration ${duration} exceeded one frame tolerance`);
   return duration;
 }
 
@@ -60,7 +65,7 @@ async function main() {
   try {
     const one = await verifyScenario(workDir, 1);
     const five = await verifyScenario(workDir, 5);
-    process.stdout.write(`V3 reel verification passed:\n- 1 scene: ${one.toFixed(3)}s, h264, 1080x1920, 30fps, no audio\n- 5 scenes: ${five.toFixed(3)}s, h264, 1080x1920, 30fps, no audio\n`);
+    process.stdout.write(`V3 reel verification passed:\n- 1 scene: ${one.toFixed(3)}s, h264+aac, 1080x1920, 30fps\n- 5 scenes: ${five.toFixed(3)}s, h264+aac, 1080x1920, 30fps\n`);
   } finally {
     await rm(workDir, { recursive: true, force: true });
   }

@@ -183,12 +183,12 @@ describe("V3 non-Reel package finalizer", () => {
     await expect(finalizeAiContentPackage(target, storage())).rejects.toThrow("ai_content_blog_html_invalid");
   });
 
-  it("reuses successful scenes in index order, uses scene one as cover, and uploads one deterministic silent MP4", async () => {
+  it("reuses successful scenes in index order, uses scene one as cover, and uploads one deterministic MP4 with AAC BGM", async () => {
     const plan = { contractVersion: "reel-plan.v2", outputFormat: "reel", content: { caption: "Caption", hashtags: [], cta: "CTA" }, imagePackage: imagePackage("reel", 2) };
     const blob = storage();
     const reelRenderer = { render: vi.fn(async ({ scenes }: { scenes: Array<{ bytes: Buffer }> }) => ({
       cover: { bytes: scenes[0]!.bytes, mimeType: "image/png" as const, width: 1080 as const, height: 1920 as const },
-      video: { bytes: Buffer.from("mp4"), mimeType: "video/mp4" as const, width: 1080 as const, height: 1920 as const, videoCodec: "h264" as const, audioCodec: null, fps: 30 as const, durationSeconds: 8 }
+      video: { bytes: Buffer.from("mp4"), mimeType: "video/mp4" as const, width: 1080 as const, height: 1920 as const, videoCodec: "h264" as const, audioCodec: "aac" as const, fps: 30 as const, durationSeconds: 6 }
     })) };
     const one = { ...rendered(1), width: 1080, height: 1920 };
     const two = { ...rendered(2), width: 1080, height: 1920 };
@@ -200,14 +200,14 @@ describe("V3 non-Reel package finalizer", () => {
     expect(reelRenderer.render).toHaveBeenCalledTimes(1);
     expect(blob.uploadVideo).toHaveBeenCalledWith(expect.objectContaining({
       path: `ai-content/${uid(5)}/${uid(2)}/${uid(3)}/reel.mp4`,
-      bytes: Buffer.from("mp4"), durationSeconds: 8, audioCodec: null
+      bytes: Buffer.from("mp4"), durationSeconds: 6, audioCodec: "aac"
     }));
     expect(result.manifest).toMatchObject({
       version: "ai-content.v3", outputFormat: "reel",
       assets: [
         { role: "scene", index: 1, url: one.url },
         { role: "scene", index: 2, url: two.url },
-        { role: "video", index: 1, fileName: "reel.mp4", mimeType: "video/mp4", durationSeconds: 8, audioCodec: null }
+        { role: "video", index: 1, fileName: "reel.mp4", mimeType: "video/mp4", durationSeconds: 6, audioCodec: "aac" }
       ],
       content: plan.content
     });

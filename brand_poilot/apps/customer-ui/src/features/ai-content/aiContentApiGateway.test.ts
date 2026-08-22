@@ -525,7 +525,7 @@ describe("createAiContentApiGateway", () => {
         ? [asset("html", 1, "text/html"), asset("inline", 1)]
         : [
             asset("scene", 1),
-            { ...asset("video", 1, "video/mp4"), width: 1080, height: 1920, durationSeconds: 4, videoCodec: "h264", fps: 30, audioCodec: null },
+            { ...asset("video", 1, "video/mp4"), width: 1080, height: 1920, durationSeconds: 3, videoCodec: "h264", fps: 30, audioCodec: "aac" },
           ];
     const manifestContent = outputFormat === "blog"
       ? { title: "V3 블로그", summary: "V3 요약", html: "<article><h1>V3 블로그</h1></article>", metaTitle: "V3", metaDescription: "V3 설명" }

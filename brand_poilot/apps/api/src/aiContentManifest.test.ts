@@ -601,6 +601,38 @@ describe("parseActiveAiContentManifestV3", () => {
     expect(parseActiveAiContentManifestV3(reelManifest)).toEqual(reelManifest);
   });
 
+  it("rejects a three-second canonical V3 reel without the required AAC audio", () => {
+    const threeSecondReel = {
+      ...reelManifest,
+      assets: reelManifest.assets.map((asset) => asset.role === "video"
+        ? { ...asset, durationSeconds: 3 }
+        : asset),
+    };
+    expect(() => parseActiveAiContentManifestV3(threeSecondReel))
+      .toThrow("ai_content_reel_video_metadata_invalid");
+  });
+
+  it("accepts AAC audio on a new three-second canonical V3 reel", () => {
+    const reelWithBgm = {
+      ...reelManifest,
+      assets: reelManifest.assets.map((asset) => asset.role === "video"
+        ? { ...asset, durationSeconds: 3, audioCodec: "aac" }
+        : asset),
+    };
+    expect(parseActiveAiContentManifestV3(reelWithBgm)).toEqual(reelWithBgm);
+  });
+
+  it("rejects AAC audio on the previous four-second Reel manifest", () => {
+    const mismatchedReel = {
+      ...reelManifest,
+      assets: reelManifest.assets.map((asset) => asset.role === "video"
+        ? { ...asset, audioCodec: "aac" }
+        : asset),
+    };
+    expect(() => parseActiveAiContentManifestV3(mismatchedReel))
+      .toThrow("ai_content_reel_video_metadata_invalid");
+  });
+
   it("rejects retired versions, type fields, and mismatched content shapes", () => {
     expect(() => parseActiveAiContentManifestV3({ ...reelManifest, version: "ai-content.v2" }))
       .toThrow("ai_content_manifest_v3_invalid");

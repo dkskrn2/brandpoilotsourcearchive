@@ -176,7 +176,7 @@ export function createBlobStorage({ token, model }: { token: string; model: stri
 export interface AiContentBlobStorage {
   readOwned(storagePath: string, constraints?: AiContentOwnedBlobReadConstraints): Promise<Buffer>;
   uploadAsset(input: { path: string; bytes: Buffer; index: number; width: number; height: number }): Promise<AiContentRenderedAsset>;
-  uploadVideo(input: { path: string; bytes: Buffer; width: number; height: number; durationSeconds: number; videoCodec: "h264"; audioCodec: null; fps: 30 }): Promise<{ url: string; checksum: string }>;
+  uploadVideo(input: { path: string; bytes: Buffer; width: number; height: number; durationSeconds: number; videoCodec: "h264"; audioCodec: "aac"; fps: 30 }): Promise<{ url: string; checksum: string }>;
   uploadText(input: { path: string; text: string; contentType: "text/html; charset=utf-8" | "application/json" }): Promise<{ url: string; checksum: string }>;
 }
 

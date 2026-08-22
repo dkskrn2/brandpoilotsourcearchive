@@ -20,7 +20,7 @@ export class AiContentFinalizerError extends Error {
 
 export interface AiContentFinalizerStorage {
   readOwned(storagePath: string): Promise<Buffer>;
-  uploadVideo(input: { path: string; bytes: Buffer; width: number; height: number; durationSeconds: number; videoCodec: "h264"; audioCodec: null; fps: 30 }): Promise<{ url: string; checksum: string }>;
+  uploadVideo(input: { path: string; bytes: Buffer; width: number; height: number; durationSeconds: number; videoCodec: "h264"; audioCodec: "aac"; fps: 30 }): Promise<{ url: string; checksum: string }>;
   uploadText(input: { path: string; text: string; contentType: "text/html; charset=utf-8" | "application/json" }): Promise<{ url: string; checksum: string }>;
 }
 
@@ -174,7 +174,7 @@ export async function finalizeAiContentPackage(job: AiContentPackageFinalizeJob,
       purpose: finalInput.outputSettings.purpose,
       title: finalInput.selectedProposal.title,
       scenes: assets.map((asset) => ({ index: asset.index, url: asset.url, width: asset.width, height: asset.height })),
-      video: { url: uploadedVideo.url, width: rendered.video.width, height: rendered.video.height, durationSeconds: rendered.video.durationSeconds },
+      video: { url: uploadedVideo.url, width: rendered.video.width, height: rendered.video.height, durationSeconds: rendered.video.durationSeconds, audioCodec: rendered.video.audioCodec },
       content: record(plan.content)
     });
   } else if (format === "card_news") {

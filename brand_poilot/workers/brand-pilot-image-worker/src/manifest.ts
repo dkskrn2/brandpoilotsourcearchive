@@ -4,6 +4,8 @@ import {
   type AiContentManifestV3,
 } from "@brand-pilot/content-contracts";
 
+const aiContentReelSecondsPerScene = 3;
+
 export interface WorkerManifestAsset {
   index: number;
   role: string;
@@ -62,7 +64,7 @@ export function buildAiContentReelManifest(input: {
   purpose: "informational" | "marketing";
   title: string;
   scenes: Array<{ index: number; url: string; width: number; height: number }>;
-  video: { url: string; width: number; height: number; durationSeconds: number };
+  video: { url: string; width: number; height: number; durationSeconds: number; audioCodec: "aac" };
   content: Record<string, unknown>;
 }): AiContentManifestV3 {
   if (!input.title.trim() || input.scenes.length < 1 || input.scenes.length > 5) throw new Error("ai_content_reel_manifest_invalid");
@@ -75,7 +77,7 @@ export function buildAiContentReelManifest(input: {
   });
   let videoUrl: URL;
   try { videoUrl = new URL(input.video.url); } catch { throw new Error("ai_content_reel_manifest_invalid"); }
-  if (videoUrl.protocol !== "https:" || input.video.width * 16 !== input.video.height * 9 || Math.abs(input.video.durationSeconds - input.scenes.length * 4) > 1 / 30) {
+  if (videoUrl.protocol !== "https:" || input.video.width * 16 !== input.video.height * 9 || Math.abs(input.video.durationSeconds - input.scenes.length * aiContentReelSecondsPerScene) > 1 / 30) {
     throw new Error("ai_content_reel_manifest_invalid");
   }
   return parseAiContentManifestV3({
@@ -85,7 +87,7 @@ export function buildAiContentReelManifest(input: {
     title: input.title.trim(),
     assets: [
       ...input.scenes.map((scene) => ({ role: "scene", index: scene.index, url: scene.url, fileName: `scene-${String(scene.index).padStart(2, "0")}.png`, mimeType: "image/png", width: scene.width, height: scene.height })),
-      { role: "video", index: 1, url: input.video.url, fileName: "reel.mp4", mimeType: "video/mp4", width: input.video.width, height: input.video.height, durationSeconds: input.video.durationSeconds, videoCodec: "h264", fps: 30, audioCodec: null }
+      { role: "video", index: 1, url: input.video.url, fileName: "reel.mp4", mimeType: "video/mp4", width: input.video.width, height: input.video.height, durationSeconds: input.video.durationSeconds, videoCodec: "h264", fps: 30, audioCodec: input.video.audioCodec }
     ],
     content: input.content,
   });

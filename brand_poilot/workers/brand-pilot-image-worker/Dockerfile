@@ -37,9 +37,11 @@ COPY --from=build --chown=node:node /app/workers/brand-pilot-image-worker/script
 COPY --from=build --chown=node:node /app/workers/brand-pilot-image-worker/scripts/audit-codex-visual-session-image.mjs ./workers/brand-pilot-image-worker/scripts/audit-codex-visual-session-image.mjs
 COPY --from=build --chown=node:node /app/workers/brand-pilot-image-worker/scripts/visualSessionImageAudit.mjs ./workers/brand-pilot-image-worker/scripts/visualSessionImageAudit.mjs
 COPY --from=build --chown=node:node /app/workers/brand-pilot-image-worker/scripts/render-reel.py ./workers/brand-pilot-image-worker/scripts/render-reel.py
+COPY --from=build --chown=node:node /app/workers/brand-pilot-image-worker/assets/mixkit-a-very-happy-christmas-897.mp3 ./workers/brand-pilot-image-worker/assets/mixkit-a-very-happy-christmas-897.mp3
 COPY --from=build --chown=node:node /app/workers/brand-pilot-image-worker/AGENTS.md ./workers/brand-pilot-image-worker/AGENTS.md
 COPY --from=build --chown=node:node /app/workers/brand-pilot-image-worker/.codex/skills/image-render/SKILL.md ./workers/brand-pilot-image-worker/.codex/skills/image-render/SKILL.md
 COPY --from=build --chown=node:node /app/workers/brand-pilot-image-worker/.codex/skills/threads-text/SKILL.md ./workers/brand-pilot-image-worker/.codex/skills/threads-text/SKILL.md
+RUN echo "714baa43f1c04e8ca77a8268825ea7e68e958917f5f5fe4c656d83811e1d0c98  /app/workers/brand-pilot-image-worker/assets/mixkit-a-very-happy-christmas-897.mp3" | sha256sum -c -
 
 USER node
 CMD ["node", "workers/brand-pilot-image-worker/dist/index.js", "watch"]

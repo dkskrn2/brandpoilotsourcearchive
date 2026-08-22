@@ -173,7 +173,13 @@ describe("AI content direct publishing", () => {
   });
 
   it("queues the completed Reel MP4 directly without creating another render job", async () => {
-    const { repository, statements, query } = setup({ outputFormat: "reel", outputManifest: reelManifest });
+    const reelWithBgm = {
+      ...reelManifest,
+      assets: reelManifest.assets.map((asset) => asset.role === "video"
+        ? { ...asset, durationSeconds: 3, audioCodec: "aac" }
+        : asset),
+    };
+    const { repository, statements, query } = setup({ outputFormat: "reel", outputManifest: reelWithBgm });
 
     await expect(repository.prepareAiContentPublish({
       ...staticPublishActionFixture,
@@ -194,6 +200,7 @@ describe("AI content direct publishing", () => {
         role: "video",
         mimeType: "video/mp4",
         url: "https://assets.public.blob.vercel-storage.com/reel.mp4",
+        audioCodec: "aac",
       },
     });
   });

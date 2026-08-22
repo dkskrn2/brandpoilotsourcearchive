@@ -38,7 +38,7 @@ export const ManifestVideoAssetSchema = Type.Object({
   durationSeconds: Type.Number({ exclusiveMinimum: 0 }),
   videoCodec: Type.Literal("h264"),
   fps: Type.Literal(30),
-  audioCodec: Type.Null(),
+  audioCodec: Type.Union([Type.Null(), Type.Literal("aac")]),
 }, { additionalProperties: false });
 export type ManifestVideoAsset = Static<typeof ManifestVideoAssetSchema>;
 
