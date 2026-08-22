@@ -1,6 +1,7 @@
 import { PGlite } from "@electric-sql/pglite";
 import { pgcrypto } from "@electric-sql/pglite/contrib/pgcrypto";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { manualSlotKey } from "./publishCalendarIdempotency.js";
 import { createPublishCalendarRepository } from "./publishCalendarRepository.js";
 
 const ids = {
@@ -10,11 +11,14 @@ const ids = {
   generation2: "30000000-0000-4000-8000-000000000002",
   output: "40000000-0000-4000-8000-000000000001",
   channelOutput: "50000000-0000-4000-8000-000000000001",
+  topic: "60000000-0000-4000-8000-000000000001",
+  otherTopic: "60000000-0000-4000-8000-000000000002",
 };
 
 describe("publish calendar manual provisioning with postgres semantics", () => {
   let db: PGlite;
   let repository: ReturnType<typeof createPublishCalendarRepository>;
+  let pool: Parameters<typeof createPublishCalendarRepository>[0];
 
   beforeEach(async () => {
     db = await PGlite.create({ extensions: { pgcrypto } });
@@ -26,6 +30,16 @@ describe("publish calendar manual provisioning with postgres semantics", () => {
       create table brand_subscriptions(brand_id uuid primary key, plan_code text not null, status text not null, started_at timestamptz not null, current_period_start timestamptz not null, current_period_end timestamptz not null);
       create table ai_content_generations(id uuid primary key, workspace_id uuid not null, brand_id uuid not null, title text not null, output_format text not null, status text not null, created_at timestamptz not null default now());
       create table ai_content_generation_outputs(id uuid primary key, generation_id uuid not null, workspace_id uuid not null, brand_id uuid not null, title text, status text not null, created_at timestamptz not null default now());
+      create table content_topics(
+        id uuid primary key, workspace_id uuid not null, brand_id uuid not null,
+        title text not null, status text not null, selected_instagram_format text,
+        created_at timestamptz not null default now()
+      );
+      create table topic_publish_groups(
+        id uuid primary key default gen_random_uuid(), workspace_id uuid not null, brand_id uuid not null,
+        content_topic_id uuid not null unique, status text not null, scheduled_for timestamptz,
+        created_at timestamptz not null default now(), updated_at timestamptz not null default now()
+      );
       create table ai_content_usage_ledger(generation_id uuid not null, workspace_id uuid not null, brand_id uuid not null, usage_type text not null, quantity integer not null, usage_date date not null);
       create table channel_outputs(
         id uuid primary key, workspace_id uuid not null, brand_id uuid not null,
@@ -49,6 +63,9 @@ describe("publish calendar manual provisioning with postgres semantics", () => {
       create unique index publish_calendar_slots_generation_unique
         on publish_calendar_slots(brand_id,generation_id)
         where generation_id is not null and status<>'cancelled';
+      create unique index publish_calendar_slots_publish_group_unique
+        on publish_calendar_slots(brand_id,topic_publish_group_id)
+        where topic_publish_group_id is not null and status<>'cancelled';
     `);
     await db.query("insert into brands values($1,$2)", [ids.brand, ids.workspace]);
     await db.query("insert into brand_channels(workspace_id,brand_id,channel,enabled,status) values($1,$2,'instagram',true,'connected')", [ids.workspace, ids.brand]);
@@ -59,7 +76,8 @@ describe("publish calendar manual provisioning with postgres semantics", () => {
       const result = await db.query(sql, values as never[]);
       return { rows: result.rows, rowCount: result.rows.length || Number(result.affectedRows ?? 0) };
     };
-    repository = createPublishCalendarRepository({ query, connect: async () => ({ query, release() {} }) } as never);
+    pool = { query, connect: async () => ({ query, release() {} }) } as never;
+    repository = createPublishCalendarRepository(pool);
   }, 60_000);
 
   afterEach(async () => db?.close(), 30_000);
@@ -82,14 +100,219 @@ describe("publish calendar manual provisioning with postgres semantics", () => {
     },
   });
 
-  it("atomically creates content-backed rows exactly 30 minutes apart", async () => {
+  it("reserves a selected content topic without starting generation or provider publication", async () => {
+    await db.query(
+      `insert into content_topics(id,workspace_id,brand_id,title,status,selected_instagram_format)
+       values($1,$2,$3,'SNS 마케팅 사장님 콘텐츠','selected','instagram_feed_carousel')`,
+      [ids.topic, ids.workspace, ids.brand],
+    );
+    const afterManualSlotProvisioned = vi.fn(async () => undefined);
+    const topicRepository = createPublishCalendarRepository(pool, { afterManualSlotProvisioned });
+    const input = {
+      workspaceId: ids.workspace,
+      brandId: ids.brand,
+      scheduledFor: new Date("2099-08-15T02:30:00Z"),
+      channel: "instagram" as const,
+      contentFormat: "card_news" as const,
+      idempotencyKey: "manual-selected-topic",
+      source: { kind: "existing_content_topic", contentTopicId: ids.topic } as never,
+    };
+
+    const before = await topicRepository.getWeeklyUsage({
+      workspaceId: ids.workspace,
+      brandId: ids.brand,
+      at: input.scheduledFor,
+    });
+    const first = await topicRepository.provisionManualSlot(input);
+    await db.query(
+      "insert into ai_content_generation_outputs(id,generation_id,workspace_id,brand_id,title,status) values($1,$2,$3,$4,'생성 완료 콘텐츠','completed')",
+      [ids.output, ids.generation1, ids.workspace, ids.brand],
+    );
+    await db.query(
+      "update publish_calendar_slots set generation_id=$2,generation_output_id=$3,status='content_assigned' where id=$1",
+      [first.id, ids.generation1, ids.output],
+    );
+    const replay = await topicRepository.provisionManualSlot(input);
+    await db.query(
+      `insert into content_topics(id,workspace_id,brand_id,title,status,selected_instagram_format)
+       values($1,$2,$3,'다른 주제','selected','instagram_feed_carousel')`,
+      [ids.otherTopic, ids.workspace, ids.brand],
+    );
+    await expect(topicRepository.provisionManualSlot({
+      ...input,
+      source: { kind: "existing_content_topic", contentTopicId: ids.otherTopic } as never,
+    })).rejects.toThrow("publish_calendar_idempotency_conflict");
+    const after = await topicRepository.getWeeklyUsage({
+      workspaceId: ids.workspace,
+      brandId: ids.brand,
+      at: input.scheduledFor,
+    });
+
+    expect(replay.id).toBe(first.id);
+    expect(first).toMatchObject({
+      status: "generation_pending",
+      generationId: null,
+      generationOutputId: null,
+    });
+    expect(first.topicPublishGroupId).not.toBeNull();
+    expect(afterManualSlotProvisioned).not.toHaveBeenCalled();
+    expect(after.generation).toEqual(before.generation);
+    expect(after.publishing.reserved).toBe(before.publishing.reserved + 1);
+    const stored = await db.query<{
+      topic_status: string;
+      group_status: string;
+      group_count: number;
+      slot_count: number;
+    }>(
+      `select topic.status topic_status,publish_group.status group_status,
+              count(distinct publish_group.id)::integer group_count,
+              count(distinct slot.id)::integer slot_count
+         from content_topics topic
+         join topic_publish_groups publish_group on publish_group.content_topic_id=topic.id
+         join publish_calendar_slots slot on slot.topic_publish_group_id=publish_group.id
+        where topic.id=$1
+        group by topic.status,publish_group.status`,
+      [ids.topic],
+    );
+    expect(stored.rows[0]).toEqual({
+      topic_status: "selected",
+      group_status: "waiting",
+      group_count: 1,
+      slot_count: 1,
+    });
+  });
+
+  it("reuses the selected content topic's existing waiting publish group", async () => {
+    const groupId = "70000000-0000-4000-8000-000000000001";
+    await db.query(
+      `insert into content_topics(id,workspace_id,brand_id,title,status,selected_instagram_format)
+       values($1,$2,$3,'기존 그룹 주제','selected','instagram_reel')`,
+      [ids.topic, ids.workspace, ids.brand],
+    );
+    await db.query(
+      `insert into topic_publish_groups(id,workspace_id,brand_id,content_topic_id,status)
+       values($1,$2,$3,$4,'waiting')`,
+      [groupId, ids.workspace, ids.brand, ids.topic],
+    );
+
+    const slot = await repository.provisionManualSlot({
+      workspaceId: ids.workspace,
+      brandId: ids.brand,
+      scheduledFor: new Date("2099-08-16T02:30:00Z"),
+      channel: "instagram",
+      contentFormat: "reel",
+      idempotencyKey: "manual-existing-topic-group",
+      source: { kind: "existing_content_topic", contentTopicId: ids.topic },
+    });
+
+    expect(slot).toMatchObject({
+      topicPublishGroupId: groupId,
+      status: "generation_pending",
+    });
+    await expect(db.query("select count(*)::integer count from topic_publish_groups"))
+      .resolves.toMatchObject({ rows: [{ count: 1 }] });
+  });
+
+  it("replays an existing-generation key after output and topic lineage are linked", async () => {
+    const input = manualGenerationInput({ idempotencyKey: "manual-generation-after-lineage" });
+    const original = await repository.provisionManualSlot(input);
+    await db.query(
+      `insert into content_topics(id,workspace_id,brand_id,title,status,selected_instagram_format)
+       values($1,$2,$3,'생성 연결 주제','generated','instagram_feed_carousel')`,
+      [ids.topic, ids.workspace, ids.brand],
+    );
+    const group = await db.query<{ id: string }>(
+      `insert into topic_publish_groups(workspace_id,brand_id,content_topic_id,status)
+       values($1,$2,$3,'waiting') returning id`,
+      [ids.workspace, ids.brand, ids.topic],
+    );
+    await db.query(
+      "insert into ai_content_generation_outputs(id,generation_id,workspace_id,brand_id,title,status) values($1,$2,$3,$4,'생성 완료 콘텐츠','completed')",
+      [ids.output, ids.generation1, ids.workspace, ids.brand],
+    );
+    await db.query(
+      `update publish_calendar_slots
+          set generation_output_id=$2,topic_publish_group_id=$3,status='content_assigned'
+        where id=$1`,
+      [original.id, ids.output, group.rows[0]?.id],
+    );
+
+    await expect(repository.provisionManualSlot(input)).resolves.toMatchObject({
+      id: original.id,
+      generationId: ids.generation1,
+      generationOutputId: ids.output,
+      topicPublishGroupId: group.rows[0]?.id,
+    });
+  });
+
+  it("replays a Release A v1 manual key through lineage compatibility", async () => {
+    const input = manualGenerationInput({ idempotencyKey: "release-a-manual-replay" });
+    const inserted = await db.query<{ id: string }>(
+      `insert into publish_calendar_slots(
+         workspace_id,brand_id,scheduled_for,assignment_mode,status,recommendation_kind,
+         content_format,channels,generation_id,title,idempotency_key
+       ) values($1,$2,$3,'manual','generation_pending',null,'card_news',array['instagram'],$4,'기존 예약',$5)
+       returning id`,
+      [ids.workspace, ids.brand, input.scheduledFor, ids.generation1, manualSlotKey(input.idempotencyKey)],
+    );
+
+    await expect(repository.provisionManualSlot(input)).resolves.toMatchObject({
+      id: inserted.rows[0]?.id,
+      generationId: ids.generation1,
+    });
+  });
+
+  it("rejects changing a manual request source kind after lifecycle enrichment", async () => {
+    const input = manualGenerationInput({ idempotencyKey: "manual-source-kind-after-lineage" });
+    const original = await repository.provisionManualSlot(input);
+    await db.query(
+      "insert into ai_content_generation_outputs(id,generation_id,workspace_id,brand_id,title,status) values($1,$2,$3,$4,'생성 완료 콘텐츠','completed')",
+      [ids.output, ids.generation1, ids.workspace, ids.brand],
+    );
+    await db.query(
+      "update publish_calendar_slots set generation_output_id=$2,status='content_assigned' where id=$1",
+      [original.id, ids.output],
+    );
+
+    await expect(repository.provisionManualSlot({
+      ...input,
+      source: { kind: "existing_output", generationOutputId: ids.output },
+    })).rejects.toThrow("publish_calendar_idempotency_conflict");
+  });
+
+  it.each([
+    ["another workspace", ids.topic, "90000000-0000-4000-8000-000000000001", ids.brand, "selected", "instagram_feed_carousel", "card_news"],
+    ["another brand", ids.topic, ids.workspace, "90000000-0000-4000-8000-000000000002", "selected", "instagram_feed_carousel", "card_news"],
+    ["non-selected status", ids.topic, ids.workspace, ids.brand, "generating", "instagram_feed_carousel", "card_news"],
+    ["format mismatch", ids.topic, ids.workspace, ids.brand, "selected", "instagram_reel", "card_news"],
+  ])("rejects a content topic from %s", async (_label, topicId, workspaceId, brandId, status, selectedFormat, contentFormat) => {
+    await db.query(
+      `insert into content_topics(id,workspace_id,brand_id,title,status,selected_instagram_format)
+       values($1,$2,$3,'차단 대상',$4,$5)`,
+      [topicId, workspaceId, brandId, status, selectedFormat],
+    );
+
+    await expect(repository.provisionManualSlot({
+      workspaceId: ids.workspace,
+      brandId: ids.brand,
+      scheduledFor: new Date("2099-08-15T02:30:00Z"),
+      channel: "instagram",
+      contentFormat: contentFormat as "card_news",
+      idempotencyKey: `topic-rejected-${_label}`,
+      source: { kind: "existing_content_topic", contentTopicId: topicId } as never,
+    })).rejects.toThrow("publish_calendar_content_not_assignable");
+    await expect(db.query("select count(*)::integer count from topic_publish_groups"))
+      .resolves.toMatchObject({ rows: [{ count: 0 }] });
+  });
+
+  it("atomically creates same-time batch rows for distinct publication sources", async () => {
     const slots = await repository.provisionManualSlotsBatch({
       workspaceId: ids.workspace,
       brandId: ids.brand,
       idempotencyKey: "batch-pglite",
       rows: [
         { clientRowId: "row-1", scheduledFor: new Date("2099-08-15T02:30:00Z"), channel: "instagram", contentFormat: "card_news", source: { kind: "existing_generation", generationId: ids.generation1 } },
-        { clientRowId: "row-2", scheduledFor: new Date("2099-08-15T03:00:00Z"), channel: "instagram", contentFormat: "reel", source: { kind: "existing_generation", generationId: ids.generation2 } },
+        { clientRowId: "row-2", scheduledFor: new Date("2099-08-15T02:30:00Z"), channel: "instagram", contentFormat: "reel", source: { kind: "existing_generation", generationId: ids.generation2 } },
       ],
     });
     expect(slots.map((slot) => slot.status)).toEqual(["generation_pending", "generation_pending"]);
@@ -97,6 +320,58 @@ describe("publish calendar manual provisioning with postgres semantics", () => {
       "select count(*)::integer count,count(*) filter(where status='open')::integer open_count,count(distinct idempotency_key)::integer key_count from publish_calendar_slots",
     );
     expect(stored.rows[0]).toEqual({ count: 2, open_count: 0, key_count: 2 });
+  });
+
+  it("rejects changing a batch row source kind after lifecycle enrichment", async () => {
+    const input = {
+      workspaceId: ids.workspace,
+      brandId: ids.brand,
+      idempotencyKey: "batch-source-kind-after-lineage",
+      rows: [{
+        clientRowId: "row-1",
+        scheduledFor: new Date("2099-08-15T02:30:00Z"),
+        channel: "instagram" as const,
+        contentFormat: "card_news" as const,
+        source: { kind: "existing_generation" as const, generationId: ids.generation1 },
+      }],
+    };
+    const [original] = await repository.provisionManualSlotsBatch(input);
+    await db.query(
+      "insert into ai_content_generation_outputs(id,generation_id,workspace_id,brand_id,title,status) values($1,$2,$3,$4,'생성 완료 콘텐츠','completed')",
+      [ids.output, ids.generation1, ids.workspace, ids.brand],
+    );
+    await db.query(
+      "update publish_calendar_slots set generation_output_id=$2,status='content_assigned' where id=$1",
+      [original.id, ids.output],
+    );
+
+    await expect(repository.provisionManualSlotsBatch({
+      ...input,
+      rows: [{ ...input.rows[0], source: { kind: "existing_output", generationOutputId: ids.output } }],
+    })).rejects.toThrow("publish_calendar_idempotency_conflict");
+  });
+
+  it("creates two same-time manual reservations, counts two units, and does not recount replay", async () => {
+    const firstInput = manualGenerationInput({ idempotencyKey: "same-time-manual-1" });
+    const secondInput = manualGenerationInput({
+      idempotencyKey: "same-time-manual-2",
+      generationId: ids.generation2,
+      contentFormat: "reel",
+    });
+
+    const first = await repository.provisionManualSlot(firstInput);
+    const second = await repository.provisionManualSlot(secondInput);
+    const replay = await repository.provisionManualSlot(firstInput);
+    const usage = await repository.getWeeklyUsage({
+      workspaceId: ids.workspace,
+      brandId: ids.brand,
+      at: firstInput.scheduledFor,
+    });
+
+    expect(first.id).not.toBe(second.id);
+    expect(first.scheduledFor).toBe(second.scheduledFor);
+    expect(replay.id).toBe(first.id);
+    expect(usage.publishing.reserved).toBe(2);
   });
 
   it("replays a keyed slot after its scheduled time has passed", async () => {
@@ -140,7 +415,7 @@ describe("publish calendar manual provisioning with postgres semantics", () => {
     ["format", "update publish_calendar_slots set content_format='reel' where id=$1"],
     ["timestamp", "update publish_calendar_slots set scheduled_for='2099-08-15T03:30:00Z' where id=$1"],
     ["source kind", `update publish_calendar_slots
-       set generation_output_id='40000000-0000-4000-8000-000000000099' where id=$1`],
+       set generation_id=null,generation_output_id='40000000-0000-4000-8000-000000000099' where id=$1`],
     ["source id", `update publish_calendar_slots
        set generation_id='30000000-0000-4000-8000-000000000002' where id=$1`],
   ])("rejects a keyed replay whose %s differs", async (_label, mutation) => {
@@ -152,8 +427,8 @@ describe("publish calendar manual provisioning with postgres semantics", () => {
       .rejects.toThrow("publish_calendar_idempotency_conflict");
   });
 
-  it("rolls the whole batch back when two rows are less than 30 minutes apart", async () => {
-    await expect(repository.provisionManualSlotsBatch({
+  it("allows nearby times inside one batch", async () => {
+    const slots = await repository.provisionManualSlotsBatch({
       workspaceId: ids.workspace,
       brandId: ids.brand,
       idempotencyKey: "batch-spacing",
@@ -161,9 +436,10 @@ describe("publish calendar manual provisioning with postgres semantics", () => {
         { clientRowId: "row-1", scheduledFor: new Date("2099-08-15T02:30:00Z"), channel: "instagram", contentFormat: "card_news", source: { kind: "existing_generation", generationId: ids.generation1 } },
         { clientRowId: "row-2", scheduledFor: new Date("2099-08-15T02:59:00Z"), channel: "instagram", contentFormat: "reel", source: { kind: "existing_generation", generationId: ids.generation2 } },
       ],
-    })).rejects.toThrow("publish_calendar_spacing_conflict");
+    });
     const stored = await db.query<{ count: number }>("select count(*)::integer count from publish_calendar_slots");
-    expect(stored.rows[0]?.count).toBe(0);
+    expect(slots).toHaveLength(2);
+    expect(stored.rows[0]?.count).toBe(2);
   });
 
   it("rejects client row ids that collide after durable-key normalization", async () => {
@@ -372,54 +648,4 @@ describe("publish calendar manual provisioning with postgres semantics", () => {
       .resolves.toMatchObject({ publishing: { reserved: 1 } });
   });
 
-  it("returns the matching legacy no-key row when multiple active rows share one time", async () => {
-    const scheduledFor = "2099-09-01T02:30:00Z";
-    const first = await db.query<{ id: string }>(
-      `insert into publish_calendar_slots(
-         workspace_id,brand_id,scheduled_for,assignment_mode,status,recommendation_kind,content_format,channels
-       ) values($1,$2,$3,'automatic','open','trend','reel',array['instagram']) returning id`,
-      [ids.workspace, ids.brand, scheduledFor],
-    );
-    const matching = await db.query<{ id: string }>(
-      `insert into publish_calendar_slots(
-         workspace_id,brand_id,scheduled_for,assignment_mode,status,recommendation_kind,content_format,channels
-       ) values($1,$2,$3,'manual','open',null,'card_news',array['instagram']) returning id`,
-      [ids.workspace, ids.brand, scheduledFor],
-    );
-
-    await expect(repository.createSlot({
-      workspaceId: ids.workspace,
-      brandId: ids.brand,
-      scheduledFor: new Date(scheduledFor),
-      assignmentMode: "manual",
-      recommendationKind: null,
-      contentFormat: "card_news",
-      channels: ["instagram"],
-    })).resolves.toMatchObject({ id: matching.rows[0]?.id });
-    expect(first.rows[0]?.id).not.toBe(matching.rows[0]?.id);
-  });
-
-  it("creates a new legacy no-key row after the prior matching row is cancelled", async () => {
-    const scheduledFor = "2099-09-02T02:30:00Z";
-    const original = await db.query<{ id: string }>(
-      `insert into publish_calendar_slots(
-         workspace_id,brand_id,scheduled_for,assignment_mode,status,recommendation_kind,content_format,channels
-       ) values($1,$2,$3,'manual','open',null,'card_news',array['instagram']) returning id`,
-      [ids.workspace, ids.brand, scheduledFor],
-    );
-    await db.query("update publish_calendar_slots set status='cancelled' where id=$1", [original.rows[0]?.id]);
-
-    const recreated = await repository.createSlot({
-      workspaceId: ids.workspace,
-      brandId: ids.brand,
-      scheduledFor: new Date(scheduledFor),
-      assignmentMode: "manual",
-      recommendationKind: null,
-      contentFormat: "card_news",
-      channels: ["instagram"],
-    });
-
-    expect(recreated.id).not.toBe(original.rows[0]?.id);
-    expect(recreated.idempotencyKey).toBeNull();
-  });
 });

@@ -19,8 +19,8 @@ done
 
 POST_075_DATA_MIGRATION_ID="076_manual_content_generation_brand_rules.sql"
 POST_075_DATA_MIGRATION_SHA256="da42c957d4307d58c1f37f5d508c8a1f14836727080d6290e4b0537e43167604"
-POST_075_SCHEMA_MIGRATION_ID="085_publish_calendar_idempotency_expand.sql"
-POST_075_SCHEMA_MIGRATION_SHA256="1601035eee057da39cac63c6e9a187fcd3331d590414005d2971a943306d22de"
+POST_075_SCHEMA_MIGRATION_ID="086_publish_calendar_same_time_contract.sql"
+POST_075_SCHEMA_MIGRATION_SHA256="89b5e23a3535ca4d8c11eb8ebd274317cc414bd482d70b93bb0b6f2c379b0abb"
 
 validate_post_075_data_migration_evidence() {
   local evidence_file="$1"

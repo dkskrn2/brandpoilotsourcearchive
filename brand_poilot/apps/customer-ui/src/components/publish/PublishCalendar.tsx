@@ -1,6 +1,6 @@
 import { CalendarDays, ChevronLeft, ChevronRight, Clock3, Settings2, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { ChannelType, PublishCalendarContentCandidate, PublishCalendarManualOptions, PublishCalendarManualSlotInput, PublishCalendarNewContentSetup, PublishCalendarSettings } from "../../types";
+import type { ChannelType, PublishCalendarManualOptions, PublishCalendarNewContentSetup, PublishCalendarSettings, PublishItem } from "../../types";
 import { dateKey, monthCells, timeLabel, type CalendarEntry } from "../../features/publishing/publishCalendar";
 import { ChannelLogo } from "../channels/ChannelLogo";
 import { Badge } from "../ui/Badge";
@@ -16,12 +16,14 @@ type Props = {
   settingsError: string | null;
   slotsError: string | null;
   slotsLoading: boolean;
+  unreservedItems?: PublishItem[];
+  focusedItemKey?: string | null;
+  onFocusedItemHandled?(): void;
   assignableContents: Array<{ id: string; title: string }>;
   manualOptions: PublishCalendarManualOptions | null;
   manualOptionsError: string | null;
+  manualOptionsLoading?: boolean;
   onMonthChange(value: string): void;
-  onLoadCandidates(kind: "generating" | "completed_unpublished"): Promise<PublishCalendarContentCandidate[]>;
-  onProvision(input: PublishCalendarManualSlotInput): Promise<boolean>;
   onStartNew(input: { scheduledFor: string; contentFormat: "card_news" | "reel"; setup: PublishCalendarNewContentSetup }): void;
   initialBulkDraft: PublishCalendarBulkDraft | null;
   onStartBulk(rows: PublishCalendarBulkDraftRow[]): void;
@@ -29,13 +31,16 @@ type Props = {
   onProvisionBatch(draft: PublishCalendarBulkDraft): Promise<boolean>;
   onAssign(slotId: string, content: { id: string; title: string }): Promise<boolean>;
   onCancel(id: string): void;
+  onScheduleItem(item: PublishItem, dateKey: string, trigger: HTMLButtonElement): void;
+  onLoadManualOptions(): void;
   onSaveSettings(input: Omit<PublishCalendarSettings, "brandId" | "updatedAt">): Promise<{ ok: boolean; message?: string }>;
   saving?: boolean;
 };
 
-const label: Record<string, string> = { open: "추천 대기", proposal_assigned: "추천 배정", generation_pending: "생성 대기", content_assigned: "콘텐츠 배정", ready: "게시 준비", scheduled: "예약", publish_delayed: "게시 지연", quota_blocked: "한도 대기", published: "완료", cancelled: "취소" };
-const variant = (status: string) => status === "published" || status === "ready" ? "ok" : status === "publish_delayed" || status === "quota_blocked" ? "warn" : status === "cancelled" ? "neutral" : "info" as const;
+const label: Record<string, string> = { open: "추천 대기", proposal_assigned: "추천 배정", generation_pending: "생성 대기", content_assigned: "콘텐츠 배정", ready: "게시 준비", pre_generation: "생성 전", generating: "생성 중", completed_unpublished: "미게시", reserved: "예약 · 생성 대기", publish_queued: "게시 대기", scheduled: "예약", deferred: "게시 지연", publishing: "게시 중", partially_published: "일부 게시", publish_delayed: "게시 지연", quota_blocked: "한도 대기", published: "완료", failed: "실패", result_unknown: "결과 확인 필요", cancelled: "취소" };
+const variant = (status: string) => status === "published" || status === "ready" ? "ok" : status === "publish_delayed" || status === "quota_blocked" || status === "deferred" || status === "partially_published" || status === "result_unknown" ? "warn" : status === "failed" ? "bad" : status === "cancelled" ? "neutral" : "info" as const;
 const channelLabel: Record<ChannelType, string> = { instagram: "Instagram", threads: "Threads", tiktok: "TikTok", youtube: "YouTube", linkedin: "LinkedIn", x: "X" };
+const detailTimeFormatter = new Intl.DateTimeFormat("ko-KR", { timeZone: "Asia/Seoul", hour: "2-digit", minute: "2-digit", hourCycle: "h23" });
 
 function shiftMonth(value: string, amount: number) {
   const [year, month] = value.split("-").map(Number);
@@ -43,11 +48,13 @@ function shiftMonth(value: string, amount: number) {
   return `${next.getUTCFullYear()}-${String(next.getUTCMonth() + 1).padStart(2, "0")}`;
 }
 function fullDate(key: string) { const [, month, day] = key.split("-"); return `${Number(month)}월 ${Number(day)}일`; }
-function slotTimesAreSpaced(values: string[]) {
-  const minutes = [...values].sort().map((value) => Number(value.slice(0, 2)) * 60 + Number(value.slice(3)));
-  return minutes.every((value, index) => minutes.length < 2 || (index + 1 < minutes.length ? minutes[index + 1] : minutes[0] + 24 * 60) - value >= 30);
+function detailTimes(entry: CalendarEntry) {
+  if (entry.status === "published") return [{ label: "게시 완료 시각", value: entry.publishedAt ?? entry.calendarDate }];
+  if (entry.scheduledFor && entry.effectiveScheduledFor && entry.scheduledFor !== entry.effectiveScheduledFor) {
+    return [{ label: "원래 예약 시각", value: entry.scheduledFor }, { label: "지연 후 실제 게시 예정", value: entry.effectiveScheduledFor }];
+  }
+  return [{ label: "게시 예정 시각", value: entry.scheduledFor ?? entry.effectiveScheduledFor ?? entry.calendarDate }];
 }
-
 function SettingsDialog({ settings, channels, onClose, onSave, saving }: { settings: PublishCalendarSettings; channels: ChannelType[]; onClose(): void; onSave: Props["onSaveSettings"]; saving?: boolean }) {
   const [enabled, setEnabled] = useState(settings.enabled);
   const [informationalFormat, setInformationalFormat] = useState(settings.informationalFormat);
@@ -60,7 +67,6 @@ function SettingsDialog({ settings, channels, onClose, onSave, saving }: { setti
     if (enabled && !instagramAvailable) { setError("연결·활성화된 Instagram 채널이 필요합니다."); return; }
     const times = slotTimes.split(",").map((time) => time.trim()).filter(Boolean);
     if (times.length === 0 || times.some((time) => !/^([01]\d|2[0-3]):[0-5]\d$/.test(time))) { setError("게시 시간은 HH:mm 형식으로 입력해 주세요."); return; }
-    if (new Set(times).size !== times.length || !slotTimesAreSpaced(times)) { setError("게시 시간은 서로 최소 30분 간격이어야 합니다."); return; }
     setError(null);
     const result = await onSave({ enabled, channels: enabled ? ["instagram"] : [], informationalFormat, trendFormat, slotTimes: times });
     if (result.ok) onClose(); else setError(result.message ?? "자동 게시 설정을 저장하지 못했습니다.");
@@ -83,37 +89,57 @@ function SettingsUnavailableDialog({ message, onClose }: { message: string; onCl
   return <div className="modal-backdrop"><FocusTrap active initialFocusSelector=".auto-publish-settings__close" className="modal-panel auto-publish-settings" role="dialog" aria-modal="true" aria-label="자동 게시 설정" onKeyDown={(event) => event.key === "Escape" && onClose()}><header className="auto-publish-settings__header"><div><h2>자동 게시 설정</h2><p>{message}</p></div><button className="button icon-button auto-publish-settings__close" type="button" aria-label="닫기" onClick={onClose}><X size={18} /></button></header><div className="auto-publish-settings__body"><p role="alert">설정을 불러온 뒤에만 변경할 수 있습니다.</p></div></FocusTrap></div>;
 }
 
-export function PublishCalendar({ monthKey, entries, connectedChannels, settings, settingsError, slotsError, slotsLoading, assignableContents, manualOptions, manualOptionsError, onMonthChange, onLoadCandidates, onProvision, onStartNew, initialBulkDraft, onStartBulk, onContinueBulk, onProvisionBatch, onAssign, onCancel, onSaveSettings, saving }: Props) {
+export function PublishCalendar({ monthKey, entries, connectedChannels, settings, settingsError, slotsError, slotsLoading, unreservedItems = [], focusedItemKey, onFocusedItemHandled, assignableContents, manualOptions, manualOptionsError, manualOptionsLoading, onMonthChange, onStartNew, initialBulkDraft, onStartBulk, onContinueBulk, onProvisionBatch, onAssign, onCancel, onScheduleItem, onLoadManualOptions, onSaveSettings, saving }: Props) {
   const cells = useMemo(() => monthCells(monthKey), [monthKey]);
-  const byDate = useMemo(() => entries.reduce((map, entry) => { const key = dateKey(entry.scheduledFor); map.set(key, [...(map.get(key) ?? []), entry]); return map; }, new Map<string, CalendarEntry[]>()), [entries]);
-  const [selectedDate, setSelectedDate] = useState(`${monthKey}-01`);
+  const byDate = useMemo(() => entries.reduce((map, entry) => { const key = dateKey(entry.calendarDate); map.set(key, [...(map.get(key) ?? []), entry]); return map; }, new Map<string, CalendarEntry[]>()), [entries]);
+  const today = dateKey(new Date());
+  const [selectedDate, setSelectedDate] = useState(today.startsWith(monthKey) ? today : `${monthKey}-01`);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [creationTrayOpen, setCreationTrayOpen] = useState(Boolean(initialBulkDraft));
   const [assignedContentId, setAssignedContentId] = useState("");
   const detailHeadingRef = useRef<HTMLHeadingElement>(null);
   const settingsTriggerRef = useRef<HTMLButtonElement>(null);
   const settingsWasOpenRef = useRef(false);
-  useEffect(() => { if (!selectedDate.startsWith(monthKey)) { setSelectedDate(`${monthKey}-01`); setSelectedId(null); } }, [monthKey, selectedDate]);
+  const bulkOptionsRequestedRef = useRef(false);
+  useEffect(() => { if (!selectedDate.startsWith(monthKey)) { setSelectedDate(today.startsWith(monthKey) ? today : `${monthKey}-01`); setSelectedId(null); } }, [monthKey, selectedDate, today]);
+  useEffect(() => {
+    if (!focusedItemKey) return;
+    const entry = entries.find((candidate) => candidate.id === focusedItemKey);
+    if (!entry) return;
+    setSelectedDate(dateKey(entry.calendarDate));
+    setSelectedId(entry.id);
+    onFocusedItemHandled?.();
+  }, [entries, focusedItemKey, onFocusedItemHandled]);
   useEffect(() => { setAssignedContentId(""); }, [selectedDate, selectedId]);
+  useEffect(() => {
+    if (!initialBulkDraft || manualOptions || manualOptionsLoading || bulkOptionsRequestedRef.current) return;
+    bulkOptionsRequestedRef.current = true;
+    onLoadManualOptions();
+  }, [initialBulkDraft, manualOptions, manualOptionsLoading, onLoadManualOptions]);
   useEffect(() => { if (settingsWasOpenRef.current && !settingsOpen) settingsTriggerRef.current?.focus(); settingsWasOpenRef.current = settingsOpen; }, [settingsOpen]);
-  const dateEntries = (byDate.get(selectedDate) ?? []).sort((a, b) => Date.parse(a.scheduledFor) - Date.parse(b.scheduledFor));
+  const dateEntries = (byDate.get(selectedDate) ?? []).sort((a, b) => Date.parse(a.calendarDate) - Date.parse(b.calendarDate));
   const selected = dateEntries.find((entry) => entry.id === selectedId) ?? null;
   useEffect(() => { if (selected) { const stacked = window.matchMedia?.("(max-width: 980px)").matches; detailHeadingRef.current?.focus(stacked ? undefined : { preventScroll: true }); if (stacked) detailHeadingRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }); } }, [selected]);
   return <section className="publish-calendar-layout" aria-label="월간 게시 일정">
     <div className="publish-calendar-card"><header className="publish-calendar-toolbar"><div><span className="publish-calendar-eyebrow"><CalendarDays size={15} /> 월간 게시 계획</span><h2>{monthKey.replace("-", "년 ")}월</h2></div><div className="actions"><button ref={settingsTriggerRef} className="button" type="button" onClick={() => setSettingsOpen(true)}>자동 게시 설정</button><button className="button icon-button" type="button" aria-label="이전 달" onClick={() => onMonthChange(shiftMonth(monthKey, -1))}><ChevronLeft size={18} /></button><button className="button icon-button" type="button" aria-label="다음 달" onClick={() => onMonthChange(shiftMonth(monthKey, 1))}><ChevronRight size={18} /></button></div></header>
       <div className="publish-calendar-scroll" role="region" aria-label="게시 캘린더 스크롤"><div className="publish-calendar-weekdays" aria-hidden="true">{["월", "화", "수", "목", "금", "토", "일"].map((day) => <span key={day}>{day}</span>)}</div>
-      <div className="publish-calendar-grid" role="grid" aria-label="게시 캘린더">{Array.from({ length: 6 }, (_, week) => <div role="row" className="publish-calendar-row" key={week}>{cells.slice(week * 7, week * 7 + 7).map((cell) => { const slots = byDate.get(cell.key) ?? []; return <div role="gridcell" aria-label={fullDate(cell.key)} className={`publish-calendar-cell${cell.current ? "" : " is-outside"}`} key={cell.key}><button className="publish-calendar-cell__button" type="button" aria-label={`${fullDate(cell.key)} 일정 보기`} onClick={() => { setSelectedDate(cell.key); setSelectedId(null); }}><span>{cell.day}</span></button>{slots.slice(0, 3).map((entry) => <button className="publish-calendar-cell__entry" type="button" aria-label={`${entry.title} 슬롯 상세 보기`} onClick={() => { setSelectedDate(cell.key); setSelectedId(entry.id); }} key={entry.id}><span>{timeLabel(entry)}</span><strong>{entry.title}</strong></button>)}{slots.length > 3 ? <span>+{slots.length - 3}</span> : null}</div>; })}</div>)}</div></div>
+      <div className="publish-calendar-grid" role="grid" aria-label="게시 캘린더">{Array.from({ length: 6 }, (_, week) => <div role="row" className="publish-calendar-row" key={week}>{cells.slice(week * 7, week * 7 + 7).map((cell) => { const slots = byDate.get(cell.key) ?? []; return <div role="gridcell" aria-label={fullDate(cell.key)} className={`publish-calendar-cell${cell.current ? "" : " is-outside"}`} key={cell.key}><button className="publish-calendar-cell__button" type="button" aria-label={`${fullDate(cell.key)} 일정 보기`} onClick={() => { setSelectedDate(cell.key); setSelectedId(null); }}><span>{cell.day}</span></button>{slots.slice(0, 3).map((entry) => <button className="publish-calendar-cell__entry" type="button" data-publish-focus-key={entry.id} aria-label={`${entry.title} 슬롯 상세 보기`} onClick={() => { setSelectedDate(cell.key); setSelectedId(entry.id); }} key={entry.id}><span>{timeLabel(entry)}</span><strong>{entry.title}</strong></button>)}{slots.length > 3 ? <span>+{slots.length - 3}</span> : null}</div>; })}</div>)}</div></div>
     </div>
     <aside className="publish-calendar-detail" aria-label={selected ? `${selected.title} 슬롯 상세` : `${fullDate(selectedDate)} 게시 일정`}>
       <header className="publish-calendar-detail__header"><div><span>{selected ? "슬롯 상세" : "선택한 날짜"}</span><h2 ref={detailHeadingRef} tabIndex={-1}>{selected ? selected.title : fullDate(selectedDate)}</h2></div><Badge variant={selected ? variant(selected.status) : "neutral"}>{selected ? label[selected.status] ?? selected.status : `${dateEntries.length}개 일정`}</Badge></header>
       {slotsLoading ? <p role="status" aria-label="캘린더 슬롯을 불러오는 중입니다.">캘린더 슬롯을 불러오는 중입니다.</p> : slotsError ? <p role="alert">{slotsError}</p> : selected ? <div className="publish-calendar-slot-detail">
-        <div className="publish-calendar-slot-detail__time"><Clock3 size={18} /><span><small>{selected.effectiveScheduledFor && selected.effectiveScheduledFor !== selected.scheduledFor ? "원래 예약 시각" : "게시 예정 시각"}</small><strong>{timeLabel(selected)}</strong>{selected.effectiveScheduledFor && selected.effectiveScheduledFor !== selected.scheduledFor ? <><small>{selected.status === "published" ? "실제 게시 시각" : "지연 후 실제 게시 예정"}</small><strong>{timeLabel({ ...selected, scheduledFor: selected.effectiveScheduledFor })}</strong></> : null}</span></div>
-        <dl><div><dt>게시 방식</dt><dd>{selected.mode === "automatic" ? "자동" : "수동"} 게시</dd></div>{selected.recommendationKind ? <div><dt>추천 종류</dt><dd>{selected.recommendationKind === "trend" ? "트렌드성 추천" : "정보성 추천"}</dd></div> : null}<div><dt>콘텐츠 형식</dt><dd>{selected.contentFormat === "reel" ? "릴스" : "카드뉴스"}</dd></div><div><dt>게시 채널</dt><dd>{selected.channels.map((channel) => channelLabel[channel]).join(", ") || "채널 설정 전"}</dd></div>{selected.lastError ? <div><dt>상태·오류</dt><dd>{selected.lastError}</dd></div> : null}</dl>
+        <div className="publish-calendar-slot-detail__time"><Clock3 size={18} /><span>{detailTimes(selected).map((time) => <span key={time.label}><small>{time.label}</small><strong>{detailTimeFormatter.format(new Date(time.value))}</strong></span>)}</span></div>
+        <dl><div><dt>게시 방식</dt><dd>{selected.mode === "automatic" ? "자동" : "수동"} 게시</dd></div>{selected.recommendationKind ? <div><dt>추천 종류</dt><dd>{selected.recommendationKind === "trend" ? "트렌드성 추천" : "정보성 추천"}</dd></div> : null}<div><dt>콘텐츠 형식</dt><dd>{selected.contentFormat === "reel" ? "릴스" : selected.contentFormat === "card_news" ? "카드뉴스" : "설정 전"}</dd></div><div><dt>게시 채널</dt><dd>{selected.channels.map((channel) => channelLabel[channel]).join(", ") || "채널 설정 전"}</dd></div>{selected.lastError ? <div><dt>상태·오류</dt><dd>{selected.lastError}</dd></div> : null}</dl>
         {selected.status === "open" ? <div className="publish-calendar-manual-form"><label>배정할 콘텐츠<select aria-label="배정할 콘텐츠" value={assignedContentId} onChange={(event) => setAssignedContentId(event.target.value)}><option value="">콘텐츠 선택</option>{assignableContents.map((content) => <option value={content.id} key={content.id}>{content.title}</option>)}</select></label><button className="button primary" type="button" disabled={!assignedContentId} onClick={() => { const content = assignableContents.find((item) => item.id === assignedContentId); if (content) void onAssign(selected.id, content).then((assigned) => { if (assigned) setAssignedContentId(""); }); }}>선택 콘텐츠 배정</button></div> : null}
-        {!["published", "cancelled"].includes(selected.status) ? <button className="button" type="button" onClick={() => onCancel(selected.id)}>슬롯 취소</button> : null}<button className="button" type="button" onClick={() => setSelectedId(null)}>전체 일정 보기</button>
+        {(selected.cancellable ?? !["published", "cancelled", "publishing"].includes(selected.status)) ? <button className="button" type="button" onClick={() => onCancel(selected.id)}>슬롯 취소</button> : null}<button className="button" type="button" onClick={() => setSelectedId(null)}>전체 일정 보기</button>
       </div> : <div className="publish-calendar-detail__list">
         {dateEntries.map((entry) => <button className="publish-calendar-entry" type="button" onClick={() => setSelectedId(entry.id)} key={entry.id}><span>{timeLabel(entry)}</span><strong>{entry.title}</strong><Badge variant={variant(entry.status)}>{label[entry.status] ?? entry.status}</Badge></button>)}
-        <ManualPublishProvisioner dateKey={selectedDate} connected={connectedChannels.includes("instagram")} options={manualOptions} optionsError={manualOptionsError} onLoadCandidates={onLoadCandidates} onProvision={onProvision} onStartNew={onStartNew} initialBulkDraft={initialBulkDraft} onStartBulk={onStartBulk} onContinueBulk={onContinueBulk} onProvisionBatch={onProvisionBatch} />
+        <section aria-label="미예약 콘텐츠 보관함" className="publish-calendar-unreserved">
+          <h3>미예약 콘텐츠</h3>
+          {unreservedItems.length === 0 ? <p>게시 일정을 설정할 콘텐츠가 없습니다.</p> : unreservedItems.map((item) => <article data-item-key={item.itemKey} data-publish-focus-key={item.itemKey} tabIndex={-1} key={item.itemKey}><strong>{item.title}</strong><Badge variant="neutral">{label[item.status] ?? item.status}</Badge>{item.schedulable && item.contentFormat ? <button className="button" type="button" onClick={(event) => onScheduleItem(item, selectedDate, event.currentTarget)}>게시 설정</button> : null}</article>)}
+        </section>
+        {!creationTrayOpen ? <button className="button" type="button" onClick={() => { setCreationTrayOpen(true); onLoadManualOptions(); }}>새 콘텐츠·일괄 등록</button> : manualOptionsLoading ? <p role="status">콘텐츠 등록 선택 항목을 불러오는 중입니다.</p> : manualOptionsError && !manualOptions ? <div><p role="alert">{manualOptionsError}</p><button className="button" type="button" onClick={onLoadManualOptions}>선택 항목 다시 불러오기</button></div> : <ManualPublishProvisioner dateKey={selectedDate} connected={connectedChannels.includes("instagram")} options={manualOptions} optionsError={manualOptionsError} onStartNew={onStartNew} initialBulkDraft={initialBulkDraft} onStartBulk={onStartBulk} onContinueBulk={onContinueBulk} onProvisionBatch={onProvisionBatch} />}
       </div>}
     </aside>
     {settingsOpen ? settings ? <SettingsDialog settings={settings} channels={connectedChannels} saving={saving} onClose={() => setSettingsOpen(false)} onSave={onSaveSettings} /> : <SettingsUnavailableDialog message={settingsError ?? "자동 게시 설정을 불러오는 중입니다."} onClose={() => setSettingsOpen(false)} /> : null}

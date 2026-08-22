@@ -1,4 +1,5 @@
 ﻿import { describe, expect, it, vi } from "vitest";
+import { readFileSync } from "node:fs";
 import { encryptCredential } from "./credentialCrypto";
 import { afterEach } from "vitest";
 import { createRepository } from "./repository";
@@ -16,6 +17,7 @@ function findSqlCall(calls: ReadonlyArray<readonly unknown[]>, predicate: (sql: 
 
 const task3TestNow = new Date("2026-07-13T00:00:00.000Z");
 const oneDayMs = 24 * 60 * 60 * 1000;
+const repositorySource = readFileSync(new URL("./repository.ts", import.meta.url), "utf8");
 
 function useTask3TestClock() {
   vi.useFakeTimers();
@@ -38,6 +40,8 @@ describe("Task 4 transactional topic generation", () => {
     lastSelectedFormat?: string | null;
     dailyTopicCount?: number;
     autoApprovalEnabled?: boolean;
+    selectedTopic?: boolean;
+    selectedTopicFormat?: string | null;
   } = {}) {
     const statements: Array<{ sql: string; values: unknown[] }> = [];
     const query = vi.fn(async (sql: string, values?: unknown[]) => {
@@ -68,7 +72,26 @@ describe("Task 4 transactional topic generation", () => {
         return { rowCount: 1, rows: [{ topic_count: String(options.dailyTopicCount ?? 0) }] };
       }
       if (sql.includes("from content_topics ct") && sql.includes("for update") && sql.includes("skip locked")) {
-        return { rowCount: 0, rows: [] };
+        return options.selectedTopic
+          ? {
+              rowCount: 1,
+              rows: [{
+                id: "content-topic-1",
+                topic_row_id: "topic-row-1",
+                title: "예약된 SNS 마케팅 주제",
+                angle: "사장님 실전 팁",
+                source_context: { source: "topic_table", topicRowId: "topic-row-1" },
+                selected_instagram_format: options.selectedTopicFormat ?? null,
+                topic_title: "예약된 SNS 마케팅 주제",
+                topic_angle: "사장님 실전 팁",
+                target_customer: "small business owners",
+                region: null,
+                season: null,
+                reference_url: null,
+                notes: null,
+              }],
+            }
+          : { rowCount: 0, rows: [] };
       }
       if (sql.includes("from topic_rows") && sql.includes("for update skip locked")) {
         return { rowCount: 1, rows: [{
@@ -162,6 +185,35 @@ describe("Task 4 transactional topic generation", () => {
         expected === "instagram_story" ? "instagram_story_render" : "instagram_reel_render"
       ))).toBe(true);
     }
+  });
+
+  it.each([
+    { selected: "instagram_reel", expected: "instagram_reel" },
+    { selected: null, expected: "instagram_feed_carousel" },
+  ])("uses a selected topic format through generation output: $selected", async ({ selected, expected }) => {
+    const fixture = generationQuery({
+      channels: ["instagram"],
+      enabledFormats: ["instagram_feed_carousel"],
+      lastSelectedFormat: null,
+      selectedTopic: true,
+      selectedTopicFormat: selected,
+    });
+
+    await createRepository(fakePoolWithClient(fixture.query) as any).generateContent("brand-1");
+
+    const selectedQuery = fixture.statements.find(({ sql }) =>
+      sql.includes("from content_topics ct") && sql.includes("for update of ct skip locked")
+    );
+    expect(selectedQuery?.sql).toContain("ct.selected_instagram_format");
+    const generatingUpdate = fixture.statements.find(({ sql }) =>
+      sql.includes("update content_topics set status = 'generating'")
+    );
+    expect(generatingUpdate?.values).toEqual(["content-topic-1", expected]);
+    const instagramOutput = fixture.statements.find(({ sql, values }) =>
+      sql.includes("insert into channel_outputs") && values[4] === "instagram"
+    );
+    expect(instagramOutput?.values[5]).toBe(expected);
+    expect(fixture.statements.some(({ sql }) => sql.includes("insert into content_topics"))).toBe(false);
   });
 
   it("creates a Threads-only topic without changing the Instagram cursor", async () => {
@@ -330,7 +382,7 @@ function fakePoolWithClient(query: ReturnType<typeof vi.fn>) {
 describe("daily generation maintenance boundary", () => {
   it("checks maintenance before the first brand query and leaves all execution counts unchanged", async () => {
     const counts = { brands: 0, automation: 0, generation: 0 };
-    const query = vi.fn(async (sql: string) => {
+    const query = vi.fn(async (sql: string, _params?: unknown[]) => {
       if (sql === "select assert_ai_content_writable()") throw new Error("ai_content_maintenance");
       if (sql.includes("from brands")) counts.brands += 1;
       if (sql.includes("automation_runs")) counts.automation += 1;
@@ -2753,7 +2805,7 @@ describe("repository", () => {
       expect(queueUpdate?.sql).not.toMatch(/delivery_format|output_json/);
     });
 
-    it("counts active topic groups instead of channel rows and overflows after four groups", async () => {
+    it("schedules every slotless ready group at one fixed policy time with null slot numbers", async () => {
       const fixture = schedulingFixture([
         "publish-group-1", "publish-group-2", "publish-group-3", "publish-group-4", "publish-group-5"
       ]);
@@ -2762,13 +2814,13 @@ describe("repository", () => {
       await repository.schedulePublishQueue("brand-1", new Date("2026-07-13T01:00:00.000Z"));
 
       const groupUpdates = fixture.statements.filter(({ sql }) => sql.includes("update topic_publish_groups") && sql.includes("status = 'scheduled'"));
-      expect(groupUpdates.map(({ values }) => [values[1], values[2]])).toEqual([
-        ["2026-07-13", 1], ["2026-07-13", 2], ["2026-07-13", 3], ["2026-07-13", 4], ["2026-07-14", 1]
-      ]);
+      expect(groupUpdates.map(({ values }) => values.slice(1))).toEqual(Array.from({ length: 5 }, () => [
+        "2026-07-13", null, new Date("2026-07-13T02:30:00.000Z")
+      ]));
       expect(fixture.statements.filter(({ sql }) => sql.includes("update publish_queue") && sql.includes("topic_publish_group_id"))).toHaveLength(5);
     });
 
-    it("normalizes PostgreSQL Date slot values before selecting the next slot", async () => {
+    it("does not query occupied policy slots before assigning slotless groups", async () => {
       const fixture = schedulingFixture(
         ["publish-group-1"],
         [{ slot_date: new Date("2026-07-13T15:00:00.000Z"), slot_number: 1 }]
@@ -2780,7 +2832,10 @@ describe("repository", () => {
       const groupUpdate = fixture.statements.find(({ sql }) => (
         sql.includes("update topic_publish_groups") && sql.includes("status = 'scheduled'")
       ));
-      expect(groupUpdate?.values.slice(1, 3)).toEqual(["2026-07-14", 2]);
+      expect(groupUpdate?.values.slice(1)).toEqual([
+        "2026-07-14", null, new Date("2026-07-14T02:30:00.000Z")
+      ]);
+      expect(fixture.statements.some(({ sql }) => sql.includes("slot_date >="))).toBe(false);
     });
 
     it("makes pending outputs wait while rejected and terminal failures do not block approved siblings", async () => {
@@ -2869,11 +2924,10 @@ describe("repository", () => {
       expect(statements.some(({ sql }) => sql.includes("set status='scheduled',last_error=null"))).toBe(true);
     });
 
-    it("moves a late-ready calendar group to the earliest 30-minute-safe time without changing existing reservations", async () => {
+    it("moves every late-ready calendar group to the exact current tick without blocked-time lookup", async () => {
       const statements: Array<{ sql: string; values: unknown[] }> = [];
       const reservedFor = new Date("2026-07-15T08:00:00.000Z");
       const now = new Date("2026-07-15T09:50:00.000Z");
-      const existingReservation = new Date("2026-07-15T10:00:00.000Z");
       const query = vi.fn(async (sql: string, values?: unknown[]) => {
         statements.push({ sql, values: values ?? [] });
         if (["begin", "commit", "rollback"].includes(sql.trim()) || sql.includes("pg_advisory_xact_lock")) {
@@ -2886,19 +2940,19 @@ describe("repository", () => {
           return { rowCount: 1, rows: [{ started_at: "2026-07-01T00:00:00.000Z", weekly_publish_limit: 2 }] };
         }
         if (sql.includes("publication_units") && sql.includes("allowed_group_ids")) {
-          return { rowCount: 1, rows: [{ allowed_group_ids: ["late-group-1"] }] };
+          return { rowCount: 1, rows: [{ allowed_group_ids: ["late-group-1", "late-group-2"] }] };
         }
         if (sql.includes("from publish_calendar_slots slot") && sql.includes("for update of slot")) {
           return {
-            rowCount: 1,
-            rows: [{ slot_id: "late-slot-1", group_id: "late-group-1", scheduled_for: reservedFor }],
+            rowCount: 2,
+            rows: [
+              { slot_id: "late-slot-1", group_id: "late-group-1", scheduled_for: reservedFor },
+              { slot_id: "late-slot-2", group_id: "late-group-2", scheduled_for: reservedFor },
+            ],
           };
         }
-        if (sql.includes("as blocked_at") && sql.includes("publish_calendar_slots")) {
-          return { rowCount: 1, rows: [{ blocked_at: existingReservation }] };
-        }
         if (sql.includes("update topic_publish_groups") && sql.includes("slot_number=null")) {
-          return { rowCount: 1, rows: [{ id: "late-group-1" }] };
+          return { rowCount: 1, rows: [{ id: values?.[0] }] };
         }
         if (sql.includes("update publish_queue") && sql.includes("topic_publish_group_id=$1")) {
           return { rowCount: 1, rows: [] };
@@ -2916,15 +2970,29 @@ describe("repository", () => {
 
       await repository.schedulePublishQueue("brand-1", now);
 
-      const expected = new Date("2026-07-15T10:30:00.000Z");
-      const groupUpdate = statements.find(({ sql }) => sql.includes("slot_number=null"));
-      const queueUpdate = statements.find(({ sql }) => sql.includes("topic_publish_group_id=$1"));
-      expect(groupUpdate?.values).toEqual(["late-group-1", "2026-07-15", expected]);
-      expect(queueUpdate?.values).toEqual(["late-group-1", "2026-07-15", expected]);
-      expect(statements.some(({ sql }) => sql.includes("as blocked_at"))).toBe(true);
-      const slotUpdate = statements.find(({ sql }) => sql.includes("set status='scheduled',last_error=null"));
-      expect(slotUpdate?.values).toEqual(["late-slot-1", "brand-1"]);
+      const groupUpdates = statements.filter(({ sql }) => (
+        sql.includes("update topic_publish_groups") && sql.includes("slot_number=null")
+      ));
+      const queueUpdates = statements.filter(({ sql }) => (
+        sql.includes("update publish_queue") && sql.includes("topic_publish_group_id=$1")
+      ));
+      expect(groupUpdates.map(({ values }) => values)).toEqual([
+        ["late-group-1", "2026-07-15", now],
+        ["late-group-2", "2026-07-15", now],
+      ]);
+      expect(queueUpdates.map(({ values }) => values)).toEqual([
+        ["late-group-1", "2026-07-15", now],
+        ["late-group-2", "2026-07-15", now],
+      ]);
+      expect(statements.some(({ sql }) => sql.includes("as blocked_at"))).toBe(false);
     });
+  });
+
+  it("preserves non-reservation recovery, lease, and provider retry timing", () => {
+    expect(repositorySource).toContain("publishing_started_at < now() - interval '30 minutes'");
+    expect(repositorySource).toContain("performance_sync_runs.started_at <= excluded.started_at - interval '30 minutes'");
+    expect(repositorySource).toContain("now() + interval '5 minutes'");
+    expect(repositorySource).not.toContain("earliestSafePublicationTime");
   });
 
   it("publishes Instagram queue items through Meta when generated image manifest is available", async () => {
@@ -4548,6 +4616,25 @@ describe("content performance repository", () => {
     expect(dashboard.channelPerformance.map(({ exposureCount }) => exposureCount)).toEqual([null, 0]);
     expect(dashboard.dailyExposure).toEqual([
       { date: "2026-07-16", channels: { threads: 0 } }
+    ]);
+  });
+
+  it("composes the tenant-scoped canonical publish items repository", async () => {
+    const query = vi.fn(async (sql: string, _params?: unknown[]) => {
+      if (sql.includes("with scoped_topics as")) return { rowCount: 0, rows: [] };
+      throw new Error(`unexpected query: ${sql}`);
+    });
+    const repository = createRepository({ query } as any);
+
+    await expect(repository.listPublishItems!({
+      workspaceId: "10000000-0000-4000-8000-000000000001",
+      brandId: "20000000-0000-4000-8000-000000000001",
+    })).resolves.toEqual([]);
+
+    expect(query).toHaveBeenCalledTimes(1);
+    expect(query.mock.calls[0]?.[1]).toEqual([
+      "10000000-0000-4000-8000-000000000001",
+      "20000000-0000-4000-8000-000000000001",
     ]);
   });
 });

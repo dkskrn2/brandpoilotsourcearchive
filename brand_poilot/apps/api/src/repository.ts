@@ -33,6 +33,7 @@ import { createAiContentPublishRepository } from "./aiContentPublish.js";
 import { createAiContentSubjectRepository } from "./aiContentSubjectRepository.js";
 import { createPublishCalendarRepository } from "./publishCalendarRepository.js";
 import { createDatabasePublishCalendarAllocator } from "./publishCalendarAllocator.js";
+import { createPublishItemsRepository } from "./publishItemsRepository.js";
 import { enqueueAutomatedCardNews } from "./automatedCardNews.js";
 import { createBrandIntelligenceRepository } from "./brandIntelligenceRepository.js";
 import { createBrandIntelligenceProvider } from "./brandIntelligenceProvider.js";
@@ -46,7 +47,7 @@ import { normalizeFaqUtterance } from "./faqUtterancePolicy.js";
 import { rankFaqCandidates } from "./faqMatcher.js";
 import type { FaqMatchingRuntimePolicy } from "./runtimeConfig.js";
 import { deliveryFormatToRenderJobType } from "./instagramFormats.js";
-import { kstDateKey, nextAvailablePolicySlot } from "./publishSchedule.js";
+import { kstDateKey, nextPolicySlots } from "./publishSchedule.js";
 import { subscriptionWeekWindow } from "./publishCalendarQuota.js";
 import { MetaGraphRequestError, classifyMetaGraphPublishError } from "./metaGraph.js";
 import {
@@ -282,19 +283,6 @@ function toDateKey(value: Date | string | null): string | null {
   }
   const date = value instanceof Date ? value : new Date(value);
   return Number.isNaN(date.getTime()) ? null : kstDateKey(date);
-}
-
-function earliestSafePublicationTime(start: Date, blockedValues: unknown[]): Date {
-  const intervalMs = 30 * 60 * 1_000;
-  let candidate = start.getTime();
-  const blocked = blockedValues
-    .map((value) => new Date(value as string | number | Date).getTime())
-    .filter(Number.isFinite)
-    .sort((left, right) => left - right);
-  for (const blockedAt of blocked) {
-    if (Math.abs(candidate - blockedAt) < intervalMs) candidate = blockedAt + intervalMs;
-  }
-  return new Date(candidate);
 }
 
 const maxReferenceSourceUrls = 10;
@@ -1504,6 +1492,7 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
       });
     },
   });
+  const publishItems = createPublishItemsRepository(pool);
   const publishCalendarAllocator = createDatabasePublishCalendarAllocator(pool, publishCalendar);
   const aiContent = createAiContentRepository(aiContentPool, {
     brandIntelligenceProvider,
@@ -2225,6 +2214,7 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
     ...aiContentAttachmentGc,
     ...aiContentDownload,
     ...publishCalendar,
+    ...publishItems,
     allocatePublishCalendar: (now) => publishCalendarAllocator.allocateAll(now),
     async getFaqCapabilities(brandId) {
       return faqPolicyForBrand(brandId);
@@ -4357,6 +4347,7 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
                   ct.title,
                   ct.angle,
                   ct.source_context,
+                  ct.selected_instagram_format,
                   tr.topic_title,
                   tr.topic_angle,
                   tr.target_customer,
@@ -4374,6 +4365,12 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
           [brandId]
         );
         const selectedTopic = selectedTopicResult.rowCount ? selectedTopicResult.rows[0] : null;
+        const persistedSelectedInstagramFormat = selectedTopic?.selected_instagram_format;
+        const generationInstagramFormat = persistedSelectedInstagramFormat === "instagram_feed_carousel"
+          || persistedSelectedInstagramFormat === "instagram_story"
+          || persistedSelectedInstagramFormat === "instagram_reel"
+          ? persistedSelectedInstagramFormat as InstagramDeliveryFormat
+          : readiness.instagramFormat;
         let topic: any | null = null;
         let sourceMaterials: { sourceType: "owned" | "reference"; contentUrl: string; content: string }[] = [];
         let sourceSnapshotIds: string[] = [];
@@ -4442,7 +4439,7 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
           }
           await client.query(
             "update content_topics set status = 'generating', selected_instagram_format = $2, error_message = null, updated_at = now() where id = $1",
-            [selectedTopic.id, readiness.instagramFormat]
+            [selectedTopic.id, generationInstagramFormat]
           );
         } else {
           const topicResult = await client.query(
@@ -4544,7 +4541,7 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
               topic?.topic_title ?? "크롤링 소스 기반 콘텐츠",
               topic?.topic_angle ?? "source_url",
               JSON.stringify(sourceContext),
-              readiness.instagramFormat
+              generationInstagramFormat
             ]
           );
           contentTopicId = contentTopic.rows[0].id;
@@ -4608,7 +4605,7 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
         for (const catalogEntry of channelCatalog) {
           if (!enabledChannels.includes(catalogEntry.channel)) continue;
           const deliveryFormat = catalogEntry.channel === "instagram"
-            ? readiness.instagramFormat
+            ? generationInstagramFormat
             : catalogEntry.defaultDeliveryFormat;
           if (!deliveryFormat) continue;
           const artifactKind = catalogEntry.channel === "instagram" && deliveryFormat === "instagram_reel"
@@ -5362,42 +5359,7 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
         for (const group of calendarReadyGroups.rows) {
           const scheduledFor = new Date(group.scheduled_for);
           if (!Number.isFinite(scheduledFor.getTime())) throw new Error("publish_calendar_slot_time_invalid");
-          let effectiveScheduledFor = scheduledFor;
-          if (scheduledFor <= now) {
-            const blocked = await client.query(
-              `select candidate.blocked_at
-                 from (
-                   select slot.scheduled_for as blocked_at
-                     from publish_calendar_slots slot
-                    where slot.brand_id=$1::uuid and slot.id<>$2::uuid
-                      and slot.status in (
-                        'proposal_assigned','generation_pending','content_assigned','ready',
-                        'scheduled','publish_delayed','quota_blocked'
-                      )
-                      and slot.channels @> array['instagram']::text[]
-                   union all
-                   select queue.scheduled_for as blocked_at
-                     from publish_queue queue
-                    where queue.brand_id=$1::uuid and queue.topic_publish_group_id<>$3
-                      and queue.channel='instagram'
-                      and queue.status in ('scheduled','publishing','deferred')
-                      and queue.scheduled_for is not null
-                   union all
-                   select queue.published_at as blocked_at
-                     from publish_queue queue
-                    where queue.brand_id=$1::uuid and queue.topic_publish_group_id<>$3
-                      and queue.channel='instagram' and queue.status='published'
-                      and queue.published_at >= $4::timestamptz - interval '30 minutes'
-                 ) candidate
-                where candidate.blocked_at is not null
-                order by candidate.blocked_at`,
-              [brandId, group.slot_id, group.group_id, now],
-            );
-            effectiveScheduledFor = earliestSafePublicationTime(
-              now,
-              blocked.rows.map((row) => row.blocked_at),
-            );
-          }
+          const effectiveScheduledFor = scheduledFor <= now ? now : scheduledFor;
           const allowedGroups = await allowedPublicationGroupIds(effectiveScheduledFor);
           if (!allowedGroups.has(String(group.group_id))) {
             await client.query(
@@ -5437,19 +5399,6 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
           updated += queueRows.rowCount ?? 0;
         }
 
-        const occupied = await client.query(
-          `select slot_date, slot_number
-           from topic_publish_groups
-           where brand_id = $1
-             and status in ('scheduled', 'partially_published')
-             and slot_date >= $2::date
-             and slot_number is not null`,
-          [brandId, kstDateKey(now)]
-        );
-        const occupiedSlotKeys = new Set<string>(occupied.rows.flatMap((row) => {
-          const slotDate = toDateKey(row.slot_date);
-          return slotDate ? [`${slotDate}:${row.slot_number}`] : [];
-        }));
         const readyGroups = await client.query(
           `select id
            from topic_publish_groups
@@ -5468,9 +5417,11 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
           [brandId]
         );
 
+        const slotlessScheduledFor = nextPolicySlots(now, 1)[0];
+        if (!slotlessScheduledFor) throw new Error("policy_slot_unavailable");
+        const slotlessDate = kstDateKey(slotlessScheduledFor);
         for (const group of readyGroups.rows) {
-          const slot = nextAvailablePolicySlot(now, group.id, occupiedSlotKeys);
-          const allowedGroups = await allowedPublicationGroupIds(slot.scheduledFor);
+          const allowedGroups = await allowedPublicationGroupIds(slotlessScheduledFor);
           if (!allowedGroups.has(String(group.id))) continue;
           const claimed = await client.query(
             `update topic_publish_groups
@@ -5478,7 +5429,7 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
                  scheduled_for = $4, updated_at = now()
              where id = $1 and status = 'ready' and slot_date is null and slot_number is null
              returning id`,
-            [group.id, slot.slotDate, slot.slotNumber, slot.scheduledFor]
+            [group.id, slotlessDate, null, slotlessScheduledFor]
           );
           if (!claimed.rowCount) continue;
           const queueRows = await client.query(
@@ -5486,9 +5437,8 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
              set status = 'scheduled', slot_date = $2::date, slot_number = $3,
                  scheduled_for = $4, updated_at = now()
              where topic_publish_group_id = $1 and status = 'queued'`,
-            [group.id, slot.slotDate, slot.slotNumber, slot.scheduledFor]
+            [group.id, slotlessDate, null, slotlessScheduledFor]
           );
-          occupiedSlotKeys.add(slot.key);
           processed += 1;
           updated += queueRows.rowCount ?? 0;
         }

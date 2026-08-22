@@ -208,6 +208,7 @@ jobs:
           node --test scripts/ai-content-three-format-cutover.postgres.integration.test.mjs
           AI_CONTENT_074_ENFORCE_BENCHMARK=false node --test scripts/ai-content-074.postgres.integration.test.mjs
           npm run test:migrations
+          npm exec --workspace @brand-pilot/api -- vitest run src/publishCalendarMigration086.postgres.integration.test.ts
           echo "migration_approval_required"
       - name: Verify API
         if: fromJSON(needs.impact.outputs.components).api
@@ -236,6 +237,15 @@ jobs:
             src/aiContentUpload.test.ts \
             src/contentOrchestration.test.ts \
             src/contentProposalJobs.test.ts \
+            src/publishCalendarIdempotency.test.ts \
+            src/publishCalendarRepository.test.ts \
+            src/publishCalendarProvisioning.pglite.test.ts \
+            src/publishCalendarMigration086.pglite.test.ts \
+            src/publishCalendarAllocator.test.ts \
+            src/publishItemsRepository.test.ts \
+            src/publishItemsRepository.pglite.test.ts \
+            src/publishItemState.test.ts \
+            src/publishSchedule.test.ts \
             src/repository.aiContentPool.test.ts \
             src/repository.dmWiki.test.ts \
             src/server.aiContentCustomer.test.ts \
@@ -244,6 +254,12 @@ jobs:
             src/server.aiContentWorker.test.ts \
             src/server.contentProposalWorker.test.ts \
             --maxWorkers=4
+          npm exec --workspace @brand-pilot/api -- vitest run \
+            src/repository.test.ts --testNamePattern "Task 4 transactional topic generation|Task 11 topic publish group scheduling|preserves non-reservation recovery, lease, and provider retry timing|composes the tenant-scoped canonical publish items repository" \
+            --maxWorkers=1
+          npm exec --workspace @brand-pilot/api -- vitest run \
+            src/server.test.ts --testNamePattern "scopes calendar routes|returns canonical publish items|requires authentication and brand access before listing canonical publish items|removes the legacy no-key calendar slot creation route|returns brand-scoped authoritative manual calendar options|lists scoped calendar content candidates|provisions a content-backed manual slot|provisions a validated manual slot batch|returns a conflict when a manual batch exceeds the plan generation quota" \
+            --maxWorkers=1
           npm run build --workspace @brand-pilot/api
       - name: Verify customer UI
         if: fromJSON(needs.impact.outputs.components).customerUi

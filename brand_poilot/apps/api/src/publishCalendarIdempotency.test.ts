@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
   automaticSlotKey,
+  batchSlotIdentity,
   batchSlotKey,
+  manualSlotIdentity,
   manualSlotKey,
   normalizeCalendarChannels,
 } from "./publishCalendarIdempotency.js";
@@ -14,6 +16,44 @@ describe("publish calendar idempotency keys", () => {
 
   it("keeps structured batch key components unambiguous", () => {
     expect(batchSlotKey("a:b", "c")).not.toBe(batchSlotKey("a", "b:c"));
+  });
+
+  it("persists manual request identity separately from the immutable source identity", () => {
+    const generation = manualSlotIdentity(" request-1 ", {
+      kind: "existing_generation",
+      generationId: "generation-1",
+    });
+    const output = manualSlotIdentity("request-1", {
+      kind: "existing_output",
+      generationOutputId: "output-1",
+    });
+
+    expect(generation.key).toMatch(/^manual:v2:[0-9a-f]{64}:[0-9a-f]{64}$/);
+    expect(generation.key.length).toBeLessThanOrEqual(200);
+    expect(generation.prefix).toBe(output.prefix);
+    expect(generation.key).not.toBe(output.key);
+    expect(generation.legacyKey).toBe(manualSlotKey("request-1"));
+  });
+
+  it("scopes batch row identity by batch key and row id before adding source identity", () => {
+    const first = batchSlotIdentity("batch-1", " row-1 ", {
+      kind: "existing_generation",
+      generationId: "generation-1",
+    });
+    const changedSource = batchSlotIdentity("batch-1", "row-1", {
+      kind: "existing_generation",
+      generationId: "generation-2",
+    });
+    const otherRow = batchSlotIdentity("batch-1", "row-2", {
+      kind: "existing_generation",
+      generationId: "generation-1",
+    });
+
+    expect(first.prefix).toBe(changedSource.prefix);
+    expect(first.key.length).toBeLessThanOrEqual(200);
+    expect(first.key).not.toBe(changedSource.key);
+    expect(first.prefix).not.toBe(otherRow.prefix);
+    expect(first.legacyKey).toBe(batchSlotKey("batch-1", "row-1"));
   });
 
   it("distinguishes repeated automatic occurrences at the same time", () => {

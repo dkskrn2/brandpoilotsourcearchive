@@ -86,7 +86,7 @@ const deploymentScripts = [
   ubuntuBootstrapPath,
 ];
 
-test("cutover API image contains ordered migrations through publish calendar expansion 085", () => {
+test("cutover API image contains ordered migrations through publish calendar contract 086", () => {
   const dockerfile = read("apps/api/Dockerfile");
   const migrate = read("scripts/migrate.mjs");
   const runner = read("scripts/migrationRunner.mjs");
@@ -108,6 +108,7 @@ test("cutover API image contains ordered migrations through publish calendar exp
   assert.equal(existsSync("db/migrations/083_manual_visual_selection_write_fence_invoker.sql"), true);
   assert.equal(existsSync("db/migrations/084_ai_content_usage_reversal_identity_invoker.sql"), true);
   assert.equal(existsSync("db/migrations/085_publish_calendar_idempotency_expand.sql"), true);
+  assert.equal(existsSync("db/migrations/086_publish_calendar_same_time_contract.sql"), true);
   assert.match(migrate, /AI_CONTENT_074_AUTHORIZATION_PUBLIC_KEY_FILE/);
   assert.match(migrate, /AI_CONTENT_074_PROVIDER_ATTESTATION_PUBLIC_KEY_FILE/);
   assert.doesNotMatch(migrate, /readFile\([^\n]*(?:PRIVATE|SIGNING)|createPrivateKey|AI_CONTENT_074_(?:AUTHORIZATION|PROVIDER_ATTESTATION)_KEY_FILE/);
@@ -153,7 +154,7 @@ test("deployment applies or verifies the pinned post-075 data migration before c
   assert.ok(migrationGate >= 0 && migrationGate < transition && transition < canary);
 });
 
-test("deployment applies the ordered post-075 schemas through publish calendar expansion 085 before canary mutation", () => {
+test("deployment applies the ordered post-075 schemas through publish calendar contract 086 before canary mutation", () => {
   const deploy = read("deploy/scripts/deploy.sh");
   const runner = read("scripts/migrationRunner.mjs");
   assert.match(runner, /077_content_suggestion_batches\.sql/);
@@ -174,9 +175,10 @@ test("deployment applies the ordered post-075 schemas through publish calendar e
   assert.match(runner, /31938a77b6b2b278b608e32de48cc463ceda24b7c96622b0662aacc3c0978f12/);
   assert.match(runner, /085_publish_calendar_idempotency_expand\.sql/);
   assert.match(runner, /1601035eee057da39cac63c6e9a187fcd3331d590414005d2971a943306d22de/);
-  assert.match(deploy, /POST_075_SCHEMA_MIGRATION_ID="085_publish_calendar_idempotency_expand\.sql"/);
-  assert.match(deploy, /POST_075_SCHEMA_MIGRATION_SHA256="1601035eee057da39cac63c6e9a187fcd3331d590414005d2971a943306d22de"/);
-  assert.doesNotMatch(deploy, /086_publish_calendar_same_time_contract/);
+  assert.match(runner, /086_publish_calendar_same_time_contract\.sql/);
+  assert.match(runner, /89b5e23a3535ca4d8c11eb8ebd274317cc414bd482d70b93bb0b6f2c379b0abb/);
+  assert.match(deploy, /POST_075_SCHEMA_MIGRATION_ID="086_publish_calendar_same_time_contract\.sql"/);
+  assert.match(deploy, /POST_075_SCHEMA_MIGRATION_SHA256="89b5e23a3535ca4d8c11eb8ebd274317cc414bd482d70b93bb0b6f2c379b0abb"/);
   assert.match(deploy, /scripts\/migrate\.mjs --post-075-schema/);
   assert.match(deploy, /post-075-schema-migration-evidence\.v1/);
   const dataGate = deploy.lastIndexOf("run_post_075_data_migration_gate");
@@ -203,6 +205,28 @@ test("publish calendar schema fails fast while adding the existing topic group t
 test("publish calendar idempotency expansion fails fast on live schema locks", () => {
   const migration = read("db/migrations/085_publish_calendar_idempotency_expand.sql");
   assert.match(migration, /begin;\s*set local lock_timeout = '5s';\s*set local statement_timeout = '60s';/i);
+});
+
+test("publish calendar same-time contract is fail-closed DDL with no row modifications", () => {
+  const migration = read("db/migrations/086_publish_calendar_same_time_contract.sql");
+  assert.equal(migration, [
+    "begin;",
+    "",
+    "set local lock_timeout = '5s';",
+    "",
+    "drop index publish_calendar_slots_active_brand_time_unique;",
+    "",
+    "drop index publish_calendar_slots_generation_unique;",
+    "",
+    "create unique index publish_calendar_slots_generation_unique",
+    "  on publish_calendar_slots(brand_id,generation_id)",
+    "  where generation_id is not null and generation_output_id is null and status <> 'cancelled';",
+    "",
+    "commit;",
+    "",
+  ].join("\n"));
+  assert.doesNotMatch(migration, /\bif\s+exists\b/i);
+  assert.doesNotMatch(migration, /\b(?:insert|update|delete|merge|truncate)\b/i);
 });
 
 test("FAQ runbook excludes Wiki without permanently disabling generic Wiki rollouts", () => {
@@ -254,7 +278,7 @@ test("cutover API image contains both ordered migrations in an actual no-network
   try {
     const script = [
       "const fs=require('node:fs');",
-      "const required=['/app/db/migrations/074_ai_content_maintenance_write_fence.sql','/app/db/migrations/075_ai_content_three_format_cutover.sql','/app/db/migrations/076_manual_content_generation_brand_rules.sql','/app/db/migrations/077_content_suggestion_batches.sql','/app/db/migrations/078_faq_utterance_matching.sql','/app/db/migrations/079_publish_calendar_runtime.sql','/app/db/migrations/080_reference_channel_archive.sql','/app/db/migrations/081_meta_ad_library_references.sql','/app/db/migrations/082_manual_brand_visual_assets.sql','/app/db/migrations/083_manual_visual_selection_write_fence_invoker.sql','/app/db/migrations/084_ai_content_usage_reversal_identity_invoker.sql','/app/db/migrations/085_publish_calendar_idempotency_expand.sql','/app/scripts/migrationRunner.mjs','/app/scripts/migrate.mjs','/app/scripts/databaseTls.mjs'];",
+      "const required=['/app/db/migrations/074_ai_content_maintenance_write_fence.sql','/app/db/migrations/075_ai_content_three_format_cutover.sql','/app/db/migrations/076_manual_content_generation_brand_rules.sql','/app/db/migrations/077_content_suggestion_batches.sql','/app/db/migrations/078_faq_utterance_matching.sql','/app/db/migrations/079_publish_calendar_runtime.sql','/app/db/migrations/080_reference_channel_archive.sql','/app/db/migrations/081_meta_ad_library_references.sql','/app/db/migrations/082_manual_brand_visual_assets.sql','/app/db/migrations/083_manual_visual_selection_write_fence_invoker.sql','/app/db/migrations/084_ai_content_usage_reversal_identity_invoker.sql','/app/db/migrations/085_publish_calendar_idempotency_expand.sql','/app/db/migrations/086_publish_calendar_same_time_contract.sql','/app/scripts/migrationRunner.mjs','/app/scripts/migrate.mjs','/app/scripts/databaseTls.mjs'];",
       "for(const path of required)if(!fs.existsSync(path))throw new Error('missing:'+path);",
     ].join("");
     const inspect = spawnSync("docker", ["run", "--rm", "--network", "none", "--entrypoint", "node", tag, "-e", script], {
@@ -2373,6 +2397,25 @@ test("CI publishing verifies release tooling plus only affected workspaces", () 
     assert.ok(verifyJob.includes(command), `verify job missing ${command}`);
   }
   assert.match(verifyJob, /if: fromJSON\(needs\.impact\.outputs\.components\)\.api[\s\S]*npm run pretest --workspace @brand-pilot\/api[\s\S]*npm exec --workspace @brand-pilot\/api -- vitest run[\s\S]*src\/server\.contentProposalWorker\.test\.ts[\s\S]*--maxWorkers=4/);
+  for (const testFile of [
+    "src/publishCalendarIdempotency.test.ts",
+    "src/publishCalendarRepository.test.ts",
+    "src/publishCalendarProvisioning.pglite.test.ts",
+    "src/publishCalendarMigration086.pglite.test.ts",
+    "src/publishCalendarAllocator.test.ts",
+    "src/publishItemsRepository.test.ts",
+    "src/publishItemsRepository.pglite.test.ts",
+    "src/publishItemState.test.ts",
+    "src/publishSchedule.test.ts",
+  ]) {
+    assert.ok(verifyJob.includes(testFile), `API verify job missing ${testFile}`);
+  }
+  for (const focusedCommand of [
+    'src/repository.test.ts --testNamePattern "Task 4 transactional topic generation|Task 11 topic publish group scheduling|preserves non-reservation recovery, lease, and provider retry timing|composes the tenant-scoped canonical publish items repository"',
+    'src/server.test.ts --testNamePattern "scopes calendar routes|returns canonical publish items|requires authentication and brand access before listing canonical publish items|removes the legacy no-key calendar slot creation route|returns brand-scoped authoritative manual calendar options|lists scoped calendar content candidates|provisions a content-backed manual slot|provisions a validated manual slot batch|returns a conflict when a manual batch exceeds the plan generation quota"',
+  ]) {
+    assert.ok(verifyJob.includes(focusedCommand), `API verify job missing focused command: ${focusedCommand}`);
+  }
   assert.doesNotMatch(verifyJob, /npm run test --workspace @brand-pilot\/api/);
   assert.match(verifyJob, /if: needs\.impact\.outputs\.migration_changed == 'true'[\s\S]*npm run test:migrations/);
   for (const command of [
@@ -2380,6 +2423,7 @@ test("CI publishing verifies release tooling plus only affected workspaces", () 
     "node --test scripts/migrationRunner.test.mjs",
     "node --test scripts/ai-content-three-format-cutover.postgres.integration.test.mjs",
     "AI_CONTENT_074_ENFORCE_BENCHMARK=false node --test scripts/ai-content-074.postgres.integration.test.mjs",
+    "npm exec --workspace @brand-pilot/api -- vitest run src/publishCalendarMigration086.postgres.integration.test.ts",
   ]) {
     assert.ok(verifyJob.includes(command), `migration verify job missing ${command}`);
   }
@@ -2680,7 +2724,7 @@ if [[ "$*" == *"/app/scripts/ai-content-cutover-floor-probe.mjs"* ]]; then
   exit 0
 fi
 if [[ "$*" == *"/app/scripts/migrate.mjs --post-075-schema"* ]]; then
-  printf '{\n  "post075SchemaMigration": {\n    "contractVersion": "post-075-schema-migration-evidence.v1",\n    "providerRoleName": "postgres",\n    "migrationId": "085_publish_calendar_idempotency_expand.sql",\n    "migrationSha256": "%s",\n    "status": "already_applied"\n  }\n}\n' "$POST_075_SCHEMA_SHA_FOR_TEST"
+  printf '{\n  "post075SchemaMigration": {\n    "contractVersion": "post-075-schema-migration-evidence.v1",\n    "providerRoleName": "postgres",\n    "migrationId": "086_publish_calendar_same_time_contract.sql",\n    "migrationSha256": "%s",\n    "status": "already_applied"\n  }\n}\n' "$POST_075_SCHEMA_SHA_FOR_TEST"
   exit 0
 fi
 if [[ "$1 $2" == "image inspect" ]]; then
@@ -2785,12 +2829,12 @@ function runDeployFixture({
   }, null, 2)}\n`, { mode: 0o600 });
   const post075SchemaState = join(root, "state", "post-075-schema-migrations");
   mkdirSync(post075SchemaState, { recursive: true, mode: 0o700 });
-  writeFileSync(join(post075SchemaState, "084_ai_content_usage_reversal_identity_invoker.sql.json"), `${JSON.stringify({
+  writeFileSync(join(post075SchemaState, "085_publish_calendar_idempotency_expand.sql.json"), `${JSON.stringify({
     post075SchemaMigration: {
       contractVersion: "post-075-schema-migration-evidence.v1",
       providerRoleName: "postgres",
-      migrationId: "084_ai_content_usage_reversal_identity_invoker.sql",
-      migrationSha256: "31938a77b6b2b278b608e32de48cc463ceda24b7c96622b0662aacc3c0978f12",
+      migrationId: "085_publish_calendar_idempotency_expand.sql",
+      migrationSha256: "1601035eee057da39cac63c6e9a187fcd3331d590414005d2971a943306d22de",
       status: "already_applied",
     },
   }, null, 2)}\n`, { mode: 0o600 });
@@ -2872,7 +2916,7 @@ function runDeployFixture({
       DOCKER_FAIL_UP_TIMES: "1",
       RELEASE_SHA_FOR_TEST: "1".repeat(40),
       AI_CONTENT_POST_075_PROVIDER_DATABASE_URL_FILE: bashPath(providerDatabaseUrlFile),
-      POST_075_SCHEMA_SHA_FOR_TEST: "1601035eee057da39cac63c6e9a187fcd3331d590414005d2971a943306d22de",
+      POST_075_SCHEMA_SHA_FOR_TEST: "89b5e23a3535ca4d8c11eb8ebd274317cc414bd482d70b93bb0b6f2c379b0abb",
     },
   });
   return { fixture, root, dockerLog, preflightLog, result, candidateSha: "1".repeat(40) };

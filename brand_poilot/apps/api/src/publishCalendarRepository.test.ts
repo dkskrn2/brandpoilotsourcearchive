@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { automaticSlotKey } from "./publishCalendarIdempotency.js";
+import { automaticSlotKey, batchSlotIdentity, manualSlotIdentity } from "./publishCalendarIdempotency.js";
 import { createPublishCalendarRepository } from "./publishCalendarRepository.js";
 
 type QueryResult = { rows: Array<Record<string, unknown>>; rowCount?: number };
@@ -103,7 +103,36 @@ describe("publish calendar repository settings and slot validation", () => {
     })).resolves.toMatchObject({ enabled: true, channels: ["instagram"], slotTimes: times });
   });
 
-  it("rejects duplicate, malformed, or more than 24 slot times", async () => {
+  it("preserves duplicate and nearby automatic slot times", async () => {
+    const values = ["09:00", "09:00", "09:29", "23:45", "00:00"];
+    const run = harness((sql, parameters) => sql.startsWith("insert into publish_calendar_settings")
+      ? {
+          rows: [{
+            brand_id: scope.brandId,
+            enabled: false,
+            channels: [],
+            informational_format: "card_news",
+            trend_format: "reel",
+            slot_times: parameters[6],
+            updated_at: "2026-08-13T00:00:00Z",
+          }],
+          rowCount: 1,
+        }
+      : { rows: [], rowCount: 0 });
+    const repository = createPublishCalendarRepository(run.pool);
+    const input = {
+      ...scope,
+      enabled: false,
+      channels: [] as "instagram"[],
+      informationalFormat: "card_news" as const,
+      trendFormat: "reel" as const,
+    };
+
+    await expect(repository.saveSettings({ ...input, slotTimes: values }))
+      .resolves.toMatchObject({ slotTimes: values });
+  });
+
+  it("still rejects malformed, empty, or more than 24 slot times", async () => {
     const repository = createPublishCalendarRepository(harness(() => ({ rows: [], rowCount: 0 })).pool);
     const input = {
       ...scope,
@@ -112,30 +141,14 @@ describe("publish calendar repository settings and slot validation", () => {
       informationalFormat: "card_news" as const,
       trendFormat: "reel" as const,
     };
-    await expect(repository.saveSettings({ ...input, slotTimes: ["11:30", "11:30"] }))
-      .rejects.toThrowError("publish_calendar_time_duplicate");
+    await expect(repository.saveSettings({ ...input, slotTimes: [] }))
+      .rejects.toThrowError("publish_calendar_time_invalid");
     await expect(repository.saveSettings({ ...input, slotTimes: ["24:00"] }))
       .rejects.toThrowError("publish_calendar_time_invalid");
     await expect(repository.saveSettings({
       ...input,
       slotTimes: Array.from({ length: 25 }, (_, index) => `${String(index % 24).padStart(2, "0")}:01`),
     })).rejects.toThrowError("publish_calendar_time_invalid");
-  });
-
-  it("requires automatic slot times to stay at least 30 minutes apart across midnight", async () => {
-    const repository = createPublishCalendarRepository(harness(() => ({ rows: [], rowCount: 0 })).pool);
-    const input = {
-      ...scope,
-      enabled: false,
-      channels: [] as "instagram"[],
-      informationalFormat: "card_news" as const,
-      trendFormat: "reel" as const,
-    };
-
-    await expect(repository.saveSettings({ ...input, slotTimes: ["09:00", "09:29"] }))
-      .rejects.toThrowError("publish_calendar_spacing_conflict");
-    await expect(repository.saveSettings({ ...input, slotTimes: ["00:00", "23:45"] }))
-      .rejects.toThrowError("publish_calendar_spacing_conflict");
   });
 
   it("rejects unsupported calendar channels even while automatic settings are disabled", async () => {
@@ -147,20 +160,6 @@ describe("publish calendar repository settings and slot validation", () => {
       informationalFormat: "card_news",
       trendFormat: "reel",
       slotTimes: ["11:30"],
-    })).rejects.toThrowError("publish_calendar_channel_invalid");
-    expect(run.statements).toEqual([]);
-  });
-
-  it("rejects a manual calendar slot for a channel without a publish adapter", async () => {
-    const run = harness(() => ({ rows: [], rowCount: 0 }));
-
-    await expect(createPublishCalendarRepository(run.pool).createSlot({
-      ...scope,
-      scheduledFor: new Date("2099-08-15T11:30:00+09:00"),
-      assignmentMode: "manual",
-      recommendationKind: null,
-      contentFormat: "reel",
-      channels: ["threads"],
     })).rejects.toThrowError("publish_calendar_channel_invalid");
     expect(run.statements).toEqual([]);
   });
@@ -186,6 +185,7 @@ describe("publish calendar repository settings and slot validation", () => {
       recommendationKind: "informational",
       contentFormat: "card_news",
       channels: ["instagram"],
+      idempotencyKey: automaticSlotKey({ kstDate: "2099-08-15", time: "11:30", occurrence: 0 }),
     })).resolves.toMatchObject({ status: "open", contentSuggestionId: null });
 
     const sql = run.statements.map(({ sql }) => sql);
@@ -254,34 +254,6 @@ describe("publish calendar repository settings and slot validation", () => {
     expect(run.statements.some(({ sql }) => sql.includes("from brand_channels"))).toBe(false);
   });
 
-  it("finds the matching legacy no-key row across every active same-time slot", async () => {
-    const matching = slotRow({
-      id: "30000000-0000-4000-8000-000000000099",
-      assignment_mode: "manual",
-      recommendation_kind: null,
-      content_format: "card_news",
-      channels: ["instagram"],
-    });
-    const run = harness((sql) => {
-      if (sql.includes("clock_timestamp()")) return { rows: [{ future: true }], rowCount: 1 };
-      if (sql.includes("from brand_channels")) return { rows: [{ channel: "instagram" }], rowCount: 1 };
-      if (sql.includes("slot.scheduled_for=$3::timestamptz") && sql.includes("order by slot.id")) {
-        return { rows: [slotRow(), matching], rowCount: 2 };
-      }
-      if (sql.includes("abs(extract(epoch")) throw new Error("legacy_exact_replay_must_precede_spacing");
-      throw new Error(`unexpected query: ${sql}`);
-    });
-
-    await expect(createPublishCalendarRepository(run.pool).createSlot({
-      ...scope,
-      scheduledFor: new Date("2099-08-15T11:30:00+09:00"),
-      assignmentMode: "manual",
-      recommendationKind: null,
-      contentFormat: "card_news",
-      channels: ["instagram"],
-    })).resolves.toMatchObject({ id: matching.id, assignmentMode: "manual" });
-  });
-
   it("rechecks future time with the database clock after waiting for the brand lock", async () => {
     const run = harness((sql) => {
       if (sql.includes("clock_timestamp()")) return { rows: [{ future: false }], rowCount: 1 };
@@ -296,6 +268,7 @@ describe("publish calendar repository settings and slot validation", () => {
       recommendationKind: "informational",
       contentFormat: "card_news",
       channels: ["instagram"],
+      idempotencyKey: automaticSlotKey({ kstDate: "2099-08-15", time: "11:30", occurrence: 0 }),
     })).rejects.toThrowError("publish_calendar_time_past");
 
     const sql = run.statements.map(({ sql }) => sql);
@@ -307,25 +280,27 @@ describe("publish calendar repository settings and slot validation", () => {
     expect(sql.some((value) => value.startsWith("insert into publish_calendar_slots"))).toBe(false);
   });
 
-  it("rejects a past slot, a disconnected channel, and an inactive subscription", async () => {
-    const disconnected = createPublishCalendarRepository(harness((sql) => sql.includes("clock_timestamp()")
-      ? { rows: [{ future: true }], rowCount: 1 }
+  it("rejects a past automatic slot, a disconnected channel, and an inactive subscription", async () => {
+    const disconnected = createPublishCalendarRepository(harness((sql, values) => sql.includes("clock_timestamp()")
+      ? { rows: [{ future: new Date(values[0] as Date).getUTCFullYear() > 2020 }], rowCount: 1 }
       : { rows: [], rowCount: 0 }).pool);
     await expect(disconnected.createSlot({
       ...scope,
       scheduledFor: new Date("2020-01-01T00:00:00Z"),
-      assignmentMode: "manual",
-      recommendationKind: null,
+      assignmentMode: "automatic",
+      recommendationKind: "informational",
       contentFormat: "card_news",
       channels: ["instagram"],
+      idempotencyKey: automaticSlotKey({ kstDate: "2020-01-01", time: "09:00", occurrence: 0 }),
     })).rejects.toThrowError("publish_calendar_time_past");
     await expect(disconnected.createSlot({
       ...scope,
       scheduledFor: new Date("2099-01-01T00:00:00Z"),
-      assignmentMode: "manual",
-      recommendationKind: null,
+      assignmentMode: "automatic",
+      recommendationKind: "informational",
       contentFormat: "card_news",
       channels: ["instagram"],
+      idempotencyKey: automaticSlotKey({ kstDate: "2099-01-01", time: "09:00", occurrence: 0 }),
     })).rejects.toThrowError("publish_calendar_channel_not_connected");
 
     const inactiveRun = harness((sql) => {
@@ -337,10 +312,11 @@ describe("publish calendar repository settings and slot validation", () => {
     await expect(createPublishCalendarRepository(inactiveRun.pool).createSlot({
       ...scope,
       scheduledFor: new Date("2099-01-01T00:00:00Z"),
-      assignmentMode: "manual",
-      recommendationKind: null,
+      assignmentMode: "automatic",
+      recommendationKind: "informational",
       contentFormat: "card_news",
       channels: ["instagram"],
+      idempotencyKey: automaticSlotKey({ kstDate: "2099-01-01", time: "09:00", occurrence: 1 }),
     })).rejects.toThrowError("publish_calendar_subscription_inactive");
   });
 });
@@ -613,7 +589,10 @@ describe("publish calendar content-backed manual provisioning", () => {
       content_format: "card_news",
       channels: ["instagram"],
       scheduled_for: "2099-08-15T02:30:00.000Z",
-      idempotency_key: `manual:v1:${"a".repeat(64)}`,
+      idempotency_key: manualSlotIdentity("completed-output-retry", {
+        kind: "existing_output",
+        generationOutputId: outputId,
+      }).key,
       title: "완료된 카드뉴스",
     });
     const run = harness((sql) => {
@@ -650,7 +629,10 @@ describe("publish calendar content-backed manual provisioning", () => {
       content_format: "card_news",
       channels: ["instagram"],
       scheduled_for: "2099-08-15T03:00:00.000Z",
-      idempotency_key: `batch:v1:${"b".repeat(64)}`,
+      idempotency_key: batchSlotIdentity("completed-output-batch-retry", "row-1", {
+        kind: "existing_output",
+        generationOutputId: outputId,
+      }).key,
       title: "완료된 카드뉴스",
     });
     const run = harness((sql) => {
@@ -701,37 +683,75 @@ describe("publish calendar content-backed manual provisioning", () => {
     expect(lineage?.sql).not.toContain("queue.status in (");
   });
 
-  it("rejects any non-cancelled slot less than 30 minutes away under the brand lock", async () => {
+  it("locks and reserves a selected content topic through its waiting publish group", async () => {
+    const topicId = "40000000-0000-4000-8000-000000000010";
+    const groupId = "50000000-0000-4000-8000-000000000010";
     const run = harness((sql) => {
+      if (sql.includes("idempotency_key=$3::text")) return { rows: [], rowCount: 0 };
       if (sql.includes("clock_timestamp()")) return { rows: [{ future: true }], rowCount: 1 };
       if (sql.includes("from brand_channels")) return { rows: [{ channel: "instagram" }], rowCount: 1 };
-      if (sql.includes("slot.scheduled_for=$3::timestamptz") && sql.includes("order by slot.id")) {
-        return { rows: [], rowCount: 0 };
-      }
-      if (sql.includes("abs(extract(epoch")) return { rows: [{ id: "near-slot" }], rowCount: 1 };
+      if (sql.includes("slot.scheduled_for=$3::timestamptz")) return { rows: [], rowCount: 0 };
+      if (sql.includes("abs(extract(epoch")) return { rows: [], rowCount: 0 };
+      if (sql.includes("from content_topics topic") && sql.includes("for update")) return {
+        rows: [{
+          content_topic_id: topicId,
+          generation_id: null,
+          generation_output_id: null,
+          title: "SNS 마케팅 사장님 콘텐츠",
+          content_format: "card_news",
+        }],
+        rowCount: 1,
+      };
+      if (sql.startsWith("insert into topic_publish_groups")) return {
+        rows: [{ id: groupId, status: "waiting" }],
+        rowCount: 1,
+      };
+      if (sql.includes("slot.topic_publish_group_id=$3::uuid")) return { rows: [], rowCount: 0 };
       const subscription = activeSubscription(sql);
       if (subscription) return subscription;
       if (sql.includes("calendar_usage") && sql.includes("direct_publish_groups")) {
         return { rows: [{ published_count: 0, reserved_count: 0 }], rowCount: 1 };
       }
-      if (sql.startsWith("insert into publish_calendar_slots")) return { rows: [slotRow()], rowCount: 1 };
+      if (sql.startsWith("insert into publish_calendar_slots")) return {
+        rows: [slotRow({
+          assignment_mode: "manual",
+          status: "generation_pending",
+          recommendation_kind: null,
+          generation_id: null,
+          generation_output_id: null,
+          topic_publish_group_id: groupId,
+          title: "SNS 마케팅 사장님 콘텐츠",
+        })],
+        rowCount: 1,
+      };
       throw new Error(`unexpected query: ${sql}`);
     });
+    const afterManualSlotProvisioned = vi.fn(async () => undefined);
+    const repository = createPublishCalendarRepository(run.pool, { afterManualSlotProvisioned });
 
-    await expect(createPublishCalendarRepository(run.pool).createSlot({
+    await expect(repository.provisionManualSlot({
       ...scope,
       scheduledFor: new Date("2099-08-15T11:30:00+09:00"),
-      assignmentMode: "manual",
-      recommendationKind: null,
+      channel: "instagram",
       contentFormat: "card_news",
-      channels: ["instagram"],
-    })).rejects.toThrowError("publish_calendar_spacing_conflict");
+      idempotencyKey: "manual-topic-1",
+      createdByUserId: "50000000-0000-4000-8000-000000000001",
+      source: { kind: "existing_content_topic", contentTopicId: topicId } as never,
+    })).resolves.toMatchObject({
+      status: "generation_pending",
+      generationId: null,
+      generationOutputId: null,
+      topicPublishGroupId: groupId,
+    });
 
-    const statements = run.statements.map(({ sql }) => sql);
-    const lockIndex = statements.findIndex((sql) => sql.includes("pg_advisory_xact_lock"));
-    const spacingIndex = statements.findIndex((sql) => sql.includes("abs(extract(epoch"));
-    expect(lockIndex).toBeLessThan(spacingIndex);
-    expect(statements.some((sql) => sql.startsWith("insert into publish_calendar_slots"))).toBe(false);
+    expect(afterManualSlotProvisioned).not.toHaveBeenCalled();
+    const topicLineageSql = run.statements.find(({ sql }) => sql.includes("from content_topics topic"))?.sql ?? "";
+    expect(topicLineageSql).toContain("topic.status='selected'");
+    expect(topicLineageSql).toContain("topic.selected_instagram_format='instagram_feed_carousel'");
+    expect(topicLineageSql).toContain("topic.selected_instagram_format='instagram_reel'");
+    expect(topicLineageSql).not.toContain("instagram_feed_single");
+    expect(run.statements.find(({ sql }) => sql.startsWith("insert into topic_publish_groups"))?.sql)
+      .toContain("on conflict (content_topic_id)");
   });
 
   it("creates a generation-backed slot without ever inserting an open slot", async () => {
@@ -792,7 +812,7 @@ describe("publish calendar content-backed manual provisioning", () => {
 
     const insert = run.statements.find(({ sql }) => sql.startsWith("insert into publish_calendar_slots"));
     expect(insert?.sql).toContain("'manual',$12,null");
-    expect(insert?.values[9]).toMatch(/^manual:v1:[0-9a-f]{64}$/);
+    expect(insert?.values[9]).toMatch(/^manual:v2:[0-9a-f]{64}:[0-9a-f]{64}$/);
     expect(insert?.values[11]).toBe("generation_pending");
     expect(insert?.sql).not.toContain("'open'");
   });

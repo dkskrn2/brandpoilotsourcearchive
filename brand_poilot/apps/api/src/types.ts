@@ -69,6 +69,69 @@ export type DeliveryFormat =
   | "x_post"
   | "linkedin_post";
 export type Channel = "instagram" | "threads" | "x" | "linkedin" | "youtube" | "tiktok";
+export type PublishStatus = "unreserved" | "reserved" | "publish_queued" | "scheduled" | "deferred"
+  | "publishing" | "partially_published" | "published" | "failed" | "result_unknown" | "cancelled";
+export type PublishItemStatus = Exclude<PublishStatus, "unreserved">
+  | "completed_unpublished" | "generating" | "pre_generation";
+
+export interface PublishItemTargetDto {
+  queueId: string;
+  channelOutputId: string | null;
+  channel: Channel;
+  status: "queued" | "scheduled" | "publishing" | "published" | "failed" | "deferred" | "cancelled";
+  scheduledFor: string | null;
+  publishedAt: string | null;
+  failedAt: string | null;
+  lastError: string | null;
+  externalPostId: string | null;
+  externalUrl: string | null;
+  previewTitle: string | null;
+  previewBody: string | null;
+  outputJson: Record<string, unknown>;
+  artifactPublicUrl: string | null;
+  sourceSummary: string | null;
+}
+
+export interface PublishItemReviewTargetDto {
+  channelOutputId: string;
+  channel: Channel;
+  deliveryFormat: DeliveryFormat;
+  status: Exclude<ContentOutputStatus, "regenerated">;
+  previewTitle: string | null;
+  previewBody: string | null;
+  outputJson: Record<string, unknown>;
+  sourceSummary: string | null;
+  blockReasons: string[];
+  generatedAt: string;
+}
+
+export interface PublishItemDto {
+  itemKey: string;
+  workspaceId: string;
+  brandId: string;
+  title: string;
+  createdAt: string;
+  contentFormat: "card_news" | "reel" | null;
+  channels: Channel[];
+  source: { type: "topic_table" | "source_url" | "mixed" | "unknown"; label: string; detail: string | null; urls: string[] };
+  targets: PublishItemTargetDto[];
+  reviewTargets: PublishItemReviewTargetDto[];
+  contentStatus: "pre_generation" | "generating" | "completed" | "failed";
+  publishStatus: PublishStatus;
+  status: PublishItemStatus;
+  groupStatus: string | null;
+  publicationProgress: "none" | "partial" | "complete";
+  scheduledFor: string | null;
+  effectiveScheduledFor: string | null;
+  publishedAt: string | null;
+  calendarDate: string | null;
+  calendarPlacement: "dated" | "unreserved" | "hidden";
+  assignmentMode: "automatic" | "manual" | "direct" | null;
+  sourceRefs: { contentTopicId: string | null; proposalId: string | null; generationId: string | null; generationOutputId: string | null; calendarSlotId: string | null; topicPublishGroupId: string | null; queueIds: string[] };
+  schedulable: boolean;
+  scheduleBlockedReason: string | null;
+  lastError: string | null;
+}
 export type ChannelOAuthState = "connected" | "not_connected" | "needs_attention";
 export type ChannelStatus =
   | "not_connected"
@@ -687,6 +750,7 @@ export interface PublishCalendarNewContentSetupDto {
 }
 
 export type PublishCalendarManualSlotSourceDto =
+  | { kind: "existing_content_topic"; contentTopicId: string }
   | { kind: "existing_generation"; generationId: string }
   | { kind: "existing_output"; generationOutputId: string };
 
@@ -1218,6 +1282,7 @@ export interface ApiRepository
     Partial<import("./aiContentAttachmentRepository.js").AiContentAttachmentLifecycleRepository>,
     Partial<import("./aiContentAttachmentGcRepository.js").AiContentAttachmentGcRepository>,
     Partial<import("./publishCalendarRepository.js").PublishCalendarRepository>,
+    Partial<import("./publishItemsRepository.js").PublishItemsRepository>,
     Partial<ContentProposalJobsRepository> {
   health(): Promise<{
     database: "ok";

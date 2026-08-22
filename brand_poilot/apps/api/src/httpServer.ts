@@ -2274,7 +2274,11 @@ export function createServer(
           throw new Error("publish_calendar_batch_invalid");
         }
         const sourceRecord = source as Record<string, unknown>;
-        const normalizedSource = sourceRecord.kind === "existing_generation"
+        const normalizedSource = sourceRecord.kind === "existing_content_topic"
+          && hasExactKeys(sourceRecord, ["kind", "contentTopicId"])
+          && uuidPattern.test(String(sourceRecord.contentTopicId ?? ""))
+          ? { kind: "existing_content_topic" as const, contentTopicId: String(sourceRecord.contentTopicId) }
+          : sourceRecord.kind === "existing_generation"
           && hasExactKeys(sourceRecord, ["kind", "generationId"])
           && uuidPattern.test(String(sourceRecord.generationId ?? ""))
           ? { kind: "existing_generation" as const, generationId: String(sourceRecord.generationId) }
@@ -2631,7 +2635,10 @@ export function createServer(
         throw new Error("publish_calendar_manual_slot_invalid");
       }
       const sourceRecord = source as Record<string, unknown>;
-      const sourceValid = sourceRecord.kind === "existing_generation"
+      const sourceValid = sourceRecord.kind === "existing_content_topic"
+        ? hasExactKeys(sourceRecord, ["kind", "contentTopicId"])
+          && uuidPattern.test(String(sourceRecord.contentTopicId ?? ""))
+        : sourceRecord.kind === "existing_generation"
         ? hasExactKeys(sourceRecord, ["kind", "generationId"])
           && uuidPattern.test(String(sourceRecord.generationId ?? ""))
         : sourceRecord.kind === "existing_output"
@@ -2644,9 +2651,11 @@ export function createServer(
         || body.idempotencyKey.length > 200) {
         throw new Error("publish_calendar_manual_slot_invalid");
       }
-      const normalizedSource = sourceRecord.kind === "existing_generation"
-        ? { kind: "existing_generation" as const, generationId: String(sourceRecord.generationId) }
-        : { kind: "existing_output" as const, generationOutputId: String(sourceRecord.generationOutputId) };
+      const normalizedSource = sourceRecord.kind === "existing_content_topic"
+        ? { kind: "existing_content_topic" as const, contentTopicId: String(sourceRecord.contentTopicId) }
+        : sourceRecord.kind === "existing_generation"
+          ? { kind: "existing_generation" as const, generationId: String(sourceRecord.generationId) }
+          : { kind: "existing_output" as const, generationOutputId: String(sourceRecord.generationOutputId) };
       const scope = aiContentScope(request, request.params.brandId);
       const slot = await repository.provisionManualSlot({
         ...scope,
@@ -4142,6 +4151,11 @@ export function createServer(
     return repository.listPublishQueue(request.params.brandId);
   });
 
+  app.get<{ Params: { brandId: string } }>("/brands/:brandId/publish-items", async (request) => {
+    if (!repository.listPublishItems) throw new Error("publish_items_not_configured");
+    return repository.listPublishItems(aiContentScope(request, request.params.brandId));
+  });
+
   app.get<{ Params: { brandId: string } }>("/brands/:brandId/publish-calendar/settings", async (request) => {
     if (!repository.getSettings) throw new Error("publish_calendar_not_configured");
     return repository.getSettings(aiContentScope(request, request.params.brandId));
@@ -4200,27 +4214,6 @@ export function createServer(
       ...aiContentScope(request, request.params.brandId),
       startsAt: publishCalendarDate(request.query.from),
       endsAt: publishCalendarDate(request.query.to),
-    });
-  });
-
-  app.post<{ Params: { brandId: string }; Body: unknown }>("/brands/:brandId/publish-calendar/slots", async (request) => {
-    if (!repository.createSlot) throw new Error("publish_calendar_not_configured");
-    if (!hasExactKeys(request.body, ["scheduledFor", "contentFormat", "channels"])) {
-      throw new Error("publish_calendar_slot_invalid");
-    }
-    const { scheduledFor, contentFormat, channels: selectedChannels } = request.body;
-    if (!publishCalendarFormats.has(String(contentFormat)) || !Array.isArray(selectedChannels)
-      || selectedChannels.some((channel) => typeof channel !== "string" || !publishCalendarChannels.has(channel))) {
-      throw new Error("publish_calendar_slot_invalid");
-    }
-    return repository.createSlot({
-      ...aiContentScope(request, request.params.brandId),
-      scheduledFor: publishCalendarDate(scheduledFor),
-      assignmentMode: "manual",
-      recommendationKind: null,
-      contentFormat: contentFormat as "card_news" | "reel",
-      channels: selectedChannels as Channel[],
-      createdByUserId: aiContentActorUserId(request),
     });
   });
 

@@ -846,6 +846,93 @@ export interface PublishSlot {
   scheduledFor?: string | null;
 }
 
+export type PublishItemStatus =
+  | "completed_unpublished"
+  | "generating"
+  | "pre_generation"
+  | "reserved"
+  | "publish_queued"
+  | "scheduled"
+  | "deferred"
+  | "publishing"
+  | "partially_published"
+  | "published"
+  | "failed"
+  | "result_unknown"
+  | "cancelled";
+
+export interface PublishItemTarget {
+  queueId: string;
+  channelOutputId: string | null;
+  channel: ChannelType;
+  status: "queued" | "scheduled" | "publishing" | "published" | "failed" | "deferred" | "cancelled";
+  scheduledFor: string | null;
+  publishedAt: string | null;
+  failedAt: string | null;
+  lastError: string | null;
+  externalPostId: string | null;
+  externalUrl: string | null;
+  previewTitle: string | null;
+  previewBody: string | null;
+  outputJson: Record<string, unknown>;
+  artifactPublicUrl: string | null;
+  sourceSummary: string | null;
+}
+
+export interface PublishItemReviewTarget {
+  channelOutputId: string;
+  channel: ChannelType;
+  deliveryFormat: DeliveryFormat;
+  status: ReviewStatus;
+  previewTitle: string | null;
+  previewBody: string | null;
+  outputJson: ContentOutputJson;
+  sourceSummary: string | null;
+  blockReasons: string[];
+  generatedAt: string;
+}
+
+export interface PublishItem {
+  itemKey: string;
+  workspaceId: string;
+  brandId: string;
+  title: string;
+  createdAt: string;
+  contentFormat: "card_news" | "reel" | null;
+  channels: ChannelType[];
+  source: {
+    type: "topic_table" | "source_url" | "mixed" | "unknown";
+    label: string;
+    detail: string | null;
+    urls: string[];
+  };
+  targets: PublishItemTarget[];
+  reviewTargets: PublishItemReviewTarget[];
+  contentStatus: "pre_generation" | "generating" | "completed" | "failed";
+  publishStatus: "unreserved" | "reserved" | "publish_queued" | "scheduled" | "deferred" | "publishing" | "partially_published" | "published" | "failed" | "result_unknown" | "cancelled";
+  status: PublishItemStatus;
+  groupStatus: string | null;
+  publicationProgress: "none" | "partial" | "complete";
+  scheduledFor: string | null;
+  effectiveScheduledFor: string | null;
+  publishedAt: string | null;
+  calendarDate: string | null;
+  calendarPlacement: "dated" | "unreserved" | "hidden";
+  assignmentMode: "automatic" | "manual" | "direct" | null;
+  sourceRefs: {
+    contentTopicId: string | null;
+    proposalId: string | null;
+    generationId: string | null;
+    generationOutputId: string | null;
+    calendarSlotId: string | null;
+    topicPublishGroupId: string | null;
+    queueIds: string[];
+  };
+  schedulable: boolean;
+  scheduleBlockedReason: string | null;
+  lastError: string | null;
+}
+
 export interface PublishCalendarSettings {
   brandId: string;
   enabled: boolean;
@@ -942,6 +1029,7 @@ export interface PublishCalendarNewContentSetup {
 }
 
 export type PublishCalendarManualSlotSource =
+  | { kind: "existing_content_topic"; contentTopicId: string }
   | { kind: "existing_generation"; generationId: string }
   | { kind: "existing_output"; generationOutputId: string };
 

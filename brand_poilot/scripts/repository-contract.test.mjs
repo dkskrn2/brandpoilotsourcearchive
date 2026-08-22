@@ -62,6 +62,24 @@ test("AI 콘텐츠 저장소 계약은 중앙 ApiRepository에 모두 노출된�
   }
 });
 
+test("공통 게시 항목은 하나의 tenant-scoped repository와 route만 사용한다", async () => {
+  const [types, repository, publishItems, server] = await Promise.all([
+    readFile("apps/api/src/types.ts", "utf8"),
+    readFile("apps/api/src/repository.ts", "utf8"),
+    readFile("apps/api/src/publishItemsRepository.ts", "utf8"),
+    readFile("apps/api/src/httpServer.ts", "utf8"),
+  ]);
+
+  assert.match(types, /Partial<import\("\.\/publishItemsRepository\.js"\)\.PublishItemsRepository>/);
+  assert.match(repository, /createPublishItemsRepository\(pool\)/);
+  assert.match(repository, /\.\.\.publishItems/);
+  assert.match(server, /"\/brands\/:brandId\/publish-items"/);
+  assert.match(server, /repository\.listPublishItems\(aiContentScope\(request, request\.params\.brandId\)\)/);
+  assert.match(publishItems, /topic\.workspace_id=\$1::uuid and topic\.brand_id=\$2::uuid/);
+  assert.match(publishItems, /queue\.workspace_id=\$1::uuid and queue\.brand_id=\$2::uuid/);
+  assert.doesNotMatch(server, /publish-items[^\n]*listPublishQueue/);
+});
+
 test("브랜드 분석 저장소는 open workflow 조회와 보존형 중복 정리를 계약으로 고정한다", async () => {
   const [repository, migration] = await Promise.all([
     readFile("apps/api/src/brandIntelligenceRepository.ts", "utf8"),
@@ -299,7 +317,7 @@ test("API 패키지는 타입 검사와 tsup 빌드 및 배포 시작 명령을 
   assert.equal(packageJson.scripts.start, "node dist/index.js");
 });
 
-test("데이터베이스 마이그레이션 registry는 게시 캘린더 079부터 usage reversal 권한 보정 084와 idempotency 확장 085까지 순서대로 포함한다", async () => {
+test("데이터베이스 마이그레이션 registry는 게시 캘린더 079부터 same-time 계약 086까지 순서대로 포함한다", async () => {
   const migrationFiles = (await readdir("db/migrations"))
     .filter((file) => file.endsWith(".sql"))
     .sort();
@@ -392,6 +410,7 @@ test("데이터베이스 마이그레이션 registry는 게시 캘린더 079부�
     "083_manual_visual_selection_write_fence_invoker.sql",
     "084_ai_content_usage_reversal_identity_invoker.sql",
     "085_publish_calendar_idempotency_expand.sql",
+    "086_publish_calendar_same_time_contract.sql",
   ]);
   assert.ok(reservedProgramMigrations.filter((file) => file.startsWith("059_")).length <= 1);
   assert.ok(reservedProgramMigrations.filter((file) => file.startsWith("060_")).length <= 1);

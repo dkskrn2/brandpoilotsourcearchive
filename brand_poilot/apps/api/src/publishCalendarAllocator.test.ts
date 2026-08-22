@@ -147,8 +147,8 @@ describe("publish calendar allocator", () => {
     };
     const deps = dependencies();
 
-    const result = await createPublishCalendarAllocator(deps)
-      .allocateBrand(duplicateBrand, new Date("2026-08-12T19:00:00.000Z"));
+    const allocator = createPublishCalendarAllocator(deps);
+    const result = await allocator.allocateBrand(duplicateBrand, new Date("2026-08-12T19:00:00.000Z"));
 
     const keys = deps.createSlot.mock.calls.map(([input]) => input.idempotencyKey);
     expect(result.openSlotsCreated).toBe(14);
@@ -156,6 +156,16 @@ describe("publish calendar allocator", () => {
     expect(new Set(keys).size).toBe(14);
     expect(keys).toContain(automaticSlotKey({ kstDate: "2026-08-13", time: "11:30", occurrence: 0 }));
     expect(keys).toContain(automaticSlotKey({ kstDate: "2026-08-13", time: "11:30", occurrence: 1 }));
+    expect(deps.assignSlot).toHaveBeenNthCalledWith(1, expect.objectContaining({ contentSuggestionId: "suggestion-info" }));
+    expect(deps.assignSlot).toHaveBeenNthCalledWith(2, expect.objectContaining({ contentSuggestionId: "suggestion-trend" }));
+
+    deps.listUnassignedRecommendations.mockResolvedValue([]);
+    deps.createSlot.mockClear();
+    deps.assignSlot.mockClear();
+    const replay = await allocator.allocateBrand(duplicateBrand, new Date("2026-08-12T19:00:00.000Z"));
+    expect(replay).toEqual({ openSlotsCreated: 0, proposalsAssigned: 0, quotaBlocked: false });
+    expect(deps.createSlot).not.toHaveBeenCalled();
+    expect(deps.assignSlot).not.toHaveBeenCalled();
   });
 
   it("preserves an existing keyed occurrence while creating the missing same-time occurrence", async () => {

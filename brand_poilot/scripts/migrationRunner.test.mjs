@@ -4612,6 +4612,7 @@ test("an installation applied through 064 has every later migration pending", as
       "083_manual_visual_selection_write_fence_invoker.sql",
       "084_ai_content_usage_reversal_identity_invoker.sql",
       "085_publish_calendar_idempotency_expand.sql",
+      "086_publish_calendar_same_time_contract.sql",
     ],
   );
 });
@@ -4673,6 +4674,25 @@ test("publish calendar idempotency expansion follows operating migration 084 det
   );
 });
 
+test("publish calendar same-time contract follows migration 085 deterministically", async () => {
+  const loaded = await migrationRunner.loadMigrations();
+  const ids = loaded.map(({ id }) => id);
+  const migration086Index = ids.indexOf("086_publish_calendar_same_time_contract.sql");
+
+  assert.equal(
+    migration086Index,
+    ids.indexOf("085_publish_calendar_idempotency_expand.sql") + 1,
+  );
+  assert.equal(
+    migrationRunner.post075SchemaMigrationChecksums["086_publish_calendar_same_time_contract.sql"],
+    "89b5e23a3535ca4d8c11eb8ebd274317cc414bd482d70b93bb0b6f2c379b0abb",
+  );
+  assert.equal(
+    loaded[migration086Index].checksum,
+    migrationRunner.post075SchemaMigrationChecksums["086_publish_calendar_same_time_contract.sql"],
+  );
+});
+
 const post076SchemaMigrationIdsForTests = [
   "077_content_suggestion_batches.sql",
   "078_faq_utterance_matching.sql",
@@ -4683,6 +4703,7 @@ const post076SchemaMigrationIdsForTests = [
   "083_manual_visual_selection_write_fence_invoker.sql",
   "084_ai_content_usage_reversal_identity_invoker.sql",
   "085_publish_calendar_idempotency_expand.sql",
+  "086_publish_calendar_same_time_contract.sql",
 ];
 
 test("post-075 data migrations are a closed DML-only contract", async () => {

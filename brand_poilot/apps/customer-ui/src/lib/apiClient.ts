@@ -47,6 +47,7 @@ import type {
   PublishCalendarManualSlotInput,
   PublishCalendarSlot,
   PublishCalendarWeeklyUsage,
+  PublishItem,
   PublishSlot,
   PublishResult,
   ReferenceBrand,
@@ -716,6 +717,9 @@ export function apiClient(options: ApiClientOptions = {}) {
     },
     listPublishQueue(brandId: string) {
       return request<ApiPublishQueueItem[]>(fetcher, `${baseUrl}/brands/${brandId}/publish-queue`, { method: "GET" }).then((items) => items.map(mapPublishQueueItem));
+    },
+    listPublishItems(brandId: string) {
+      return request<PublishItem[]>(fetcher, `${baseUrl}/brands/${brandId}/publish-items`, { method: "GET" });
     },
     getPublishCalendarSettings(brandId: string) {
       return request<PublishCalendarSettings>(fetcher, `${baseUrl}/brands/${brandId}/publish-calendar/settings`, { method: "GET" });

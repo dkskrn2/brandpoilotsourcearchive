@@ -2,6 +2,17 @@ import { describe, expect, it, vi } from "vitest";
 import { ApiRequestError, apiClient, SUPPORT_REQUESTS_CHANGED_EVENT } from "./apiClient";
 
 describe("apiClient", () => {
+  it("reads the canonical publish items endpoint", async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify([{ itemKey: "output:one" }]), { status: 200 }));
+    const client = apiClient({ baseUrl: "http://api.test", fetcher: fetchMock as typeof fetch });
+
+    expect(await client.listPublishItems("brand-1")).toEqual([{ itemKey: "output:one" }]);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://api.test/brands/brand-1/publish-items",
+      expect.objectContaining({ method: "GET" })
+    );
+  });
+
   it("keeps Meta ad cache reads separate from explicit provider searches", async () => {
     const page = { searchId: "search-1", cacheState: "fresh", errorCode: null, refreshedAt: null, items: [], nextCursor: null };
     const fetchMock = vi.fn(async () => new Response(JSON.stringify(page), { status: 200 }));

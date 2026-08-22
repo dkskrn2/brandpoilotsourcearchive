@@ -102,6 +102,7 @@ export const fullSourceMigrationIds = Object.freeze([
   "083_manual_visual_selection_write_fence_invoker.sql",
   "084_ai_content_usage_reversal_identity_invoker.sql",
   "085_publish_calendar_idempotency_expand.sql",
+  "086_publish_calendar_same_time_contract.sql",
 ]);
 const legacyTriggerSearchPathMigrationId = "073a_legacy_trigger_function_search_path.sql";
 export const legacyTriggerSearchPathMigrationChecksum =
@@ -124,6 +125,7 @@ const post075SchemaMigrationIds = Object.freeze([
   "083_manual_visual_selection_write_fence_invoker.sql",
   "084_ai_content_usage_reversal_identity_invoker.sql",
   "085_publish_calendar_idempotency_expand.sql",
+  "086_publish_calendar_same_time_contract.sql",
 ]);
 export const post075SchemaMigrationChecksums = Object.freeze({
   "077_content_suggestion_batches.sql": "3b178464c5ae5c4e220428e0752ab3e79a2ca06b5b2b23f1e89c34e983e63f76",
@@ -135,6 +137,7 @@ export const post075SchemaMigrationChecksums = Object.freeze({
   "083_manual_visual_selection_write_fence_invoker.sql": "d2a788802e460ab1815f4e859616dc0e9a702f6cb45d0f6578b7fba4a6a74296",
   "084_ai_content_usage_reversal_identity_invoker.sql": "31938a77b6b2b278b608e32de48cc463ceda24b7c96622b0662aacc3c0978f12",
   "085_publish_calendar_idempotency_expand.sql": "1601035eee057da39cac63c6e9a187fcd3331d590414005d2971a943306d22de",
+  "086_publish_calendar_same_time_contract.sql": "89b5e23a3535ca4d8c11eb8ebd274317cc414bd482d70b93bb0b6f2c379b0abb",
 });
 const post075DeferredMigrationIds = Object.freeze([
   ...post075DataMigrationIds,
@@ -4476,17 +4479,18 @@ async function verifyPublishCalendarSchemaCatalog(client, {
      ), expected_index(relation_name,index_name,is_unique,key_columns,predicate_fragments) as (values
        ('brand_subscriptions','brand_subscriptions_due_renewal_idx',false,array['current_period_end']::text[],array['status','active','cancel_scheduled']::text[]),
        ('publish_calendar_slots','publish_calendar_slots_brand_period_idx',false,array['brand_id','scheduled_for','id']::text[],array[]::text[]),
-       ('publish_calendar_slots','publish_calendar_slots_active_brand_time_unique',true,array['brand_id','scheduled_for']::text[],array['status','cancelled']::text[]),
        ('publish_calendar_slots','publish_calendar_slots_auto_open_idx',false,array['brand_id','recommendation_kind','scheduled_for','id']::text[],array['assignment_mode','automatic','status','open']::text[]),
        ('publish_calendar_slots','publish_calendar_slots_proposal_unique',true,array['proposal_id']::text[],array['proposal_id is not null','status','cancelled']::text[]),
        ('publish_calendar_slots','publish_calendar_slots_content_suggestion_unique',true,array['brand_id','content_suggestion_id']::text[],array['content_suggestion_id is not null','status','cancelled']::text[]),
-       ('publish_calendar_slots','publish_calendar_slots_generation_unique',true,array['brand_id','generation_id']::text[],array['generation_id is not null','status','cancelled']::text[]),
+       ('publish_calendar_slots','publish_calendar_slots_generation_unique',true,array['brand_id','generation_id']::text[],array['generation_id is not null','generation_output_id is null','status','cancelled']::text[]),
        ('publish_calendar_slots','publish_calendar_slots_brand_idempotency_unique',true,array['brand_id','idempotency_key']::text[],array['idempotency_key is not null']::text[]),
        ('publish_calendar_slots','publish_calendar_slots_generation_output_unique',true,array['brand_id','generation_output_id']::text[],array['generation_output_id is not null','status','cancelled']::text[]),
        ('publish_calendar_slots','publish_calendar_slots_publish_group_unique',true,array['brand_id','topic_publish_group_id']::text[],array['topic_publish_group_id is not null','status','cancelled']::text[]),
        ('publish_calendar_slots','publish_calendar_slots_active_reservation_idx',false,array['brand_id','scheduled_for']::text[],array['status','proposal_assigned','quota_blocked']::text[])
      ), expected_idempotency_index(index_name,key_columns,predicate_expression) as (values
        ('publish_calendar_slots_brand_idempotency_unique',array['brand_id','idempotency_key']::text[],'idempotency_keyisnotnull'),
+       ('publish_calendar_slots_generation_unique',array['brand_id','generation_id']::text[],
+        'generation_idisnotnullandgeneration_output_idisnullandstatus<>''cancelled''::text'),
        ('publish_calendar_slots_generation_output_unique',array['brand_id','generation_output_id']::text[],
         'generation_output_idisnotnullandstatus<>''cancelled''::text')
      ), expected_trigger(relation_name,trigger_name,definition_fragments) as (values

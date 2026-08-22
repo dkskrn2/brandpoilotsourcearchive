@@ -1,8 +1,8 @@
 import type { Pool, PoolClient } from "pg";
 import { withAiContentTransactionFence } from "./aiContentMaintenance.js";
 import {
-  batchSlotKey,
-  manualSlotKey,
+  batchSlotIdentity,
+  manualSlotIdentity,
   normalizeCalendarChannels,
 } from "./publishCalendarIdempotency.js";
 import { subscriptionWeekWindow, usageAvailability, type UsageAvailability } from "./publishCalendarQuota.js";
@@ -28,6 +28,9 @@ type ManualSlotProvisionInput = BrandScope & {
   idempotencyKey: string;
   createdByUserId?: string | null;
   source: PublishCalendarManualSlotSourceDto;
+};
+type PersistedManualSlotProvisionInput = ManualSlotProvisionInput & {
+  requestIdentity: { key: string; prefix: string; legacyKey: string };
 };
 
 type PublishCalendarRepositoryOptions = {
@@ -61,11 +64,11 @@ export interface PublishCalendarRepository {
   listSlots(input: BrandScope & { startsAt: Date; endsAt: Date }): Promise<PublishCalendarSlotDto[]>;
   createSlot(input: BrandScope & {
     scheduledFor: Date;
-    assignmentMode: AssignmentMode;
-    recommendationKind: RecommendationKind | null;
+    assignmentMode: "automatic";
+    recommendationKind: RecommendationKind;
     contentFormat: ContentFormat;
     channels: Channel[];
-    idempotencyKey?: string | null;
+    idempotencyKey: string;
     createdByUserId?: string | null;
   }): Promise<PublishCalendarSlotDto>;
   assignSlot(input: BrandScope & {
@@ -174,17 +177,7 @@ function validateSlotTimes(values: string[]): string[] {
     || values.some((value) => !/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(value))) {
     throw new Error("publish_calendar_time_invalid");
   }
-  const unique = [...new Set(values)].sort();
-  if (unique.length !== values.length) throw new Error("publish_calendar_time_duplicate");
-  if (unique.length > 1) {
-    const minutes = unique.map((value) => Number(value.slice(0, 2)) * 60 + Number(value.slice(3)));
-    for (let index = 0; index < minutes.length; index += 1) {
-      const current = minutes[index];
-      const next = index + 1 < minutes.length ? minutes[index + 1] : minutes[0] + 24 * 60;
-      if (next - current < 30) throw new Error("publish_calendar_spacing_conflict");
-    }
-  }
-  return unique;
+  return [...values];
 }
 
 async function transaction<T>(pool: Pool, action: (client: PoolClient) => Promise<T>): Promise<T> {
@@ -221,23 +214,6 @@ async function assertConnectedChannels(
   if (new Set(connected.rows.map(({ channel }) => String(channel))).size !== channels.length) {
     throw new Error("publish_calendar_channel_not_connected");
   }
-}
-
-async function assertSlotSpacing(
-  client: Pick<PoolClient, "query">,
-  scope: BrandScope,
-  scheduledFor: Date,
-  excludeSlotId?: string,
-): Promise<void> {
-  const conflict = await client.query(
-    `select slot.id from publish_calendar_slots slot
-      where slot.workspace_id=$1::uuid and slot.brand_id=$2::uuid and slot.status<>'cancelled'
-        and ($4::uuid is null or slot.id<>$4::uuid)
-        and abs(extract(epoch from (slot.scheduled_for-$3::timestamptz))) < 1800
-      order by slot.scheduled_for,slot.id limit 1 for update`,
-    [scope.workspaceId, scope.brandId, scheduledFor, excludeSlotId ?? null],
-  );
-  if (conflict.rowCount) throw new Error("publish_calendar_spacing_conflict");
 }
 
 async function subscriptionAndPublishUsage(
@@ -414,40 +390,56 @@ export function createPublishCalendarRepository(
   };
   const loadManualSlotReplay = async (
     client: PoolClient,
-    input: ManualSlotProvisionInput,
+    input: PersistedManualSlotProvisionInput,
     channels: Channel[],
   ): Promise<PublishCalendarSlotDto | null> => {
     const replay = await client.query(
-      `select slot.* from publish_calendar_slots slot
+      `select slot.*,publish_group.content_topic_id as source_content_topic_id
+         from publish_calendar_slots slot
+         left join topic_publish_groups publish_group
+           on publish_group.id=slot.topic_publish_group_id
+          and publish_group.workspace_id=slot.workspace_id and publish_group.brand_id=slot.brand_id
         where slot.workspace_id=$1::uuid and slot.brand_id=$2::uuid
-          and slot.idempotency_key=$3::text
-        for update`,
-      [input.workspaceId, input.brandId, input.idempotencyKey],
+          and (
+            slot.idempotency_key=$3::text
+            or slot.idempotency_key=$4::text
+            or slot.idempotency_key like $5::text
+          )
+        order by case
+          when slot.idempotency_key=$3::text then 0
+          when slot.idempotency_key=$4::text then 1
+          else 2
+        end
+        for update of slot`,
+      [input.workspaceId, input.brandId, input.requestIdentity.key,
+        input.requestIdentity.legacyKey, `${input.requestIdentity.prefix}%`],
     );
     if (!replay.rowCount) return null;
     const row = replay.rows[0] as Record<string, unknown>;
-    const storedSource = row.generation_output_id
-      ? { kind: "existing_output", id: String(row.generation_output_id) }
-      : row.generation_id
-        ? { kind: "existing_generation", id: String(row.generation_id) }
-        : { kind: null, id: null };
-    const incomingSource = input.source.kind === "existing_output"
-      ? { kind: input.source.kind, id: input.source.generationOutputId }
-      : { kind: input.source.kind, id: input.source.generationId };
+    if (String(row.idempotency_key) !== input.requestIdentity.key
+      && String(row.idempotency_key) !== input.requestIdentity.legacyKey) {
+      throw new Error("publish_calendar_idempotency_conflict");
+    }
+    // Release A rows only stored the client-key digest. Their lineage comparison remains the
+    // compatibility fallback; v2 rows additionally preserve the immutable request source.
+    const sourceMatches = input.source.kind === "existing_content_topic"
+      ? String(row.source_content_topic_id ?? "") === input.source.contentTopicId
+      : input.source.kind === "existing_generation"
+        ? String(row.generation_id ?? "") === input.source.generationId
+        : String(row.generation_output_id ?? "") === input.source.generationOutputId;
     const matches = row.assignment_mode === "manual"
       && row.recommendation_kind == null
       && row.content_format === input.contentFormat
       && iso(row.scheduled_for) === input.scheduledFor.toISOString()
       && JSON.stringify(normalizeCalendarChannels((row.channels ?? []) as Channel[]))
         === JSON.stringify(channels)
-      && storedSource.kind === incomingSource.kind
-      && storedSource.id === incomingSource.id;
+      && sourceMatches;
     if (!matches) throw new Error("publish_calendar_idempotency_conflict");
     return mapSlot(row);
   };
   const provisionManualSlotLocked = async (
     client: PoolClient,
-    input: ManualSlotProvisionInput,
+    input: PersistedManualSlotProvisionInput,
     replayChecked = false,
   ): Promise<{ slot: PublishCalendarSlotDto; replayed: boolean }> => {
     const channels = validateManualProvisionInput(input);
@@ -461,29 +453,28 @@ export function createPublishCalendarRepository(
     );
     if (future.rows[0]?.future !== true) throw new Error("publish_calendar_time_past");
     await assertConnectedChannels(client, input, channels);
-    const exact = await client.query(
-      `select slot.* from publish_calendar_slots slot
-        where slot.workspace_id=$1::uuid and slot.brand_id=$2::uuid
-          and slot.scheduled_for=$3::timestamptz and slot.status<>'cancelled'
-        for update`,
-      [input.workspaceId, input.brandId, input.scheduledFor],
-    );
-    if (exact.rowCount) {
-      const row = exact.rows[0] as Record<string, unknown>;
-      const sameSource = input.source.kind === "existing_generation"
-        ? String(row.generation_id ?? "") === input.source.generationId
-        : String(row.generation_output_id ?? "") === input.source.generationOutputId;
-      const sameChannels = Array.isArray(row.channels)
-        && row.channels.length === 1 && row.channels[0] === input.channel;
-      if (sameSource && sameChannels && row.content_format === input.contentFormat) {
-        return { slot: mapSlot(row), replayed: true };
-      }
-      throw new Error("publish_calendar_slot_time_conflict");
-    }
-    await assertSlotSpacing(client, input, input.scheduledFor);
 
-    const lineage = input.source.kind === "existing_generation"
+    const lineage = input.source.kind === "existing_content_topic"
       ? await client.query(
+          `select topic.id as content_topic_id,null::uuid as generation_id,
+                  null::uuid as generation_output_id,topic.title,
+                  case
+                    when topic.selected_instagram_format='instagram_reel' then 'reel'
+                    when topic.selected_instagram_format='instagram_feed_carousel' then 'card_news'
+                  end as content_format
+             from content_topics topic
+            where topic.workspace_id=$1::uuid and topic.brand_id=$2::uuid
+              and topic.id=$3::uuid and topic.status='selected'
+              and case
+                    when $4='reel' then topic.selected_instagram_format='instagram_reel'
+                    when $4='card_news' then topic.selected_instagram_format='instagram_feed_carousel'
+                    else false
+                  end
+            for update`,
+          [input.workspaceId, input.brandId, input.source.contentTopicId, input.contentFormat],
+        )
+      : input.source.kind === "existing_generation"
+        ? await client.query(
           `select generation.id as generation_id,null::uuid as generation_output_id,
                   null::uuid as topic_publish_group_id,generation.title,
                   generation.output_format as content_format
@@ -494,7 +485,7 @@ export function createPublishCalendarRepository(
             for key share`,
           [input.workspaceId, input.brandId, input.source.generationId, input.contentFormat],
         )
-      : await client.query(
+        : await client.query(
           `select generation.id as generation_id,output.id as generation_output_id,
                   null::uuid as topic_publish_group_id,
                   coalesce(nullif(output.title,''),generation.title) as title,
@@ -518,8 +509,31 @@ export function createPublishCalendarRepository(
         );
     if (!lineage.rowCount) throw new Error("publish_calendar_content_not_assignable");
     const resolved = lineage.rows[0] as Record<string, unknown>;
-    const duplicate = await client.query(
-      `select slot.id from publish_calendar_slots slot
+    if (input.source.kind === "existing_content_topic") {
+      const publishGroup = await client.query(
+        `insert into topic_publish_groups(workspace_id,brand_id,content_topic_id,status)
+         values($1::uuid,$2::uuid,$3::uuid,'waiting')
+         on conflict (content_topic_id) do update
+           set content_topic_id=excluded.content_topic_id
+         where topic_publish_groups.workspace_id=excluded.workspace_id
+           and topic_publish_groups.brand_id=excluded.brand_id
+           and topic_publish_groups.status='waiting'
+         returning id,status`,
+        [input.workspaceId, input.brandId, input.source.contentTopicId],
+      );
+      if (!publishGroup.rowCount) throw new Error("publish_calendar_content_not_assignable");
+      resolved.topic_publish_group_id = publishGroup.rows[0]?.id;
+    }
+    const duplicate = input.source.kind === "existing_content_topic"
+      ? await client.query(
+          `select slot.id from publish_calendar_slots slot
+            where slot.workspace_id=$1::uuid and slot.brand_id=$2::uuid and slot.status<>'cancelled'
+              and slot.topic_publish_group_id=$3::uuid
+            limit 1 for update`,
+          [input.workspaceId, input.brandId, resolved.topic_publish_group_id],
+        )
+      : await client.query(
+        `select slot.id from publish_calendar_slots slot
         where slot.workspace_id=$1::uuid and slot.brand_id=$2::uuid and slot.status<>'cancelled'
           and (slot.generation_id=$3::uuid and slot.generation_output_id is null and $4::uuid is null
             or (
@@ -532,11 +546,13 @@ export function createPublishCalendarRepository(
           )
         limit 1 for update`,
       [input.workspaceId, input.brandId, resolved.generation_id, resolved.generation_output_id ?? null],
-    );
+      );
     if (duplicate.rowCount) throw new Error("publish_calendar_content_already_scheduled");
     const { availability } = await subscriptionAndPublishUsage(client, input, input.scheduledFor);
     if (availability.additionalAvailable < 1) throw new Error("publish_weekly_quota_exceeded");
-    const status = resolved.topic_publish_group_id ? "content_assigned" : "generation_pending";
+    const status = input.source.kind === "existing_content_topic"
+      ? "generation_pending"
+      : resolved.topic_publish_group_id ? "content_assigned" : "generation_pending";
     let result;
     try {
       result = await client.query(
@@ -700,7 +716,12 @@ export function createPublishCalendarRepository(
 
     async provisionManualSlot(input) {
       validateManualProvisionInput(input);
-      const persistedInput = { ...input, idempotencyKey: manualSlotKey(input.idempotencyKey) };
+      const requestIdentity = manualSlotIdentity(input.idempotencyKey, input.source);
+      const persistedInput: PersistedManualSlotProvisionInput = {
+        ...input,
+        idempotencyKey: requestIdentity.key,
+        requestIdentity,
+      };
       const result = await transaction(fencedPool, async (client) => {
         await lockBrand(client, input.brandId);
         return provisionManualSlotLocked(client, persistedInput);
@@ -732,13 +753,21 @@ export function createPublishCalendarRepository(
       if (rowIds.size !== input.rows.length || normalizedRowIds.some((value) => !value || value.length > 100)) {
         throw new Error("publish_calendar_batch_invalid");
       }
-      const rows = input.rows.map((row, index) => ({
-        ...input,
-        ...row,
-        clientRowId: normalizedRowIds[index],
-        idempotencyKey: batchSlotKey(input.idempotencyKey, normalizedRowIds[index]),
-        createdByUserId: input.createdByUserId ?? null,
-      }));
+      const rows = input.rows.map((row, index) => {
+        const requestIdentity = batchSlotIdentity(
+          input.idempotencyKey,
+          normalizedRowIds[index],
+          row.source,
+        );
+        return {
+          ...input,
+          ...row,
+          clientRowId: normalizedRowIds[index],
+          idempotencyKey: requestIdentity.key,
+          requestIdentity,
+          createdByUserId: input.createdByUserId ?? null,
+        } satisfies PersistedManualSlotProvisionInput & { clientRowId: string };
+      });
       rows.forEach(validateManualProvisionInput);
       const results = await transaction(fencedPool, async (client) => {
         await lockBrand(client, input.brandId);
@@ -848,81 +877,40 @@ export function createPublishCalendarRepository(
 
     async createSlot(input) {
       const channels = validateChannels(input.channels);
-      const idempotencyKey = input.idempotencyKey ?? null;
-      const internalAutomatic = input.assignmentMode === "automatic"
-        && typeof idempotencyKey === "string"
-        && /^automatic:v1:[0-9a-f]{64}$/.test(idempotencyKey);
-      if (idempotencyKey !== null && !internalAutomatic) {
+      const idempotencyKey = input.idempotencyKey;
+      if (input.assignmentMode !== "automatic"
+        || !/^automatic:v1:[0-9a-f]{64}$/.test(idempotencyKey)) {
         throw new Error("publish_calendar_idempotency_key_invalid");
       }
       if (!Number.isFinite(input.scheduledFor.getTime())) throw new Error("publish_calendar_time_invalid");
-      if (!internalAutomatic && input.scheduledFor <= new Date()) throw new Error("publish_calendar_time_past");
       return transaction(fencedPool, async (client) => {
         await lockBrand(client, input.brandId);
-        if (internalAutomatic) {
-          const replay = await client.query(
-            `select slot.* from publish_calendar_slots slot
-              where slot.workspace_id=$1::uuid and slot.brand_id=$2::uuid
-                and slot.idempotency_key=$3::text
-              for update`,
-            [input.workspaceId, input.brandId, idempotencyKey],
-          );
-          if (replay.rowCount) return mapSlot(replay.rows[0]);
-        }
+        const replay = await client.query(
+          `select slot.* from publish_calendar_slots slot
+            where slot.workspace_id=$1::uuid and slot.brand_id=$2::uuid
+              and slot.idempotency_key=$3::text
+            for update`,
+          [input.workspaceId, input.brandId, idempotencyKey],
+        );
+        if (replay.rowCount) return mapSlot(replay.rows[0]);
         const future = await client.query(
           "select clock_timestamp() < $1::timestamptz as future",
           [input.scheduledFor],
         );
         if (future.rows[0]?.future !== true) throw new Error("publish_calendar_time_past");
         await assertConnectedChannels(client, input, channels);
-        if (!internalAutomatic) {
-          const exact = await client.query(
-            `select slot.* from publish_calendar_slots slot
-              where slot.workspace_id=$1::uuid and slot.brand_id=$2::uuid
-                and slot.scheduled_for=$3::timestamptz and slot.status<>'cancelled'
-              order by slot.id
-              for update`,
-            [input.workspaceId, input.brandId, input.scheduledFor],
-          );
-          const matching = exact.rows.find((row) => row.idempotency_key == null
-            && row.assignment_mode === input.assignmentMode
-            && row.recommendation_kind === input.recommendationKind
-            && row.content_format === input.contentFormat
-            && row.content_suggestion_id == null
-            && row.proposal_id == null
-            && row.generation_id == null
-            && row.generation_output_id == null
-            && row.topic_publish_group_id == null
-            && JSON.stringify(normalizeCalendarChannels((row.channels ?? []) as Channel[]))
-              === JSON.stringify(channels));
-          if (matching) return mapSlot(matching);
-          if (exact.rowCount) throw new Error("publish_calendar_slot_time_conflict");
-          await assertSlotSpacing(client, input, input.scheduledFor);
-        }
         await subscriptionAndPublishUsage(client, input, input.scheduledFor);
-        if (internalAutomatic) {
-          const result = await client.query(
-            `insert into publish_calendar_slots(
-               workspace_id,brand_id,scheduled_for,assignment_mode,status,recommendation_kind,
-               content_format,channels,created_by_user_id,idempotency_key
-             ) values($1::uuid,$2::uuid,$3::timestamptz,$4,'open',$5,$6,$7::text[],$8::uuid,$9)
-             on conflict(brand_id,idempotency_key) where idempotency_key is not null
-             do update set updated_at=publish_calendar_slots.updated_at
-             returning *`,
-            [input.workspaceId, input.brandId, input.scheduledFor, input.assignmentMode,
-              input.recommendationKind, input.contentFormat, channels,
-              input.createdByUserId ?? null, idempotencyKey],
-          );
-          return mapSlot(result.rows[0]);
-        }
         const result = await client.query(
           `insert into publish_calendar_slots(
              workspace_id,brand_id,scheduled_for,assignment_mode,status,recommendation_kind,
-             content_format,channels,created_by_user_id
-           ) values($1::uuid,$2::uuid,$3::timestamptz,$4,'open',$5,$6,$7::text[],$8::uuid)
+             content_format,channels,created_by_user_id,idempotency_key
+           ) values($1::uuid,$2::uuid,$3::timestamptz,$4,'open',$5,$6,$7::text[],$8::uuid,$9)
+           on conflict(brand_id,idempotency_key) where idempotency_key is not null
+           do update set updated_at=publish_calendar_slots.updated_at
            returning *`,
           [input.workspaceId, input.brandId, input.scheduledFor, input.assignmentMode,
-            input.recommendationKind, input.contentFormat, channels, input.createdByUserId ?? null],
+            input.recommendationKind, input.contentFormat, channels,
+            input.createdByUserId ?? null, idempotencyKey],
         );
         return mapSlot(result.rows[0]);
       });

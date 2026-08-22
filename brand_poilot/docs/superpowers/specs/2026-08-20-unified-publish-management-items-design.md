@@ -29,6 +29,10 @@
 6. 생성 전, 생성 중, 생성 완료·미게시 항목을 예약할 수 있다.
 7. 모든 수동·목록·일괄·자동 배정에서 최소 게시 간격 제한을 제거하고 동일 시각 다중 예약도 허용한다.
 8. 기존 게시 큐 실행, 게시 실패·재시도, 늦은 자동 게시, 구독 주간 한도 정책은 유지한다.
+9. 기존 일일 정보성·트렌드성 추천 2건의 자동 선택과 생성 전 슬롯 연결을 유지한다.
+10. 자동 콘텐츠 형식 설정이 없을 때 카드뉴스·릴스 혼합 기본 배치를 유지하고, 명시한 형식 설정은 그대로 적용한다.
+11. 사이드바의 `생성 N건 남음`은 생성 횟수 한도를 표시하며, 게시 예약만으로 생성 잔여량을 차감하지 않는다.
+12. 게시 한도는 플랜 시작일 기준 주간 주기, 생성 한도는 구독 플랜의 별도 생성 횟수 계약을 따르며 월 구독 변경 경계에서도 서로 섞이지 않는다.
 
 ## 3. 비목표
 
@@ -68,7 +72,8 @@ GET /brands/:brandId/publish-items
 - `contentFormat`
 - `channels`
 - `source`: 기존 결과 상세에서 사용하는 source type, label, detail과 URL 배열
-- `targets`: 채널별 queue ID, 상태, 실제 예약 시각, 게시 완료 시각, 오류, preview/output JSON과 artifact/external URL
+- `targets`: 채널별 queue ID, 상태, 실제 예약 시각, 게시·실패 시각, 오류, preview/output JSON, artifact URL, 외부 게시 ID/URL과 source summary
+- `reviewTargets`: 기존 생성 검토를 유지하기 위한 channel output ID, 채널, delivery format, 검토 상태, preview/output JSON, source summary, block reason과 생성 시각. 최초 별도 목록 조회 없이 같은 항목에서 승인·거절·재생성 및 콘텐츠 상세를 수행한다.
 - `contentStatus`: pre_generation, generating, completed 또는 failed
 - `publishStatus`: unreserved, reserved, publish_queued, scheduled, deferred, publishing, partially_published, published, failed, result_unknown 또는 cancelled
 - `status`: 두 상태에서 결정한 canonical 표시 상태
@@ -138,6 +143,7 @@ UI는 별도 목록·슬롯 조회를 fallback으로 사용하지 않는다. 기
 
 목록은 공통 `PublishItem[]`을 기존 카드 구조로 렌더링한다.
 
+- 생성 결과에 검토 대상이 있으면 기존 콘텐츠 상세, 승인·수동 승인·거절·재생성 동작과 부분 성공/새로고침 실패 처리를 유지한다.
 - 생성 전·생성 중·생성 완료·미게시이며 예약이 없는 항목: `게시 설정`
 - 예약됨·deferred·게시 중: `예약 상세`
 - 게시 완료: `결과 보기`
@@ -307,6 +313,10 @@ quota SQL도 공통 조회와 동일한 canonical publication unit key를 사용
 - 같은 generation의 서로 다른 completed output 2건은 예약되고 같은 output replay는 차단됨
 - workspace·brand 격리와 cross-tenant 거부
 - subscription, weekly quota, channel, format 검증
+- 플랜 시작일 기준 주간 게시 주기와 월 구독 변경 경계
+- 게시 예약과 별도인 생성 횟수 잔여량 및 사이드바 `생성 N건 남음`
+- 일일 정보성·트렌드성 추천 2건의 생성 전 자동 선택·슬롯 연결
+- 자동 형식 미설정 시 카드뉴스·릴스 혼합, 명시 설정 시 해당 형식 적용
 - 동일 시각의 서로 다른 슬롯 2건 생성 성공
 - 동일 시각 duplicate automatic settings, batch, overdue calendar group과 slot 없는 direct ready group 성공
 - idempotency replay가 시각 경과·quota 감소·채널 비활성 이후에도 기존 slot을 반환하고 새 슬롯을 만들지 않음
@@ -383,6 +393,9 @@ Release B rollback은 고객 UI A와 API A만 복구하며 `086`은 forward 상�
 5. 같은 시각의 서로 다른 슬롯을 수동·batch·automatic 경로에서 생성할 수 있다.
 6. 주간 게시 한도, 구독, tenant, channel, format과 동일 source 중복 차단은 유지된다.
 7. 기존 publish queue 실행·재시도·결과 조회가 영향 테스트를 통과한다.
-8. migration `085`/`086`과 변경 SQL이 최소 권한 application role의 실제 PostgreSQL에서 통과한다.
-9. Release A 상태에서 `086` 적용 전·후 모두 calendar write와 queue 실행이 정상이고, API A rollback 호환성이 증명된다.
-10. 무관 기능과 worker는 변경·배포·테스트 대상에 포함되지 않는다.
+8. 일일 추천 자동 선택, 생성 전 자동 슬롯 연결과 카드뉴스·릴스 기본 혼합이 유지된다.
+9. 예약만으로 생성 잔여량이 줄지 않고, 사이드바는 `생성 N건 남음`을 정확히 표시한다.
+10. 플랜 시작일 기준 주간 게시 한도와 월 구독 변경 경계가 기존 구독 계약대로 계산된다.
+11. migration `085`/`086`과 변경 SQL이 최소 권한 application role의 실제 PostgreSQL에서 통과한다.
+12. Release A 상태에서 `086` 적용 전·후 모두 calendar write와 queue 실행이 정상이고, API A rollback 호환성이 증명된다.
+13. 무관 기능과 worker는 변경·배포·테스트 대상에 포함되지 않는다.

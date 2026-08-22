@@ -60,31 +60,3 @@ export function nextPolicySlots(now: Date, count: number) {
   }
   return slots;
 }
-
-export function policySlotMetadata(slot: Date) {
-  const parts = kstParts(slot);
-  const slotNumber = policySlots.findIndex((candidate) => candidate.hour === parts.hour && candidate.minute === parts.minute) + 1;
-  if (slotNumber < 1) throw new Error("invalid_policy_slot");
-  return {
-    slotDate: `${parts.year}-${String(parts.month).padStart(2, "0")}-${String(parts.day).padStart(2, "0")}`,
-    slotNumber
-  };
-}
-
-export function jitterPolicySlot(slot: Date, queueId: string) {
-  const seed = Array.from(queueId).reduce((total, character) => total + character.codePointAt(0)!, 0);
-  const offsetMinutes = (seed % 21) - 10;
-  return new Date(slot.getTime() + offsetMinutes * 60_000);
-}
-
-export function nextAvailablePolicySlot(now: Date, queueId: string, occupiedSlotKeys: ReadonlySet<string>) {
-  for (const baseSlot of nextPolicySlots(now, 128)) {
-    const metadata = policySlotMetadata(baseSlot);
-    const key = `${metadata.slotDate}:${metadata.slotNumber}`;
-    const scheduledFor = jitterPolicySlot(baseSlot, queueId);
-    if (scheduledFor.getTime() > now.getTime() && !occupiedSlotKeys.has(key)) {
-      return { ...metadata, scheduledFor, key };
-    }
-  }
-  throw new Error("policy_slot_unavailable");
-}

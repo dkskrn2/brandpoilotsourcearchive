@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createServer } from "./httpServer";
 import { registerAdminRoutes } from "./adminServer";
 import { StoryCapabilityRequiredError } from "./repository";
-import type { ApiRepository, InstagramFormatSettingsInput, InstagramTrendPageDto, PublishResultDto, SourceSnapshotDto } from "./types";
+import type { ApiRepository, InstagramFormatSettingsInput, InstagramTrendPageDto, PublishItemDto, PublishResultDto, SourceSnapshotDto } from "./types";
 
 const brandId = "11111111-1111-1111-1111-111111111111";
 
@@ -525,6 +525,7 @@ function createRepository(): ApiRepository {
     listContentOutputs: vi.fn(async () => []),
     reviewContentOutput: vi.fn(async (_outputId, action) => ({ id: _outputId, status: action === "approve" ? "approved" : "rejected" })),
     listPublishQueue: vi.fn(async () => []),
+    listPublishItems: vi.fn(async () => []),
     listPublishResults: vi.fn(async (): Promise<PublishResultDto[]> => [{
       contentId: "master-1",
       title: "제주 가족 숙소 카드뉴스",
@@ -3096,12 +3097,68 @@ describe("API server", () => {
     });
 
     expect(unsupportedSettings.statusCode).toBe(400);
-    expect(unsupportedSlot.statusCode).toBe(400);
+    expect(unsupportedSlot.statusCode).toBe(404);
     expect(repository.saveSettings).toHaveBeenCalledTimes(1);
     expect(repository.createSlot).not.toHaveBeenCalled();
   });
 
-  it("keeps the legacy no-key calendar slot request body unchanged", async () => {
+  it("returns canonical publish items with the authenticated workspace scope", async () => {
+    vi.stubEnv("BRAND_PILOT_DEV_WORKSPACE_ID", "22222222-2222-4222-8222-222222222222");
+    const repository = createRepository();
+    const item: PublishItemDto = {
+      itemKey: "topic:topic-1", workspaceId: "22222222-2222-4222-8222-222222222222", brandId,
+      title: "SNS 마케팅", createdAt: "2026-08-20T00:00:00.000Z", contentFormat: "card_news",
+      channels: ["instagram"], source: { type: "topic_table", label: "SNS 운영", detail: null, urls: [] },
+      targets: [], reviewTargets: [], contentStatus: "pre_generation", publishStatus: "unreserved", status: "pre_generation",
+      groupStatus: null, publicationProgress: "none", scheduledFor: null, effectiveScheduledFor: null,
+      publishedAt: null, calendarDate: null, calendarPlacement: "unreserved", assignmentMode: null,
+      sourceRefs: { contentTopicId: "topic-1", proposalId: null, generationId: null, generationOutputId: null,
+        calendarSlotId: null, topicPublishGroupId: null, queueIds: [] },
+      schedulable: true, scheduleBlockedReason: null, lastError: null,
+    };
+    vi.mocked(repository.listPublishItems!).mockResolvedValue([item]);
+    const app = createServer({ repository, logger: false });
+
+    const response = await app.inject({ method: "GET", url: `/brands/${brandId}/publish-items` });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual([item]);
+    expect(repository.listPublishItems).toHaveBeenCalledWith({
+      workspaceId: "22222222-2222-4222-8222-222222222222", brandId,
+    });
+  });
+
+  it("requires authentication and brand access before listing canonical publish items", async () => {
+    const anonymousRepository = createRepository();
+    const anonymous = createServer({
+      repository: anonymousRepository,
+      kakaoAuth: { getSession: vi.fn(async () => null) } as any,
+      logger: false,
+    });
+    const anonymousResponse = await anonymous.inject({ method: "GET", url: `/brands/${brandId}/publish-items` });
+    expect(anonymousResponse.statusCode).toBe(401);
+    expect(anonymousResponse.json()).toEqual({ error: "authentication_required" });
+    expect(anonymousRepository.listPublishItems).not.toHaveBeenCalled();
+
+    const foreignRepository = createRepository();
+    const foreign = createServer({
+      repository: foreignRepository,
+      kakaoAuth: {
+        getSession: vi.fn(async () => ({ userId: "user-1" })),
+        canAccessBrand: vi.fn(async () => false),
+        canAccessResource: vi.fn(async () => false),
+      } as any,
+      logger: false,
+    });
+    const foreignResponse = await foreign.inject({
+      method: "GET", url: `/brands/${brandId}/publish-items`, headers: { cookie: "bp_session=session-token" },
+    });
+    expect(foreignResponse.statusCode).toBe(403);
+    expect(foreignResponse.json()).toEqual({ error: "workspace_access_denied" });
+    expect(foreignRepository.listPublishItems).not.toHaveBeenCalled();
+  });
+
+  it("removes the legacy no-key calendar slot creation route", async () => {
     vi.stubEnv("BRAND_PILOT_DEV_WORKSPACE_ID", "22222222-2222-4222-8222-222222222222");
     vi.stubEnv("BRAND_PILOT_DEV_USER_ID", "33333333-3333-4333-8333-333333333333");
     const repository = createRepository();
@@ -3118,12 +3175,8 @@ describe("API server", () => {
       payload: capturedBody,
     });
 
-    expect(response.statusCode).toBe(200);
-    expect(Object.keys(capturedBody).sort()).toEqual(["channels", "contentFormat", "scheduledFor"]);
-    expect(repository.createSlot).toHaveBeenCalledWith(expect.objectContaining({
-      assignmentMode: "manual",
-      recommendationKind: null,
-    }));
+    expect(response.statusCode).toBe(404);
+    expect(repository.createSlot).not.toHaveBeenCalled();
   });
 
   it("returns brand-scoped authoritative manual calendar options", async () => {
@@ -3254,6 +3307,17 @@ describe("API server", () => {
         source: { kind: "existing_output", generationOutputId: completedOutputId },
       },
     });
+    const selectedTopicId = "40000000-0000-4000-8000-000000000003";
+    const selectedTopic = await app.inject({
+      method: "POST",
+      url: `/brands/${brandId}/publish-calendar/manual-slots`,
+      payload: {
+        ...payload,
+        scheduledFor: "2099-08-17T01:00:00.000Z",
+        idempotencyKey: "manual-slot-3",
+        source: { kind: "existing_content_topic", contentTopicId: selectedTopicId },
+      },
+    });
 
     expect(response.statusCode).toBe(200);
     expect(response.json()).toMatchObject({ status: "generation_pending", generationId: payload.source.generationId });
@@ -3268,7 +3332,11 @@ describe("API server", () => {
     expect(provisionManualSlot.mock.calls[0]?.[0].scheduledFor).toEqual(new Date(payload.scheduledFor));
     expect(invalid.statusCode).toBe(400);
     expect(completed.statusCode).toBe(200);
-    expect(provisionManualSlot).toHaveBeenCalledTimes(2);
+    expect(selectedTopic.statusCode).toBe(200);
+    expect(provisionManualSlot).toHaveBeenLastCalledWith(expect.objectContaining({
+      source: { kind: "existing_content_topic", contentTopicId: selectedTopicId },
+    }));
+    expect(provisionManualSlot).toHaveBeenCalledTimes(3);
     expect(prepareCompletedCalendarPublish).not.toHaveBeenCalled();
   });
 
@@ -3289,6 +3357,12 @@ describe("API server", () => {
         channel: "instagram",
         contentFormat: "card_news",
         source: { kind: "existing_output", generationOutputId: "40000000-0000-4000-8000-000000000001" },
+      }, {
+        clientRowId: "row-2",
+        scheduledFor: "2099-08-17T00:30:00.000Z",
+        channel: "instagram",
+        contentFormat: "reel",
+        source: { kind: "existing_content_topic", contentTopicId: "40000000-0000-4000-8000-000000000002" },
       }],
     };
 
@@ -3309,6 +3383,10 @@ describe("API server", () => {
         clientRowId: "row-1",
         scheduledFor: new Date(payload.rows[0].scheduledFor),
         source: payload.rows[0].source,
+      }), expect.objectContaining({
+        clientRowId: "row-2",
+        scheduledFor: new Date(payload.rows[1].scheduledFor),
+        source: payload.rows[1].source,
       })],
     }));
     expect(prepareCompletedCalendarPublish).not.toHaveBeenCalled();

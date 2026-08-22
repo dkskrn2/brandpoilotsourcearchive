@@ -4,8 +4,10 @@ export const PUBLISH_CALENDAR_USAGE_CHANGED_EVENT = "brand-pilot:publish-calenda
 
 export type CalendarEntry = {
   id: string;
-  scheduledFor: string;
-  effectiveScheduledFor?: string | null;
+  calendarDate: string;
+  scheduledFor: string | null;
+  effectiveScheduledFor: string | null;
+  publishedAt: string | null;
   title: string;
   status: string;
   mode: "automatic" | "manual";
@@ -13,6 +15,7 @@ export type CalendarEntry = {
   recommendationKind?: "informational" | "trend" | null;
   contentFormat?: "card_news" | "reel";
   lastError?: string | null;
+  cancellable?: boolean;
 };
 
 const kst = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Seoul", year: "numeric", month: "2-digit", day: "2-digit" });
@@ -36,20 +39,23 @@ export function monthCells(monthKey: string) {
 export function entryFromSlot(slot: PublishCalendarSlot): CalendarEntry {
   return {
     id: slot.id,
+    calendarDate: slot.effectiveScheduledFor ?? slot.scheduledFor,
     scheduledFor: slot.scheduledFor,
-    effectiveScheduledFor: slot.effectiveScheduledFor,
+    effectiveScheduledFor: slot.effectiveScheduledFor ?? slot.scheduledFor,
+    publishedAt: slot.status === "published" ? slot.effectiveScheduledFor ?? slot.scheduledFor : null,
     title: slot.title ?? (slot.recommendationKind === "trend" ? "트렌드 추천 대기" : slot.recommendationKind === "informational" ? "정보성 추천 대기" : "수동 배정 대기"),
     status: slot.status,
     mode: slot.assignmentMode,
     channels: slot.channels,
     recommendationKind: slot.recommendationKind,
     contentFormat: slot.contentFormat,
-    lastError: slot.lastError
+    lastError: slot.lastError,
+    cancellable: !["published", "cancelled", "publishing"].includes(slot.status)
   };
 }
 
 export function timeLabel(entry: CalendarEntry) {
-  return kstTime.format(new Date(entry.scheduledFor));
+  return kstTime.format(new Date(entry.calendarDate));
 }
 
 export function monthPeriod(monthKey: string) {

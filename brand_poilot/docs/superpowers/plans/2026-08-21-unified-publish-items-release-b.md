@@ -299,7 +299,7 @@ Expected: missing client method and old three-way assembly still runs.
 
 - [ ] **Step 3: Mirror the API DTO and add one client call**
 
-Add the exact `PublishItem`, `PublishItemTarget`, status and source-ref types matching Task 2. Add:
+Add the exact `PublishItem`, `PublishItemTarget`, `PublishItemReviewTarget`, status and source-ref types matching Task 2. `PublishItemTarget` includes failed time, external post ID and source summary; `reviewTargets` preserves the existing content review/detail actions without another page-load collection. Add:
 
 ```ts
 listPublishItems(brandId: string) {
@@ -320,6 +320,8 @@ export const unreservedItems = (items: PublishItem[]) => items.filter((item) => 
 - [ ] **Step 5: Replace page state and initial reads**
 
 Replace `queueRows`, `contentOutputs`, `publishResults` and `calendarSlots` as rendering sources with one `publishItems` state and one initial request. Keep calendar settings, channel connection and manual options as separate supporting reads. Refresh the same collection after schedule, cancel, retry and publish mutations. Preserve queue deep links by searching `item.targets[].queueId`.
+
+Preserve the existing content artifact dialog and grouped approve/reject/regenerate behavior from `item.reviewTargets`. Review mutations remain channel-output-specific and refresh `PublishItem[]`; partial mutation success and saved-success/refetch-failure messages remain distinct.
 
 For cancellation, use `cancelPublishCalendarSlot` when `sourceRefs.calendarSlotId` is active; otherwise use the existing queue cancel action for the selected target. Retry remains target/queue-specific. Published result and artifact actions use the selected target queue ID. Do not add a future-force-publish action.
 
@@ -400,6 +402,8 @@ The tray retains `새 콘텐츠 생성` and `여러 주제 일괄 설정`. Those
 
 Keep regression assertions for Seoul-today selection in the current month, first-day selection after month navigation, mobile shared calendar scrolling, keyboard tab/dialog focus restoration, cancel/retry/result actions and the existing sidebar usage summary.
 
+Make the sidebar assertion exact: it renders `생성 N건 남음` from generation usage, has no progress bar, and creating a publish reservation without starting generation does not decrement that number. Keep the existing DB-backed automatic content-format preference; when it is unset, preserve the current card-news/reel mixed default, and when set, preserve the selected format.
+
 - [ ] **Step 8: Run GREEN and commit**
 
 ```powershell
@@ -428,6 +432,8 @@ git commit -m "feat: share publish scheduling across views"
 - [ ] **Step 1: Write same-time RED tests for every approved path**
 
 Prove exact same timestamp succeeds for two manual sources, two batch rows and duplicate automatic settings. Prove late calendar groups all use the current tick and slot-less ready groups all use the same next policy time. Assert each distinct publication unit consumes one quota unit and multi-target/replay do not add usage.
+
+Add preservation fixtures for the existing daily two-recommendation flow: one informational and one trend recommendation are automatically selected and linked to slots before content generation, and allocator replay does not duplicate either publication unit. These are regression assertions for the existing automation, not a replacement recommendation implementation.
 
 - [ ] **Step 2: Run RED**
 
@@ -497,6 +503,8 @@ Expected: focused UI tests and production build exit 0. Do not run DM, FAQ, craw
 - [ ] **Step 4: Run local browser behavior checks**
 
 Using the real local API/database fixture and authenticated customer UI, verify: one network `publish-items` read feeds both tabs; list and calendar show the same item/status/time; selected content topic, generation and output scheduling; two items at one timestamp; partial publish error visibility; mobile calendar without body overflow; keyboard focus restore and panel accessibility.
+
+Also verify the affected quota boundaries with the existing subscription implementation: weekly publish usage resets from the plan start date, a monthly subscription-plan transition uses the effective plan without rewriting historical units, generation usage remains separate from publish reservations, and the sidebar shows the exact remaining generation count. Verify one informational and one trend recommendation can remain pre-generation while already assigned, and the unset automatic format preference still produces the existing card-news/reel mixed allocation.
 
 - [ ] **Step 5: Review exact scope and commit corrections**
 
