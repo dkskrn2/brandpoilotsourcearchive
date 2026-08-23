@@ -1,11 +1,15 @@
 import { describe, expect, it } from "vitest";
-import { buildReelPlanPrompt } from "./promptBuilder.js";
+import { buildReelPlanPrompt, reelPlanSkillVersion } from "./promptBuilder.js";
 
 const uid = (value: number) => `00000000-0000-4000-8000-${String(value).padStart(12, "0")}`;
 const frozenManualVisualSelection = {
   contractVersion: "manual-visual-selection-frozen.v1",
   product: null, stylePreset: null, avatar: null,
 } as const;
+
+it("uses the revised marketing-evidence skill version", () => {
+  expect(reelPlanSkillVersion).toBe("reel-storyboard-skill.v5");
+});
 
 const marketingManualVisualSelection = {
   contractVersion: "manual-visual-selection-frozen.v1",
@@ -159,6 +163,36 @@ describe("reel purpose prompt", () => {
       expect(prompt).toContain("Approved feature");
       expect(prompt).toContain(uid(2));
     }
+  });
+
+  it("grounds marketing storyboards in both approved product facts and Subject Evidence", () => {
+    const prompt = buildReelPlanPrompt(promptInput("marketing"), marketingManualVisualSelection);
+
+    expect(prompt).toContain("승인된 선택 제품의 구체적인 사실 또는 가치");
+    expect(prompt).toContain("Subject/Research Evidence에 근거한 Editorial Point");
+    expect(prompt).toContain("동결된 subject, 승인된 product와 Research Evidence를 구분");
+    expect(prompt).toContain("서로 다른 대상의 사실을 전이");
+    expect(prompt).toContain("CTA Scene은 최대 1개");
+  });
+
+  it("binds complete frozen subject-reference content instead of only the reference kind", () => {
+    const source = promptInput("informational") as never as {
+      subject: { kind: "reference"; referenceIds: string[] };
+      references: { selected: Array<{ referenceItemId: string }> };
+    };
+    source.subject = { kind: "reference", referenceIds: ["secret-reference-id"] };
+
+    const prompt = buildReelPlanPrompt(source as never, frozenManualVisualSelection);
+    const serialized = prompt
+      .split("<untrusted_reel_creative_context_json>\n")[1]
+      ?.split("\n</untrusted_reel_creative_context_json>")[0];
+    const context = JSON.parse(serialized as string);
+
+    expect(context.subjectReferences).toEqual([{
+      title: "Editorial example",
+      sourceUrl: "https://reference.example/item",
+      text: "Useful editorial reference text.",
+    }]);
   });
 
   it("projects creative facts without immutable input or storage metadata", () => {

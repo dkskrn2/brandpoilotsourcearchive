@@ -30,9 +30,7 @@ function v3Input(purpose: "informational" | "marketing") {
     brandCore: { versionId: uid(1), companyOverview: "Company", businessDescription: "Business", primaryCategory: "Food", detailedCategory: "Tea", primaryTarget: "Adults", differentiator: "Fresh", coreAppeal: "Calm" },
     brandRules: { versionId: uid(11), version: 1, content: { contractVersion: "brand-rules.v1", requiredPhrases: [], forbiddenPhrases: [], exaggerationRules: [], ctaRules: { defaultCta: "", allowed: [] }, channelRules: {}, designRules: { colors: [], fonts: [], notes: [], referenceImages: [] }, autoApprovalRules: { enabled: false, conditions: [] } }, contentSha256: "f".repeat(64) },
     subject: { kind: "topic_text", title: "Tea guide" }, contentInstruction: "Practical copy", product,
-    researchEvidence: marketing
-      ? { contractVersion: "research-evidence.v1", decision: "not_needed", reason: "Product facts suffice", queries: [], capturedAt, items: [] }
-      : { contractVersion: "research-evidence.v1", decision: "searched", reason: "Current source", queries: ["tea"], capturedAt, items: [{ id: uid(7), title: "Study", url: "https://evidence.example/study", publisher: null, publishedAt: null, capturedAt, claimSummary: "Use warm water", contentHash: "c".repeat(64) }] },
+    researchEvidence: { contractVersion: "research-evidence.v1", decision: "searched", reason: "Current source", queries: ["tea"], capturedAt, items: [{ id: uid(7), title: "Study", url: "https://evidence.example/study", publisher: null, publishedAt: null, capturedAt, claimSummary: "Use warm water", contentHash: "c".repeat(64) }] },
     references: { selected: [reference], brandStyleImages: [style], avatarStyleImageId: uid(5), attachments: [attachment] },
     selectedProposal: {
       id: uid(9), conceptKey: "tea-guide", title: "Tea guide", informationalType: marketing ? null : "how_to", oneLineIntent: "Explain tea", differentiator: "Simple", differentiationAxes: ["question"], target: "Adults", customerContext: "Choosing tea", keyMessage: "Brew well", hook: "Better tea", selectionReason: "Useful", evidenceIds: marketing ? [] : [uid(7)], referenceIds: [uid(5)], outputFormat: "card_news", channelTargets: ["instagram"], assetCount: 3,
@@ -47,7 +45,7 @@ function v3Input(purpose: "informational" | "marketing") {
 }
 
 function v3Draft(input: ReturnType<typeof v3Input>) {
-  const evidenceIds = input.product ? [] : [uid(7)];
+  const evidenceIds = [uid(7)];
   return {
     contractVersion: "card-manuscript-plan.v1",
     content: { caption: "Tea guide", hashtags: ["tea"], cta: "Save this" },
@@ -117,7 +115,7 @@ describe("card-news worker", () => {
     expect(planner.run).toHaveBeenCalledOnce();
     expect(api.complete).toHaveBeenCalledWith(item.id, {
       workerId: "worker-1", leaseToken: "lease-v3", jobType: "generate",
-      skillVersion: "card-manuscript-plan-skill.v2", planDraft: compiledV1(v3Input(purpose)),
+      skillVersion: "card-manuscript-plan-skill.v3", planDraft: compiledV1(v3Input(purpose)),
       cardManuscriptContract: expect.objectContaining({
         contractVersion: "card-manuscript-plan.v1",
         manuscriptSha256: expect.stringMatching(/^[0-9a-f]{64}$/),

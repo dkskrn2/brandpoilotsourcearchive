@@ -111,4 +111,53 @@ describe("Proposal V2 research", () => {
       expect(search.mock.calls[0]![0].publicResearchContext.sourceUrls).toBeNull();
     },
   );
+
+  it("passes the complete frozen subject references to controlled research", async () => {
+    const search = vi.fn(async () => evidence);
+    const input = structuredClone(researchJob().baseInput);
+    const referenceItemId = "70000000-0000-4000-8000-000000000007";
+    input.subject = { kind: "reference", referenceIds: [referenceItemId] };
+    input.references = [{
+      referenceItemId,
+      snapshotId: "71000000-0000-4000-8000-000000000007",
+      roles: ["content_reference"],
+      title: "선택 레퍼런스",
+      sourceUrl: "https://example.com/reference",
+      capturedAt: "2026-08-01T03:00:00.000Z",
+      contentHash: "c".repeat(64),
+      text: "동결된 레퍼런스 본문",
+      image: null,
+    }];
+    const job = researchJobWithBase(input);
+
+    await createContentProposalResearch(search).run(job);
+
+    expect(search.mock.calls[0]![0].publicResearchContext.subjectReferences).toEqual([{
+      title: "선택 레퍼런스",
+      sourceUrl: "https://example.com/reference",
+      text: "동결된 레퍼런스 본문",
+    }]);
+  });
+
+  it("uses one required research execution for manual marketing card news", async () => {
+    const search = vi.fn(async () => evidence);
+    const job = researchJob();
+    job.request.purpose = "marketing";
+    job.baseInput.outputSettings.purpose = "marketing";
+    job.baseInput.product = {
+      id: "72000000-0000-4000-8000-000000000007",
+      versionId: "73000000-0000-4000-8000-000000000007",
+      kind: "product",
+      name: "승인 제품",
+      description: "제품 설명",
+      features: [], benefits: [], cautions: [], evergreenPurchaseInfo: null, images: [],
+    };
+
+    await createContentProposalResearch(search).run(job);
+
+    expect(search).toHaveBeenCalledWith(expect.objectContaining({
+      purpose: "marketing",
+      mode: "required",
+    }));
+  });
 });

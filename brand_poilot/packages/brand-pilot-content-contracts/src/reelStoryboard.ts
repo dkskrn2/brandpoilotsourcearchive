@@ -241,6 +241,16 @@ export function parseReelStoryboardV2(
       && scene.editorialRole.toLowerCase() !== "cta")) {
     throw new Error("reel_storyboard_scene_evidence_required");
   }
+  if (frozenInput.outputSettings.purpose === "marketing") {
+    const ctaCount = scenes.filter(({ editorialRole }) => editorialRole.toLowerCase() === "cta").length;
+    const hasGroundedEditorialScene = scenes.some((scene) => {
+      const role = scene.editorialRole.toLowerCase();
+      return role !== "cta" && role !== "transition" && scene.evidenceIds.length > 0;
+    });
+    if (ctaCount > 1 || !hasGroundedEditorialScene) {
+      throw new Error("reel_storyboard_marketing_structure_invalid");
+    }
+  }
   if (!unique(scenes.map(({ headline }) => headline.normalize("NFC")))
     || !unique(scenes.map(({ coreMessage }) => coreMessage.normalize("NFC")))) v2Invalid();
   const hashtags = source.content.hashtags.map(v2Trimmed);

@@ -178,6 +178,16 @@ export function parseCardManuscriptPlanV1(
       && scene.editorialRole.toLowerCase() !== "cta")) {
     throw new Error("card_manuscript_scene_evidence_required");
   }
+  if (frozenInput.outputSettings.purpose === "marketing") {
+    const ctaCount = scenes.filter((scene) => scene.editorialRole.toLowerCase() === "cta").length;
+    const hasGroundedEditorialScene = scenes.some((scene) => {
+      const role = scene.editorialRole.toLowerCase();
+      return role !== "cta" && role !== "transition" && scene.evidenceIds.length > 0;
+    });
+    if (ctaCount > 1 || !hasGroundedEditorialScene) {
+      throw new Error("card_manuscript_marketing_structure_invalid");
+    }
+  }
   if (!unique(scenes.map(({ headline }) => headline.normalize("NFC")))
     || !unique(scenes.map(({ coreMessage }) => coreMessage.normalize("NFC")))) invalid();
   const hashtags = source.content.hashtags.map(trimmed);

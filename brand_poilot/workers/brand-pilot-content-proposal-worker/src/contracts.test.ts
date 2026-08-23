@@ -16,6 +16,66 @@ import {
   researchJobWithBase,
 } from "./testFixtures.js";
 
+function resealComposition(job: ReturnType<typeof compositionJob>) {
+  const { researchEvidence, ...withoutEvidence } = job.composedInput;
+  const base = { ...withoutEvidence, contractVersion: "proposal-base-input.v2" };
+  job.contract.requestSha256 = contractModule.proposalSha256(job.request);
+  job.contract.baseInputSha256 = contractModule.proposalSha256(base);
+  job.contract.enqueueContractSha256 = contractModule.proposalSha256({
+    jobId: job.id,
+    batchId: job.batchId,
+    workspaceId: job.workspaceId,
+    brandId: job.brandId,
+    requestSha256: job.contract.requestSha256,
+    baseInputSha256: job.contract.baseInputSha256,
+    commandDescriptorSha256: job.contract.commandDescriptorSha256,
+    contractSourceSha256: job.contract.contractSourceSha256,
+    catalogSha256: job.contract.catalogSha256,
+  });
+  job.evidenceSetSha256 = contractModule.proposalSha256([researchEvidence]);
+  job.composedInputSha256 = contractModule.proposalSha256(job.composedInput);
+  job.finalInvocationAggregateSha256 = contractModule.proposalSha256({
+    enqueueContractSha256: job.contract.enqueueContractSha256,
+    modelId: job.contract.modelId,
+    commandDescriptorSha256: job.contract.commandDescriptorSha256,
+    proposalOutputSchemaSha256: job.contract.proposalOutputSchemaSha256,
+    evidenceSetSha256: job.evidenceSetSha256,
+    composedInputSha256: job.composedInputSha256,
+  });
+  return job;
+}
+
+function zeroEvidenceMarketingComposition(outputFormat: "card_news" | "reel" | "blog") {
+  const job = compositionJob();
+  job.request.purpose = "marketing";
+  job.request.outputFormat = outputFormat;
+  job.request.channelTargets = outputFormat === "blog" ? ["blog_export"] : ["instagram"];
+  job.composedInput.outputSettings = {
+    ...job.composedInput.outputSettings,
+    purpose: "marketing",
+    outputFormat,
+    channelTargets: outputFormat === "blog" ? ["blog_export"] : ["instagram"],
+    aspectRatio: outputFormat === "blog" ? null : outputFormat === "reel" ? "9:16" : "1:1",
+  };
+  job.composedInput.product = {
+    id: "c0000000-0000-4000-8000-00000000000c",
+    versionId: "d0000000-0000-4000-8000-00000000000d",
+    kind: "service",
+    name: "승인 제품",
+    description: "승인된 설명",
+    features: [], benefits: [], cautions: [], evergreenPurchaseInfo: "", images: [],
+  };
+  job.composedInput.researchEvidence = {
+    contractVersion: "research-evidence.v1",
+    decision: "not_needed",
+    reason: "근거 없음",
+    queries: [],
+    capturedAt: "2026-08-01T04:00:00.000Z",
+    items: [],
+  };
+  return resealComposition(job);
+}
+
 describe("Proposal V2 claim contract", () => {
   it("accepts the closed research claim with model attemptCount zero", () => {
     const input = researchJob();
@@ -40,6 +100,15 @@ describe("Proposal V2 claim contract", () => {
       ...researchJob(),
       request: { contractVersion: "content-proposal-request.v1" },
     })).toThrow("content_proposal_job_invalid");
+  });
+
+  it("requires Evidence for manual marketing card news and reels but preserves marketing blog behavior", () => {
+    expect(() => parseContentProposalJob(zeroEvidenceMarketingComposition("card_news")))
+      .toThrow("content_proposal_claim_contract_mismatch");
+    expect(() => parseContentProposalJob(zeroEvidenceMarketingComposition("reel")))
+      .toThrow("content_proposal_claim_contract_mismatch");
+    expect(() => parseContentProposalJob(zeroEvidenceMarketingComposition("blog")))
+      .not.toThrow();
   });
 
   it("requires composition attemptCount to be positive and equal modelAttemptNumber", () => {

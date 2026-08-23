@@ -11,7 +11,7 @@ export const CONTENT_PROPOSAL_CONTRACT_VERSIONS = {
   composedInput: "proposal-input.v2",
   output: "content-proposal.v2",
 } as const;
-export const CONTENT_PROPOSAL_PROMPT_VERSION = "proposal.writer.v2" as const;
+export const CONTENT_PROPOSAL_PROMPT_VERSION = "proposal.writer.v3" as const;
 export const RESEARCH_EVIDENCE_VERSION = "research-evidence.v1" as const;
 export const CONTENT_GENERATION_INPUT_VERSION = "content-generation-input.v3" as const;
 export const CONTENT_PROMPT_BINDING_VERSION = "content-prompt-binding.v1" as const;

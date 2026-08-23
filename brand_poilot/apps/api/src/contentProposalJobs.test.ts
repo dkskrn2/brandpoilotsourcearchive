@@ -160,7 +160,7 @@ function contractColumns(overrides: Record<string, unknown> = {}) {
     base_input_contract_version: "proposal-base-input.v2",
     research_contract_version: "research-evidence.v1",
     proposal_contract_version: "content-proposal.v2",
-    proposal_prompt_version: "proposal.writer.v2",
+    proposal_prompt_version: "proposal.writer.v3",
     proposal_output_schema_sha256: sha,
     proposal_model_id: "gpt-5.6-terra",
     command_descriptor_sha256: sha,

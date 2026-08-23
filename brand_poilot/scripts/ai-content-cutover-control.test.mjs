@@ -80,7 +80,7 @@ function proposalPreflight(cutoverId) {
   identity.proposalCommandDescriptorSha256 = sha256(canonicalJson({
     runner: "codex-exec",
     modelId: "gpt-5.6-terra",
-    promptVersion: "proposal.writer.v2",
+    promptVersion: "proposal.writer.v3",
     outputSchemaSha256: identity.proposalSchemaSha256,
     proposalContractVersion: "content-proposal.v2",
     baseInputContractVersion: "proposal-base-input.v2",

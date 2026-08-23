@@ -46,6 +46,32 @@ describe("Proposal V2 prompt", () => {
     expect(prompt).toContain("원문의 모든 세부사항을 각 안에 억지로 넣지 마라");
   });
 
+  it("uses the grounded marketing analysis chain without transferring subject and product facts", () => {
+    const job = compositionJob();
+    job.composedInput.outputSettings.purpose = "marketing";
+    job.composedInput.product = {
+      id: "c0000000-0000-4000-8000-00000000000c",
+      versionId: "d0000000-0000-4000-8000-00000000000d",
+      kind: "service",
+      name: "승인 제품",
+      description: "승인된 설명",
+      features: [], benefits: [], cautions: [], evergreenPurchaseInfo: "", images: [],
+    };
+
+    const prompt = buildContentProposalPrompt(job);
+
+    expect(prompt).toContain("subject와 선택 제품 snapshot은 서로 다른 사실 원천");
+    expect(prompt).toContain("동일 대상인지, 명시적으로 관계가 있는 다른 대상인지, 관계가 불명확한 다른 대상인지");
+    expect(prompt).toContain("고객 상황 → 구체적 타깃 → 해결하려는 일 → 구매 장벽 → 승인된 가치 → 근거 → 한계 → CTA");
+    expect(prompt).toContain("분석 순서를 outline의 고정 장면 순서로 복사하지 마라");
+    expect(prompt).toContain("researchEvidence는 subject의 공개 사실과 시장·고객 맥락을 보조한다");
+  });
+
+  it("does not add marketing analysis rules to informational proposals", () => {
+    const prompt = buildContentProposalPrompt(compositionJob());
+    expect(prompt).not.toContain("구매 장벽 → 승인된 가치");
+  });
+
   it.each(["blog"] as const)(
     "keeps the identical evidence-set instruction for %s",
     (outputFormat) => {

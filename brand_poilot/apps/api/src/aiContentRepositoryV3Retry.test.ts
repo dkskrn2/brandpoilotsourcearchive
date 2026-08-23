@@ -40,7 +40,7 @@ const promptBinding = {
   proposalBaseInputVersion: "proposal-base-input.v2",
   proposalComposedInputVersion: "proposal-input.v2",
   proposalOutputVersion: "content-proposal.v2",
-  proposalPromptVersion: "proposal.writer.v2",
+  proposalPromptVersion: "proposal.writer.v3",
   proposalSchemaSha256: "1".repeat(64),
   generationInputVersion: "content-generation-input.v3",
   generationSchemaSha256: "2".repeat(64),
@@ -130,7 +130,7 @@ function harness(options: {
         ? { ...frozenStoryboardContract, storyboardSha256: "0".repeat(64) }
         : frozenStoryboardContract,
     } : { generationId: UUID.parent, manualVisualSelection: frozenManualVisualSelection },
-    parent_skill_version: options.renderReady && !options.missingParentSkill ? "reel-storyboard-skill.v4" : null,
+    parent_skill_version: options.renderReady && !options.missingParentSkill ? "reel-storyboard-skill.v5" : null,
     attachments_locked_at: "2026-08-06T00:00:00.000Z", terminal_at: "2026-08-06T00:00:00.000Z",
     error_code: "failed", error_message: "failed", created_at: "2026-08-06T00:00:00.000Z", updated_at: "2026-08-06T00:00:00.000Z", completed_at: "2026-08-06T00:00:00.000Z",
   };

@@ -155,6 +155,53 @@ function v2Storyboard() {
   };
 }
 
+function marketingV2Input(): ContentGenerationInputV3 {
+  const input = v2Input();
+  input.outputSettings.purpose = "marketing";
+  input.product = {
+    id: uuid(110), versionId: uuid(111), kind: "service", name: "승인 제품",
+    description: "승인 설명", features: ["승인 기능"], benefits: ["승인 가치"],
+    cautions: [], evergreenPurchaseInfo: "", images: [],
+  };
+  input.selectedProposal = {
+    ...input.selectedProposal,
+    informationalType: null,
+    assetCount: 2,
+    outline: [
+      { index: 1, role: "analysis", headline: "분석", purpose: "근거 설명" },
+      { index: 2, role: "cta", headline: "행동", purpose: "다음 행동" },
+    ],
+    purposeDetails: {
+      kind: "marketing",
+      campaignObjective: "관심",
+      situationAndNeed: "판단 필요",
+      productId: uuid(110),
+      targetSegment: "실무자",
+      strengths: ["승인 기능"], limitations: [], appeal: "승인 가치",
+      buyingBarriers: ["근거 부족"], cta: "확인",
+    },
+  };
+  return input;
+}
+
+function marketingV2Storyboard(firstRole: string, secondRole: string, evidenceOnFirst: boolean) {
+  const first = {
+    ...v2Storyboard().scenes[0]!,
+    editorialRole: firstRole,
+    evidenceIds: evidenceOnFirst ? [uuid(1)] : [],
+  };
+  const second = {
+    ...v2Storyboard().scenes[0]!,
+    index: 2,
+    editorialRole: secondRole,
+    purpose: "다음 행동",
+    coreMessage: "근거를 확인하고 다음 행동을 선택한다.",
+    headline: "근거를 확인해 보세요",
+    evidenceIds: evidenceOnFirst ? [] : [uuid(1)],
+  };
+  return { ...v2Storyboard(), scenes: [first, second] };
+}
+
 describe("reel-storyboard.v2", () => {
   it("partitions the complete Evidence pool and binds selected Evidence to the scene union", () => {
     const input = v2Input();
@@ -169,6 +216,19 @@ describe("reel-storyboard.v2", () => {
     expect(() => parseReelStoryboardV2(empty, input)).toThrow("reel_storyboard_scene_evidence_required");
     expect(parseReelStoryboardV2({ ...empty, scenes: [{ ...empty.scenes[0], editorialRole: "cta" }] }, input).scenes[0]?.evidenceIds).toEqual([]);
     expect(() => parseReelStoryboardV2({ ...v2Storyboard(), scenes: [{ ...v2Storyboard().scenes[0], informationRelation: { type: "before_after", entries: [{ role: "left", label: null, value: "80%" }, { role: "right", label: null, value: "83%" }] } }] }, input)).toThrow("card_manuscript_information_relation_invalid");
+  });
+
+  it("requires a grounded non-CTA marketing scene and allows at most one CTA", () => {
+    const input = marketingV2Input();
+    expect(() => parseReelStoryboardV2(
+      marketingV2Storyboard("cta", "cta", true), input,
+    )).toThrow("reel_storyboard_marketing_structure_invalid");
+    expect(() => parseReelStoryboardV2(
+      marketingV2Storyboard("transition", "cta", true), input,
+    )).toThrow("reel_storyboard_marketing_structure_invalid");
+    expect(parseReelStoryboardV2(
+      marketingV2Storyboard("analysis", "cta", true), input,
+    ).scenes.map(({ editorialRole }) => editorialRole)).toEqual(["analysis", "cta"]);
   });
 
   it("rejects planner design fields and projects semantic copy deterministically", () => {

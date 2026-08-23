@@ -3,6 +3,7 @@ import {
   CONTENT_FORMAT_CATALOG,
   CONTENT_IMAGE_PROMPT_VERSIONS,
   CONTENT_OUTPUT_FORMATS,
+  CONTENT_PROPOSAL_PROMPT_VERSION,
   CONTENT_PROMPT_DEFINITION_VERSIONS,
   CONTENT_PURPOSES,
 } from "./catalog.js";
@@ -11,6 +12,10 @@ import { parseGeneratedContentCatalog } from "./catalog.js";
 import { generateArtifactSet } from "./generateArtifacts.js";
 
 const HASH = "a".repeat(64);
+
+it("uses the revised marketing-evidence proposal prompt version", () => {
+  expect(CONTENT_PROPOSAL_PROMPT_VERSION).toBe("proposal.writer.v3");
+});
 
 function bindingFor(
   outputFormat: (typeof CONTENT_OUTPUT_FORMATS)[number],
@@ -24,7 +29,7 @@ function bindingFor(
     proposalBaseInputVersion: "proposal-base-input.v2",
     proposalComposedInputVersion: "proposal-input.v2",
     proposalOutputVersion: "content-proposal.v2",
-    proposalPromptVersion: "proposal.writer.v2",
+    proposalPromptVersion: CONTENT_PROPOSAL_PROMPT_VERSION,
     proposalSchemaSha256: HASH,
     generationInputVersion: "content-generation-input.v3",
     generationSchemaSha256: "b".repeat(64),

@@ -26,6 +26,14 @@ function subjectTitle(job: ContentProposalResearchJob): string | null {
 function publicResearchContext(job: ContentProposalResearchJob) {
   const snapshot = job.baseInput;
   const purpose = job.request.purpose;
+  const selectedReferenceIds = snapshot.subject.kind === "reference"
+    ? new Set(snapshot.subject.referenceIds)
+    : null;
+  const subjectReferences = selectedReferenceIds === null
+    ? undefined
+    : snapshot.references
+      .filter((reference) => selectedReferenceIds.has(reference.referenceItemId))
+      .map(({ title, sourceUrl, text }) => ({ title, sourceUrl, text }));
   return {
     purpose,
     subjectKind: snapshot.subject.kind,
@@ -42,6 +50,7 @@ function publicResearchContext(job: ContentProposalResearchJob) {
     selectedProduct: purpose === "marketing" && snapshot.product !== null
       ? { name: snapshot.product.name, category: snapshot.brandCore.detailedCategory }
       : null,
+    ...(subjectReferences === undefined ? {} : { subjectReferences }),
   };
 }
 
@@ -52,7 +61,9 @@ export function createContentProposalResearch(
     run(job, signal) {
       return search({
         purpose: job.request.purpose,
-        mode: job.request.purpose === "informational" ? "required" : "automatic",
+        mode: job.request.purpose === "marketing" && job.request.outputFormat === "blog"
+          ? "automatic"
+          : "required",
         evidenceGranularity: "independent_claim",
         publicResearchContext: publicResearchContext(job),
         signal,

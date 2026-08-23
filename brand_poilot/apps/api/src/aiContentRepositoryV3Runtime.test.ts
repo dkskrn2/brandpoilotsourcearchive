@@ -269,7 +269,7 @@ describe("V3 generation runtime contract", () => {
   it("validates, persists, and atomically renders the Reel Storyboard source", async () => {
     const run = runtimeHarness("processing", "manual");
     await run.repository.completeAiContentJob({
-      jobId: uid(6), workerId: "worker-1", leaseToken: "lease-1", skillVersion: "reel-storyboard-skill.v4",
+      jobId: uid(6), workerId: "worker-1", leaseToken: "lease-1", skillVersion: "reel-storyboard-skill.v5",
       jobType: "generate", planDraft, reelStoryboardContract,
     } as never);
     const sql = run.statements.map(({ sql }) => sql).join("\n");
@@ -288,7 +288,7 @@ describe("V3 generation runtime contract", () => {
   it("rejects a Reel completion without its Storyboard before any write", async () => {
     const run = runtimeHarness("processing", "manual");
     await expect(run.repository.completeAiContentJob({
-      jobId: uid(6), workerId: "worker-1", leaseToken: "lease-1", skillVersion: "reel-storyboard-skill.v4",
+      jobId: uid(6), workerId: "worker-1", leaseToken: "lease-1", skillVersion: "reel-storyboard-skill.v5",
       jobType: "generate", planDraft,
     })).rejects.toThrow("ai_content_reel_storyboard_contract_invalid");
     expect(run.statements.map(({ sql }) => sql).join("\n")).not.toMatch(/set plan_json=coalesce|insert into ai_content_generation_render_jobs/i);
@@ -299,7 +299,7 @@ describe("V3 generation runtime contract", () => {
     changedStoryboard.scenes[0]!.headline = "Different displayed conclusion";
     const run = runtimeHarness("processing", "manual");
     await expect(run.repository.completeAiContentJob({
-      jobId: uid(6), workerId: "worker-1", leaseToken: "lease-1", skillVersion: "reel-storyboard-skill.v4",
+      jobId: uid(6), workerId: "worker-1", leaseToken: "lease-1", skillVersion: "reel-storyboard-skill.v5",
       jobType: "generate", planDraft,
       reelStoryboardContract: {
         contractVersion: "reel-storyboard.v2",
@@ -312,7 +312,7 @@ describe("V3 generation runtime contract", () => {
   it("rolls back the plan and Storyboard write when render enqueue faults", async () => {
     const run = runtimeHarness("processing", "manual", {}, { renderInsert: true });
     await expect(run.repository.completeAiContentJob({
-      jobId: uid(6), workerId: "worker-1", leaseToken: "lease-1", skillVersion: "reel-storyboard-skill.v4",
+      jobId: uid(6), workerId: "worker-1", leaseToken: "lease-1", skillVersion: "reel-storyboard-skill.v5",
       jobType: "generate", planDraft, reelStoryboardContract,
     } as never)).rejects.toThrow("render_insert_fault");
     expect(run.statements.at(-1)?.sql).toBe("ROLLBACK");
@@ -337,7 +337,7 @@ describe("V3 generation runtime contract", () => {
   it("replays only an identical succeeded Reel Storyboard", async () => {
     const identical = runtimeHarness("succeeded", "manual", { plan, reelStoryboardContract });
     await expect(identical.repository.completeAiContentJob({
-      jobId: uid(6), workerId: "worker-1", leaseToken: "lease-1", skillVersion: "reel-storyboard-skill.v4",
+      jobId: uid(6), workerId: "worker-1", leaseToken: "lease-1", skillVersion: "reel-storyboard-skill.v5",
       jobType: "generate", planDraft, reelStoryboardContract,
     } as never)).resolves.toMatchObject({ id: uid(1) });
     expect(identical.statements.map(({ sql }) => sql).join("\n"))
@@ -347,7 +347,7 @@ describe("V3 generation runtime contract", () => {
     changedStoryboard.scenes[0]!.coreMessage = "Different structured meaning.";
     const changed = runtimeHarness("succeeded", "manual", { plan, reelStoryboardContract });
     await expect(changed.repository.completeAiContentJob({
-      jobId: uid(6), workerId: "worker-1", leaseToken: "lease-1", skillVersion: "reel-storyboard-skill.v4",
+      jobId: uid(6), workerId: "worker-1", leaseToken: "lease-1", skillVersion: "reel-storyboard-skill.v5",
       jobType: "generate", planDraft,
       reelStoryboardContract: {
         contractVersion: "reel-storyboard.v2",

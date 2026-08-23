@@ -5,7 +5,7 @@
     "card_news": "card_news",
     "reel": "reel"
   },
-  "contractSourceHash": "02760a1e006eb5920980a4b9c5b268cf53b3595543c5f909f2d66be53393c660",
+  "contractSourceHash": "ecada3861313486b50e0a1475d89284f13fe4a74018207d11f205613deefb550",
   "formats": [
     "card_news",
     "blog",
@@ -28,7 +28,7 @@
     "reel": "gpt-5.6-terra"
   },
   "promptBinding": {
-    "schemaSha256": "b78786d0becf415eeb5943e29b9e2f2e4908ae0109c2c85536910dda1c9644f2",
+    "schemaSha256": "11ed8b2870a5176675225d8b09cb6c8552217f1e487abae1bd34ff219082dc02",
     "version": "content-prompt-binding.v1"
   },
   "proposalContracts": {
@@ -38,7 +38,7 @@
     "composedInputVersion": "proposal-input.v2",
     "outputSchemaSha256": "54bf063cf32926874af6b098272df08d41a9e7d7f578ee6560debe44428cf5f3",
     "outputVersion": "content-proposal.v2",
-    "promptVersion": "proposal.writer.v2",
+    "promptVersion": "proposal.writer.v3",
     "requestSchemaSha256": "a061a9290fc852f7f2200bdd6efb28ebe542afce78f3489b78678a4f45052bd2",
     "requestVersion": "content-proposal-request.v2"
   },
@@ -58,7 +58,7 @@
   "schemas": {
     "aiContentV3": {
       "filename": "ai-content-v3.schema.json",
-      "sha256": "ba78eed317b6c6a0d06f6e7039b56be0560217262c15b510cade7b62105ead65"
+      "sha256": "7c4662a0e0ae2fd386886429802bee0bc714dad18962847df6b89dcc7f4ddbe2"
     },
     "contentGenerationInputV3": {
       "filename": "content-generation-input-v3.schema.json",
@@ -70,7 +70,7 @@
     },
     "contentPromptBindingV1": {
       "filename": "content-prompt-binding-v1.schema.json",
-      "sha256": "b78786d0becf415eeb5943e29b9e2f2e4908ae0109c2c85536910dda1c9644f2"
+      "sha256": "11ed8b2870a5176675225d8b09cb6c8552217f1e487abae1bd34ff219082dc02"
     },
     "contentProposalRequestV2": {
       "filename": "content-proposal-request-v2.schema.json",

@@ -34,7 +34,7 @@ export type {
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const SHA256 = /^[0-9a-f]{64}$/;
-const EXPECTED_CATALOG_SHA256 = "41ac04e76adf0fd9746ea7535b36f6c1ea314ec4890253a2cd56a9f215f7cdbe";
+const EXPECTED_CATALOG_SHA256 = "415ca40b3dc3616affab6642b437ecd6b148bf70f017638640e2a4f858aaf808";
 
 export const CONTENT_PROPOSAL_OUTPUT_SCHEMA_PATH = fileURLToPath(import.meta.resolve(
   "@brand-pilot/content-contracts/generated/content-proposal-v2.schema.json",
@@ -311,7 +311,7 @@ function assertInputBinding(
     || request.channelTargets[0] !== settings.channelTargets[0]
     || !formatBindingValid
     || (request.purpose === "informational" ? input.product !== null : input.product === null)
-    || ("researchEvidence" in input && request.purpose === "informational"
+    || ("researchEvidence" in input && settings.outputFormat !== "blog"
       && (input.researchEvidence.decision !== "searched" || input.researchEvidence.items.length === 0))) {
     fail("content_proposal_claim_contract_mismatch");
   }

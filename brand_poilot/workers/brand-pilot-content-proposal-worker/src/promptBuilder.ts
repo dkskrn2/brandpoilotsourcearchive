@@ -31,7 +31,14 @@ function buildV2Prompt(job: ContentProposalCompositionJob): string {
       ]
     : [
         "마케팅성 안은 목적·상황·니즈, 승인 product 분석, 강점·한계, 고효율·고전환 타깃, 소구점, 구매 장벽, CTA를 포함하라.",
-        "researchEvidence는 시장·고객 맥락만 보조한다. 제품 사실은 product snapshot만 사용하고 검색 근거로 제품 속성을 보충하지 마라.",
+        "subject와 선택 제품 snapshot은 서로 다른 사실 원천이다. 어느 한쪽을 다른 쪽의 사실로 덮어쓰거나 주제와 무관하다는 이유로 버리지 마라.",
+        "먼저 subject와 선택 제품이 동일 대상인지, 명시적으로 관계가 있는 다른 대상인지, 관계가 불명확한 다른 대상인지 판단하되 이 판단을 새 필드로 출력하지 마라.",
+        "동일 대상이면 충돌하지 않는 범위에서 보완하되 선택 제품 속성은 승인 product snapshot을 권위로 사용하라.",
+        "다른 대상이면 사용자가 명시한 관계만 사용하고, 관계가 불명확하면 사실을 전이하거나 임의의 협업·효과·사용 관계를 만들지 마라.",
+        "구성안을 쓰기 전에 고객 상황 → 구체적 타깃 → 해결하려는 일 → 구매 장벽 → 승인된 가치 → 근거 → 한계 → CTA 순서로 내부 분석하라.",
+        "이 분석 순서를 outline의 고정 장면 순서로 복사하지 마라. 각 구성안의 관점과 내용에 맞는 서사와 장면 순서를 별도로 결정하라.",
+        "세 안은 타깃·상황·소구·질문·서사 중 하나 이상이 실질적으로 달라야 하며 같은 제품 문구의 제목만 바꾸지 마라.",
+        "researchEvidence는 subject의 공개 사실과 시장·고객 맥락을 보조한다. 제품 사실은 product snapshot만 사용하고 검색 근거로 제품 속성을 보충하지 마라.",
         "purposeDetails는 kind=marketing, campaignObjective, situationAndNeed, productId, targetSegment, strengths, limitations, appeal, buyingBarriers, cta를 포함하라.",
         "informationalType은 null이어야 한다.",
       ];

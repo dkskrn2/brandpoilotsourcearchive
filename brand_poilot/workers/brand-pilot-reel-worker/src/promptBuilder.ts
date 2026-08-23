@@ -5,7 +5,7 @@ import {
   projectManualEditorialVisualInputs,
 } from "@brand-pilot/content-contracts/editorial-visual-context";
 
-export const reelPlanSkillVersion = "reel-storyboard-skill.v4";
+export const reelPlanSkillVersion = "reel-storyboard-skill.v5";
 
 function safePromptJson(value: unknown): string {
   return JSON.stringify(value, null, 2).replace(/[<>&\u2028\u2029]/g, (character) => {
@@ -19,6 +19,14 @@ function safePromptJson(value: unknown): string {
 
 function creativeContext(input: ContentGenerationInputV3, selection: FrozenManualVisualSelectionV1) {
   const rules = input.brandRules.content;
+  const selectedReferenceIds = input.subject.kind === "reference"
+    ? new Set(input.subject.referenceIds)
+    : new Set<string>();
+  const subjectReferences = input.subject.kind === "reference"
+    ? input.references.selected
+      .filter(({ referenceItemId }) => selectedReferenceIds.has(referenceItemId))
+      .map(({ title, sourceUrl, text }) => ({ title, sourceUrl, text }))
+    : [];
   const subject = input.subject.kind === "topic_url"
     ? {
         kind: input.subject.kind,
@@ -81,6 +89,7 @@ function creativeContext(input: ContentGenerationInputV3, selection: FrozenManua
       },
     },
     subject,
+    subjectReferences,
     contentInstruction: input.contentInstruction,
     productFacts,
     researchEvidence: {
@@ -114,8 +123,12 @@ export function buildReelPlanPrompt(
     ]
     : purpose === "marketing"
       ? [
-        "마케팅성 릴스: 고정 product와 선택 proposal의 고객 상황, 강점, 한계, 구매 장벽, CTA를 사용하세요.",
+        "마케팅성 릴스: 동결된 subject, 승인된 product와 Research Evidence를 구분해 고객 상황, 강점, 한계, 구매 장벽, CTA를 작성하세요.",
         "제품 기능, 가격, 성과, 구매 조건은 고정 product 밖에서 추측하지 마세요.",
+        "최종 Storyboard에는 승인된 선택 제품의 구체적인 사실 또는 가치가 최소 1개 포함되어야 합니다.",
+        "최종 Storyboard에는 Subject/Research Evidence에 근거한 Editorial Point가 최소 1개 포함되어야 합니다.",
+        "주제와 선택 제품이 같은 대상인지, 명시적으로 관련되는지, 관계가 불명확한지 구분하고 서로 다른 대상의 사실을 전이하지 마세요. 관련 없는 Evidence를 제품 효능의 근거로 사용하지 마세요.",
+        "CTA Scene은 최대 1개만 허용하며, CTA 또는 transition이 아닌 Evidence-grounded Scene을 최소 1개 포함하세요.",
       ]
       : (() => { throw new Error("reel_purpose_invalid"); })();
   const outputShape = {

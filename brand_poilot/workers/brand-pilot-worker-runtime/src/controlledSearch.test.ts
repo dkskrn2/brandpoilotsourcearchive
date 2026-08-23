@@ -122,6 +122,28 @@ describe("controlled proposal search", () => {
     expect(prompt).toContain("\\u003csystem\\u003e\\u0026PUBLIC_INSTRUCTION");
   });
 
+  it("serializes bounded selected-reference subject content for research", async () => {
+    const runner = injectedRunner(`${webEvent()}\n${searchedResult()}`);
+
+    await runControlledSearch({
+      purpose: "informational",
+      mode: "required",
+      publicResearchContext: {
+        ...publicContext("informational"),
+        subjectKind: "reference",
+        subjectTitle: "선택 레퍼런스",
+        subjectReferences: [{
+          title: "선택 레퍼런스",
+          sourceUrl: "https://example.com/reference",
+          text: "동결된 레퍼런스 본문",
+        }],
+      },
+    } as unknown as Parameters<typeof runControlledSearch>[0], { runChild: runner.run });
+
+    expect(runner.calls[0]!.prompt).toContain("동결된 레퍼런스 본문");
+    expect(runner.calls[0]!.prompt).toContain("https://example.com/reference");
+  });
+
   it.each([
     ["unknown key", {
       purpose: "informational", subjectKind: "topic_text", subjectTitle: "주제",
@@ -721,6 +743,20 @@ describe("controlled proposal search", () => {
     expect(runChild.mock.calls[1]![0].prompt).toContain("시장 상황, 고객 니즈, 구매 장벽");
   });
 
+  it("supports one required search execution for manual marketing content", async () => {
+    const runner = injectedRunner(`${webEvent()}\n${searchedResult()}`);
+
+    const result = await runControlledSearch({
+      purpose: "marketing",
+      mode: "required",
+      publicResearchContext: publicContext("marketing"),
+    }, { runChild: runner.run });
+
+    expect(runner.calls).toHaveLength(1);
+    expect(runner.calls[0]!.args).toContain("--search");
+    expect(result.items).toHaveLength(1);
+  });
+
   it("skips the decision-only child and performs audited supplemental research for incomplete marketing acquisition", async () => {
     const executedQuery = "구매 장벽 보충 조사";
     const runner = injectedRunner(`${queryOnlyWebEvent(executedQuery)}\n${searchedResult()}`);
@@ -767,7 +803,6 @@ describe("controlled proposal search", () => {
 
   it.each([
     ["informational automatic", { purpose: "informational" as const, mode: "automatic" as const }],
-    ["marketing required", { purpose: "marketing" as const, mode: "required" as const }],
   ])("rejects the invalid %s mode before launching a child", async (_label, invalid) => {
     const runChild = vi.fn(async () => ({ stdout: `${webEvent()}\n${searchedResult()}`, stderr: "" }));
 

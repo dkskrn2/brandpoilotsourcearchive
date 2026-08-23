@@ -28,6 +28,14 @@ function projectProposalLens(input: ContentGenerationInputV3) {
   };
 }
 
+function projectSubjectReferences(input: ContentGenerationInputV3) {
+  if (input.subject.kind !== "reference") return [];
+  const selected = new Set(input.subject.referenceIds);
+  return input.references.selected
+    .filter(({ referenceItemId }) => selected.has(referenceItemId))
+    .map(({ title, sourceUrl, text }) => ({ title, sourceUrl, text }));
+}
+
 export function buildCardDeckSourceBundle(input: ContentGenerationInputV3, selection: FrozenManualVisualSelectionV1) {
   return {
     intent: {
@@ -36,6 +44,7 @@ export function buildCardDeckSourceBundle(input: ContentGenerationInputV3, selec
       proposalLens: projectProposalLens(input),
     },
     subject: input.subject,
+    subjectReferences: projectSubjectReferences(input),
     factualSources: {
       researchEvidence: input.researchEvidence,
       product: projectManualEditorialProductFacts(selection),

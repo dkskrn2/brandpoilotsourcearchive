@@ -90,7 +90,7 @@ describe("reel worker", () => {
     expect(client.complete).toHaveBeenCalledWith(item.id, {
       workerId: "worker",
       leaseToken: "lease",
-      skillVersion: "reel-storyboard-skill.v4",
+      skillVersion: "reel-storyboard-skill.v5",
       jobType: "generate",
       planDraft: compiledDraft().planDraft,
       reelStoryboardContract: compiledDraft().reelStoryboardContract,

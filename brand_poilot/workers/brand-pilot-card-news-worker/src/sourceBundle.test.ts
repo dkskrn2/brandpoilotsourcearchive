@@ -51,9 +51,12 @@ describe("card deck source bundle", () => {
     const bundle = buildCardDeckSourceBundle(source, selection);
 
     expect(Object.keys(bundle)).toEqual([
-      "intent", "subject", "factualSources", "editorialReferences", "visualReferences", "brandContext",
+      "intent", "subject", "subjectReferences", "factualSources", "editorialReferences", "visualReferences", "brandContext",
     ]);
     expect(bundle.subject).toEqual(source.subject);
+    expect(bundle.subjectReferences).toEqual(subject.kind === "reference"
+      ? [{ title: "Editorial", sourceUrl: "https://reference.example/one", text: "비교 중심" }]
+      : []);
     expect(bundle.factualSources.researchEvidence).toEqual(source.researchEvidence);
     expect(bundle.editorialReferences).toEqual(source.references.selected.map(({ roles, title, sourceUrl, text }) => ({
       roles, title, sourceUrl, text,
@@ -84,5 +87,17 @@ describe("card deck source bundle", () => {
     expect(bundle.intent).not.toHaveProperty("selectedProposal");
     expect(JSON.stringify(bundle)).not.toContain("참고 목적");
     expect(JSON.stringify(bundle.intent)).not.toContain(`\"evidenceIds\"`);
+  });
+
+  it("projects only references selected by a reference subject", () => {
+    const source = input({ kind: "reference", referenceIds: [id(5)] });
+    source.references.selected.push({
+      referenceItemId: id(9), roles: ["content_reference"], title: "Other",
+      sourceUrl: "https://reference.example/two", text: "다른 참고 본문",
+    });
+
+    expect(buildCardDeckSourceBundle(source, selection).subjectReferences).toEqual([{
+      title: "Editorial", sourceUrl: "https://reference.example/one", text: "비교 중심",
+    }]);
   });
 });

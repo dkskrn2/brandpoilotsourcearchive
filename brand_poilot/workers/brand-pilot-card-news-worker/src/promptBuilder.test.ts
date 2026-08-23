@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildCardNewsPlanPrompt } from "./promptBuilder.js";
+import { buildCardNewsPlanPrompt, cardNewsPlanSkillVersion } from "./promptBuilder.js";
 
 const job = { id: "job", generationId: "generation", outputId: "output", workspaceId: "workspace", brandId: "brand", jobType: "generate", outputFormat: "card_news", status: "processing", payload: {}, leaseToken: "lease" } as const;
 const frozenManualVisualSelection = {
@@ -7,9 +7,14 @@ const frozenManualVisualSelection = {
 } as const;
 
 describe("card-news V3 prompt", () => {
+  it("uses the revised marketing-evidence skill version", () => {
+    expect(cardNewsPlanSkillVersion).toBe("card-manuscript-plan-skill.v3");
+  });
+
   it.each(["informational", "marketing"] as const)("uses an explicit %s purpose branch", (purpose) => {
     const prompt = buildCardNewsPlanPrompt(job, {
       generationId: job.generationId,
+      subject: { kind: "topic_text", title: "주제" },
       product: null,
       selectedProposal: { assetCount: 2, outline: [] },
       outputSettings: { purpose, outputFormat: "card_news" },
@@ -22,6 +27,23 @@ describe("card-news V3 prompt", () => {
     expect(prompt).not.toContain("attachmentIds");
     expect(prompt).not.toContain("logoPolicy");
     expect(prompt).not.toContain("content-generation-input.v2");
+  });
+
+  it("grounds marketing manuscripts in both approved product facts and Subject Evidence", () => {
+    const prompt = buildCardNewsPlanPrompt(job, {
+      generationId: job.generationId,
+      subject: { kind: "topic_text", title: "마케팅 주제" },
+      selectedProposal: { assetCount: 2, outline: [] },
+      outputSettings: { purpose: "marketing", outputFormat: "card_news" },
+      researchEvidence: { items: [{ id: "70000000-0000-4000-8000-000000000007" }] },
+      references: { selected: [], brandStyleImages: [], avatarStyleImageId: null, attachments: [] },
+    } as never, frozenManualVisualSelection);
+
+    expect(prompt).toContain("승인된 선택 제품의 구체적인 사실 또는 가치");
+    expect(prompt).toContain("Subject/Research Evidence에 근거한 Editorial Point");
+    expect(prompt).toContain("동결된 subject, 승인된 제품 사실과 Research Evidence");
+    expect(prompt).toContain("서로 다른 대상의 사실을 전이");
+    expect(prompt).toContain("CTA Scene은 최대 1개");
   });
 
   it("locks the selected concept and count while reopening scene editorial decisions", () => {

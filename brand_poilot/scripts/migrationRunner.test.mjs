@@ -4613,6 +4613,7 @@ test("an installation applied through 064 has every later migration pending", as
       "084_ai_content_usage_reversal_identity_invoker.sql",
       "085_publish_calendar_idempotency_expand.sql",
       "086_publish_calendar_same_time_contract.sql",
+      "087_ai_content_prompt_lineage_v3.sql",
     ],
   );
 });
@@ -4693,6 +4694,25 @@ test("publish calendar same-time contract follows migration 085 deterministicall
   );
 });
 
+test("AI content prompt lineage v3 follows migration 086 deterministically", async () => {
+  const loaded = await migrationRunner.loadMigrations();
+  const ids = loaded.map(({ id }) => id);
+  const migration087Index = ids.indexOf("087_ai_content_prompt_lineage_v3.sql");
+
+  assert.equal(
+    migration087Index,
+    ids.indexOf("086_publish_calendar_same_time_contract.sql") + 1,
+  );
+  assert.equal(
+    migrationRunner.post075SchemaMigrationChecksums["087_ai_content_prompt_lineage_v3.sql"],
+    "bb5c9cbc2b78654e7bbdd988af929b634671cc2e794cbd46b8cf5c9fd5d5b359",
+  );
+  assert.equal(
+    loaded[migration087Index].checksum,
+    migrationRunner.post075SchemaMigrationChecksums["087_ai_content_prompt_lineage_v3.sql"],
+  );
+});
+
 const post076SchemaMigrationIdsForTests = [
   "077_content_suggestion_batches.sql",
   "078_faq_utterance_matching.sql",
@@ -4704,6 +4724,7 @@ const post076SchemaMigrationIdsForTests = [
   "084_ai_content_usage_reversal_identity_invoker.sql",
   "085_publish_calendar_idempotency_expand.sql",
   "086_publish_calendar_same_time_contract.sql",
+  "087_ai_content_prompt_lineage_v3.sql",
 ];
 
 test("post-075 data migrations are a closed DML-only contract", async () => {

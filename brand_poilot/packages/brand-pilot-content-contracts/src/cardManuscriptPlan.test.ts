@@ -130,6 +130,55 @@ function manuscript(overrides: Record<string, unknown> = {}) {
   };
 }
 
+function marketingInput(): ContentGenerationInputV3 {
+  const input = frozenInput();
+  input.outputSettings.purpose = "marketing";
+  input.product = {
+    id: "50000000-0000-4000-8000-000000000001",
+    versionId: "50000000-0000-4000-8000-000000000002",
+    kind: "service",
+    name: "승인 제품",
+    description: "승인된 설명",
+    features: ["승인 기능"], benefits: ["승인 가치"], cautions: [],
+    evergreenPurchaseInfo: "", images: [],
+  };
+  input.selectedProposal.informationalType = null;
+  input.selectedProposal.assetCount = 2;
+  input.selectedProposal.outline = [
+    { index: 1, role: "analysis", headline: "분석", purpose: "근거 설명" },
+    { index: 2, role: "cta", headline: "행동", purpose: "다음 행동" },
+  ];
+  input.selectedProposal.purposeDetails = {
+    kind: "marketing",
+    campaignObjective: "관심",
+    situationAndNeed: "판단이 필요함",
+    productId: input.product.id,
+    targetSegment: "실무자",
+    strengths: ["승인 기능"], limitations: [], appeal: "승인 가치",
+    buyingBarriers: ["판단 근거 부족"], cta: "확인",
+  };
+  return input;
+}
+
+function marketingManuscript(firstRole: string, secondRole: string, evidenceOnFirst: boolean) {
+  const base = manuscript();
+  const first = {
+    ...base.scenes[0],
+    editorialRole: firstRole,
+    evidenceIds: evidenceOnFirst ? [evidenceA] : [],
+  };
+  const second = {
+    ...base.scenes[0],
+    index: 2,
+    editorialRole: secondRole,
+    purpose: "다음 행동을 제안한다.",
+    coreMessage: "근거를 확인하고 다음 행동을 선택한다.",
+    headline: "근거를 확인해 보세요",
+    evidenceIds: evidenceOnFirst ? [] : [evidenceA],
+  };
+  return manuscript({ scenes: [first, second] });
+}
+
 describe("Card Manuscript Plan v1", () => {
   it("requires selected/excluded to partition the full pool and selected to equal the scene union", () => {
     const input = frozenInput();
@@ -153,6 +202,19 @@ describe("Card Manuscript Plan v1", () => {
       ...noEvidence,
       scenes: [{ ...noEvidence.scenes[0], editorialRole: "transition" }],
     }, input).scenes[0]!.evidenceIds).toEqual([]);
+  });
+
+  it("requires a grounded non-CTA marketing scene and allows at most one CTA", () => {
+    const input = marketingInput();
+    expect(() => parseCardManuscriptPlanV1(
+      marketingManuscript("cta", "cta", true), input,
+    )).toThrow("card_manuscript_marketing_structure_invalid");
+    expect(() => parseCardManuscriptPlanV1(
+      marketingManuscript("transition", "cta", true), input,
+    )).toThrow("card_manuscript_marketing_structure_invalid");
+    expect(parseCardManuscriptPlanV1(
+      marketingManuscript("analysis", "cta", true), input,
+    ).scenes.map(({ editorialRole }) => editorialRole)).toEqual(["analysis", "cta"]);
   });
 
   it("validates semantic relation shapes without treating related facts as a comparison", () => {

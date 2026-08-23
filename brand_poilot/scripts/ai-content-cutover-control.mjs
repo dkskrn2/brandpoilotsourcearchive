@@ -133,7 +133,7 @@ function expectedCommandDescriptorSha256(proposalSchemaSha256) {
   return sha256Canonical({
     runner: "codex-exec",
     modelId: MODEL_ID,
-    promptVersion: "proposal.writer.v2",
+    promptVersion: "proposal.writer.v3",
     outputSchemaSha256: proposalSchemaSha256,
     proposalContractVersion: "content-proposal.v2",
     baseInputContractVersion: "proposal-base-input.v2",

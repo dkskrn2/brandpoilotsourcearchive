@@ -4,7 +4,7 @@ import test from "node:test";
 import { Client } from "pg";
 import * as migrationRunner from "./migrationRunner.mjs";
 
-test("post-cutover schemas 077 through 085 are an ordered sealed schema plan", async () => {
+test("post-cutover schemas 077 through 087 are an ordered sealed schema plan", async () => {
   const migrations = await migrationRunner.loadMigrations();
   const migration077 = migrations.find(({ id }) => id === "077_content_suggestion_batches.sql");
   const migration078 = migrations.find(({ id }) => id === "078_faq_utterance_matching.sql");
@@ -15,6 +15,8 @@ test("post-cutover schemas 077 through 085 are an ordered sealed schema plan", a
   const migration083 = migrations.find(({ id }) => id === "083_manual_visual_selection_write_fence_invoker.sql");
   const migration084 = migrations.find(({ id }) => id === "084_ai_content_usage_reversal_identity_invoker.sql");
   const migration085 = migrations.find(({ id }) => id === "085_publish_calendar_idempotency_expand.sql");
+  const migration086 = migrations.find(({ id }) => id === "086_publish_calendar_same_time_contract.sql");
+  const migration087 = migrations.find(({ id }) => id === "087_ai_content_prompt_lineage_v3.sql");
   assert.ok(migration077);
   assert.ok(migration078);
   assert.ok(migration079);
@@ -24,6 +26,8 @@ test("post-cutover schemas 077 through 085 are an ordered sealed schema plan", a
   assert.ok(migration083);
   assert.ok(migration084);
   assert.ok(migration085);
+  assert.ok(migration086);
+  assert.ok(migration087);
   assert.equal(migrationRunner.validatePost075SchemaMigration(migration077), true);
   assert.equal(migrationRunner.validatePost075SchemaMigration(migration078), true);
   assert.equal(migrationRunner.validatePost075SchemaMigration(migration079), true);
@@ -33,8 +37,10 @@ test("post-cutover schemas 077 through 085 are an ordered sealed schema plan", a
   assert.equal(migrationRunner.validatePost075SchemaMigration(migration083), true);
   assert.equal(migrationRunner.validatePost075SchemaMigration(migration084), true);
   assert.equal(migrationRunner.validatePost075SchemaMigration(migration085), true);
+  assert.equal(migrationRunner.validatePost075SchemaMigration(migration086), true);
+  assert.equal(migrationRunner.validatePost075SchemaMigration(migration087), true);
 
-  const pendingMigrations = [migration077, migration078, migration079, migration080, migration081, migration082, migration083, migration084, migration085];
+  const pendingMigrations = [migration077, migration078, migration079, migration080, migration081, migration082, migration083, migration084, migration085, migration086, migration087];
 
   const history = migrations
     .filter(({ id }) => !pendingMigrations.some((migration) => migration.id === id))
@@ -135,6 +141,8 @@ test("content suggestion schema runner accepts the exact managed provider sessio
   const migration083 = migrations.find(({ id }) => id === "083_manual_visual_selection_write_fence_invoker.sql");
   const migration084 = migrations.find(({ id }) => id === "084_ai_content_usage_reversal_identity_invoker.sql");
   const migration085 = migrations.find(({ id }) => id === "085_publish_calendar_idempotency_expand.sql");
+  const migration086 = migrations.find(({ id }) => id === "086_publish_calendar_same_time_contract.sql");
+  const migration087 = migrations.find(({ id }) => id === "087_ai_content_prompt_lineage_v3.sql");
   assert.ok(migration077);
   assert.ok(migration078);
   assert.ok(migration079);
@@ -144,7 +152,9 @@ test("content suggestion schema runner accepts the exact managed provider sessio
   assert.ok(migration083);
   assert.ok(migration084);
   assert.ok(migration085);
-  const pendingMigrations = [migration077, migration078, migration079, migration080, migration081, migration082, migration083, migration084, migration085];
+  assert.ok(migration086);
+  assert.ok(migration087);
+  const pendingMigrations = [migration077, migration078, migration079, migration080, migration081, migration082, migration083, migration084, migration085, migration086, migration087];
   const history = migrations
     .filter(({ id }) => !pendingMigrations.some((migration) => migration.id === id))
     .map(({ id, checksum }) => ({ id, checksum }));
@@ -486,6 +496,8 @@ test("content suggestion schema runner rejects a non-normal DDL guard before mut
   const migration083 = migrations.find(({ id }) => id === "083_manual_visual_selection_write_fence_invoker.sql");
   const migration084 = migrations.find(({ id }) => id === "084_ai_content_usage_reversal_identity_invoker.sql");
   const migration085 = migrations.find(({ id }) => id === "085_publish_calendar_idempotency_expand.sql");
+  const migration086 = migrations.find(({ id }) => id === "086_publish_calendar_same_time_contract.sql");
+  const migration087 = migrations.find(({ id }) => id === "087_ai_content_prompt_lineage_v3.sql");
   assert.ok(migration077);
   assert.ok(migration078);
   assert.ok(migration079);
@@ -495,7 +507,9 @@ test("content suggestion schema runner rejects a non-normal DDL guard before mut
   assert.ok(migration083);
   assert.ok(migration084);
   assert.ok(migration085);
-  const pendingMigrations = [migration077, migration078, migration079, migration080, migration081, migration082, migration083, migration084, migration085];
+  assert.ok(migration086);
+  assert.ok(migration087);
+  const pendingMigrations = [migration077, migration078, migration079, migration080, migration081, migration082, migration083, migration084, migration085, migration086, migration087];
   const history = migrations
     .filter(({ id }) => !pendingMigrations.some((migration) => migration.id === id))
     .map(({ id, checksum }) => ({ id, checksum }));
@@ -534,7 +548,7 @@ test("content suggestion schema runner rejects a non-normal DDL guard before mut
   assert.equal(calls.includes("begin"), false);
 });
 
-test("ordered 077 through 085 schemas apply and replay against PostgreSQL 16", {
+test("ordered 077 through 087 schemas apply and replay against PostgreSQL 16", {
   skip: process.env.RUN_FAQ_SCHEMA_POSTGRES_INTEGRATION !== "1",
   timeout: 300_000,
 }, async () => {
@@ -607,6 +621,8 @@ test("ordered 077 through 085 schemas apply and replay against PostgreSQL 16", {
       "083_manual_visual_selection_write_fence_invoker.sql",
       "084_ai_content_usage_reversal_identity_invoker.sql",
       "085_publish_calendar_idempotency_expand.sql",
+      "086_publish_calendar_same_time_contract.sql",
+      "087_ai_content_prompt_lineage_v3.sql",
     ]);
     const topicScope = await client.query(
       `select relation.relname as relation_name,constraint_row.conname,

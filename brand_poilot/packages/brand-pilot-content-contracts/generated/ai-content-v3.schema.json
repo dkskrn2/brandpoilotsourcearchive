@@ -96,7 +96,15 @@
             "additionalProperties": false,
             "properties": {
               "audioCodec": {
-                "type": "null"
+                "anyOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "const": "aac",
+                    "type": "string"
+                  }
+                ]
               },
               "durationSeconds": {
                 "exclusiveMinimum": 0,

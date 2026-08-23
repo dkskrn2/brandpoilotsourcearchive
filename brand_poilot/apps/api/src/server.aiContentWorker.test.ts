@@ -205,7 +205,7 @@ describe("AI content worker routes", () => {
       method: "POST", url: "/worker/ai-content-jobs/job-1/complete",
       headers: { authorization: "Bearer worker-token" },
       payload: {
-        workerId: "worker-1", leaseToken: "lease-1", skillVersion: "reel-storyboard-skill.v4",
+        workerId: "worker-1", leaseToken: "lease-1", skillVersion: "reel-storyboard-skill.v5",
         jobType: "generate", planDraft, reelStoryboardContract,
       },
     });

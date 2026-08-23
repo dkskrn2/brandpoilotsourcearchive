@@ -90,6 +90,7 @@ export interface PublicResearchContext {
   primaryCategory: string;
   detailedCategory: string;
   selectedProduct: { name: string; category: string } | null;
+  subjectReferences?: Array<{ title: string; sourceUrl: string; text: string }>;
 }
 
 type LegacyBlogSupplementPublicResearchContext = Omit<PublicResearchContext, "sourceUrls">;
@@ -319,15 +320,16 @@ function parsePublicResearchContext(
 ): PublicResearchContext {
   if (!value || typeof value !== "object" || Array.isArray(value)) invalidPublicContext();
   const hasSourceUrls = Object.hasOwn(value, "sourceUrls");
+  const hasSubjectReferences = Object.hasOwn(value, "subjectReferences");
   if (!hasSourceUrls && mode !== "blog_supplement") invalidPublicContext();
   const source = exactRecord(value, hasSourceUrls
     ? [
         "purpose", "subjectKind", "subjectTitle", "sourceUrls", "contentInstruction", "primaryCategory",
-        "detailedCategory", "selectedProduct",
+        "detailedCategory", "selectedProduct", ...(hasSubjectReferences ? ["subjectReferences"] : []),
       ]
     : [
         "purpose", "subjectKind", "subjectTitle", "contentInstruction", "primaryCategory",
-        "detailedCategory", "selectedProduct",
+        "detailedCategory", "selectedProduct", ...(hasSubjectReferences ? ["subjectReferences"] : []),
       ]);
   const contextPurpose = source.purpose;
   const subjectKind = source.subjectKind;
@@ -354,6 +356,19 @@ function parsePublicResearchContext(
     };
   }
   if (hasSourceUrls && (subjectKind === "topic_url") !== (sourceUrls !== null)) invalidPublicContext();
+  let subjectReferences: NonNullable<PublicResearchContext["subjectReferences"]> | undefined;
+  if (hasSubjectReferences) {
+    if (subjectKind !== "reference" || !Array.isArray(source.subjectReferences)
+      || source.subjectReferences.length < 1 || source.subjectReferences.length > 5) invalidPublicContext();
+    subjectReferences = source.subjectReferences.map((value) => {
+      const reference = exactRecord(value, ["title", "sourceUrl", "text"]);
+      return {
+        title: publicText(reference.title, 500)!,
+        sourceUrl: publicHttpUrl(reference.sourceUrl),
+        text: publicText(reference.text, 50_000)!,
+      };
+    });
+  }
   return {
     purpose: contextPurpose,
     subjectKind,
@@ -363,6 +378,7 @@ function parsePublicResearchContext(
     primaryCategory: publicText(source.primaryCategory, 500)!,
     detailedCategory: publicText(source.detailedCategory, 500)!,
     selectedProduct,
+    ...(subjectReferences === undefined ? {} : { subjectReferences }),
   };
 }
 
@@ -394,6 +410,9 @@ function promptFor(
       name: context.selectedProduct.name,
       category: context.selectedProduct.category,
     },
+    ...(context.subjectReferences === undefined ? {} : {
+      subjectReferences: context.subjectReferences,
+    }),
   };
   const productGuard = input.purpose === "marketing"
     ? "마케팅 검색은 시장 상황, 고객 니즈, 구매 장벽으로만 제한하세요. 제품 사실을 검색하거나 추론하지 마세요. 제품 기능, 성능, 가격, 장단점은 별도의 승인 제품 스냅샷만 권위 있는 근거로 사용됩니다."
@@ -405,6 +424,13 @@ function promptFor(
         "requestedUrl과 canonicalUrl이 같으면 같은 URL을 한 번만 확인하세요.",
         "두 URL에서 원문을 확인할 수 없으면 동결 제목과 카테고리로 추가 공개 근거를 검색하세요.",
         "실제 search audit에서 관찰하지 않은 URL을 읽었다고 주장하지 마세요.",
+      ]
+    : [];
+  const referenceFirstInstructions = !decisionOnly && context.subjectKind === "reference"
+    && context.subjectReferences !== undefined
+    ? [
+        "reference 주제이면 subjectReferences의 동결 본문을 먼저 검토하고 각 sourceUrl을 우선 확인하세요.",
+        "선택 Reference의 주제 정체성과 사실을 다른 일반 주제로 바꾸지 마세요.",
       ]
     : [];
   const independentClaimInstructions = controls.evidenceGranularity === "independent_claim"
@@ -426,6 +452,7 @@ function promptFor(
       ? "네트워크를 사용하지 말고 외부 검색 필요 여부만 판단하세요."
       : "온라인 근거를 검색하고 실제 검색 이벤트에서 확인한 출처만 반환하세요.",
     ...urlFirstInstructions,
+    ...referenceFirstInstructions,
     ...independentClaimInstructions,
     "검색어는 최대 4개로 제한하세요.",
     productGuard,
@@ -756,7 +783,7 @@ export async function runControlledSearch(
   }
   const validMode = input.mode === "blog_supplement"
     || (input.purpose === "informational" && input.mode === "required")
-    || (input.purpose === "marketing" && input.mode === "automatic");
+    || (input.purpose === "marketing" && (input.mode === "automatic" || input.mode === "required"));
   if (!validMode) throw new Error("controlled_search_mode_invalid");
   const capturedAt = (dependencies.now ?? (() => new Date()))().toISOString();
   const requiresSupplementalSearch = controls.sourceAcquisition !== null

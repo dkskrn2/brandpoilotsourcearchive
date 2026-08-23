@@ -3,7 +3,7 @@ import type { FrozenManualVisualSelectionV1 } from "@brand-pilot/content-contrac
 import type { AiContentJob } from "./contracts.js";
 import { buildCardDeckSourceBundle } from "./sourceBundle.js";
 
-export const cardNewsPlanSkillVersion = "card-manuscript-plan-skill.v2";
+export const cardNewsPlanSkillVersion = "card-manuscript-plan-skill.v3";
 
 function safePromptJson(value: unknown): string {
   return JSON.stringify(value, null, 2).replace(/[<>&\u2028\u2029]/g, (character) => {
@@ -28,7 +28,14 @@ export function buildCardNewsPlanPrompt(
   const purposeRules = purpose === "informational"
     ? ["정보성 카드뉴스는 교육·분석·문제 해결을 중심으로 구성하고 판매 주장이나 구매 압박을 넣지 마세요."]
     : purpose === "marketing"
-      ? ["마케팅성 카드뉴스는 동결된 제품 사실과 Evidence 안에서만 강점·한계·구매 장벽·CTA를 작성하고 제품 사실을 추측하지 마세요."]
+      ? [
+          "마케팅성 카드뉴스는 동결된 subject, 승인된 제품 사실과 Research Evidence 안에서만 강점·한계·구매 장벽·CTA를 작성하고 제품 사실을 추측하지 마세요.",
+          "최종 원고에는 승인된 선택 제품의 구체적인 사실 또는 가치가 최소 1개 포함되어야 합니다.",
+          "최종 원고에는 Subject/Research Evidence에 근거한 Editorial Point가 최소 1개 포함되어야 합니다.",
+          "subject와 선택 제품이 서로 다른 대상이면 서로 다른 대상의 사실을 전이하거나 임의의 관계를 만들지 마세요.",
+          "Research Evidence를 무관한 선택 제품의 기능·효과·성능을 증명하는 근거로 사용하지 마세요.",
+          "CTA Scene은 최대 1개만 허용하며, 적어도 한 개의 non-CTA·non-transition Scene은 Evidence를 가져야 합니다.",
+        ]
       : (() => { throw new Error("card_news_plan_purpose_invalid"); })();
   const outputShape = {
     contractVersion: "card-manuscript-plan.v1",
