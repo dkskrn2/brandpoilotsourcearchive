@@ -1457,7 +1457,13 @@ test("all CLI worker images install the pinned Codex runtime and run real entryp
     ["subject analysis", {
       path: "workers/brand-pilot-subject-analysis-worker/Dockerfile",
       entrypoint: /workers\/brand-pilot-subject-analysis-worker\/dist\/index\.js/,
-      assets: [/run-codex-subject-analysis\.mjs/, /subject-analysis\/SKILL\.md/],
+      assets: [
+        /packages\/brand-pilot-content-contracts\/package\.json/,
+        /packages\/brand-pilot-content-contracts\/dist/,
+        /packages\/brand-pilot-content-contracts\/generated/,
+        /run-codex-subject-analysis\.mjs/,
+        /subject-analysis\/SKILL\.md/,
+      ],
     }],
     ["image", {
       path: "workers/brand-pilot-image-worker/Dockerfile",
