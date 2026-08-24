@@ -115,6 +115,85 @@ describe("PublishQueuePage canonical collection", () => {
     expect(oldRead).not.toHaveBeenCalled();
   });
 
+  it("keeps the calendar unreserved tray compact with search, status filtering, and progressive reveal", async () => {
+    const unreserved = Array.from({ length: 8 }, (_, index) => item({
+      itemKey: `topic:unreserved-${index + 1}`,
+      title: index === 7 ? "여덟 번째 생성 중 콘텐츠" : `${index + 1}번째 미예약 콘텐츠`,
+      targets: [],
+      contentStatus: index === 7 ? "generating" : "pre_generation",
+      publishStatus: "unreserved",
+      status: index === 7 ? "generating" : "pre_generation",
+      scheduledFor: null,
+      effectiveScheduledFor: null,
+      calendarDate: null,
+      calendarPlacement: "unreserved",
+      sourceRefs: { contentTopicId: `topic-${index + 1}`, proposalId: null, generationId: null, generationOutputId: null, calendarSlotId: null, topicPublishGroupId: null, queueIds: [] },
+      schedulable: true,
+      scheduleBlockedReason: null,
+    }));
+    await renderPage({ listPublishItems: vi.fn(async () => unreserved) });
+
+    await userEvent.click(await screen.findByRole("tab", { name: "캘린더" }));
+    const tray = await screen.findByRole("region", { name: "미예약 콘텐츠 보관함" });
+    const search = within(tray).getByRole("searchbox", { name: "미예약 콘텐츠 검색" });
+    const status = within(tray).getByRole("combobox", { name: "미예약 콘텐츠 상태" });
+
+    expect(within(tray).getAllByRole("article")).toHaveLength(6);
+    expect(within(tray).getAllByRole("article")[0]).toHaveClass("publish-calendar-unreserved__item");
+    expect(within(tray).queryByText("여덟 번째 생성 중 콘텐츠")).not.toBeInTheDocument();
+    await userEvent.click(within(tray).getByRole("button", { name: "더 보기 (2개)" }));
+    expect(within(tray).getAllByRole("article")).toHaveLength(8);
+
+    await userEvent.clear(search);
+    await userEvent.type(search, "여덟 번째");
+    expect(within(tray).getAllByRole("article")).toHaveLength(1);
+    expect(within(tray).getByText("여덟 번째 생성 중 콘텐츠")).toBeVisible();
+
+    await userEvent.clear(search);
+    await userEvent.selectOptions(status, "generating");
+    expect(within(tray).getAllByRole("article")).toHaveLength(1);
+    expect(within(tray).getByText("여덟 번째 생성 중 콘텐츠")).toBeVisible();
+  });
+
+  it("shows a thumbnail only when an unreserved item has generated media", async () => {
+    const generated = item({
+      itemKey: "output:generated-thumbnail",
+      title: "생성 완료 카드뉴스",
+      targets: [],
+      reviewTargets: [reviewTarget({ status: "approved", outputJson: { cards: [{ url: "https://cdn.example.com/card-1.webp" }] } })],
+      contentStatus: "completed",
+      publishStatus: "unreserved",
+      status: "completed_unpublished",
+      scheduledFor: null,
+      effectiveScheduledFor: null,
+      calendarDate: null,
+      calendarPlacement: "unreserved",
+      schedulable: true,
+      scheduleBlockedReason: null,
+    });
+    const pending = item({
+      itemKey: "topic:pending-thumbnail",
+      title: "생성 전 콘텐츠",
+      targets: [],
+      reviewTargets: [],
+      contentStatus: "pre_generation",
+      publishStatus: "unreserved",
+      status: "pre_generation",
+      scheduledFor: null,
+      effectiveScheduledFor: null,
+      calendarDate: null,
+      calendarPlacement: "unreserved",
+      schedulable: true,
+      scheduleBlockedReason: null,
+    });
+    await renderPage({ listPublishItems: vi.fn(async () => [generated, pending]) });
+
+    await userEvent.click(await screen.findByRole("tab", { name: "캘린더" }));
+    const tray = await screen.findByRole("region", { name: "미예약 콘텐츠 보관함" });
+    expect(within(tray).getByRole("img", { name: "생성 완료 카드뉴스 미리보기" })).toHaveAttribute("src", "https://cdn.example.com/card-1.webp");
+    expect(within(within(tray).getByRole("article", { name: "생성 전 콘텐츠" })).queryByRole("img")).not.toBeInTheDocument();
+  });
+
   it("shows the common-list skeleton and fail-closed empty state", async () => {
     let reject!: (reason: Error) => void;
     const pending = new Promise<PublishItem[]>((_resolve, nextReject) => { reject = nextReject; });
