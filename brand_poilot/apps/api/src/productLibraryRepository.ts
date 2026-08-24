@@ -1,4 +1,5 @@
 import type { Pool, PoolClient } from "pg";
+import { lockProductServiceAssetVersion } from "./productServiceAssetLock.js";
 import { parseProductServiceProfile, type ProductServiceProfileV1 } from "./productLibraryContracts.js";
 import type { BrandScope } from "./brandCoreRepository.js";
 
@@ -313,7 +314,7 @@ export function createProductLibraryRepository(pool: Pool): ProductLibraryReposi
       const profile = parseProductServiceProfile(raw);
       return tx(pool, async (client) => {
         await member(client, scope);
-        const locked = await client.query("select id from product_services where id=$1 and workspace_id=$2 and brand_id=$3 for update", [scope.itemId, scope.workspaceId, scope.brandId]);
+        const locked = await client.query("select id,active_version_id from product_services where id=$1 and workspace_id=$2 and brand_id=$3 for update", [scope.itemId, scope.workspaceId, scope.brandId]);
         if (!locked.rowCount) throw new Error("product_service_not_found");
         const updated = await client.query(
           `update product_service_versions set profile_json=$1,updated_at=now()
@@ -321,11 +322,32 @@ export function createProductLibraryRepository(pool: Pool): ProductLibraryReposi
           [JSON.stringify(profile), scope.itemId, scope.workspaceId, scope.brandId],
         );
         if (!updated.rowCount) {
-          await client.query(
+          if (locked.rows[0].active_version_id) {
+            await lockProductServiceAssetVersion(client, String(locked.rows[0].active_version_id));
+          }
+          const createdDraft = await client.query(
             `insert into product_service_versions(workspace_id,brand_id,product_service_id,version,status,profile_json,created_by_user_id)
              select $1,$2,$3,coalesce(max(version),0)+1,'draft',$4,$5 from product_service_versions
-             where product_service_id=$3 and workspace_id=$1 and brand_id=$2`,
+             where product_service_id=$3 and workspace_id=$1 and brand_id=$2
+             returning id`,
             [scope.workspaceId, scope.brandId, scope.itemId, JSON.stringify(profile), scope.actorUserId],
+          );
+          await client.query(
+            `insert into product_service_assets(
+               workspace_id,brand_id,product_service_id,product_service_version_id,
+               source_image_id,storage_artifact_id,storage_url,storage_path,mime_type,size_bytes,
+               checksum,role,position,created_by_user_id
+             )
+             select asset.workspace_id,asset.brand_id,asset.product_service_id,$1,
+                    asset.source_image_id,asset.storage_artifact_id,asset.storage_url,asset.storage_path,
+                    asset.mime_type,asset.size_bytes,asset.checksum,asset.role,asset.position,$2
+               from product_services item
+               join product_service_assets asset
+                 on asset.product_service_version_id=item.active_version_id
+                and asset.workspace_id=item.workspace_id and asset.brand_id=item.brand_id
+              where item.id=$3 and item.workspace_id=$4 and item.brand_id=$5
+              order by asset.position,asset.id`,
+            [createdDraft.rows[0].id, scope.actorUserId, scope.itemId, scope.workspaceId, scope.brandId],
           );
         }
         await client.query("update product_services set display_name=$1,kind=$2 where id=$3", [profile.name, profile.kind, scope.itemId]);

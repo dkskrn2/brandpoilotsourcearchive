@@ -86,7 +86,7 @@ const deploymentScripts = [
   ubuntuBootstrapPath,
 ];
 
-test("cutover API image contains ordered migrations through AI content prompt lineage 087", () => {
+test("cutover API image contains ordered migrations through onboarding product image imports 088", () => {
   const dockerfile = read("apps/api/Dockerfile");
   const migrate = read("scripts/migrate.mjs");
   const runner = read("scripts/migrationRunner.mjs");
@@ -110,6 +110,7 @@ test("cutover API image contains ordered migrations through AI content prompt li
   assert.equal(existsSync("db/migrations/085_publish_calendar_idempotency_expand.sql"), true);
   assert.equal(existsSync("db/migrations/086_publish_calendar_same_time_contract.sql"), true);
   assert.equal(existsSync("db/migrations/087_ai_content_prompt_lineage_v3.sql"), true);
+  assert.equal(existsSync("db/migrations/088_onboarding_product_image_imports.sql"), true);
   assert.match(migrate, /AI_CONTENT_074_AUTHORIZATION_PUBLIC_KEY_FILE/);
   assert.match(migrate, /AI_CONTENT_074_PROVIDER_ATTESTATION_PUBLIC_KEY_FILE/);
   assert.doesNotMatch(migrate, /readFile\([^\n]*(?:PRIVATE|SIGNING)|createPrivateKey|AI_CONTENT_074_(?:AUTHORIZATION|PROVIDER_ATTESTATION)_KEY_FILE/);
@@ -155,7 +156,7 @@ test("deployment applies or verifies the pinned post-075 data migration before c
   assert.ok(migrationGate >= 0 && migrationGate < transition && transition < canary);
 });
 
-test("deployment applies the ordered post-075 schemas through AI content prompt lineage 087 before canary mutation", () => {
+test("deployment applies the ordered post-075 schemas through onboarding product image imports 088 before canary mutation", () => {
   const deploy = read("deploy/scripts/deploy.sh");
   const runner = read("scripts/migrationRunner.mjs");
   assert.match(runner, /077_content_suggestion_batches\.sql/);
@@ -180,8 +181,10 @@ test("deployment applies the ordered post-075 schemas through AI content prompt 
   assert.match(runner, /89b5e23a3535ca4d8c11eb8ebd274317cc414bd482d70b93bb0b6f2c379b0abb/);
   assert.match(runner, /087_ai_content_prompt_lineage_v3\.sql/);
   assert.match(runner, /bb5c9cbc2b78654e7bbdd988af929b634671cc2e794cbd46b8cf5c9fd5d5b359/);
-  assert.match(deploy, /POST_075_SCHEMA_MIGRATION_ID="087_ai_content_prompt_lineage_v3\.sql"/);
-  assert.match(deploy, /POST_075_SCHEMA_MIGRATION_SHA256="bb5c9cbc2b78654e7bbdd988af929b634671cc2e794cbd46b8cf5c9fd5d5b359"/);
+  assert.match(runner, /088_onboarding_product_image_imports\.sql/);
+  assert.match(runner, /a83e1adecd9df47980051328c2a6bde13a3c0c58a6636f21462d77800299374c/);
+  assert.match(deploy, /POST_075_SCHEMA_MIGRATION_ID="088_onboarding_product_image_imports\.sql"/);
+  assert.match(deploy, /POST_075_SCHEMA_MIGRATION_SHA256="a83e1adecd9df47980051328c2a6bde13a3c0c58a6636f21462d77800299374c"/);
   assert.match(deploy, /scripts\/migrate\.mjs --post-075-schema/);
   assert.match(deploy, /post-075-schema-migration-evidence\.v1/);
   const dataGate = deploy.lastIndexOf("run_post_075_data_migration_gate");
@@ -241,6 +244,22 @@ test("AI content prompt lineage migration is bounded and preserves exact v2/v3 t
   assert.doesNotMatch(migration, /\b(?:insert|update|delete|merge|truncate)\b/i);
 });
 
+test("onboarding product image import migration is bounded and grants only the required job-table mutations", () => {
+  const migration = read("db/migrations/088_onboarding_product_image_imports.sql");
+  assert.match(migration, /begin;\s*set local lock_timeout = '5s';\s*set local statement_timeout = '60s';/i);
+  assert.match(migration, /create table public\.product_service_image_import_jobs/i);
+  assert.match(migration, /product_service_versions_import_job_identity_unique[\s\S]*unique \(id,product_service_id,workspace_id,brand_id\)/i);
+  assert.match(migration, /foreign key \(product_service_version_id,product_service_id,workspace_id,brand_id\)[\s\S]*references public\.product_service_versions\(id,product_service_id,workspace_id,brand_id\)/i);
+  assert.match(migration, /unique \(product_service_version_id\)/i);
+  assert.match(migration, /jsonb_array_length\(source_urls_json\) between 1 and 5/i);
+  assert.match(migration, /jsonb_path_query_array\(source_urls_json,'\$\[\*\] \? \(@ like_regex "\^https:\/\/"\)'\)=source_urls_json/i);
+  assert.match(migration, /alter table public\.product_service_image_import_jobs owner to/i);
+  assert.match(migration, /revoke all on table public\.product_service_image_import_jobs from public/i);
+  assert.match(migration, /grant select,insert,update on table public\.product_service_image_import_jobs/i);
+  assert.doesNotMatch(migration, /grant [^;]*delete[^;]*product_service_image_import_jobs/i);
+  assert.match(migration, /commit;\s*$/i);
+});
+
 test("FAQ runbook excludes Wiki without permanently disabling generic Wiki rollouts", () => {
   const rollout = read("deploy/scripts/rollout-workers.sh");
   const runbook = read("docs/operations/faq-utterance-matching-rollout.md");
@@ -290,7 +309,7 @@ test("cutover API image contains both ordered migrations in an actual no-network
   try {
     const script = [
       "const fs=require('node:fs');",
-      "const required=['/app/db/migrations/074_ai_content_maintenance_write_fence.sql','/app/db/migrations/075_ai_content_three_format_cutover.sql','/app/db/migrations/076_manual_content_generation_brand_rules.sql','/app/db/migrations/077_content_suggestion_batches.sql','/app/db/migrations/078_faq_utterance_matching.sql','/app/db/migrations/079_publish_calendar_runtime.sql','/app/db/migrations/080_reference_channel_archive.sql','/app/db/migrations/081_meta_ad_library_references.sql','/app/db/migrations/082_manual_brand_visual_assets.sql','/app/db/migrations/083_manual_visual_selection_write_fence_invoker.sql','/app/db/migrations/084_ai_content_usage_reversal_identity_invoker.sql','/app/db/migrations/085_publish_calendar_idempotency_expand.sql','/app/db/migrations/086_publish_calendar_same_time_contract.sql','/app/db/migrations/087_ai_content_prompt_lineage_v3.sql','/app/scripts/migrationRunner.mjs','/app/scripts/migrate.mjs','/app/scripts/databaseTls.mjs'];",
+      "const required=['/app/db/migrations/074_ai_content_maintenance_write_fence.sql','/app/db/migrations/075_ai_content_three_format_cutover.sql','/app/db/migrations/076_manual_content_generation_brand_rules.sql','/app/db/migrations/077_content_suggestion_batches.sql','/app/db/migrations/078_faq_utterance_matching.sql','/app/db/migrations/079_publish_calendar_runtime.sql','/app/db/migrations/080_reference_channel_archive.sql','/app/db/migrations/081_meta_ad_library_references.sql','/app/db/migrations/082_manual_brand_visual_assets.sql','/app/db/migrations/083_manual_visual_selection_write_fence_invoker.sql','/app/db/migrations/084_ai_content_usage_reversal_identity_invoker.sql','/app/db/migrations/085_publish_calendar_idempotency_expand.sql','/app/db/migrations/086_publish_calendar_same_time_contract.sql','/app/db/migrations/087_ai_content_prompt_lineage_v3.sql','/app/db/migrations/088_onboarding_product_image_imports.sql','/app/scripts/migrationRunner.mjs','/app/scripts/migrate.mjs','/app/scripts/databaseTls.mjs'];",
       "for(const path of required)if(!fs.existsSync(path))throw new Error('missing:'+path);",
     ].join("");
     const inspect = spawnSync("docker", ["run", "--rm", "--network", "none", "--entrypoint", "node", tag, "-e", script], {
@@ -2742,7 +2761,7 @@ if [[ "$*" == *"/app/scripts/ai-content-cutover-floor-probe.mjs"* ]]; then
   exit 0
 fi
 if [[ "$*" == *"/app/scripts/migrate.mjs --post-075-schema"* ]]; then
-  printf '{\n  "post075SchemaMigration": {\n    "contractVersion": "post-075-schema-migration-evidence.v1",\n    "providerRoleName": "postgres",\n    "migrationId": "087_ai_content_prompt_lineage_v3.sql",\n    "migrationSha256": "%s",\n    "status": "already_applied"\n  }\n}\n' "$POST_075_SCHEMA_SHA_FOR_TEST"
+  printf '{\n  "post075SchemaMigration": {\n    "contractVersion": "post-075-schema-migration-evidence.v1",\n    "providerRoleName": "postgres",\n    "migrationId": "088_onboarding_product_image_imports.sql",\n    "migrationSha256": "%s",\n    "status": "already_applied"\n  }\n}\n' "$POST_075_SCHEMA_SHA_FOR_TEST"
   exit 0
 fi
 if [[ "$1 $2" == "image inspect" ]]; then

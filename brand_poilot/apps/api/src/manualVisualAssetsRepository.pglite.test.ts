@@ -112,6 +112,25 @@ describe("manual visual assets repository PostgreSQL behavior", () => {
     ]);
   });
 
+  it("keeps a shared storage artifact live when another product version still references it", async () => {
+    await database.exec(`
+      insert into product_service_assets values
+        ('90000000-0000-4000-8000-000000000004','${workspaceId}','${brandId}','${productId}',
+         '50000000-0000-4000-8000-000000000002','80000000-0000-4000-8000-000000000002',
+         'https://blob/1','1','image/png',1,'hero',1);
+    `);
+    const repository = createManualVisualAssetsRepository(pool(database));
+    await repository.deleteProductServiceImageAsset({
+      workspaceId, brandId, actorUserId: memberId, productServiceId: productId,
+      imageId: "90000000-0000-4000-8000-000000000001",
+    });
+
+    const artifact = await database.query<{ deleted_at: string | null }>(
+      "select deleted_at from storage_artifacts where id='80000000-0000-4000-8000-000000000002'",
+    );
+    expect(artifact.rows[0]?.deleted_at).toBeNull();
+  });
+
   it("uses revision CAS for owner preset updates", async () => {
     const repository = createManualVisualAssetsRepository(pool(database));
     const input = {

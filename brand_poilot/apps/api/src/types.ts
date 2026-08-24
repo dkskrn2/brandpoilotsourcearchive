@@ -1279,6 +1279,7 @@ export interface ApiRepository
     Partial<import("./assetLibraryRepository.js").AssetLibraryRepository>,
     Partial<import("./instagramReferenceArchiveRepository.js").InstagramReferenceArchiveRepository>,
     Partial<import("./manualVisualAssetsRepository.js").ManualVisualAssetsRepository>,
+    Partial<import("./productImageImportRepository.js").ProductImageImportRepository>,
     Partial<import("./aiContentAttachmentRepository.js").AiContentAttachmentLifecycleRepository>,
     Partial<import("./aiContentAttachmentGcRepository.js").AiContentAttachmentGcRepository>,
     Partial<import("./publishCalendarRepository.js").PublishCalendarRepository>,
