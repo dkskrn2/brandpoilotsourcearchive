@@ -42,8 +42,12 @@ describe("createKakaoAuthStore", () => {
     });
 
     const channelInsert = calls.find((sql) => sql.includes("insert into brand_channels"));
+    const subscriptionInsertIndex = calls.findIndex((sql) => sql.includes("insert into brand_subscriptions"));
+    const brandInsertIndex = calls.findIndex((sql) => sql.includes("insert into brands"));
+    const commitIndex = calls.findIndex((sql) => sql === "commit");
     const workspaceInsert = query.mock.calls.find(([sql]) => sql.includes("insert into workspaces"));
     const brandInsert = query.mock.calls.find(([sql]) => sql.includes("insert into brands"));
+    const subscriptionInsert = query.mock.calls.find(([sql]) => sql.includes("insert into brand_subscriptions"));
     expect(workspaceInsert?.[1]?.[0]).toBe("사용자의 모종");
     expect(String(brandInsert?.[0])).toContain("__provisional__:");
     expect(session.displayName).toBe("사용자");
@@ -55,6 +59,33 @@ describe("createKakaoAuthStore", () => {
     expect(channelInsert).toContain("'youtube'");
     expect(channelInsert).toContain("'tiktok'");
     expect(channelInsert).not.toContain("'webflow'");
+    expect(subscriptionInsert?.[1]).toEqual(["brand-1"]);
+    expect(String(subscriptionInsert?.[0])).toContain("'free','active'");
+    expect(subscriptionInsertIndex).toBeGreaterThan(brandInsertIndex);
+    expect(commitIndex).toBeGreaterThan(subscriptionInsertIndex);
+  });
+
+  it("rolls back the whole signup when the FREE subscription cannot be created", async () => {
+    const calls: string[] = [];
+    const query = vi.fn(async (sql: string, params?: unknown[]) => {
+      calls.push(sql);
+      if (sql.includes("from user_identities")) return { rowCount: 0, rows: [] };
+      if (sql.includes("insert into app_users")) return { rowCount: 1, rows: [{ id: "user-1", display_name: "사용자", email: "user@example.com" }] };
+      if (sql.includes("insert into workspaces")) return { rowCount: 1, rows: [{ id: "workspace-1", name: String(params?.[0]) }] };
+      if (sql.includes("insert into brands")) return { rowCount: 1, rows: [{ id: "brand-1", name: "내 브랜드" }] };
+      if (sql.includes("insert into brand_subscriptions")) throw new Error("free plan unavailable");
+      return { rowCount: 1, rows: [] };
+    });
+    const store = createKakaoAuthStore(createPool(query) as any);
+
+    await expect(store.createOrLoadUser({
+      subject: "kakao-1",
+      nickname: "사용자",
+      email: "user@example.com",
+    })).rejects.toThrow("free plan unavailable");
+
+    expect(calls).toContain("rollback");
+    expect(calls).not.toContain("commit");
   });
 
   it("does not write channel rows while loading an existing Kakao user", async () => {

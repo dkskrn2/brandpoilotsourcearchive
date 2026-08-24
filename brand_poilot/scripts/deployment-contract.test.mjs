@@ -112,6 +112,7 @@ test("cutover API image contains ordered migrations through onboarding product i
   assert.equal(existsSync("db/migrations/087_ai_content_prompt_lineage_v3.sql"), true);
   assert.equal(existsSync("db/migrations/088_onboarding_product_image_imports.sql"), true);
   assert.equal(existsSync("db/migrations/089_free_subscription_plan.sql"), true);
+  assert.equal(existsSync("db/migrations/090_existing_brand_free_subscriptions.sql"), true);
   assert.match(migrate, /AI_CONTENT_074_AUTHORIZATION_PUBLIC_KEY_FILE/);
   assert.match(migrate, /AI_CONTENT_074_PROVIDER_ATTESTATION_PUBLIC_KEY_FILE/);
   assert.doesNotMatch(migrate, /readFile\([^\n]*(?:PRIVATE|SIGNING)|createPrivateKey|AI_CONTENT_074_(?:AUTHORIZATION|PROVIDER_ATTESTATION)_KEY_FILE/);
@@ -157,7 +158,7 @@ test("deployment applies or verifies the pinned post-075 data migration before c
   assert.ok(migrationGate >= 0 && migrationGate < transition && transition < canary);
 });
 
-test("deployment applies the ordered post-075 schemas through canonical FREE plan 089 before canary mutation", () => {
+test("deployment applies the ordered post-075 schemas through existing-brand FREE provisioning 090 before canary mutation", () => {
   const deploy = read("deploy/scripts/deploy.sh");
   const runner = read("scripts/migrationRunner.mjs");
   assert.match(runner, /077_content_suggestion_batches\.sql/);
@@ -186,8 +187,10 @@ test("deployment applies the ordered post-075 schemas through canonical FREE pla
   assert.match(runner, /a83e1adecd9df47980051328c2a6bde13a3c0c58a6636f21462d77800299374c/);
   assert.match(runner, /089_free_subscription_plan\.sql/);
   assert.match(runner, /fd58a829eb658b0ac650e033a5edd085ec452a6eb0420251c60abcd51231267a/);
-  assert.match(deploy, /POST_075_SCHEMA_MIGRATION_ID="089_free_subscription_plan\.sql"/);
-  assert.match(deploy, /POST_075_SCHEMA_MIGRATION_SHA256="fd58a829eb658b0ac650e033a5edd085ec452a6eb0420251c60abcd51231267a"/);
+  assert.match(runner, /090_existing_brand_free_subscriptions\.sql/);
+  assert.match(runner, /8134f35d21f72f7418b5502bb5cfb10c8f296f147788bcd8b539d6d930588552/);
+  assert.match(deploy, /POST_075_SCHEMA_MIGRATION_ID="090_existing_brand_free_subscriptions\.sql"/);
+  assert.match(deploy, /POST_075_SCHEMA_MIGRATION_SHA256="8134f35d21f72f7418b5502bb5cfb10c8f296f147788bcd8b539d6d930588552"/);
   assert.match(deploy, /scripts\/migrate\.mjs --post-075-schema/);
   assert.match(deploy, /post-075-schema-migration-evidence\.v1/);
   const dataGate = deploy.lastIndexOf("run_post_075_data_migration_gate");
@@ -279,6 +282,16 @@ test("FREE subscription plan migration is bounded and refuses conflicting operat
   assert.doesNotMatch(migration, /on conflict[\s\S]*do update/i);
 });
 
+test("existing-brand FREE subscription migration is bounded and never rewrites an existing subscription", () => {
+  const migration = read("db/migrations/090_existing_brand_free_subscriptions.sql");
+  assert.match(migration, /begin;\s*set local lock_timeout = '5s';\s*set local statement_timeout = '60s';/i);
+  assert.match(migration, /insert into brand_subscriptions/i);
+  assert.match(migration, /brand\.deleted_at is null[\s\S]*subscription\.brand_id is null/i);
+  assert.match(migration, /subscription_started_at \+ interval '1 month'/i);
+  assert.doesNotMatch(migration, /\b(?:update|delete|merge|truncate)\b/i);
+  assert.doesNotMatch(migration, /on conflict[\s\S]*do update/i);
+});
+
 test("FAQ runbook excludes Wiki without permanently disabling generic Wiki rollouts", () => {
   const rollout = read("deploy/scripts/rollout-workers.sh");
   const runbook = read("docs/operations/faq-utterance-matching-rollout.md");
@@ -328,7 +341,7 @@ test("cutover API image contains both ordered migrations in an actual no-network
   try {
     const script = [
       "const fs=require('node:fs');",
-      "const required=['/app/db/migrations/074_ai_content_maintenance_write_fence.sql','/app/db/migrations/075_ai_content_three_format_cutover.sql','/app/db/migrations/076_manual_content_generation_brand_rules.sql','/app/db/migrations/077_content_suggestion_batches.sql','/app/db/migrations/078_faq_utterance_matching.sql','/app/db/migrations/079_publish_calendar_runtime.sql','/app/db/migrations/080_reference_channel_archive.sql','/app/db/migrations/081_meta_ad_library_references.sql','/app/db/migrations/082_manual_brand_visual_assets.sql','/app/db/migrations/083_manual_visual_selection_write_fence_invoker.sql','/app/db/migrations/084_ai_content_usage_reversal_identity_invoker.sql','/app/db/migrations/085_publish_calendar_idempotency_expand.sql','/app/db/migrations/086_publish_calendar_same_time_contract.sql','/app/db/migrations/087_ai_content_prompt_lineage_v3.sql','/app/db/migrations/088_onboarding_product_image_imports.sql','/app/db/migrations/089_free_subscription_plan.sql','/app/scripts/migrationRunner.mjs','/app/scripts/migrate.mjs','/app/scripts/databaseTls.mjs'];",
+      "const required=['/app/db/migrations/074_ai_content_maintenance_write_fence.sql','/app/db/migrations/075_ai_content_three_format_cutover.sql','/app/db/migrations/076_manual_content_generation_brand_rules.sql','/app/db/migrations/077_content_suggestion_batches.sql','/app/db/migrations/078_faq_utterance_matching.sql','/app/db/migrations/079_publish_calendar_runtime.sql','/app/db/migrations/080_reference_channel_archive.sql','/app/db/migrations/081_meta_ad_library_references.sql','/app/db/migrations/082_manual_brand_visual_assets.sql','/app/db/migrations/083_manual_visual_selection_write_fence_invoker.sql','/app/db/migrations/084_ai_content_usage_reversal_identity_invoker.sql','/app/db/migrations/085_publish_calendar_idempotency_expand.sql','/app/db/migrations/086_publish_calendar_same_time_contract.sql','/app/db/migrations/087_ai_content_prompt_lineage_v3.sql','/app/db/migrations/088_onboarding_product_image_imports.sql','/app/db/migrations/089_free_subscription_plan.sql','/app/db/migrations/090_existing_brand_free_subscriptions.sql','/app/scripts/migrationRunner.mjs','/app/scripts/migrate.mjs','/app/scripts/databaseTls.mjs'];",
       "for(const path of required)if(!fs.existsSync(path))throw new Error('missing:'+path);",
     ].join("");
     const inspect = spawnSync("docker", ["run", "--rm", "--network", "none", "--entrypoint", "node", tag, "-e", script], {
@@ -2780,7 +2793,7 @@ if [[ "$*" == *"/app/scripts/ai-content-cutover-floor-probe.mjs"* ]]; then
   exit 0
 fi
 if [[ "$*" == *"/app/scripts/migrate.mjs --post-075-schema"* ]]; then
-  printf '{\n  "post075SchemaMigration": {\n    "contractVersion": "post-075-schema-migration-evidence.v1",\n    "providerRoleName": "postgres",\n    "migrationId": "089_free_subscription_plan.sql",\n    "migrationSha256": "%s",\n    "status": "already_applied"\n  }\n}\n' "$POST_075_SCHEMA_SHA_FOR_TEST"
+  printf '{\n  "post075SchemaMigration": {\n    "contractVersion": "post-075-schema-migration-evidence.v1",\n    "providerRoleName": "postgres",\n    "migrationId": "090_existing_brand_free_subscriptions.sql",\n    "migrationSha256": "%s",\n    "status": "already_applied"\n  }\n}\n' "$POST_075_SCHEMA_SHA_FOR_TEST"
   exit 0
 fi
 if [[ "$1 $2" == "image inspect" ]]; then
@@ -2972,7 +2985,7 @@ function runDeployFixture({
       DOCKER_FAIL_UP_TIMES: "1",
       RELEASE_SHA_FOR_TEST: "1".repeat(40),
       AI_CONTENT_POST_075_PROVIDER_DATABASE_URL_FILE: bashPath(providerDatabaseUrlFile),
-      POST_075_SCHEMA_SHA_FOR_TEST: "fd58a829eb658b0ac650e033a5edd085ec452a6eb0420251c60abcd51231267a",
+      POST_075_SCHEMA_SHA_FOR_TEST: "8134f35d21f72f7418b5502bb5cfb10c8f296f147788bcd8b539d6d930588552",
     },
   });
   return { fixture, root, dockerLog, preflightLog, result, candidateSha: "1".repeat(40) };

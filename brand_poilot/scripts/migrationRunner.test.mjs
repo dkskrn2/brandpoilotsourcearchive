@@ -4616,6 +4616,7 @@ test("an installation applied through 064 has every later migration pending", as
       "087_ai_content_prompt_lineage_v3.sql",
       "088_onboarding_product_image_imports.sql",
       "089_free_subscription_plan.sql",
+      "090_existing_brand_free_subscriptions.sql",
     ],
   );
 });
@@ -4753,6 +4754,25 @@ test("canonical FREE plan follows migration 088 deterministically", async () => 
   );
 });
 
+test("existing active brands receive FREE subscriptions after the canonical plan", async () => {
+  const loaded = await migrationRunner.loadMigrations();
+  const ids = loaded.map(({ id }) => id);
+  const migration090Index = ids.indexOf("090_existing_brand_free_subscriptions.sql");
+
+  assert.equal(
+    migration090Index,
+    ids.indexOf("089_free_subscription_plan.sql") + 1,
+  );
+  assert.equal(
+    migrationRunner.post075SchemaMigrationChecksums["090_existing_brand_free_subscriptions.sql"],
+    "8134f35d21f72f7418b5502bb5cfb10c8f296f147788bcd8b539d6d930588552",
+  );
+  assert.equal(
+    loaded[migration090Index].checksum,
+    migrationRunner.post075SchemaMigrationChecksums["090_existing_brand_free_subscriptions.sql"],
+  );
+});
+
 const post076SchemaMigrationIdsForTests = [
   "077_content_suggestion_batches.sql",
   "078_faq_utterance_matching.sql",
@@ -4767,6 +4787,7 @@ const post076SchemaMigrationIdsForTests = [
   "087_ai_content_prompt_lineage_v3.sql",
   "088_onboarding_product_image_imports.sql",
   "089_free_subscription_plan.sql",
+  "090_existing_brand_free_subscriptions.sql",
 ];
 
 test("post-075 data migrations are a closed DML-only contract", async () => {
