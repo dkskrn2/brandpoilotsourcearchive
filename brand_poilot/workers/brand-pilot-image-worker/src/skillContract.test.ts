@@ -24,7 +24,7 @@ describe("Threads Codex skill safety contract", () => {
     const skill = await readFile(new URL("../.codex/skills/image-render/SKILL.md", import.meta.url), "utf8");
 
     expect(skill).toContain("ai-content-visual-session-render.v1");
-    expect(skill).toContain("visual-render-policy.d2pp.v2");
+    expect(skill).toContain("visual-render-policy.d2pp.v3");
     expect(skill).toContain("inputs/visual-session.json");
     expect(skill).toContain("장면당 정확히 한 번");
     expect(skill).toContain("1080×1920");

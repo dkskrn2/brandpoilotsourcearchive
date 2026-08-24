@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 
-export const AI_CONTENT_VISUAL_RENDER_POLICY_VERSION = "visual-render-policy.d2pp.v2";
+export const AI_CONTENT_VISUAL_RENDER_POLICY_VERSION = "visual-render-policy.d2pp.v3";
 
 export const AI_CONTENT_VISUAL_RENDER_POLICY = Object.freeze({
   execution: [
@@ -19,6 +19,7 @@ export const AI_CONTENT_VISUAL_RENDER_POLICY = Object.freeze({
   },
   editorial: [
     "Vary composition without changing the primary medium. Repeated semantic relation types must not force repeated layouts.",
+    "Keep the font family or closest available font style, weight system, and typographic character as consistent as possible across every scene in this complete output. Vary size and weight only when needed for information hierarchy.",
     "informationRelation is semantic meaning only, never a chart, split-screen, column, or composition instruction.",
     "related_facts groups related independent claims. Never depict it as before/after, equal-denominator KPIs, or direct numeric comparison unless the locked relation says so.",
     "Only render text from headline, supportingTexts, footnote, relation label/value, and mandatory brand text.",

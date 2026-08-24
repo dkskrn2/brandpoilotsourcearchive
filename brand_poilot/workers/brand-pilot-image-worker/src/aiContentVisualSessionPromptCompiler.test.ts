@@ -55,4 +55,14 @@ describe("visual session prompt compiler", () => {
     expect(cardPrompt).toContain("Do not generate a portrait or landscape canvas");
     expect(cardPrompt).not.toContain("native 1080x1080 pixel 1:1 canvas");
   });
+
+  it("keeps typography styling consistent across every Card News and Reel scene", () => {
+    for (const outputFormat of ["card_news", "reel"] as const) {
+      const prompt = compileAiContentVisualSessionPrompt({
+        session: { contractVersion: "ai-content-visual-session.v1", outputFormat, source: { contractVersion: outputFormat === "reel" ? "reel-storyboard.v1" : "card-manuscript-plan.v1", sha256: "e".repeat(64) }, narrative: "Narrative", primaryMediumPolicy: { mode: "free_once", styleReferenceIds: [] }, scenes: [scene(1), scene(2)] },
+        userImageInstruction: null, staged: { productImages: [], styleImages: [], references: [], attachments: [] },
+      });
+      expect(prompt).toContain("Keep the font family or closest available font style, weight system, and typographic character as consistent as possible across every scene in this complete output");
+    }
+  });
 });
