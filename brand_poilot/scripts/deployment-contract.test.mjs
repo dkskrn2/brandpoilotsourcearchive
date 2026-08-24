@@ -2592,6 +2592,17 @@ test("normal publishing accepts recovery artifacts only from the successful reco
   assert.doesNotMatch(workflow, /artifacts\?name=brand-pilot-release-/);
 });
 
+test("normal publishing prefers a trusted recovery artifact over a stale publish artifact", () => {
+  const workflow = read(publishWorkflowPath);
+  const manifestJob = parseWorkflowJob(workflow, "manifest");
+  const recoveryLookup = manifestJob.indexOf("actions/workflows/recover-brand-pilot-production-baseline.yml/runs");
+  const publishLookup = manifestJob.indexOf("actions/workflows/publish-brand-pilot-server-images.yml/runs");
+
+  assert.ok(recoveryLookup >= 0, "recovery artifact lookup is missing");
+  assert.ok(publishLookup >= 0, "publish artifact lookup is missing");
+  assert.ok(recoveryLookup < publishLookup, "stale publish artifacts must not override a recovered operating baseline");
+});
+
 test("CI publishing uploads a complete bundle and keeps production mutation credential gated", () => {
   const workflow = read(publishWorkflowPath);
   const manifestJob = parseWorkflowJob(workflow, "manifest");

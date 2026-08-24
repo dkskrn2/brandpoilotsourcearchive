@@ -411,30 +411,30 @@ jobs:
           recovery_workflow_head_sha=""
           while read -r run_id; do
             [[ "$run_id" =~ ^[0-9]+$ ]] || continue
+            trusted_run_head_sha="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$run_id" \
+              --jq 'if .conclusion == "success" and .event == "workflow_dispatch" and .head_branch == "main" and .path == ".github/workflows/recover-brand-pilot-production-baseline.yml" then .head_sha else "" end')"
+            [[ "$trusted_run_head_sha" =~ ^[0-9a-f]{40}$ ]] || continue
             artifact_id="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$run_id/artifacts" \
               --jq ".artifacts[] | select(.expired == false and .name == \"brand-pilot-release-$PRODUCTION_RELEASE_SHA\") | .id" | head -n1)"
             if [[ "$artifact_id" =~ ^[0-9]+$ ]]; then
-              artifact_source="publish"
+              artifact_source="recovery"
+              recovery_run_id="$run_id"
+              recovery_workflow_head_sha="$trusted_run_head_sha"
               break
             fi
-          done < <(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/publish-brand-pilot-server-images.yml/runs?head_sha=$PRODUCTION_RELEASE_SHA&status=success&per_page=100" \
-            --jq '.workflow_runs[] | select(.conclusion == "success") | .id')
+          done < <(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/recover-brand-pilot-production-baseline.yml/runs?status=success&per_page=100" \
+            --jq '.workflow_runs[] | select(.conclusion == "success" and .path == ".github/workflows/recover-brand-pilot-production-baseline.yml") | .id')
           if [[ -z "$artifact_id" ]]; then
             while read -r run_id; do
               [[ "$run_id" =~ ^[0-9]+$ ]] || continue
-              trusted_run_head_sha="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$run_id" \
-                --jq 'if .conclusion == "success" and .event == "workflow_dispatch" and .head_branch == "main" and .path == ".github/workflows/recover-brand-pilot-production-baseline.yml" then .head_sha else "" end')"
-              [[ "$trusted_run_head_sha" =~ ^[0-9a-f]{40}$ ]] || continue
               artifact_id="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$run_id/artifacts" \
                 --jq ".artifacts[] | select(.expired == false and .name == \"brand-pilot-release-$PRODUCTION_RELEASE_SHA\") | .id" | head -n1)"
               if [[ "$artifact_id" =~ ^[0-9]+$ ]]; then
-                artifact_source="recovery"
-                recovery_run_id="$run_id"
-                recovery_workflow_head_sha="$trusted_run_head_sha"
+                artifact_source="publish"
                 break
               fi
-            done < <(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/recover-brand-pilot-production-baseline.yml/runs?status=success&per_page=100" \
-              --jq '.workflow_runs[] | select(.conclusion == "success" and .path == ".github/workflows/recover-brand-pilot-production-baseline.yml") | .id')
+            done < <(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/publish-brand-pilot-server-images.yml/runs?head_sha=$PRODUCTION_RELEASE_SHA&status=success&per_page=100" \
+              --jq '.workflow_runs[] | select(.conclusion == "success") | .id')
           fi
           [[ "$artifact_id" =~ ^[0-9]+$ ]] || { echo "production_manifest_artifact_missing" >&2; exit 1; }
           gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/$artifact_id/zip" > current-release.zip
