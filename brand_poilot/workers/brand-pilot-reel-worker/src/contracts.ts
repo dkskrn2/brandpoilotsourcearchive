@@ -165,6 +165,9 @@ export function parseReelStoryboardSubmissionForInput(
       "reel_plan_draft_product_image_id_unknown",
       "reel_storyboard_avatar_image_id_duplicate",
       "reel_storyboard_avatar_image_id_unknown",
+      "reel_storyboard_evidence_partition_invalid",
+      "reel_storyboard_scene_evidence_required",
+      "reel_storyboard_marketing_structure_invalid",
     ].includes(error.message)) throw error;
     throw new Error("reel_structured_draft_invalid");
   }

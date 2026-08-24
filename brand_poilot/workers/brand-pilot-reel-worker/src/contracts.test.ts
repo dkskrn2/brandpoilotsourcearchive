@@ -116,6 +116,18 @@ describe("reel worker contract", () => {
     }, input())).toThrow("reel_structured_draft_invalid");
   });
 
+  it("preserves a marketing evidence validation error for the planner repair attempt", () => {
+    const marketingInput = {
+      ...input(),
+      outputSettings: { outputFormat: "reel", purpose: "marketing" },
+    } as never;
+    expect(() => parseReelStoryboardSubmissionForInput({
+      ...storyboard(),
+      evidenceSelection: { selectedEvidenceIds: [], excludedEvidenceIds: [uid(1)] },
+      scenes: storyboard().scenes.map((scene) => ({ ...scene, evidenceIds: [] })),
+    }, marketingInput)).toThrow("reel_storyboard_marketing_structure_invalid");
+  });
+
   it("accepts only V3 reel generate jobs", () => {
     const job = {
       id: "job-1", generationId: "generation-1", outputId: "output-1",
