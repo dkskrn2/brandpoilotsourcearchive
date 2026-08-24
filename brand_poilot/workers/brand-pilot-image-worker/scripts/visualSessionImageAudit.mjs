@@ -39,6 +39,7 @@ function assertReferencePaths(toolInput, workspaceDir) {
   }
   const inputRoot = path.resolve(workspaceDir, "inputs");
   for (const reference of references) {
+    if (!path.isAbsolute(reference)) throw new Error("visual_session_image_reference_path_invalid");
     const resolved = path.resolve(workspaceDir, reference);
     const relative = path.relative(inputRoot, resolved);
     if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) {
@@ -49,7 +50,7 @@ function assertReferencePaths(toolInput, workspaceDir) {
 
 function assertRequiredProductReferences(toolInput, requiredPaths, workspaceDir) {
   if (requiredPaths === undefined || requiredPaths === null || requiredPaths.length === 0) return;
-  if (!Array.isArray(requiredPaths) || requiredPaths.some((value) => typeof value !== "string" || !value)
+  if (!Array.isArray(requiredPaths) || requiredPaths.some((value) => typeof value !== "string" || !value || !path.isAbsolute(value))
     || typeof workspaceDir !== "string" || !path.isAbsolute(workspaceDir)) {
     throw new Error("visual_session_image_required_product_reference_invalid");
   }

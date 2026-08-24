@@ -138,6 +138,7 @@ export function createAiContentVisualSessionRenderer(input: {
       if (batch.jobs.some(({ payload }) => JSON.stringify(payload.imagePackage) !== JSON.stringify(imagePackage))) throw new Error("ai_content_visual_session_invalid");
       const workDir = await mkdtemp(path.join(os.tmpdir(), "brand-pilot-ai-visual-session-"));
       try {
+        await chmod(workDir, 0o711);
         const workspaceDir = path.join(workDir, "workspace");
         const inputDir = path.join(workspaceDir, "inputs");
         const outputDir = path.join(workDir, "output");
@@ -154,7 +155,7 @@ export function createAiContentVisualSessionRenderer(input: {
           const bytes = await input.readOwned(storagePath, constraints);
           if (bytes.byteLength > AI_CONTENT_OWNED_IMAGE_MAX_BYTES || hash(bytes) !== checksum.toLowerCase()) throw new Error("ai_content_owned_blob_checksum_mismatch");
           const target = path.join(inputDir, name); await mkdir(path.dirname(target), { recursive: true }); await writeFile(target, bytes, { mode: 0o444 }); await readonly(target);
-          return path.posix.join("inputs", name.replaceAll("\\", "/"));
+          return target;
         };
         const productAttachmentIds = imagePackage.attachments.filter(({ role }) => role === "product_image").map(({ id }) => id);
         const registeredProductIds = (imagePackage.product?.images ?? []).map(({ assetId }) => assetId);
@@ -181,7 +182,7 @@ export function createAiContentVisualSessionRenderer(input: {
           slots: productBudget.urlSlots,
           inputDir,
         });
-        staged.productImages.push(...acquired.references.map(({ candidate, relativePath }) => ({ id: candidate.candidateId, path: relativePath })));
+        staged.productImages.push(...acquired.references.map(({ candidate, absolutePath }) => ({ id: candidate.candidateId, path: absolutePath })));
         if (staged.productImages.length !== productBudget.attachmentIds.length + productBudget.registeredIds.length + acquired.references.length
           || staged.styleImages.filter(({ avatar }) => avatar).length !== selectedAvatars.size) throw new Error("ai_content_asset_binding_invalid");
         const finalReferences = [

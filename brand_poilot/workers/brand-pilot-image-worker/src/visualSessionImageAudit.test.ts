@@ -65,7 +65,10 @@ describe("visual-session image tool audit", () => {
   });
 
   it("requires every selected product identity reference in the actual image tool arguments", () => {
-    const required = ["inputs/product-1.png", "inputs/product-url-1.webp"];
+    const required = [
+      path.join(workspaceDir, "inputs", "product-1.png"),
+      path.join(workspaceDir, "inputs", "product-url-1.webp"),
+    ];
     const audit = createVisualSessionImageAudit([1]);
     expect(() => applyVisualSessionImageHookEvent(audit, {
       hookEventName: "PreToolUse", toolName: "image_gen__imagegen", toolUseId: "call-one",

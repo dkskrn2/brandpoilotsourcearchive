@@ -1,4 +1,4 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -146,9 +146,15 @@ describe("visual session renderer", () => {
     let workspaceDir = "";
     const runChild = vi.fn(async (run: { outputFiles: string[]; workspaceDir: string; prompt: string }) => {
       workspaceDir = run.workspaceDir;
-      expect(JSON.parse(await readFile(path.join(run.workspaceDir, "required-product-reference-paths.json"), "utf8"))).toEqual([
+      if (process.platform !== "win32") {
+        expect((await stat(path.dirname(run.workspaceDir))).mode & 0o777).toBe(0o711);
+      }
+      const requiredPaths = JSON.parse(await readFile(path.join(run.workspaceDir, "required-product-reference-paths.json"), "utf8")) as string[];
+      expect(requiredPaths.every((referencePath) => path.isAbsolute(referencePath))).toBe(true);
+      expect(requiredPaths.map((referencePath) => path.relative(run.workspaceDir, referencePath).replaceAll("\\", "/"))).toEqual([
         "inputs/attachments/attachment-1.png", "inputs/product-1.png", "inputs/product-url-1.png",
       ]);
+      expect(run.prompt).toContain(JSON.stringify(requiredPaths[0]));
       expect(run.prompt).toContain("Every image_generation call MUST include every local path");
       for (const output of run.outputFiles) { await mkdir(path.dirname(output), { recursive: true }); await writeFile(output, source); }
     });
