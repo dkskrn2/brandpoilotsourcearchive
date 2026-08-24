@@ -18,6 +18,30 @@ export function parseAiContentVisualSessionRunnerJob(value: unknown): AiContentV
   return { contractVersion: "ai-content-visual-session-render.v1", prompt: source.prompt, expectedSceneIndices: [...source.expectedSceneIndices] as number[] };
 }
 
+export function buildAiContentVisualSessionOutputSchema(job: AiContentVisualSessionRunnerJob): Record<string, unknown> {
+  return {
+    type: "object",
+    additionalProperties: false,
+    required: ["contractVersion", "scenes"],
+    properties: {
+      contractVersion: { type: "string", enum: ["ai-content-visual-session-render.v1"] },
+      scenes: {
+        type: "array",
+        minItems: job.expectedSceneIndices.length,
+        maxItems: job.expectedSceneIndices.length,
+        items: {
+          type: "object",
+          additionalProperties: false,
+          required: ["index"],
+          properties: {
+            index: { type: "integer", enum: [...job.expectedSceneIndices] },
+          },
+        },
+      },
+    },
+  };
+}
+
 export function parseAiContentVisualSessionRunnerResult(value: unknown, job: AiContentVisualSessionRunnerJob): void {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw new Error("ai_content_visual_session_final_message_contract_invalid");

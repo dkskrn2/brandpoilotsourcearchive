@@ -1,11 +1,35 @@
 import { describe, expect, it } from "vitest";
 import {
+  buildAiContentVisualSessionOutputSchema,
   parseAiContentVisualSessionFinalMessage,
   parseAiContentVisualSessionRunnerJob,
   parseAiContentVisualSessionRunnerResult,
 } from "./aiContentVisualSessionRunnerContract.js";
 
 describe("visual session runner contract", () => {
+  it("builds a strict Codex output schema for the claimed scene count", () => {
+    const job = parseAiContentVisualSessionRunnerJob({ contractVersion: "ai-content-visual-session-render.v1", prompt: "Generate", expectedSceneIndices: [1, 2, 3, 4] });
+    expect(buildAiContentVisualSessionOutputSchema(job)).toEqual({
+      type: "object",
+      additionalProperties: false,
+      required: ["contractVersion", "scenes"],
+      properties: {
+        contractVersion: { type: "string", enum: ["ai-content-visual-session-render.v1"] },
+        scenes: {
+          type: "array",
+          minItems: 4,
+          maxItems: 4,
+          items: {
+            type: "object",
+            additionalProperties: false,
+            required: ["index"],
+            properties: { index: { type: "integer", enum: [1, 2, 3, 4] } },
+          },
+        },
+      },
+    });
+  });
+
   it("requires one ordered result for every expected scene", () => {
     const job = parseAiContentVisualSessionRunnerJob({ contractVersion: "ai-content-visual-session-render.v1", prompt: "Generate", expectedSceneIndices: [1, 2, 3] });
     expect(() => parseAiContentVisualSessionRunnerResult({ contractVersion: "ai-content-visual-session-render.v1", scenes: [{ index: 1 }, { index: 2 }, { index: 3 }] }, job)).not.toThrow();
