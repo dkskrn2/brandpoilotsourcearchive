@@ -9,7 +9,7 @@ import { findGeneratedImages, parseCodexFinalMessage, parseCodexThreadId, resolv
 import { assertCompleteVisualSessionImageAudit } from "./visualSessionImageAudit.mjs";
 import { forwardParentTermination } from "../dist/processTermination.mjs";
 import { parseAiContentAssetRenderResult, parseAiContentAssetRunnerJob } from "../dist/aiContentAssetRunnerContract.js";
-import { parseAiContentVisualSessionRunnerJob, parseAiContentVisualSessionRunnerResult } from "../dist/aiContentVisualSessionRunnerContract.js";
+import { parseAiContentVisualSessionFinalMessage, parseAiContentVisualSessionRunnerJob } from "../dist/aiContentVisualSessionRunnerContract.js";
 import { codexFailureDiagnostic } from "../dist/codexFailureDiagnostic.js";
 
 function argument(name) {
@@ -96,11 +96,14 @@ async function main() {
       termination = forwardParentTermination({ child });
       child.stdin.end(job.prompt, "utf8");
     });
-    try {
-      if (visualSession) parseAiContentVisualSessionRunnerResult(JSON.parse(result.finalMessage), job);
-      else parseAiContentAssetRenderResult(JSON.parse(result.finalMessage), job);
-    } catch {
-      throw new Error("ai_content_asset_final_message_invalid");
+    if (visualSession) {
+      parseAiContentVisualSessionFinalMessage(result.finalMessage, job);
+    } else {
+      try {
+        parseAiContentAssetRenderResult(JSON.parse(result.finalMessage), job);
+      } catch {
+        throw new Error("ai_content_asset_final_message_invalid");
+      }
     }
     let generated;
     let visualCalls = null;

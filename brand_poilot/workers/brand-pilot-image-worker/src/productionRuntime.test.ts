@@ -82,6 +82,8 @@ describe("production image worker runtime", () => {
     expect(runnerSource).toContain("image_generation");
     expect(runnerSource).toContain("permissions.worker.network.enabled=false");
     expect(runnerSource).toContain("assertCompleteVisualSessionImageAudit");
+    expect(runnerSource).toContain("parseAiContentVisualSessionFinalMessage");
+    expect(runnerSource).not.toContain("if (visualSession) parseAiContentVisualSessionRunnerResult(JSON.parse(result.finalMessage), job)");
     expect(runnerSource).toContain("visual-session-hook-audit.json");
     expect(runnerSource).toContain("ai_content_visual_session_hook_audit_missing");
     expect(runnerSource).toContain('hookCommand: visualSession ? visualSessionHookCommand : undefined');

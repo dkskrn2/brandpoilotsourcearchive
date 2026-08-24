@@ -52,7 +52,7 @@ function trustedBlobUrl(value: unknown, expectedPath: string, code: string): str
     || url.hash
     || path !== expectedPath
   ) fail(code);
-  return value;
+  return url.href;
 }
 
 export function validateAssetLibraryUpload(

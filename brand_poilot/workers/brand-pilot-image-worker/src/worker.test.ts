@@ -504,7 +504,7 @@ describe("V3 AI content render priority", () => {
     const failure = new Error("ai_content_asset_render_failed:1");
     Object.defineProperty(failure, "diagnostic", {
       enumerable: false,
-      value: "codex_image_generation_internal_error",
+      value: "ai_content_visual_session_final_message_contract_invalid",
     });
     const aiContentVisualRenderer = { renderSession: vi.fn(async () => { throw failure; }) };
 
@@ -522,7 +522,7 @@ describe("V3 AI content render priority", () => {
     expect(aiContentClient.failBatch).toHaveBeenCalledTimes(1);
     expect(aiContentClient.failBatch).toHaveBeenCalledWith(batch, "worker", {
       errorCode: "ai_content_visual_session_failed",
-      errorMessage: "codex_image_generation_internal_error",
+      errorMessage: "ai_content_visual_session_final_message_contract_invalid",
     });
     expect(aiContentClient.completeBatch).not.toHaveBeenCalled();
   });

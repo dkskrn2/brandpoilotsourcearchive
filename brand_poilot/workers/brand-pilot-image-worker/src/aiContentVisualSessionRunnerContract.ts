@@ -19,11 +19,32 @@ export function parseAiContentVisualSessionRunnerJob(value: unknown): AiContentV
 }
 
 export function parseAiContentVisualSessionRunnerResult(value: unknown, job: AiContentVisualSessionRunnerJob): void {
-  const source = object(value);
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("ai_content_visual_session_final_message_contract_invalid");
+  }
+  const source = value as Record<string, unknown>;
   if (Object.keys(source).length !== 2 || source.contractVersion !== "ai-content-visual-session-render.v1" || !Array.isArray(source.scenes)
-    || source.scenes.length !== job.expectedSceneIndices.length) throw new Error("ai_content_visual_session_final_message_invalid");
+    || source.scenes.length !== job.expectedSceneIndices.length) throw new Error("ai_content_visual_session_final_message_contract_invalid");
   source.scenes.forEach((item, offset) => {
-    const scene = object(item);
-    if (Object.keys(scene).length !== 1 || scene.index !== job.expectedSceneIndices[offset]) throw new Error("ai_content_visual_session_final_message_invalid");
+    if (!item || typeof item !== "object" || Array.isArray(item)) {
+      throw new Error("ai_content_visual_session_final_message_scene_invalid");
+    }
+    const scene = item as Record<string, unknown>;
+    if (Object.keys(scene).length !== 1 || scene.index !== job.expectedSceneIndices[offset]) {
+      throw new Error("ai_content_visual_session_final_message_scene_invalid");
+    }
   });
+}
+
+export function parseAiContentVisualSessionFinalMessage(
+  message: string,
+  job: AiContentVisualSessionRunnerJob,
+): void {
+  let value: unknown;
+  try {
+    value = JSON.parse(message);
+  } catch {
+    throw new Error("ai_content_visual_session_final_message_json_invalid");
+  }
+  parseAiContentVisualSessionRunnerResult(value, job);
 }

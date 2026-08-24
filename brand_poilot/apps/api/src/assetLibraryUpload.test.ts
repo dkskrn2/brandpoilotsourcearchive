@@ -207,6 +207,35 @@ describe("asset library uploads", () => {
     }));
   });
 
+  it("accepts equivalent provider URLs with encoded paths and hostname casing differences", async () => {
+    const bytes = Buffer.from("trusted-product-image");
+    const actualChecksum = sha256(bytes);
+    const productId = "33333333-3333-4333-8333-333333333333";
+    const fileName = "제품 이미지.jpg";
+    const expectedPath = buildAssetLibraryPath({
+      brandId, productId, sessionId, kind: "product", checksum: actualChecksum, fileName,
+    });
+    const browserUrl = `https://store.blob.vercel-storage.com/${expectedPath
+      .split("/").map((part) => encodeURIComponent(part)).join("/")}`;
+    const result = blobResult(expectedPath, "image/jpeg", bytes);
+    result.blob.url = `https://StOrE.blob.vercel-storage.com/${expectedPath}`;
+
+    await expect(confirmAssetLibraryUpload({
+      session: {
+        id: sessionId, workspaceId: "11111111-1111-4111-8111-111111111111", brandId,
+        kind: "product", productId, nonce: "valid-nonce-123456", fileName,
+        expectedMimeType: "image/jpeg", expectedSizeBytes: bytes.length,
+        expectedChecksum: actualChecksum,
+        storagePathPrefix: `brands/${brandId}/asset-library/products/${productId}/${sessionId}/`,
+        expiresAt: new Date(Date.now() + 60_000).toISOString(), confirmedAt: null,
+      },
+      nonce: "valid-nonce-123456", storagePath: expectedPath, storageUrl: browserUrl,
+      mimeType: "image/jpeg", sizeBytes: bytes.length, checksum: actualChecksum,
+    }, {
+      token: "rw-token", getBlob: vi.fn(async () => result),
+    })).resolves.toMatchObject({ storagePath: expectedPath, storageUrl: new URL(browserUrl).href });
+  });
+
   it("rejects an attacker Blob hostname even when it submits the expected pathname", async () => {
     const bytes = Buffer.from("trusted-reference");
     const actualChecksum = sha256(bytes);

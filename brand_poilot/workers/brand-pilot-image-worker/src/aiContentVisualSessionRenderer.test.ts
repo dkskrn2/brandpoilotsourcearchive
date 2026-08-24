@@ -62,7 +62,7 @@ describe("visual session renderer", () => {
     const childError = new Error("ai_content_asset_render_failed:1");
     Object.defineProperty(childError, "diagnostic", {
       enumerable: false,
-      value: "provider response\ncodex_image_generation_internal_error\ncodex_ai_content_asset_failed:1\nSECRET_TOKEN=do-not-store",
+      value: "provider response\nai_content_visual_session_final_message_scene_invalid\ncodex_ai_content_asset_failed:1\nSECRET_TOKEN=do-not-store",
     });
     const renderer = createAiContentVisualSessionRenderer({
       workerRoot,
@@ -77,7 +77,7 @@ describe("visual session renderer", () => {
       message: "ai_content_asset_render_failed:1",
       code: "ai_content_visual_session_failed",
       retryable: false,
-      diagnostic: "codex_image_generation_internal_error",
+      diagnostic: "ai_content_visual_session_final_message_scene_invalid",
     });
     expect(JSON.stringify(failure)).not.toContain("SECRET_TOKEN");
   });
