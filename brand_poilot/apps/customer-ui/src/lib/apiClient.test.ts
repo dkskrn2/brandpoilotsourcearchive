@@ -13,6 +13,22 @@ describe("apiClient", () => {
     );
   });
 
+  it("patches one existing calendar slot when its reservation changes", async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ id: "slot-1", scheduledFor: "2099-08-24T01:10:00.000Z" }), { status: 200 }));
+    const client = apiClient({ baseUrl: "http://api.test", fetcher: fetchMock as typeof fetch });
+
+    await client.reschedulePublishCalendarSlot("brand-1", "slot-1", { scheduledFor: "2099-08-24T01:10:00.000Z" });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://api.test/brands/brand-1/publish-calendar/slots/slot-1/schedule",
+      expect.objectContaining({
+        method: "PATCH",
+        credentials: "include",
+        body: JSON.stringify({ scheduledFor: "2099-08-24T01:10:00.000Z" }),
+      }),
+    );
+  });
+
   it("keeps Meta ad cache reads separate from explicit provider searches", async () => {
     const page = { searchId: "search-1", cacheState: "fresh", errorCode: null, refreshedAt: null, items: [], nextCursor: null };
     const fetchMock = vi.fn(async () => new Response(JSON.stringify(page), { status: 200 }));

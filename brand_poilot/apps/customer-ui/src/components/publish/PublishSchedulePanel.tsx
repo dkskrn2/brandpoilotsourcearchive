@@ -8,12 +8,13 @@ type SubmitResult =
   | { ok: false; errorCode: string | null; existingCalendarDate?: string | null };
 
 type Props = {
+  mode?: "create" | "edit";
   item: PublishItem;
   options: PublishCalendarManualOptions | null;
   optionsError: string | null;
   optionsLoading: boolean;
   initialDateKey: string;
-  onSubmit(input: PublishCalendarManualSlotInput): Promise<SubmitResult>;
+  onSubmit(input: PublishCalendarManualSlotInput | { scheduledFor: string }): Promise<SubmitResult>;
   onSaved(result: { refreshFailed: boolean }): void;
   onOpenExistingReservation(itemKey: string, calendarDate: string | null): void;
   onRetryOptions(): void;
@@ -56,6 +57,8 @@ export function scheduleErrorMessage(errorCode: string | null, options: PublishC
   if (errorCode === "publish_calendar_channel_not_connected") return "게시하려면 Instagram 연결이 필요합니다.";
   if (errorCode === "publish_calendar_content_format_mismatch") return "콘텐츠 형식이 Instagram 게시 형식과 일치하지 않습니다.";
   if (errorCode === "publish_calendar_content_already_scheduled") return "이미 예약된 콘텐츠입니다. 기존 예약 상세를 엽니다.";
+  if (errorCode === "publish_calendar_slot_not_reschedulable") return "게시가 시작되었거나 결과 확인이 필요한 예약은 변경할 수 없습니다.";
+  if (errorCode === "publish_calendar_slot_not_found") return "예약 정보를 찾지 못했습니다. 목록을 새로고침해 주세요.";
   return "이 콘텐츠는 현재 브랜드에서 예약할 수 없습니다.";
 }
 
@@ -64,9 +67,18 @@ function toScheduledFor(date: string, time: string) {
   return Number.isFinite(value.getTime()) ? value : null;
 }
 
-export function PublishSchedulePanel({ item, options, optionsError, optionsLoading, initialDateKey, onSubmit, onSaved, onOpenExistingReservation, onRetryOptions, onClose }: Props) {
+function seoulTime(value: string | null) {
+  if (!value) return "11:30";
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Seoul", hour: "2-digit", minute: "2-digit", hourCycle: "h23",
+  }).formatToParts(new Date(value));
+  return `${parts.find((part) => part.type === "hour")?.value}:${parts.find((part) => part.type === "minute")?.value}`;
+}
+
+export function PublishSchedulePanel({ mode = "create", item, options, optionsError, optionsLoading, initialDateKey, onSubmit, onSaved, onOpenExistingReservation, onRetryOptions, onClose }: Props) {
+  const editing = mode === "edit";
   const [date, setDate] = useState(initialDateKey);
-  const [time, setTime] = useState("11:30");
+  const [time, setTime] = useState(() => editing ? seoulTime(item.scheduledFor) : "11:30");
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const idempotencyKeyRef = useRef(crypto.randomUUID());
@@ -74,33 +86,36 @@ export function PublishSchedulePanel({ item, options, optionsError, optionsLoadi
   const instagram = options?.channels.find((channel) => channel.value === "instagram") ?? null;
   const connected = Boolean(instagram);
   const formatSupported = Boolean(item.contentFormat && instagram?.formats.some((format) => format.value === item.contentFormat));
-  const quotaAvailable = (options?.usage.publishing.additionalAvailable ?? 0) > 0;
+  const quotaAvailable = editing || (options?.usage.publishing.additionalAvailable ?? 0) > 0;
   const scheduledFor = toScheduledFor(date, time);
   const past = Boolean(scheduledFor && scheduledFor.getTime() <= Date.now());
 
   useEffect(() => {
     setDate(initialDateKey);
+    setTime(editing ? seoulTime(item.scheduledFor) : "11:30");
     setError(null);
     setSubmitting(false);
     idempotencyKeyRef.current = crypto.randomUUID();
-  }, [initialDateKey, item.itemKey]);
+  }, [editing, initialDateKey, item.itemKey, item.scheduledFor]);
 
   async function submit() {
     if (submitting) return;
     if (!scheduledFor || past) { setError(scheduleErrorMessage("publish_calendar_time_past", options)); return; }
-    if (!connected) { setError(scheduleErrorMessage("publish_calendar_channel_not_connected", options)); return; }
-    if (!source || !item.contentFormat || !formatSupported) { setError("이 콘텐츠 형식은 현재 Instagram 게시 설정과 일치하지 않습니다."); return; }
-    if (!quotaAvailable) { setError(scheduleErrorMessage("publish_weekly_quota_exceeded", options)); return; }
+    if (!editing && !connected) { setError(scheduleErrorMessage("publish_calendar_channel_not_connected", options)); return; }
+    if (!editing && (!source || !item.contentFormat || !formatSupported)) { setError("이 콘텐츠 형식은 현재 Instagram 게시 설정과 일치하지 않습니다."); return; }
+    if (!editing && !quotaAvailable) { setError(scheduleErrorMessage("publish_weekly_quota_exceeded", options)); return; }
     setSubmitting(true);
     setError(null);
     try {
-      const result = await onSubmit({
-        scheduledFor: scheduledFor.toISOString(),
-        channel: "instagram",
-        contentFormat: item.contentFormat,
-        idempotencyKey: idempotencyKeyRef.current,
-        source,
-      });
+      const result = await onSubmit(editing
+        ? { scheduledFor: scheduledFor.toISOString() }
+        : {
+            scheduledFor: scheduledFor.toISOString(),
+            channel: "instagram",
+            contentFormat: item.contentFormat!,
+            idempotencyKey: idempotencyKeyRef.current,
+            source: source!,
+          });
       if (result.ok) {
         onSaved({ refreshFailed: result.refreshFailed });
         onClose();
@@ -114,22 +129,25 @@ export function PublishSchedulePanel({ item, options, optionsError, optionsLoadi
     }
   }
 
-  const disabled = optionsLoading || !options || !source || !item.contentFormat || !connected || !formatSupported || !quotaAvailable || !scheduledFor || past || submitting;
-  return <div className="modal-backdrop"><FocusTrap active initialFocusSelector=".publish-schedule-panel__close" className="modal-panel publish-schedule-panel" role="dialog" aria-modal="true" aria-label={`${item.title} 게시 설정`} onKeyDown={(event) => event.key === "Escape" && onClose()}>
-    <header className="publish-calendar-detail__header"><div><span>게시 설정</span><h2>{item.title}</h2></div><button className="button icon-button publish-schedule-panel__close" type="button" aria-label="닫기" onClick={onClose}><X size={18} /></button></header>
+  const disabled = editing
+    ? !scheduledFor || past || submitting
+    : optionsLoading || !options || !source || !item.contentFormat || !connected || !formatSupported || !quotaAvailable || !scheduledFor || past || submitting;
+  const actionLabel = editing ? "예약 변경" : "게시 예약";
+  return <div className="modal-backdrop"><FocusTrap active initialFocusSelector=".publish-schedule-panel__close" className="modal-panel publish-schedule-panel" role="dialog" aria-modal="true" aria-label={`${item.title} ${editing ? "예약 변경" : "게시 설정"}`} onKeyDown={(event) => event.key === "Escape" && onClose()}>
+    <header className="publish-calendar-detail__header"><div><span>{editing ? "예약 변경" : "게시 설정"}</span><h2>{item.title}</h2></div><button className="button icon-button publish-schedule-panel__close" type="button" aria-label="닫기" onClick={onClose}><X size={18} /></button></header>
     <div className="publish-calendar-slot-detail">
       <dl>
         <div><dt>선택 콘텐츠</dt><dd>{item.title}</dd></div>
         <div><dt>콘텐츠 상태</dt><dd>{sourceLabel(source)}</dd></div>
         <div><dt>콘텐츠 형식</dt><dd>{item.contentFormat ? contentFormatLabel[item.contentFormat] : "설정 전"}</dd></div>
-        <div><dt>게시 채널</dt><dd>{options ? (connected ? "Instagram 연결됨" : "Instagram 연결 필요") : "Instagram"}</dd></div>
+        <div><dt>게시 채널</dt><dd>{editing ? item.channels.map((channel) => channel === "instagram" ? "Instagram" : channel).join(", ") || "Instagram" : options ? (connected ? "Instagram 연결됨" : "Instagram 연결 필요") : "Instagram"}</dd></div>
       </dl>
-      {optionsLoading ? <p role="status">게시 설정을 불러오는 중입니다.</p> : null}
-      {optionsError ? <div><p role="alert">{optionsError}</p><button className="button" type="button" onClick={onRetryOptions}>게시 설정 다시 불러오기</button></div> : null}
-      {!optionsLoading && options && !connected ? <p role="alert">Instagram 연결이 필요합니다.</p> : null}
-      {!optionsLoading && options && item.contentFormat && connected && !formatSupported ? <p role="alert">이 콘텐츠 형식은 현재 Instagram 게시 설정과 일치하지 않습니다.</p> : null}
-      {options?.usage.publishing ? <p>이번 주 추가 예약 가능 {options.usage.publishing.additionalAvailable}건 · 게시 한도 {options.usage.publishing.limit}건</p> : null}
-      {options && !quotaAvailable ? <p role="alert">{scheduleErrorMessage("publish_weekly_quota_exceeded", options)}</p> : null}
+      {!editing && optionsLoading ? <p role="status">게시 설정을 불러오는 중입니다.</p> : null}
+      {!editing && optionsError ? <div><p role="alert">{optionsError}</p><button className="button" type="button" onClick={onRetryOptions}>게시 설정 다시 불러오기</button></div> : null}
+      {!editing && !optionsLoading && options && !connected ? <p role="alert">Instagram 연결이 필요합니다.</p> : null}
+      {!editing && !optionsLoading && options && item.contentFormat && connected && !formatSupported ? <p role="alert">이 콘텐츠 형식은 현재 Instagram 게시 설정과 일치하지 않습니다.</p> : null}
+      {!editing && options?.usage.publishing ? <p>이번 주 추가 예약 가능 {options.usage.publishing.additionalAvailable}건 · 게시 한도 {options.usage.publishing.limit}건</p> : null}
+      {!editing && options && !quotaAvailable ? <p role="alert">{scheduleErrorMessage("publish_weekly_quota_exceeded", options)}</p> : null}
       <div className="publish-calendar-manual-form">
         <label>게시 날짜<input aria-label="게시 날짜" type="date" value={date} onChange={(event) => { setDate(event.target.value); setError(null); }} /></label>
         <label>게시 시간<input aria-label="게시 시간" type="time" value={time} onChange={(event) => { setTime(event.target.value); setError(null); }} /></label>
@@ -137,6 +155,6 @@ export function PublishSchedulePanel({ item, options, optionsError, optionsLoadi
       {past ? <p role="alert">선택한 게시 시각이 지났습니다. 미래 시각을 선택해 주세요.</p> : null}
       {error ? <p role="alert">{error}</p> : null}
     </div>
-    <footer className="auto-publish-settings__footer"><button className="button" type="button" onClick={onClose}>취소</button><button className="button primary" type="button" disabled={disabled} onClick={() => void submit()}>{submitting ? "예약 중" : "게시 예약"}</button></footer>
+    <footer className="auto-publish-settings__footer"><button className="button" type="button" onClick={onClose}>취소</button><button className="button primary" type="button" disabled={disabled} onClick={() => void submit()}>{submitting ? (editing ? "변경 중" : "예약 중") : actionLabel}</button></footer>
   </FocusTrap></div>;
 }

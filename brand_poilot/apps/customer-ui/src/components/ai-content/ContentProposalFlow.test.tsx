@@ -671,6 +671,8 @@ describe("ContentProposalFlow", () => {
   it("uploads a V3 product image and sends only its attachment id in finalization", async () => {
     const user = userEvent.setup();
     const { uploadAttachment, updateFinalizationDraft, startGenerationV2 } = renderFlow({ initialBatchId: "batch-1" });
+    const usageChanged = vi.fn();
+    window.addEventListener("brand-pilot:publish-calendar-usage-changed", usageChanged, { once: true });
 
     await user.click(await screen.findByRole("button", { name: "구성안 선택: 여름 피부 3단계 관리" }));
     await user.upload(
@@ -691,6 +693,7 @@ describe("ContentProposalFlow", () => {
       expect.objectContaining({ attachmentIds: ["one-time-receipt-1"] }),
     );
     expect(startGenerationV2).toHaveBeenCalledTimes(1);
+    expect(usageChanged).toHaveBeenCalledTimes(1);
   });
 
   it("maps the generation quota code to Korean and preserves the selected proposal", async () => {
@@ -706,6 +709,19 @@ describe("ContentProposalFlow", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent("오늘 AI 콘텐츠 생성 10회를 모두 사용했습니다");
     expect(screen.getAllByText("여름 피부 3단계 관리")[0]).toBeVisible();
     expect(screen.getByRole("heading", { name: "제품 정보와 스타일을 확인하세요" })).toBeVisible();
+  });
+
+  it("maps the subscription weekly generation quota to Korean", async () => {
+    const user = userEvent.setup();
+    const { startGenerationV2 } = renderFlow({ initialBatchId: "batch-1" });
+    startGenerationV2.mockRejectedValueOnce(
+      new ApiRequestError({ status: 429, errorCode: "generation_weekly_quota_exceeded" }),
+    );
+
+    await user.click(await screen.findByRole("button", { name: "구성안 선택: 여름 피부 3단계 관리" }));
+    await user.click(await screen.findByRole("button", { name: "콘텐츠 생성 시작" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("이번 주 콘텐츠 생성 한도를 모두 사용했습니다");
   });
 
   it("seals the selected proposal before loading current visual selections", async () => {

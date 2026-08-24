@@ -81,6 +81,10 @@ export interface PublishCalendarRepository {
     topicPublishGroupId?: string | null;
     title?: string | null;
   }): Promise<PublishCalendarSlotDto>;
+  rescheduleSlot(input: BrandScope & {
+    slotId: string;
+    scheduledFor: Date;
+  }): Promise<PublishCalendarSlotDto>;
   cancelSlot(input: BrandScope & { slotId: string }): Promise<PublishCalendarSlotDto>;
   getWeeklyUsage(input: BrandScope & { at?: Date }): Promise<PublishCalendarWeeklyUsageDto>;
   applyDueSubscriptionRenewals(now?: Date): Promise<AppliedSubscriptionRenewal[]>;
@@ -1070,6 +1074,118 @@ export function createPublishCalendarRepository(
             effective.generationOutputId, effective.topicPublishGroupId,
             input.title ?? (existingRow.title ? String(existingRow.title) : null)],
         );
+        return mapSlot(result.rows[0]);
+      });
+    },
+
+    async rescheduleSlot(input) {
+      if (!Number.isFinite(input.scheduledFor.getTime())) {
+        throw new Error("publish_calendar_time_invalid");
+      }
+      return transaction(fencedPool, async (client) => {
+        await lockBrand(client, input.brandId);
+        const existing = await client.query(
+          `select slot.* from publish_calendar_slots slot
+            where slot.id=$1::uuid and slot.brand_id=$2::uuid and slot.workspace_id=$3::uuid
+            for update`,
+          [input.slotId, input.brandId, input.workspaceId],
+        );
+        if (!existing.rowCount) throw new Error("publish_calendar_slot_not_found");
+        const existingRow = existing.rows[0];
+        if (!["open", "proposal_assigned", "generation_pending", "content_assigned", "ready",
+          "scheduled", "publish_delayed", "quota_blocked"].includes(String(existingRow.status))) {
+          throw new Error("publish_calendar_slot_not_reschedulable");
+        }
+        const future = await client.query(
+          "select clock_timestamp() < $1::timestamptz as future",
+          [input.scheduledFor],
+        );
+        if (future.rows[0]?.future !== true) throw new Error("publish_calendar_time_past");
+
+        const publishGroupId = existingRow.topic_publish_group_id
+          ? String(existingRow.topic_publish_group_id)
+          : null;
+        let scheduledLineage = false;
+        if (publishGroupId) {
+          const publishGroup = await client.query(
+            `select publish_group.status from topic_publish_groups publish_group
+              where publish_group.id=$1::uuid and publish_group.brand_id=$2::uuid
+                and publish_group.workspace_id=$3::uuid
+              for update`,
+            [publishGroupId, input.brandId, input.workspaceId],
+          );
+          if (!publishGroup.rowCount
+            || !["waiting", "ready", "scheduled"].includes(String(publishGroup.rows[0].status))) {
+            throw new Error("publish_calendar_slot_not_reschedulable");
+          }
+          const queue = await client.query(
+            `select queue.status from publish_queue queue
+              where queue.topic_publish_group_id=$1::uuid
+                and queue.brand_id=$2::uuid and queue.workspace_id=$3::uuid
+              order by queue.id
+              for update`,
+            [publishGroupId, input.brandId, input.workspaceId],
+          );
+          const queueStatuses = queue.rows.map((row) => String(row.status));
+          if (queueStatuses.some((status) => !["queued", "scheduled"].includes(status))) {
+            throw new Error("publish_calendar_slot_not_reschedulable");
+          }
+          scheduledLineage = String(publishGroup.rows[0].status) === "scheduled";
+          if (scheduledLineage
+            && (String(existingRow.status) !== "scheduled"
+              || queueStatuses.length === 0
+              || queueStatuses.some((status) => status !== "scheduled"))) {
+            throw new Error("publish_calendar_slot_not_reschedulable");
+          }
+          if (!scheduledLineage && queueStatuses.some((status) => status === "scheduled")) {
+            throw new Error("publish_calendar_slot_not_reschedulable");
+          }
+        } else if (String(existingRow.status) === "scheduled") {
+          throw new Error("publish_calendar_slot_not_reschedulable");
+        }
+
+        const { availability } = await subscriptionAndPublishUsage(
+          client,
+          input,
+          input.scheduledFor,
+          input.slotId,
+        );
+        if (availability.additionalAvailable < 1) {
+          throw new Error("publish_weekly_quota_exceeded");
+        }
+
+        if (scheduledLineage && publishGroupId) {
+          const group = await client.query(
+            `update topic_publish_groups set
+                scheduled_for=$4::timestamptz,
+                slot_date=($4::timestamptz at time zone 'Asia/Seoul')::date,
+                slot_number=null,updated_at=now()
+              where id=$1::uuid and brand_id=$2::uuid and workspace_id=$3::uuid
+                and status='scheduled'`,
+            [publishGroupId, input.brandId, input.workspaceId, input.scheduledFor],
+          );
+          const queue = await client.query(
+            `update publish_queue set
+                scheduled_for=$4::timestamptz,
+                slot_date=($4::timestamptz at time zone 'Asia/Seoul')::date,
+                slot_number=null,updated_at=now()
+              where topic_publish_group_id=$1::uuid and brand_id=$2::uuid and workspace_id=$3::uuid
+                and status='scheduled'`,
+            [publishGroupId, input.brandId, input.workspaceId, input.scheduledFor],
+          );
+          if (!group.rowCount || !queue.rowCount) {
+            throw new Error("publish_calendar_slot_not_reschedulable");
+          }
+        }
+
+        const result = await client.query(
+          `update publish_calendar_slots set
+              scheduled_for=$4::timestamptz,assignment_mode='manual',recommendation_kind=null,updated_at=now()
+            where id=$1::uuid and brand_id=$2::uuid and workspace_id=$3::uuid
+            returning *`,
+          [input.slotId, input.brandId, input.workspaceId, input.scheduledFor],
+        );
+        if (!result.rowCount) throw new Error("publish_calendar_slot_not_reschedulable");
         return mapSlot(result.rows[0]);
       });
     },

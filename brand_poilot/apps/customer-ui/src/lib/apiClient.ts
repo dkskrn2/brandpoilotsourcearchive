@@ -739,6 +739,9 @@ export function apiClient(options: ApiClientOptions = {}) {
     provisionPublishCalendarManualSlot(brandId: string, payload: PublishCalendarManualSlotInput) {
       return request<PublishCalendarSlot>(fetcher, `${baseUrl}/brands/${brandId}/publish-calendar/manual-slots`, { method: "POST", body: JSON.stringify(payload) });
     },
+    reschedulePublishCalendarSlot(brandId: string, slotId: string, payload: { scheduledFor: string }) {
+      return request<PublishCalendarSlot>(fetcher, `${baseUrl}/brands/${brandId}/publish-calendar/slots/${slotId}/schedule`, { method: "PATCH", body: JSON.stringify(payload) });
+    },
     provisionPublishCalendarManualSlotsBatch(brandId: string, payload: PublishCalendarManualBatchInput) {
       return request<PublishCalendarManualBatchResult>(fetcher, `${baseUrl}/brands/${brandId}/publish-calendar/manual-slots/batch`, { method: "POST", body: JSON.stringify(payload) });
     },

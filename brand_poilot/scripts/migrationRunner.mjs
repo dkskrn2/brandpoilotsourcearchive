@@ -105,6 +105,7 @@ export const fullSourceMigrationIds = Object.freeze([
   "086_publish_calendar_same_time_contract.sql",
   "087_ai_content_prompt_lineage_v3.sql",
   "088_onboarding_product_image_imports.sql",
+  "089_free_subscription_plan.sql",
 ]);
 const legacyTriggerSearchPathMigrationId = "073a_legacy_trigger_function_search_path.sql";
 export const legacyTriggerSearchPathMigrationChecksum =
@@ -130,6 +131,7 @@ const post075SchemaMigrationIds = Object.freeze([
   "086_publish_calendar_same_time_contract.sql",
   "087_ai_content_prompt_lineage_v3.sql",
   "088_onboarding_product_image_imports.sql",
+  "089_free_subscription_plan.sql",
 ]);
 export const post075SchemaMigrationChecksums = Object.freeze({
   "077_content_suggestion_batches.sql": "3b178464c5ae5c4e220428e0752ab3e79a2ca06b5b2b23f1e89c34e983e63f76",
@@ -144,6 +146,7 @@ export const post075SchemaMigrationChecksums = Object.freeze({
   "086_publish_calendar_same_time_contract.sql": "89b5e23a3535ca4d8c11eb8ebd274317cc414bd482d70b93bb0b6f2c379b0abb",
   "087_ai_content_prompt_lineage_v3.sql": "bb5c9cbc2b78654e7bbdd988af929b634671cc2e794cbd46b8cf5c9fd5d5b359",
   "088_onboarding_product_image_imports.sql": "a83e1adecd9df47980051328c2a6bde13a3c0c58a6636f21462d77800299374c",
+  "089_free_subscription_plan.sql": "fd58a829eb658b0ac650e033a5edd085ec452a6eb0420251c60abcd51231267a",
 });
 const post075DeferredMigrationIds = Object.freeze([
   ...post075DataMigrationIds,
@@ -4915,6 +4918,8 @@ export async function runPost075SchemaMigrationsWithClient({
         applicationRoleName: provider.application_role_name,
         requireEmptyPlanCatalog: pendingSchemaMigrations.some(
           ({ id }) => id === "079_publish_calendar_runtime.sql",
+        ) && !pendingSchemaMigrations.some(
+          ({ id }) => id === "089_free_subscription_plan.sql",
         ),
       });
       await verifyManualVisualAssetsSchemaCatalog(client, {

@@ -3250,6 +3250,80 @@ describe("API server", () => {
     expect(listManualContentCandidates).toHaveBeenCalledTimes(1);
   });
 
+  it("reschedules a publish calendar slot with one parsed timestamp", async () => {
+    vi.stubEnv("BRAND_PILOT_DEV_WORKSPACE_ID", "22222222-2222-4222-8222-222222222222");
+    const repository = createRepository();
+    const scheduledFor = "2099-08-31T18:30:00.000Z";
+    const rescheduleSlot = vi.fn(async (input: Parameters<NonNullable<ApiRepository["rescheduleSlot"]>>[0]) => ({
+      id: input.slotId,
+      workspaceId: input.workspaceId,
+      brandId: input.brandId,
+      scheduledFor: input.scheduledFor.toISOString(),
+      effectiveScheduledFor: input.scheduledFor.toISOString(),
+      assignmentMode: "manual" as const,
+      status: "scheduled" as const,
+      recommendationKind: null,
+      contentFormat: "card_news" as const,
+      channels: ["instagram" as const],
+      contentSuggestionId: null,
+      proposalId: null,
+      generationId: null,
+      generationOutputId: null,
+      topicPublishGroupId: "70000000-0000-4000-8000-000000000041",
+      idempotencyKey: null,
+      title: "SNS 마케팅",
+      lastError: null,
+      updatedAt: "2099-08-30T00:00:00.000Z",
+    }));
+    repository.rescheduleSlot = rescheduleSlot;
+    const app = createServer({ repository, logger: false });
+
+    const response = await app.inject({
+      method: "PATCH",
+      url: `/brands/${brandId}/publish-calendar/slots/30000000-0000-4000-8000-000000000041/schedule`,
+      payload: { scheduledFor },
+    });
+    const extraField = await app.inject({
+      method: "PATCH",
+      url: `/brands/${brandId}/publish-calendar/slots/30000000-0000-4000-8000-000000000041/schedule`,
+      payload: { scheduledFor, force: true },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({ scheduledFor, assignmentMode: "manual" });
+    expect(rescheduleSlot).toHaveBeenCalledWith({
+      workspaceId: "22222222-2222-4222-8222-222222222222",
+      brandId,
+      slotId: "30000000-0000-4000-8000-000000000041",
+      scheduledFor: new Date(scheduledFor),
+    });
+    expect(extraField.statusCode).toBe(400);
+    expect(rescheduleSlot).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    ["publish_calendar_slot_not_found", 404],
+    ["publish_calendar_time_past", 400],
+    ["publish_calendar_subscription_inactive", 409],
+    ["publish_calendar_slot_not_reschedulable", 409],
+  ])("maps reservation reschedule error %s to HTTP %s", async (errorCode, statusCode) => {
+    vi.stubEnv("BRAND_PILOT_DEV_WORKSPACE_ID", "22222222-2222-4222-8222-222222222222");
+    const repository = createRepository();
+    repository.rescheduleSlot = vi.fn(async () => {
+      throw new Error(errorCode);
+    });
+    const app = createServer({ repository, logger: false });
+
+    const response = await app.inject({
+      method: "PATCH",
+      url: `/brands/${brandId}/publish-calendar/slots/30000000-0000-4000-8000-000000000041/schedule`,
+      payload: { scheduledFor: "2099-08-31T18:30:00.000Z" },
+    });
+
+    expect(response.statusCode).toBe(statusCode);
+    expect(response.json()).toEqual({ error: errorCode });
+  });
+
   it("provisions a content-backed manual slot and rejects a source-less request", async () => {
     vi.stubEnv("BRAND_PILOT_DEV_WORKSPACE_ID", "22222222-2222-4222-8222-222222222222");
     vi.stubEnv("BRAND_PILOT_DEV_USER_ID", "33333333-3333-4333-8333-333333333333");

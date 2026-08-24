@@ -1015,6 +1015,28 @@ describe("V3 manual generation HTTP boundary", () => {
     await harness.app.close();
   });
 
+  it("returns HTTP 429 when the subscription weekly generation quota is exhausted", async () => {
+    const harness = setup();
+    vi.mocked(harness.repository.retryAiContentOutput).mockRejectedValueOnce(
+      new Error("generation_weekly_quota_exceeded"),
+    );
+
+    const response = await harness.app.inject({
+      method: "POST",
+      url: `/brands/${brandId}/ai-content/outputs/${outputId}/retry`,
+      headers: auth,
+      payload: {
+        contractVersion: "content-generation-retry.v1",
+        idempotencyKey: "retry-weekly-limit-1",
+        reason: "주간 한도 경계 확인",
+      },
+    });
+
+    expect(response.statusCode).toBe(429);
+    expect(response.json()).toEqual({ error: "generation_weekly_quota_exceeded" });
+    await harness.app.close();
+  });
+
   it.each([
     { idempotencyKey: "retry-output-1", reason: "missing contract" },
     { contractVersion: "content-generation-retry.v0", idempotencyKey: "retry-output-1", reason: "old contract" },

@@ -37,7 +37,8 @@ describe("publish calendar manual provisioning with postgres semantics", () => {
       );
       create table topic_publish_groups(
         id uuid primary key default gen_random_uuid(), workspace_id uuid not null, brand_id uuid not null,
-        content_topic_id uuid not null unique, status text not null, scheduled_for timestamptz,
+        content_topic_id uuid not null unique, status text not null, slot_date date, slot_number integer,
+        scheduled_for timestamptz,
         created_at timestamptz not null default now(), updated_at timestamptz not null default now()
       );
       create table ai_content_usage_ledger(generation_id uuid not null, workspace_id uuid not null, brand_id uuid not null, usage_type text not null, quantity integer not null, usage_date date not null);
@@ -45,7 +46,7 @@ describe("publish calendar manual provisioning with postgres semantics", () => {
         id uuid primary key, workspace_id uuid not null, brand_id uuid not null,
         ai_content_generation_output_id uuid, content_topic_id uuid
       );
-      create table publish_queue(id uuid primary key default gen_random_uuid(), workspace_id uuid not null, brand_id uuid not null, channel_output_id uuid, topic_publish_group_id uuid, status text not null, scheduled_for timestamptz, queued_at timestamptz not null default now(), published_at timestamptz);
+      create table publish_queue(id uuid primary key default gen_random_uuid(), workspace_id uuid not null, brand_id uuid not null, channel_output_id uuid, topic_publish_group_id uuid, status text not null, slot_date date, slot_number integer, scheduled_for timestamptz, queued_at timestamptz not null default now(), published_at timestamptz, updated_at timestamptz not null default now());
       create table publish_calendar_slots(
         id uuid primary key default gen_random_uuid(), workspace_id uuid not null, brand_id uuid not null,
         scheduled_for timestamptz not null, assignment_mode text not null, status text not null,
@@ -372,6 +373,66 @@ describe("publish calendar manual provisioning with postgres semantics", () => {
     expect(first.scheduledFor).toBe(second.scheduledFor);
     expect(replay.id).toBe(first.id);
     expect(usage.publishing.reserved).toBe(2);
+  });
+
+  it("reschedules one durable slot, group, and queue atomically without creating another reservation", async () => {
+    const original = await repository.provisionManualSlot(manualGenerationInput({ idempotencyKey: "reschedule-pglite" }));
+    await db.query(
+      `insert into content_topics(id,workspace_id,brand_id,title,status,selected_instagram_format)
+       values($1,$2,$3,'예약 변경 검증','selected','instagram_feed_carousel')`,
+      [ids.topic, ids.workspace, ids.brand],
+    );
+    const group = await db.query<{ id: string }>(
+      `insert into topic_publish_groups(workspace_id,brand_id,content_topic_id,status,slot_date,scheduled_for)
+       values($1,$2,$3,'scheduled','2099-08-15',$4) returning id`,
+      [ids.workspace, ids.brand, ids.topic, original.scheduledFor],
+    );
+    await db.query(
+      `insert into publish_queue(workspace_id,brand_id,topic_publish_group_id,status,slot_date,scheduled_for)
+       values($1,$2,$3,'scheduled','2099-08-15',$4)`,
+      [ids.workspace, ids.brand, group.rows[0]?.id, original.scheduledFor],
+    );
+    await db.query(
+      `update publish_calendar_slots
+          set topic_publish_group_id=$2,status='scheduled',assignment_mode='automatic',
+              recommendation_kind='informational'
+        where id=$1`,
+      [original.id, group.rows[0]?.id],
+    );
+    const target = new Date("2099-08-22T18:40:00.000Z");
+
+    await expect(repository.rescheduleSlot({
+      workspaceId: ids.workspace,
+      brandId: ids.brand,
+      slotId: original.id,
+      scheduledFor: target,
+    })).resolves.toMatchObject({
+      id: original.id,
+      scheduledFor: target.toISOString(),
+      assignmentMode: "manual",
+    });
+
+    const slot = await db.query<{ scheduled_for: string; assignment_mode: string; recommendation_kind: string | null }>(
+      "select scheduled_for,assignment_mode,recommendation_kind from publish_calendar_slots where id=$1",
+      [original.id],
+    );
+    const storedGroup = await db.query<{ scheduled_for: string; slot_date: string }>(
+      "select scheduled_for,slot_date::text from topic_publish_groups where id=$1",
+      [group.rows[0]?.id],
+    );
+    const queue = await db.query<{ scheduled_for: string; slot_date: string }>(
+      "select scheduled_for,slot_date::text from publish_queue where topic_publish_group_id=$1",
+      [group.rows[0]?.id],
+    );
+    const count = await db.query<{ count: number }>("select count(*)::integer count from publish_calendar_slots");
+    expect(new Date(slot.rows[0]!.scheduled_for).toISOString()).toBe(target.toISOString());
+    expect(slot.rows[0]?.assignment_mode).toBe("manual");
+    expect(slot.rows[0]?.recommendation_kind).toBeNull();
+    expect(new Date(storedGroup.rows[0]!.scheduled_for).toISOString()).toBe(target.toISOString());
+    expect(new Date(queue.rows[0]!.scheduled_for).toISOString()).toBe(target.toISOString());
+    expect(storedGroup.rows[0]?.slot_date).toBe("2099-08-23");
+    expect(queue.rows[0]?.slot_date).toBe("2099-08-23");
+    expect(count.rows[0]?.count).toBe(1);
   });
 
   it("replays a keyed slot after its scheduled time has passed", async () => {

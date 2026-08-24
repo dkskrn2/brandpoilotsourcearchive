@@ -74,6 +74,33 @@ describe("PublishSchedulePanel", () => {
     await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
   });
 
+  it("edits the existing Seoul reservation time without requiring create options", async () => {
+    const onSubmit = vi.fn(async (_input: { scheduledFor: string }) => ({ ok: true as const, refreshFailed: false }));
+    const reserved = item({
+      status: "scheduled",
+      publishStatus: "scheduled",
+      calendarPlacement: "dated",
+      scheduledFor: "2099-08-23T02:30:00.000Z",
+      effectiveScheduledFor: "2099-08-23T02:30:00.000Z",
+      calendarDate: "2099-08-23T02:30:00.000Z",
+      sourceRefs: { ...item().sourceRefs, calendarSlotId: "slot-1" },
+      schedulable: false,
+    });
+    render(<PublishSchedulePanel mode="edit" item={reserved} options={null} optionsError={null} optionsLoading={false} initialDateKey="2099-08-23" onSubmit={onSubmit} onSaved={vi.fn()} onOpenExistingReservation={vi.fn()} onRetryOptions={vi.fn()} onClose={vi.fn()} />);
+
+    expect(screen.getByRole("dialog", { name: "사장님 SNS 마케팅 예약 변경" })).toBeVisible();
+    expect(screen.getByLabelText("게시 날짜")).toHaveValue("2099-08-23");
+    expect(screen.getByLabelText("게시 시간")).toHaveValue("11:30");
+    expect(screen.queryByText(/추가 예약 가능/)).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "예약 변경" })).toBeEnabled();
+
+    await userEvent.clear(screen.getByLabelText("게시 시간"));
+    await userEvent.type(screen.getByLabelText("게시 시간"), "15:45");
+    await userEvent.click(screen.getByRole("button", { name: "예약 변경" }));
+
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledWith({ scheduledFor: "2099-08-23T06:45:00.000Z" }));
+  });
+
   it("derives fixed sources in output, generation, content-topic order", () => {
     expect(publishScheduleSource(item())).toEqual({ kind: "existing_output", generationOutputId: "output-1" });
     expect(publishScheduleSource(item({ sourceRefs: { ...item().sourceRefs, generationOutputId: null } }))).toEqual({ kind: "existing_generation", generationId: "generation-1" });

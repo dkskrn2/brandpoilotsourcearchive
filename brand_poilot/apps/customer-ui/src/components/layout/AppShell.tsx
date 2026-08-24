@@ -41,7 +41,7 @@ export function AppShell({ children }: AppShellProps) {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [feedbackOpen, setFeedbackOpen] = useState(false);
   const [pendingFeedbackAfterMobile, setPendingFeedbackAfterMobile] = useState(false);
-  const [planLabel, setPlanLabel] = useState("FREE 플랜");
+  const [planLabel, setPlanLabel] = useState("플랜 확인 필요");
   const [supportHistoryOpen, setSupportHistoryOpen] = useState(false);
   const [pendingSupportHistoryAfterMobile, setPendingSupportHistoryAfterMobile] = useState(false);
   const menuButtonRef = useRef<HTMLButtonElement>(null);
@@ -69,10 +69,10 @@ export function AppShell({ children }: AppShellProps) {
     api.getBillingSummary(DEMO_BRAND_ID)
       .then((summary) => {
         const nextPlanLabel = resolvePlanLabel(summary);
-        if (active && nextPlanLabel) setPlanLabel(nextPlanLabel);
+        if (active) setPlanLabel(nextPlanLabel ?? "플랜 확인 필요");
       })
       .catch(() => {
-        // The profile keeps the FREE fallback when billing is unavailable.
+        if (active) setPlanLabel("플랜 확인 필요");
       });
     return () => {
       active = false;

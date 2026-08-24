@@ -96,7 +96,7 @@ describe("AppShell navigation", () => {
     ["미구독 상태", async () => freeBillingSummary],
     ["누락된 응답", async () => ({} as Awaited<ReturnType<typeof api.getBillingSummary>>)],
     ["조회 실패", async () => { throw new Error("billing unavailable"); }],
-  ])("uses FREE 플랜 for %s", async (_caseName, response) => {
+  ])("does not invent a FREE subscription for %s", async (_caseName, response) => {
     vi.spyOn(api, "getBillingSummary").mockImplementation(response);
 
     render(
@@ -106,7 +106,8 @@ describe("AppShell navigation", () => {
     );
 
     await waitFor(() => expect(api.getBillingSummary).toHaveBeenCalledWith(DEMO_BRAND_ID));
-    expect(screen.getByText("FREE 플랜")).toBeVisible();
+    expect(screen.getAllByText("플랜 확인 필요")).not.toHaveLength(0);
+    expect(screen.queryByText("FREE 플랜")).not.toBeInTheDocument();
   });
 
   it("opens support history from the desktop account menu and restores focus on Escape", async () => {
@@ -333,7 +334,7 @@ describe("AppShell navigation", () => {
     expect(usage).not.toHaveTextContent("다운로드");
   });
 
-  it("drops stale publish usage silently when a refresh fails while keeping generation", async () => {
+  it("shows a canonical usage error instead of falling back to daily generation usage", async () => {
     vi.spyOn(api, "getPublishCalendarUsage")
       .mockResolvedValueOnce({ startsAt: "2026-07-27T00:00:00.000Z", endsAt: "2026-08-03T00:00:00.000Z", generation: { limit: 10, succeeded: 1, reserved: 0, remaining: 7, additionalAvailable: 0 }, publishing: { limit: 20, succeeded: 3, reserved: 0, remaining: 17, additionalAvailable: 0 } })
       .mockRejectedValueOnce(new Error("usage_down"));
@@ -341,8 +342,8 @@ describe("AppShell navigation", () => {
     render(<MemoryRouter><BrandStatusProvider initialStatus={completeStatus}><AiContentUsageProvider gateway={gateway}><Sidebar /></AiContentUsageProvider></BrandStatusProvider></MemoryRouter>);
     const usage = await screen.findByLabelText("게시 운영 잔여 사용량");
     window.dispatchEvent(new Event("brand-pilot:publish-calendar-usage-changed"));
-    await waitFor(() => expect(usage).toHaveTextContent("생성 9건 남음"));
-    expect(usage).not.toHaveTextContent("게시 사용량을 불러올 수 없습니다.");
+    await waitFor(() => expect(usage).toHaveTextContent("플랜 확인 필요"));
+    expect(usage).not.toHaveTextContent("생성 9건 남음");
     expect(usage).not.toHaveTextContent("게시 17건 남음");
   });
 
@@ -356,11 +357,11 @@ describe("AppShell navigation", () => {
     render(<MemoryRouter><BrandStatusProvider initialStatus={completeStatus}><AiContentUsageProvider gateway={gateway}><Sidebar /></AiContentUsageProvider></BrandStatusProvider></MemoryRouter>);
     const usage = await screen.findByLabelText("게시 운영 잔여 사용량");
     window.dispatchEvent(new Event("brand-pilot:publish-calendar-usage-changed"));
-    await waitFor(() => expect(usage).not.toHaveTextContent("게시 17건 남음"));
-    expect(usage).not.toHaveTextContent("게시 사용량을 불러올 수 없습니다.");
+    await waitFor(() => expect(usage).toHaveTextContent("플랜 확인 필요"));
+    expect(usage).not.toHaveTextContent("게시 17건 남음");
 
     await act(async () => { resolveOlderUsage!({ startsAt: "2026-07-27T00:00:00.000Z", endsAt: "2026-08-03T00:00:00.000Z", generation: { limit: 10, succeeded: 1, reserved: 0, remaining: 7, additionalAvailable: 0 }, publishing: { limit: 20, succeeded: 3, reserved: 0, remaining: 17, additionalAvailable: 0 } }); });
-    expect(usage).not.toHaveTextContent("게시 사용량을 불러올 수 없습니다.");
+    expect(usage).toHaveTextContent("플랜 확인 필요");
     expect(usage).not.toHaveTextContent("게시 17건 남음");
   });
 

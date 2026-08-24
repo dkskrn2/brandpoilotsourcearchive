@@ -80,6 +80,8 @@ import {
 import { cardManuscriptPlanSha256 } from "@brand-pilot/content-contracts/card-manuscript-plan/node";
 import { compileReelStoryboardDraftV2, parseReelStoryboardV2 } from "@brand-pilot/content-contracts/reel-storyboard";
 import { reelStoryboardV2Sha256 } from "@brand-pilot/content-contracts/reel-storyboard/node";
+import { subscriptionWeekWindow } from "./publishCalendarQuota.js";
+import { kstDateKey } from "./publishSchedule.js";
 import {
   assembleAiContentFixedInput,
   type AiContentFixedInputSource,
@@ -463,6 +465,70 @@ async function assertActiveAiContentActor(
     [input.workspaceId, input.actorUserId, input.brandId],
   );
   if (!result.rowCount) throw new Error("ai_content_actor_forbidden");
+}
+
+async function assertAiContentGenerationQuota(
+  client: Queryable,
+  input: {
+    workspaceId: string;
+    brandId: string;
+    dailyGenerationLimit: number;
+    outputCount: number;
+    at: Date;
+  },
+): Promise<string> {
+  const usageDate = kstDateKey(input.at);
+  const subscription = await client.query(
+    `select subscription.started_at,plan.weekly_generation_limit
+       from brand_subscriptions subscription
+       join brands brand on brand.id=subscription.brand_id and brand.workspace_id=$2::uuid
+       join billing_plan_catalog plan on plan.code=subscription.plan_code and plan.active
+      where subscription.brand_id=$1::uuid
+        and subscription.status in ('active','cancel_scheduled')
+        and subscription.current_period_start<=$3::timestamptz
+        and subscription.current_period_end>$3::timestamptz`,
+    [input.brandId, input.workspaceId, input.at.toISOString()],
+  );
+  if (!subscription.rowCount) throw new Error("generation_subscription_inactive");
+
+  const weeklyGenerationLimit = Number(subscription.rows[0].weekly_generation_limit);
+  if (!Number.isSafeInteger(weeklyGenerationLimit) || weeklyGenerationLimit < 0) {
+    throw new Error("generation_subscription_invalid");
+  }
+  const window = subscriptionWeekWindow({
+    subscriptionStartedAt: new Date(subscription.rows[0].started_at),
+    now: input.at,
+  });
+  await client.query("select pg_advisory_xact_lock(hashtextextended($1,0))", [
+    `ai-content-weekly-usage:${input.brandId}:${window.startsAt.toISOString()}`,
+  ]);
+  const weeklyUsage = await client.query(
+    `select coalesce(sum(quantity),0)::integer generation_count
+       from ai_content_usage_ledger
+      where workspace_id=$1 and brand_id=$2
+        and usage_date >= ($3::timestamptz at time zone 'Asia/Seoul')::date
+        and usage_date < ($4::timestamptz at time zone 'Asia/Seoul')::date
+        and usage_type in ('generation','reversal')`,
+    [input.workspaceId, input.brandId, window.startsAt.toISOString(), window.endsAt.toISOString()],
+  );
+  if (Number(weeklyUsage.rows[0]?.generation_count ?? 0) + input.outputCount > weeklyGenerationLimit) {
+    throw new Error("generation_weekly_quota_exceeded");
+  }
+
+  await client.query("select pg_advisory_xact_lock(hashtextextended($1,0))", [
+    `ai-content-usage:${input.brandId}:${usageDate}`,
+  ]);
+  const dailyUsage = await client.query(
+    `select coalesce(sum(quantity),0)::integer generation_count
+       from ai_content_usage_ledger
+      where workspace_id=$1 and brand_id=$2 and usage_date=$3::date
+        and usage_type in ('generation','reversal')`,
+    [input.workspaceId, input.brandId, usageDate],
+  );
+  if (Number(dailyUsage.rows[0]?.generation_count ?? 0) + input.outputCount > input.dailyGenerationLimit) {
+    throw new Error("ai_content_limit_reached");
+  }
+  return usageDate;
 }
 
 function iso(value: unknown) {
@@ -2476,19 +2542,13 @@ async function startAiContentGenerationV3Transaction(input: {
     };
     const outputCount = assembly.input.outputSettings.outputCount;
 
-    await client.query("select pg_advisory_xact_lock(hashtextextended($1,0))", [
-      `ai-content-usage:${command.brandId}:${command.usageDate}`,
-    ]);
-    const usageResult = await client.query(
-      `select coalesce(sum(quantity),0)::integer generation_count
-         from ai_content_usage_ledger
-        where workspace_id=$1 and brand_id=$2 and usage_date=$3::date
-          and usage_type in ('generation','reversal')`,
-      [command.workspaceId, command.brandId, command.usageDate],
-    );
-    if (Number(usageResult.rows[0]?.generation_count ?? 0) + outputCount > command.dailyGenerationLimit) {
-      throw new Error("ai_content_limit_reached");
-    }
+    const usageDate = await assertAiContentGenerationQuota(client, {
+      workspaceId: command.workspaceId,
+      brandId: command.brandId,
+      dailyGenerationLimit: command.dailyGenerationLimit,
+      outputCount,
+      at: new Date(startedAt),
+    });
 
     await sealManualVisualSelection(client, command, preparedVisualSelection);
 
@@ -2507,7 +2567,7 @@ async function startAiContentGenerationV3Transaction(input: {
          idempotency_key,operation_id,reservation_id,reversal_of_ledger_id
        ) values($1,$2,$3,$4,null,'generation',$5,$6::date,$7,$8,$1,null)`,
       [reservationId, command.workspaceId, command.brandId, command.generationId,
-        outputCount, command.usageDate, `generation-reservation:${operationId}`, operationId],
+        outputCount, usageDate, `generation-reservation:${operationId}`, operationId],
     );
     await client.query(
       `insert into ai_content_generation_input_snapshots(
@@ -4127,26 +4187,22 @@ export function createAiContentRepository(pool: Pool, options: AiContentReposito
           await client.query("COMMIT");
           return generation;
         }
-        await client.query("select pg_advisory_xact_lock(hashtextextended($1,0))", [
-          `ai-content-usage:${input.brandId}:${input.usageDate}`,
-        ]);
-        const usage = await client.query(
-          `select coalesce(sum(quantity),0)::integer generation_count from ai_content_usage_ledger
-            where workspace_id=$1 and brand_id=$2 and usage_date=$3::date
-              and usage_type in ('generation','reversal')`,
-          [input.workspaceId, input.brandId, input.usageDate],
-        );
         const outputCount = parentInput.outputSettings.outputCount;
-        if (Number(usage.rows[0]?.generation_count ?? 0) + outputCount > input.dailyGenerationLimit) {
-          throw new Error("ai_content_limit_reached");
-        }
+        const retriedAt = new Date();
+        const usageDate = await assertAiContentGenerationQuota(client, {
+          workspaceId: input.workspaceId,
+          brandId: input.brandId,
+          dailyGenerationLimit: input.dailyGenerationLimit,
+          outputCount,
+          at: retriedAt,
+        });
         const generationId = randomUUID();
         const operationId = randomUUID();
         const reservationId = randomUUID();
         const retriedInput = parseCanonicalContentGenerationInputV3({
           ...parentInput,
           generationId,
-          capturedAt: new Date().toISOString(),
+          capturedAt: retriedAt.toISOString(),
         });
         const retriedJson = canonicalProposalJson(retriedInput);
         const retriedHash = proposalSha256(retriedInput);
@@ -4180,7 +4236,7 @@ export function createAiContentRepository(pool: Pool, options: AiContentReposito
              id,workspace_id,brand_id,generation_id,output_id,usage_type,quantity,usage_date,
              idempotency_key,operation_id,reservation_id,reversal_of_ledger_id
            ) values($1,$2,$3,$4,null,'generation',$5,$6::date,$7,$8,$1,null)`,
-          [reservationId, input.workspaceId, input.brandId, generationId, outputCount, input.usageDate,
+          [reservationId, input.workspaceId, input.brandId, generationId, outputCount, usageDate,
             `generation-reservation:${operationId}`, operationId],
         );
         await client.query(

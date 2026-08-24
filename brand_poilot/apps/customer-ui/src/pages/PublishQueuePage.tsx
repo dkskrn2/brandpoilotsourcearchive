@@ -20,7 +20,7 @@ import {
 } from "../components/publish/publishManagementFilters";
 import { api, DEMO_BRAND_ID } from "../lib/apiClient";
 import { dateKey, PUBLISH_CALENDAR_USAGE_CHANGED_EVENT, type CalendarEntry } from "../features/publishing/publishCalendar";
-import { datedItems, entryFromPublishItem, listItems, unreservedItems } from "../features/publishing/publishItems";
+import { canReschedulePublishItem, datedItems, entryFromPublishItem, listItems, unreservedItems } from "../features/publishing/publishItems";
 import { clearPublishCalendarBulkDraft, loadPublishCalendarBulkDraft, savePublishCalendarBulkDraft, type PublishCalendarBulkDraft, type PublishCalendarBulkDraftRow } from "../features/publishing/publishCalendarBulkDraft";
 import { aiContentApiGateway } from "../features/ai-content/aiContentApiGateway";
 import type { AiContentGateway, AiGenerationOutput } from "../features/ai-content/types";
@@ -175,7 +175,8 @@ function PublishItemCardGrid({
   onRetryPublish,
   onVerifyPublish,
   onCancelPublish,
-  onSchedule
+  onSchedule,
+  onReschedule,
 }: {
   items: PublishItem[];
   activeFilter: ManagementFilterId;
@@ -189,6 +190,7 @@ function PublishItemCardGrid({
   onVerifyPublish: (queueId: string) => void;
   onCancelPublish: (item: PublishItem, target: PublishItemTarget) => void;
   onSchedule: (item: PublishItem, trigger: HTMLButtonElement) => void;
+  onReschedule: (item: PublishItem, trigger: HTMLButtonElement) => void;
 }) {
   const rows = listItems(items);
   const statuses = rows.map(filterStatusForPublishItem);
@@ -233,6 +235,7 @@ function PublishItemCardGrid({
               {rejectable.length > 0 ? <button className="button danger" type="button" disabled={reviewPending} onClick={() => onReviewTargets(rejectable, "reject", "콘텐츠를 거절했습니다.")}>거절</button> : null}
             </div> : null}
             {canSchedulePublishItem(item) ? <div className="publish-management-card__actions"><button className="button primary" type="button" onClick={(event) => onSchedule(item, event.currentTarget)}>게시 설정</button></div> : null}
+            {canReschedulePublishItem(item) ? <div className="publish-management-card__actions"><button className="button primary" type="button" onClick={(event) => onReschedule(item, event.currentTarget)}>예약 변경</button></div> : null}
             {item.scheduledFor ? <div className="row-meta">원래 예약 {formatDateTime(item.scheduledFor)}</div> : null}
             {item.effectiveScheduledFor && item.effectiveScheduledFor !== item.scheduledFor ? <div className="row-meta">실제 실행 예정 {formatDateTime(item.effectiveScheduledFor)}</div> : null}
             {item.publishedAt ? <div className="row-meta">게시 완료 {formatDateTime(item.publishedAt)}</div> : null}
@@ -489,7 +492,7 @@ export function PublishQueuePage({ generationGateway = aiContentApiGateway }: Pu
   const [notice, setNotice] = useState<string | null>(null);
   const [selectedResult, setSelectedResult] = useState<{ result: PublishResult; channel: PublishResultChannel } | null>(null);
   const [selectedReviewOutput, setSelectedReviewOutput] = useState<ContentOutput | null>(null);
-  const [scheduleTarget, setScheduleTarget] = useState<{ item: PublishItem; dateKey: string } | null>(null);
+  const [scheduleTarget, setScheduleTarget] = useState<{ item: PublishItem; dateKey: string; mode: "create" | "edit" } | null>(null);
   const [calendarFocusItemKey, setCalendarFocusItemKey] = useState<string | null>(null);
   const [initialLoading, setInitialLoading] = useState(true);
   const scheduleTriggerRef = useRef<HTMLButtonElement | null>(null);
@@ -653,8 +656,15 @@ export function PublishQueuePage({ generationGateway = aiContentApiGateway }: Pu
   function openSchedulePanel(item: PublishItem, selectedDateKey: string, trigger: HTMLButtonElement) {
     scheduleTriggerRef.current = trigger;
     scheduleFocusItemKeyRef.current = item.itemKey;
-    setScheduleTarget({ item, dateKey: selectedDateKey });
+    setScheduleTarget({ item, dateKey: selectedDateKey, mode: "create" });
     void loadManualOptions();
+  }
+
+  function openReschedulePanel(item: PublishItem, trigger: HTMLButtonElement) {
+    if (!item.scheduledFor || !item.sourceRefs.calendarSlotId || !canReschedulePublishItem(item)) return;
+    scheduleTriggerRef.current = trigger;
+    scheduleFocusItemKeyRef.current = item.itemKey;
+    setScheduleTarget({ item, dateKey: dateKey(item.scheduledFor), mode: "edit" });
   }
 
   function closeSchedulePanel() {
@@ -696,6 +706,23 @@ export function PublishQueuePage({ generationGateway = aiContentApiGateway }: Pu
         }
       }
       return { ok: false as const, errorCode, existingCalendarDate };
+    }
+  }
+
+  async function submitRescheduledItem(input: { scheduledFor: string }) {
+    const slotId = scheduleTarget?.item.sourceRefs.calendarSlotId;
+    if (!slotId) return { ok: false as const, errorCode: "publish_calendar_slot_not_found" };
+    try {
+      await api.reschedulePublishCalendarSlot(DEMO_BRAND_ID, slotId, input);
+      let refreshFailed = false;
+      try { await refreshPublishItems(); } catch { refreshFailed = true; }
+      window.dispatchEvent(new Event(PUBLISH_CALENDAR_USAGE_CHANGED_EVENT));
+      return { ok: true as const, refreshFailed };
+    } catch (error) {
+      const errorCode = typeof error === "object" && error !== null && "errorCode" in error && typeof error.errorCode === "string"
+        ? error.errorCode
+        : error instanceof Error && error.message.startsWith("publish_") ? error.message : null;
+      return { ok: false as const, errorCode };
     }
   }
 
@@ -919,6 +946,10 @@ export function PublishQueuePage({ generationGateway = aiContentApiGateway }: Pu
             if (item) cancelPublishItemReservation(item);
           }}
           onScheduleItem={(item, selectedDateKey, trigger) => void openSchedulePanel(item, selectedDateKey, trigger)}
+          onRescheduleItem={(itemKey, trigger) => {
+            const item = publishItems.find((candidate) => candidate.itemKey === itemKey);
+            if (item) openReschedulePanel(item, trigger);
+          }}
           onLoadManualOptions={() => void loadManualOptions()}
           onSaveSettings={saveCalendarSettings}
         />
@@ -936,6 +967,7 @@ export function PublishQueuePage({ generationGateway = aiContentApiGateway }: Pu
           onVerifyPublish={() => void refreshRecoveryState()}
           onCancelPublish={cancelPublishItemReservation}
           onSchedule={(item, trigger) => void openSchedulePanel(item, dateKey(new Date()), trigger)}
+          onReschedule={openReschedulePanel}
         />
       )}
       </div>
@@ -949,15 +981,20 @@ export function PublishQueuePage({ generationGateway = aiContentApiGateway }: Pu
       ) : null}
       {selectedReviewOutput ? <ContentArtifactDialog output={selectedReviewOutput} onClose={() => setSelectedReviewOutput(null)} /> : null}
       {scheduleTarget ? <PublishSchedulePanel
+        mode={scheduleTarget.mode}
         item={scheduleTarget.item}
         options={calendarManualOptions}
         optionsError={calendarManualOptionsError}
         optionsLoading={calendarManualOptionsLoading}
         initialDateKey={scheduleTarget.dateKey}
-        onSubmit={submitScheduledItem}
-        onSaved={({ refreshFailed }) => setNotice(refreshFailed
-          ? "게시 예약은 저장했지만 목록을 새로고침하지 못했습니다. 새로고침 후 다시 확인하세요."
-          : "게시 예약을 저장했습니다.")}
+        onSubmit={scheduleTarget.mode === "edit" ? submitRescheduledItem : submitScheduledItem}
+        onSaved={({ refreshFailed }) => setNotice(scheduleTarget.mode === "edit"
+          ? refreshFailed
+            ? "예약 시간은 변경했지만 목록을 새로고침하지 못했습니다. 새로고침 후 다시 확인하세요."
+            : "예약 시간을 변경했습니다."
+          : refreshFailed
+            ? "게시 예약은 저장했지만 목록을 새로고침하지 못했습니다. 새로고침 후 다시 확인하세요."
+            : "게시 예약을 저장했습니다.")}
         onOpenExistingReservation={(itemKey, calendarDate) => {
           setCalendarFocusItemKey(itemKey);
           if (calendarDate) setCalendarMonth(dateKey(calendarDate).slice(0, 7));

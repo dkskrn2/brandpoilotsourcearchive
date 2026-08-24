@@ -87,6 +87,7 @@ function harness(options: {
   replay?: boolean;
   replayGraphDrift?: boolean;
   quota?: number;
+  weeklyQuota?: number;
   retryable?: boolean;
   reversed?: boolean;
   corruptParentBinding?: boolean;
@@ -175,6 +176,12 @@ function harness(options: {
           purpose: "informational",
         }], rowCount: 1 }
         : { rows: [], rowCount: 0 };
+      if (sql.includes("from brand_subscriptions subscription")) {
+        return { rows: [{ started_at: "2026-08-02T00:00:00.000Z", weekly_generation_limit: 30 }], rowCount: 1 };
+      }
+      if (sql.includes("from ai_content_usage_ledger") && sql.includes("usage_date >=")) {
+        return { rows: [{ generation_count: options.weeklyQuota ?? 0 }], rowCount: 1 };
+      }
       if (sql.includes("from ai_content_usage_ledger") && sql.includes("sum(quantity)")) return { rows: [{ generation_count: options.quota ?? 0 }], rowCount: 1 };
       if (sql.startsWith("insert into ai_content_generations")) { childId = String(params[0]); return { rows: [], rowCount: 1 }; }
       if (sql.includes("from ai_content_generations where id = $1")) return { rows: [{ ...parent, id: childId || String(params[0]), status: "queued", operation_id: "child-operation", generation_input_snapshot: { ...frozenInput, generationId: childId || String(params[0]) } }], rowCount: 1 };
@@ -207,6 +214,26 @@ describe("V3 permanent-failure retry lineage", () => {
       manualVisualSelection: frozenManualVisualSelection,
     });
     expect(sql.at(-1)).toBe("COMMIT");
+  });
+
+  it("derives weekly quota and ledger date from the same retry instant", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const retriedAt = new Date("2026-08-06T15:00:01.000Z");
+    vi.setSystemTime(retriedAt);
+    try {
+      const run = harness();
+      await run.repository.retryAiContentOutput({
+        ...run.command,
+        usageDate: "2026-08-06",
+      });
+
+      const subscription = run.statements.find(({ sql }) => sql.includes("from brand_subscriptions subscription"));
+      const reservation = run.statements.find(({ sql }) => sql.includes("insert into ai_content_usage_ledger"));
+      expect(subscription?.params[2]).toBe(retriedAt.toISOString());
+      expect(reservation?.params[5]).toBe("2026-08-07");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("reuses a validated stored storyboard and queues only rendering after a render failure", async () => {
@@ -271,7 +298,7 @@ describe("V3 permanent-failure retry lineage", () => {
   });
 
   it("rejects missing reversal/expired retention and quota exhaustion without writes", async () => {
-    for (const options of [{ reversed: false }, { retryable: false }, { quota: 10 }]) {
+    for (const options of [{ reversed: false }, { retryable: false }, { quota: 10 }, { weeklyQuota: 30 }]) {
       const run = harness(options);
       await expect(run.repository.retryAiContentOutput(run.command)).rejects.toThrow();
       expect(run.statements.map(({ sql }) => sql).filter((sql) => /^(?:insert|update|delete)\b/i.test(sql.trim()))).toEqual([]);

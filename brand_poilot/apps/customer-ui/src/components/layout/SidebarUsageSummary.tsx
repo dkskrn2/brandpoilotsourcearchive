@@ -1,17 +1,12 @@
 import { Send, Sparkles } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
-import { useAiContentUsage } from "../../features/ai-content/AiContentUsageContext";
 import { api, DEMO_BRAND_ID } from "../../lib/apiClient";
 import type { PublishCalendarWeeklyUsage } from "../../types";
 import { PUBLISH_CALENDAR_USAGE_CHANGED_EVENT } from "../../features/publishing/publishCalendar";
 
-function generationRemaining(used: number, limit: number) {
-  return Math.max(limit - used, 0);
-}
-
 export function SidebarUsageSummary() {
-  const { usage, loading } = useAiContentUsage();
   const [publishUsage, setPublishUsage] = useState<PublishCalendarWeeklyUsage | null>(null);
+  const [loadState, setLoadState] = useState<"loading" | "ready" | "error">("loading");
   const latestRequestId = useRef(0);
 
   useEffect(() => {
@@ -19,24 +14,31 @@ export function SidebarUsageSummary() {
     const refresh = () => {
       const requestId = ++latestRequestId.current;
       api.getPublishCalendarUsage(DEMO_BRAND_ID)
-        .then((nextUsage) => { if (!ignore && requestId === latestRequestId.current) setPublishUsage(nextUsage); })
-        .catch(() => { if (!ignore && requestId === latestRequestId.current) setPublishUsage(null); });
+        .then((nextUsage) => {
+          if (!ignore && requestId === latestRequestId.current) {
+            setPublishUsage(nextUsage);
+            setLoadState("ready");
+          }
+        })
+        .catch(() => {
+          if (!ignore && requestId === latestRequestId.current) {
+            setPublishUsage(null);
+            setLoadState("error");
+          }
+        });
     };
     refresh();
     window.addEventListener(PUBLISH_CALENDAR_USAGE_CHANGED_EVENT, refresh);
     return () => { ignore = true; latestRequestId.current += 1; window.removeEventListener(PUBLISH_CALENDAR_USAGE_CHANGED_EVENT, refresh); };
   }, []);
 
-  if (loading || !usage) return null;
-
   return (
     <div className="ai-content-header-usage sidebar-usage-summary" aria-label="게시 운영 잔여 사용량">
-      <span>
-        <Sparkles size={15} aria-hidden="true" />
-        생성 <strong>{publishUsage?.generation.remaining ?? generationRemaining(usage.generationUsed, usage.generationLimit)}건</strong> 남음
-      </span>
-      {publishUsage ? (
+      {loadState === "loading" ? <small>사용량 확인 중</small> : null}
+      {loadState === "error" ? <small>플랜 확인 필요</small> : null}
+      {loadState === "ready" && publishUsage ? (
         <>
+          <span><Sparkles size={15} aria-hidden="true" /> 생성 <strong>{publishUsage.generation.remaining}건</strong> 남음</span>
           <span><Send size={15} aria-hidden="true" /> 게시 <strong>{publishUsage.publishing.remaining}건</strong> 남음</span>
           <small>예약 {publishUsage.publishing.reserved}건은 게시 성공 차감이 아닙니다{publishUsage.publishing.additionalAvailable > 0 ? ` · 추가 ${publishUsage.publishing.additionalAvailable}건 가능` : ""}.</small>
         </>

@@ -4615,6 +4615,7 @@ test("an installation applied through 064 has every later migration pending", as
       "086_publish_calendar_same_time_contract.sql",
       "087_ai_content_prompt_lineage_v3.sql",
       "088_onboarding_product_image_imports.sql",
+      "089_free_subscription_plan.sql",
     ],
   );
 });
@@ -4733,6 +4734,25 @@ test("onboarding product image imports follow migration 087 deterministically", 
   );
 });
 
+test("canonical FREE plan follows migration 088 deterministically", async () => {
+  const loaded = await migrationRunner.loadMigrations();
+  const ids = loaded.map(({ id }) => id);
+  const migration089Index = ids.indexOf("089_free_subscription_plan.sql");
+
+  assert.equal(
+    migration089Index,
+    ids.indexOf("088_onboarding_product_image_imports.sql") + 1,
+  );
+  assert.equal(
+    migrationRunner.post075SchemaMigrationChecksums["089_free_subscription_plan.sql"],
+    "fd58a829eb658b0ac650e033a5edd085ec452a6eb0420251c60abcd51231267a",
+  );
+  assert.equal(
+    loaded[migration089Index].checksum,
+    migrationRunner.post075SchemaMigrationChecksums["089_free_subscription_plan.sql"],
+  );
+});
+
 const post076SchemaMigrationIdsForTests = [
   "077_content_suggestion_batches.sql",
   "078_faq_utterance_matching.sql",
@@ -4746,6 +4766,7 @@ const post076SchemaMigrationIdsForTests = [
   "086_publish_calendar_same_time_contract.sql",
   "087_ai_content_prompt_lineage_v3.sql",
   "088_onboarding_product_image_imports.sql",
+  "089_free_subscription_plan.sql",
 ];
 
 test("post-075 data migrations are a closed DML-only contract", async () => {

@@ -59,6 +59,7 @@ function reviewTarget(overrides: Partial<PublishItem["reviewTargets"][number]> =
 }
 
 afterEach(() => {
+  vi.useRealTimers();
   cleanup();
   window.localStorage.clear();
   window.history.replaceState({}, "", "/publish-queue");
@@ -78,6 +79,7 @@ async function renderPage(
     getPublishCalendarManualOptions: vi.fn(async () => { throw new Error("not_configured"); }),
     listPublishCalendarContentCandidates: vi.fn(async () => ({ items: [] })),
     provisionPublishCalendarManualSlot: vi.fn(async () => ({ id: "slot-new" })),
+    reschedulePublishCalendarSlot: vi.fn(async () => ({ id: "slot-1", scheduledFor: "2099-08-24T01:10:00.000Z" })),
     provisionPublishCalendarManualSlotsBatch: vi.fn(async () => ({ slots: [] })),
     assignPublishCalendarSlot: vi.fn(async () => ({ id: "slot-1" })),
     cancelPublishCalendarSlot: vi.fn(async () => ({ id: "slot-1", status: "cancelled" })),
@@ -293,6 +295,40 @@ describe("PublishQueuePage canonical collection", () => {
     await waitFor(() => expect(screen.getByRole("article", { name: "예약된 SNS 마케팅" })).toHaveFocus());
   });
 
+  it("changes the same reservation from both the list card and calendar detail", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-08-24T00:00:00.000Z"));
+    const reserved = item({
+      scheduledFor: "2026-08-31T02:30:00.000Z",
+      effectiveScheduledFor: "2026-08-31T02:30:00.000Z",
+      calendarDate: "2026-08-31T02:30:00.000Z",
+      targets: [target({ scheduledFor: "2026-08-31T02:30:00.000Z" })],
+    });
+    const listPublishItems = vi.fn(async () => [reserved]);
+    const reschedulePublishCalendarSlot = vi.fn(async () => ({ id: "slot-1" }));
+    const api = await renderPage({ listPublishItems, reschedulePublishCalendarSlot });
+
+    const card = await screen.findByRole("article", { name: "예약된 SNS 마케팅" });
+    await userEvent.click(within(card).getByRole("button", { name: "예약 변경" }));
+    expect(await screen.findByRole("dialog", { name: "예약된 SNS 마케팅 예약 변경" })).toBeVisible();
+    expect(api.getPublishCalendarManualOptions).not.toHaveBeenCalled();
+    await userEvent.clear(screen.getByLabelText("게시 날짜"));
+    await userEvent.type(screen.getByLabelText("게시 날짜"), "2026-08-30");
+    await userEvent.clear(screen.getByLabelText("게시 시간"));
+    await userEvent.type(screen.getByLabelText("게시 시간"), "10:10");
+    await userEvent.click(within(screen.getByRole("dialog", { name: "예약된 SNS 마케팅 예약 변경" })).getByRole("button", { name: "예약 변경" }));
+
+    await waitFor(() => expect(reschedulePublishCalendarSlot).toHaveBeenCalledWith(
+      "brand-1", "slot-1", { scheduledFor: "2026-08-30T01:10:00.000Z" },
+    ));
+    expect(await screen.findByText("예약 시간을 변경했습니다.")).toBeVisible();
+
+    await userEvent.click(screen.getByRole("tab", { name: "캘린더" }));
+    await userEvent.click(await screen.findByRole("button", { name: "예약된 SNS 마케팅 슬롯 상세 보기" }));
+    await userEvent.click(screen.getByRole("button", { name: "예약 변경" }));
+    expect(await screen.findByRole("dialog", { name: "예약된 SNS 마케팅 예약 변경" })).toBeVisible();
+  });
+
   it("ignores a stale manual-options response after selecting another item", async () => {
     const firstItem = item({
       itemKey: "output:first",
@@ -366,6 +402,21 @@ describe("PublishQueuePage canonical collection", () => {
     await renderPage({ listPublishItems: vi.fn(async () => items) });
     expect(await screen.findByRole("article", { name: "상태 reserved" })).toBeVisible();
     expect(screen.queryByRole("button", { name: "게시 설정" })).not.toBeInTheDocument();
+  });
+
+  it("does not offer reservation changes for past, deferred, publishing, failed, or completed items", async () => {
+    const future = "2099-08-23T02:30:00.000Z";
+    const blocked = [
+      item({ itemKey: "past", title: "지난 예약", scheduledFor: "2026-08-01T02:30:00.000Z", effectiveScheduledFor: "2026-08-01T02:30:00.000Z", calendarDate: "2026-08-01T02:30:00.000Z" }),
+      item({ itemKey: "deferred", title: "재시도 중", status: "deferred", publishStatus: "deferred", scheduledFor: future, effectiveScheduledFor: future, calendarDate: future, targets: [target({ status: "deferred", scheduledFor: future })] }),
+      item({ itemKey: "publishing", title: "게시 중", status: "publishing", publishStatus: "publishing", scheduledFor: future, effectiveScheduledFor: future, calendarDate: future, targets: [target({ status: "publishing", scheduledFor: future })] }),
+      item({ itemKey: "failed", title: "게시 실패", status: "failed", publishStatus: "failed", scheduledFor: future, effectiveScheduledFor: future, calendarDate: future, targets: [target({ status: "failed", scheduledFor: future })] }),
+      item({ itemKey: "published", title: "게시 완료", status: "published", publishStatus: "published", publicationProgress: "complete", scheduledFor: future, effectiveScheduledFor: future, calendarDate: future, targets: [target({ status: "published", scheduledFor: future })] }),
+    ];
+    await renderPage({ listPublishItems: vi.fn(async () => blocked) });
+
+    expect(await screen.findByRole("article", { name: "지난 예약" })).toBeVisible();
+    expect(screen.queryByRole("button", { name: "예약 변경" })).not.toBeInTheDocument();
   });
 
   it("closes after a saved reservation and reports refresh failure without resubmitting", async () => {

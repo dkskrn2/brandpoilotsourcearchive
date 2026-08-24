@@ -87,7 +87,10 @@ async function bootstrapSchema(client: PoolClient) {
     create table workspaces(id uuid primary key default gen_random_uuid());
     create table brands(
       id uuid primary key default gen_random_uuid(),
-      workspace_id uuid not null references workspaces(id) on delete cascade
+      workspace_id uuid not null references workspaces(id) on delete cascade,
+      name text not null default 'OTHER',
+      status text not null default 'active',
+      deleted_at timestamptz
     );
     create table app_users(id uuid primary key default gen_random_uuid());
     create table ai_content_proposals(
@@ -185,6 +188,7 @@ it("enforces migration 086 writes through a PostgreSQL 16 application role", asy
     const owner = await administrator.connect();
     const workspaceId = "10000000-0000-4000-8000-000000000086";
     const brandId = "20000000-0000-4000-8000-000000000086";
+    const growthlineBrandId = "20000000-0000-4000-8000-000000000089";
     const sharedGenerationId = "30000000-0000-4000-8000-000000000086";
     const firstGenerationId = "30000000-0000-4000-8000-000000000087";
     const secondGenerationId = "30000000-0000-4000-8000-000000000088";
@@ -223,9 +227,14 @@ it("enforces migration 086 writes through a PostgreSQL 16 application role", asy
       await bootstrapSchema(owner);
       await owner.query("insert into workspaces(id) values($1)", [workspaceId]);
       await owner.query("insert into brands(id,workspace_id) values($1,$2)", [brandId, workspaceId]);
+      await owner.query(
+        "insert into brands(id,workspace_id,name) values($1,$2,'GROWTHLINE')",
+        [growthlineBrandId, workspaceId],
+      );
       await applyMigration(owner, "079_publish_calendar_runtime.sql");
       await applyMigration(owner, "085_publish_calendar_idempotency_expand.sql");
       await applyMigration(owner, "086_publish_calendar_same_time_contract.sql");
+      await applyMigration(owner, "089_free_subscription_plan.sql");
       await owner.query(
         `insert into ai_content_generations(id,workspace_id,brand_id,title,output_format,status)
          values
@@ -317,6 +326,44 @@ it("enforces migration 086 writes through a PostgreSQL 16 application role", asy
       });
 
       const scheduledFor = "2099-08-23T02:30:00.000Z";
+      const provisionGrowthlineSubscription = await readFile(
+        resolve(process.cwd(), "../../scripts/provision-growthline-free-subscription.sql"),
+        "utf8",
+      );
+      await client.query(provisionGrowthlineSubscription);
+      const growthlineSubscription = await client.query<{
+        plan_code: string;
+        status: string;
+        weekly_generation_limit: number;
+        weekly_publish_limit: number;
+        one_month_period: boolean;
+      }>(
+        `select subscription.plan_code,subscription.status,
+                plan.weekly_generation_limit,plan.weekly_publish_limit,
+                subscription.current_period_end = subscription.current_period_start + interval '1 month'
+                  as one_month_period
+           from brand_subscriptions subscription
+           join billing_plan_catalog plan on plan.code=subscription.plan_code
+          where subscription.brand_id=$1::uuid`,
+        [growthlineBrandId],
+      );
+      expect(growthlineSubscription.rows).toEqual([{
+        plan_code: "free",
+        status: "active",
+        weekly_generation_limit: 30,
+        weekly_publish_limit: 30,
+        one_month_period: true,
+      }]);
+      await expect(client.query(provisionGrowthlineSubscription)).rejects.toThrow(
+        "growthline_subscription_already_exists",
+      );
+      await client.query("rollback");
+      const growthlineCount = await client.query<{ count: number }>(
+        "select count(*)::integer count from brand_subscriptions where brand_id=$1::uuid",
+        [growthlineBrandId],
+      );
+      expect(growthlineCount.rows[0]?.count).toBe(1);
+
       await client.query("begin");
       try {
         const sameTime = await client.query<{ id: string; idempotency_key: string }>(
@@ -495,6 +542,26 @@ it("enforces migration 086 writes through a PostgreSQL 16 application role", asy
       );
       expect(new Set(repositoryBatch.map(({ idempotencyKey }) => idempotencyKey)).size).toBe(2);
 
+      const rescheduleTarget = repositoryBatch[0];
+      await client.query(
+        `update publish_calendar_slots
+            set assignment_mode='automatic',recommendation_kind='informational'
+          where id=$1::uuid`,
+        [rescheduleTarget.id],
+      );
+      const rescheduled = await calendarRepository.rescheduleSlot({
+        workspaceId,
+        brandId,
+        slotId: rescheduleTarget.id,
+        scheduledFor: new Date("2099-08-24T04:15:00.000Z"),
+      });
+      expect(rescheduled).toMatchObject({
+        id: rescheduleTarget.id,
+        assignmentMode: "manual",
+        recommendationKind: null,
+        scheduledFor: "2099-08-24T04:15:00.000Z",
+      });
+
       const cancelled = await calendarRepository.cancelSlot({
         workspaceId,
         brandId,
@@ -527,7 +594,9 @@ it("enforces migration 086 writes through a PostgreSQL 16 application role", asy
         expect(canonicalItems.find(({ itemKey }) => itemKey === `generation:${generationId}`)).toMatchObject({
           status: "reserved",
           calendarPlacement: "dated",
-          scheduledFor: "2099-08-24T03:30:00.000Z",
+          scheduledFor: generationId === repositoryBatchFirstGenerationId
+            ? "2099-08-24T04:15:00.000Z"
+            : "2099-08-24T03:30:00.000Z",
         });
       }
 

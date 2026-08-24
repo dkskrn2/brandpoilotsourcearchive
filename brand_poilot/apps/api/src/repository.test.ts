@@ -33,6 +33,59 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
+describe("billing subscription summary", () => {
+  it("returns the active catalog plan as the subscription entitlement", async () => {
+    const query = vi.fn(async () => ({
+      rowCount: 1,
+      rows: [{
+        brand_id: "brand-1",
+        status: "active",
+        plan_name: "FREE",
+        current_period_end: new Date("2026-09-24T00:00:00.000Z"),
+        cancel_at_period_end: false,
+        entitled: true,
+      }],
+    }));
+    const repository = createRepository({ query } as any);
+
+    await expect(repository.getBillingSummary("brand-1")).resolves.toMatchObject({
+      subscription: {
+        status: "active",
+        planName: "FREE",
+        currentPeriodEnd: "2026-09-24T00:00:00.000Z",
+        nextBillingAt: "2026-09-24T00:00:00.000Z",
+        cancelAtPeriodEnd: false,
+      },
+      entitlement: {
+        active: true,
+        source: "subscription",
+        expiresAt: "2026-09-24T00:00:00.000Z",
+      },
+    });
+    expect(query).toHaveBeenCalledWith(expect.stringContaining("left join brand_subscriptions"), ["brand-1"]);
+    expect(query).toHaveBeenCalledWith(expect.stringContaining("left join billing_plan_catalog"), ["brand-1"]);
+  });
+
+  it("returns none only when the brand has no subscription row", async () => {
+    const repository = createRepository({ query: vi.fn(async () => ({
+      rowCount: 1,
+      rows: [{
+        brand_id: "brand-1",
+        status: null,
+        plan_name: null,
+        current_period_end: null,
+        cancel_at_period_end: null,
+        entitled: false,
+      }],
+    })) } as any);
+
+    await expect(repository.getBillingSummary("brand-1")).resolves.toMatchObject({
+      subscription: { status: "none", planName: null },
+      entitlement: { active: false, source: null, expiresAt: null },
+    });
+  });
+});
+
 describe("Task 4 transactional topic generation", () => {
   function generationQuery(options: {
     channels?: Array<"instagram" | "threads" | "x" | "linkedin" | "youtube" | "tiktok">;

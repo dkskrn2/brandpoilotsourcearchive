@@ -124,6 +124,8 @@ describe("AiContentGenerationPage", () => {
     await user.type(reasonInput, "이미지 구성 요소를 재생성해 주세요.");
     expect(retryButton).toBeEnabled();
 
+    const usageChanged = vi.fn();
+    window.addEventListener("brand-pilot:publish-calendar-usage-changed", usageChanged, { once: true });
     await user.click(retryButton);
     expect(gateway.retryOutput).toHaveBeenCalledWith(
       "00000000-0000-4000-8000-000000000100",
@@ -136,8 +138,26 @@ describe("AiContentGenerationPage", () => {
         expect.stringMatching(/^generation-partial-retry-/),
       );
     });
+    expect(usageChanged).toHaveBeenCalledTimes(1);
     expect(await screen.findByText(/생성 작업 상태:/)).toHaveTextContent("대기");
     expect(screen.queryByRole("heading", { name: "생성 결과 상세" })).not.toBeInTheDocument();
+  });
+
+  it("maps weekly generation exhaustion during retry to Korean", async () => {
+    const user = userEvent.setup();
+    renderGeneration("generation-partial", false, (gateway) => {
+      gateway.retryOutput = vi.fn(async () => {
+        throw new ApiRequestError({ status: 429, errorCode: "generation_weekly_quota_exceeded" });
+      });
+    });
+
+    const rows = within(await screen.findByRole("list", { name: "생성 결과 목록" }))
+      .getAllByRole("listitem");
+    const failedRow = rows[1];
+    await user.type(within(failedRow).getByLabelText("문제 해결형 다시 생성 사유"), "다시 생성");
+    await user.click(within(failedRow).getByRole("button", { name: /결과 2 다시 생성/ }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("이번 주 콘텐츠 생성 한도를 모두 사용했습니다");
   });
 
   it("shows the localized retry deadline and form before attachment retention expires", async () => {

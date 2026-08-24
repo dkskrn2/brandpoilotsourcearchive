@@ -22,6 +22,14 @@ export function unreservedItems(items: readonly PublishItem[]) {
   return items.filter((item) => item.calendarPlacement === "unreserved");
 }
 
+export function canReschedulePublishItem(item: PublishItem, now = Date.now()) {
+  return Boolean(item.sourceRefs.calendarSlotId)
+    && Boolean(item.scheduledFor && Date.parse(item.scheduledFor) > now)
+    && ["reserved", "publish_queued", "scheduled"].includes(item.status)
+    && item.publicationProgress === "none"
+    && item.targets.every((target) => target.status === "queued" || target.status === "scheduled");
+}
+
 export function entryFromPublishItem(item: PublishItem): CalendarEntry {
   if (!item.calendarDate || item.calendarPlacement !== "dated") {
     throw new Error("publish_item_not_dated");
@@ -38,6 +46,7 @@ export function entryFromPublishItem(item: PublishItem): CalendarEntry {
     channels: item.channels,
     contentFormat: item.contentFormat ?? undefined,
     lastError: item.lastError,
-    cancellable: ["reserved", "publish_queued", "scheduled", "deferred"].includes(item.status)
+    cancellable: ["reserved", "publish_queued", "scheduled", "deferred"].includes(item.status),
+    reschedulable: canReschedulePublishItem(item),
   };
 }

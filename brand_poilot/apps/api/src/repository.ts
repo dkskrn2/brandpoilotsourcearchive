@@ -2301,25 +2301,55 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
     },
 
     async getBillingSummary(brandId) {
-      const brand = await pool.query(
-        "select id from brands where id = $1 and deleted_at is null",
+      const result = await pool.query(
+        `select brand.id as brand_id,
+                subscription.status,
+                plan.name as plan_name,
+                subscription.current_period_end,
+                subscription.cancel_at_period_end,
+                coalesce(
+                  plan.code is not null
+                  and subscription.status in ('active','cancel_scheduled')
+                  and subscription.current_period_start <= clock_timestamp()
+                  and subscription.current_period_end > clock_timestamp(),
+                  false
+                ) as entitled
+           from brands brand
+           left join brand_subscriptions subscription on subscription.brand_id = brand.id
+           left join billing_plan_catalog plan on plan.code = subscription.plan_code and plan.active
+          where brand.id = $1 and brand.deleted_at is null`,
         [brandId]
       );
-      if (!brand.rowCount) throw new Error("brand_billing_not_found");
+      if (!result.rowCount) throw new Error("brand_billing_not_found");
+      const row = result.rows[0] as {
+        status: BillingSummaryDto["subscription"]["status"] | null;
+        plan_name: string | null;
+        current_period_end: Date | string | null;
+        cancel_at_period_end: boolean | null;
+        entitled: boolean;
+      };
+      const status = row.status ?? "none";
+      const periodEnd = toIso(row.current_period_end);
+      const entitled = row.entitled === true;
+      const renews = entitled && status === "active" && row.cancel_at_period_end !== true;
 
       return {
         configured: false,
         subscription: {
-          status: "none",
-          planName: null,
+          status,
+          planName: row.plan_name ?? null,
           monthlyAmount: null,
           currency: "KRW",
-          currentPeriodEnd: null,
-          nextBillingAt: null,
-          cancelAtPeriodEnd: false,
+          currentPeriodEnd: periodEnd,
+          nextBillingAt: renews ? periodEnd : null,
+          cancelAtPeriodEnd: row.cancel_at_period_end === true,
           suspensionReason: null
         },
-        entitlement: { active: false, source: null, expiresAt: null },
+        entitlement: {
+          active: entitled,
+          source: entitled ? "subscription" : null,
+          expiresAt: entitled ? periodEnd : null,
+        },
         paymentMethod: null,
         payments: []
       } satisfies BillingSummaryDto;

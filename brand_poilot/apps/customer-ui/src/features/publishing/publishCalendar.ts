@@ -16,6 +16,7 @@ export type CalendarEntry = {
   contentFormat?: "card_news" | "reel";
   lastError?: string | null;
   cancellable?: boolean;
+  reschedulable?: boolean;
 };
 
 const kst = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Seoul", year: "numeric", month: "2-digit", day: "2-digit" });
@@ -50,7 +51,9 @@ export function entryFromSlot(slot: PublishCalendarSlot): CalendarEntry {
     recommendationKind: slot.recommendationKind,
     contentFormat: slot.contentFormat,
     lastError: slot.lastError,
-    cancellable: !["published", "cancelled", "publishing"].includes(slot.status)
+    cancellable: !["published", "cancelled", "publishing"].includes(slot.status),
+    reschedulable: new Date(slot.scheduledFor).getTime() > Date.now()
+      && !["published", "cancelled", "publishing", "publish_delayed"].includes(slot.status),
   };
 }
 

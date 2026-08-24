@@ -1183,6 +1183,151 @@ describe("publish calendar repository assignment", () => {
     expect(update?.values[7]).toBe(parentGenerationId);
   });
 
+  it("reschedules a future pre-generation slot in place and makes an automatic assignment manual", async () => {
+    const target = new Date("2099-08-22T04:15:00.000Z");
+    const existing = slotRow({
+      assignment_mode: "automatic",
+      recommendation_kind: "informational",
+      status: "generation_pending",
+      generation_id: "60000000-0000-4000-8000-000000000031",
+    });
+    const run = harness((sql, values) => {
+      if (sql.includes("clock_timestamp() <")) return { rows: [{ future: true }], rowCount: 1 };
+      if (sql.includes("select slot.*") && sql.includes("for update")) return { rows: [existing], rowCount: 1 };
+      if (sql.includes("select queue.status") && sql.includes("for update")) return { rows: [], rowCount: 0 };
+      const subscription = activeSubscription(sql);
+      if (subscription) return subscription;
+      if (sql.includes("calendar_usage") && sql.includes("direct_publish_groups")) {
+        return { rows: [{ published_count: 0, reserved_count: 2 }], rowCount: 1 };
+      }
+      if (sql.startsWith("update publish_calendar_slots set")) return {
+        rows: [{ ...existing, scheduled_for: values[3], assignment_mode: "manual", recommendation_kind: null }],
+        rowCount: 1,
+      };
+      return { rows: [], rowCount: 0 };
+    });
+
+    await expect(createPublishCalendarRepository(run.pool).rescheduleSlot({
+      ...scope,
+      slotId: String(existing.id),
+      scheduledFor: target,
+    })).resolves.toMatchObject({
+      id: existing.id,
+      scheduledFor: target.toISOString(),
+      assignmentMode: "manual",
+      recommendationKind: null,
+    });
+    const slotUpdate = run.statements.find(({ sql }) => sql.startsWith("update publish_calendar_slots set"));
+    expect(slotUpdate?.sql).toContain("recommendation_kind=null");
+    const usage = run.statements.find(({ sql }) => sql.includes("calendar_usage") && sql.includes("direct_publish_groups"));
+    expect(usage?.values[5]).toBe(existing.id);
+    expect(run.statements.some(({ sql }) => sql.startsWith("update topic_publish_groups"))).toBe(false);
+    expect(run.statements.some(({ sql }) => sql.startsWith("update publish_queue"))).toBe(false);
+  });
+
+  it("reschedules a scheduled slot, group, and queue to one Seoul calendar time", async () => {
+    const target = new Date("2099-08-22T18:40:00.000Z");
+    const linked = slotRow({
+      assignment_mode: "automatic",
+      status: "scheduled",
+      topic_publish_group_id: "70000000-0000-4000-8000-000000000032",
+    });
+    const run = harness((sql, values) => {
+      if (sql.includes("clock_timestamp() <")) return { rows: [{ future: true }], rowCount: 1 };
+      if (sql.includes("select slot.*") && sql.includes("for update")) return { rows: [linked], rowCount: 1 };
+      if (sql.includes("select publish_group.status")) return { rows: [{ status: "scheduled" }], rowCount: 1 };
+      if (sql.includes("select queue.status") && sql.includes("for update")) {
+        return { rows: [{ status: "scheduled" }], rowCount: 1 };
+      }
+      const subscription = activeSubscription(sql);
+      if (subscription) return subscription;
+      if (sql.includes("calendar_usage") && sql.includes("direct_publish_groups")) {
+        return { rows: [{ published_count: 0, reserved_count: 1 }], rowCount: 1 };
+      }
+      if (sql.startsWith("update topic_publish_groups")) return { rows: [], rowCount: 1 };
+      if (sql.startsWith("update publish_queue")) return { rows: [], rowCount: 1 };
+      if (sql.startsWith("update publish_calendar_slots set")) return {
+        rows: [{ ...linked, scheduled_for: values[3], assignment_mode: "manual" }],
+        rowCount: 1,
+      };
+      return { rows: [], rowCount: 0 };
+    });
+
+    await createPublishCalendarRepository(run.pool).rescheduleSlot({
+      ...scope,
+      slotId: String(linked.id),
+      scheduledFor: target,
+    });
+
+    const groupUpdate = run.statements.find(({ sql }) => sql.startsWith("update topic_publish_groups"));
+    const queueUpdate = run.statements.find(({ sql }) => sql.startsWith("update publish_queue"));
+    expect(groupUpdate?.sql).toContain("at time zone 'Asia/Seoul'");
+    expect(queueUpdate?.sql).toContain("at time zone 'Asia/Seoul'");
+    expect(groupUpdate?.values).toContain(target);
+    expect(queueUpdate?.values).toContain(target);
+  });
+
+  it.each(["deferred", "publishing", "published", "failed", "cancelled"])(
+    "rejects rescheduling when the linked queue is %s",
+    async (queueStatus) => {
+      const linked = slotRow({ status: "scheduled", topic_publish_group_id: "70000000-0000-4000-8000-000000000033" });
+      const run = harness((sql) => {
+        if (sql.includes("clock_timestamp() <")) return { rows: [{ future: true }], rowCount: 1 };
+        if (sql.includes("select slot.*") && sql.includes("for update")) return { rows: [linked], rowCount: 1 };
+        if (sql.includes("select publish_group.status")) return { rows: [{ status: "scheduled" }], rowCount: 1 };
+        if (sql.includes("select queue.status") && sql.includes("for update")) {
+          return { rows: [{ status: queueStatus }], rowCount: 1 };
+        }
+        return { rows: [], rowCount: 0 };
+      });
+
+      await expect(createPublishCalendarRepository(run.pool).rescheduleSlot({
+        ...scope,
+        slotId: String(linked.id),
+        scheduledFor: new Date("2099-08-22T18:40:00.000Z"),
+      })).rejects.toThrowError("publish_calendar_slot_not_reschedulable");
+      expect(run.statements.some(({ sql }) => sql.startsWith("update publish_calendar_slots"))).toBe(false);
+    },
+  );
+
+  it.each([
+    ["foreign slot", "not_found"],
+    ["cancelled slot", "cancelled"],
+    ["past target", "past"],
+    ["inactive subscription", "inactive"],
+    ["full target week", "quota"],
+  ])("rejects rescheduling a %s without updating the slot", async (_label, scenario) => {
+    const existing = slotRow({ status: scenario === "cancelled" ? "cancelled" : "generation_pending" });
+    const run = harness((sql) => {
+      if (sql.includes("select slot.*") && sql.includes("for update")) {
+        return scenario === "not_found" ? { rows: [], rowCount: 0 } : { rows: [existing], rowCount: 1 };
+      }
+      if (sql.includes("clock_timestamp() <")) {
+        return { rows: [{ future: scenario !== "past" }], rowCount: 1 };
+      }
+      if (sql.includes("from brand_subscriptions subscription")) {
+        return scenario === "inactive" ? { rows: [], rowCount: 0 } : activeSubscription(sql)!;
+      }
+      if (sql.includes("calendar_usage") && sql.includes("direct_publish_groups")) {
+        return { rows: [{ published_count: scenario === "quota" ? 3 : 0, reserved_count: 0 }], rowCount: 1 };
+      }
+      return { rows: [], rowCount: 0 };
+    });
+
+    await expect(createPublishCalendarRepository(run.pool).rescheduleSlot({
+      ...scope,
+      slotId: String(existing.id),
+      scheduledFor: new Date("2099-08-22T18:40:00.000Z"),
+    })).rejects.toThrowError(
+      scenario === "not_found" ? "publish_calendar_slot_not_found"
+        : scenario === "past" ? "publish_calendar_time_past"
+          : scenario === "inactive" ? "publish_calendar_subscription_inactive"
+            : scenario === "quota" ? "publish_weekly_quota_exceeded"
+              : "publish_calendar_slot_not_reschedulable",
+    );
+    expect(run.statements.some(({ sql }) => sql.startsWith("update publish_calendar_slots"))).toBe(false);
+  });
+
   it("cancels a linked queue and publish group in the slot transaction", async () => {
     const linked = slotRow({
       assignment_mode: "manual",

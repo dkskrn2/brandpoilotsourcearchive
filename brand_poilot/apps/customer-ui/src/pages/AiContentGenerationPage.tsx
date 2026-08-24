@@ -8,6 +8,7 @@ import { AiContentPhaseProgress } from "../components/ai-content/AiContentPhaseP
 import { PageHeader } from "../components/layout/PageHeader";
 import { PageSkeleton } from "../components/ui/LoadingState";
 import { aiContentApiGateway } from "../features/ai-content/aiContentApiGateway";
+import { PUBLISH_CALENDAR_USAGE_CHANGED_EVENT } from "../features/publishing/publishCalendar";
 import type {
   AiContentGeneration,
   AiContentGateway,
@@ -53,6 +54,16 @@ function downloadErrorMessage(error: unknown) {
     return "오늘 신규 다운로드 20회를 모두 사용했습니다. 같은 결과는 다시 다운로드해도 차감되지 않습니다.";
   }
   return error instanceof Error ? error.message : "결과 다운로드에 실패했습니다.";
+}
+
+function retryErrorMessage(error: unknown) {
+  if (error instanceof ApiRequestError && error.errorCode === "generation_weekly_quota_exceeded") {
+    return "이번 주 콘텐츠 생성 한도를 모두 사용했습니다. 다음 구독 주기에 다시 사용할 수 있습니다.";
+  }
+  if (error instanceof ApiRequestError && error.errorCode === "generation_subscription_inactive") {
+    return "콘텐츠 생성을 사용하려면 구독 플랜을 확인해 주세요.";
+  }
+  return error instanceof Error ? error.message : "결과를 다시 생성하지 못했습니다.";
 }
 
 export function AiContentGenerationPage({
@@ -166,6 +177,7 @@ export function AiContentGenerationPage({
       setActionError(null);
       setRetryingOutputId(outputId);
       const retryGeneration = await gateway.retryOutput(brandId, outputId, reason);
+      window.dispatchEvent(new Event(PUBLISH_CALENDAR_USAGE_CHANGED_EVENT));
       navigate(`/ai-content/${retryGeneration.id}`);
     } catch (err: unknown) {
       if (err instanceof ApiRequestError
@@ -176,7 +188,7 @@ export function AiContentGenerationPage({
           : current);
         return;
       }
-      setActionError(err instanceof Error ? err.message : "결과를 다시 생성하지 못했습니다.");
+      setActionError(retryErrorMessage(err));
     } finally {
       actionLocks.current.retry.delete(outputId);
       setRetryingOutputId(null);

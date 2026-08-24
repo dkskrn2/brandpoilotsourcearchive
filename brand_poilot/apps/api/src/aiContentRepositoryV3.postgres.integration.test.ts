@@ -169,6 +169,22 @@ async function applyMigrationsThrough075(pool: Pool): Promise<RoleBootstrapPlan>
             selection_json jsonb not null, selection_sha256 text not null,
             frozen_json jsonb null, frozen_sha256 text null, frozen_at timestamptz null,
             created_at timestamptz not null default now()
+          );
+          create table billing_plan_catalog(
+            code text primary key,
+            weekly_generation_limit integer not null,
+            active boolean not null default true
+          );
+          create table brand_subscriptions(
+            brand_id uuid primary key references brands(id) on delete cascade,
+            plan_code text not null references billing_plan_catalog(code),
+            status text not null,
+            started_at timestamptz not null,
+            current_period_start timestamptz not null,
+            current_period_end timestamptz not null
+          );
+          create table product_service_image_import_jobs(
+            id uuid primary key default gen_random_uuid()
           )
         `);
         const database = await client.query(
@@ -584,6 +600,18 @@ describe.skipIf(process.env.RUN_POSTGRES_INTEGRATION !== "true")(
       });
       await pool.query("create extension if not exists pgcrypto");
       const plan = await applyMigrationsThrough075(pool);
+      await pool.query(await readFile(
+        resolve(process.cwd(), "../../db/migrations/087_ai_content_prompt_lineage_v3.sql"),
+        "utf8",
+      ));
+      await pool.query(
+        `insert into billing_plan_catalog(code,weekly_generation_limit,active)
+         values('free',30,true)`,
+      );
+      await pool.query(
+        `grant select on billing_plan_catalog,brand_subscriptions
+           to ${plan.roleNames.applicationRoleName}`,
+      );
       await pool.query(`
         create role brand_intelligence_application login inherit nosuperuser nobypassrls
           nocreatedb nocreaterole noreplication password '${brandIntelligenceApplicationPassword}'
@@ -784,6 +812,12 @@ describe.skipIf(process.env.RUN_POSTGRES_INTEGRATION !== "true")(
       await pool.query(
         "insert into brands(id,workspace_id,name,created_by_user_id) values($1,$2,'V3 concurrency brand',$3)",
         [ids.brand, ids.workspace, ids.actor],
+      );
+      await pool.query(
+        `insert into brand_subscriptions(
+           brand_id,plan_code,status,started_at,current_period_start,current_period_end
+         ) values($1,'free','active','2026-01-01T00:00:00Z','2026-01-01T00:00:00Z','2100-01-01T00:00:00Z')`,
+        [ids.brand],
       );
       if (source === "onboarding") {
         const analysis = await createBrandIntelligenceRepository(pool).requestBrandAnalysis({

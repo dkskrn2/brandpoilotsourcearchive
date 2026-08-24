@@ -145,6 +145,9 @@ function harness(options: {
   corruptBinding?: boolean;
   bindingFailure?: boolean;
   quotaUsage?: number;
+  weeklyQuotaUsage?: number;
+  weeklyGenerationLimit?: number;
+  subscriptionInactive?: boolean;
   operationFingerprint?: string;
   operationGenerationId?: string;
   startedWithoutOperationMatch?: boolean;
@@ -231,6 +234,14 @@ function harness(options: {
         mime_type: "image/webp",
         checksum: "7".repeat(64),
       }], rowCount: 1 } : { rows: [], rowCount: 0 };
+      if (sql.includes("from brand_subscriptions subscription")) {
+        return options.subscriptionInactive
+          ? { rows: [], rowCount: 0 }
+          : { rows: [{ started_at: "2026-08-02T00:00:00.000Z", weekly_generation_limit: options.weeklyGenerationLimit ?? 30 }], rowCount: 1 };
+      }
+      if (sql.includes("from ai_content_usage_ledger") && sql.includes("usage_date >=")) {
+        return { rows: [{ generation_count: options.weeklyQuotaUsage ?? 0 }], rowCount: 1 };
+      }
       if (sql.includes("from ai_content_usage_ledger")) return { rows: [{ generation_count: options.quotaUsage ?? 0 }], rowCount: 1 };
       if (sql.includes("create_ai_content_generation_prompt_binding") && options.bindingFailure) throw new Error("binding_write_failed");
       return { rows: [], rowCount: 1 };
@@ -266,6 +277,23 @@ describe("V3 generation start transaction", () => {
       .toEqual([expect.any(String)]);
     expect(sql.find((value) => value.includes("lock_ai_content_fixed_input_sources"))).toBeDefined();
     expect(sql.at(-1)).toBe("COMMIT");
+  });
+
+  it("derives weekly quota and ledger date from the same generation start instant", async () => {
+    const promptBinding = await binding();
+    assembler.assemble.mockReturnValue({ input: frozenInput, canonicalJson: JSON.stringify(frozenInput), contentHash: proposalSha256(frozenInput), binding: promptBinding, provenance: { selectedProposalId: id.proposal, proposalJobId: id.job, proposalContractId: id.contract, successfulModelAttemptId: id.attempt } });
+    const run = harness();
+    const startedAt = new Date("2026-08-06T15:00:01.000Z");
+
+    await run.repository.startAiContentGenerationV3({
+      ...run.command,
+      usageDate: "2026-08-06",
+    } as never, {} as never, () => startedAt);
+
+    const subscription = run.statements.find(({ sql }) => sql.includes("from brand_subscriptions subscription"));
+    const reservation = run.statements.find(({ sql }) => sql.includes("insert into ai_content_usage_ledger"));
+    expect(subscription?.params[2]).toBe(startedAt.toISOString());
+    expect(reservation?.params[5]).toBe("2026-08-07");
   });
 
   it("returns an exact replay without writes and rejects a drifted binding", async () => {
@@ -320,6 +348,29 @@ describe("V3 generation start transaction", () => {
     const run = harness({ quotaUsage: 10 });
     await expect(run.repository.startAiContentGenerationV3(run.command as never, {} as never, () => new Date(NOW)))
       .rejects.toThrow("ai_content_limit_reached");
+    expect(run.statements.map(({ sql }) => sql).filter((sql) => /^(?:insert|update|delete)\b/i.test(sql.trim()))).toEqual([]);
+    expect(run.statements.at(-1)?.sql).toBe("ROLLBACK");
+  });
+
+  it("permits the final FREE generation unit at 29 of 30 weekly usage", async () => {
+    const promptBinding = await binding();
+    assembler.assemble.mockReturnValue({ input: frozenInput, canonicalJson: JSON.stringify(frozenInput), contentHash: proposalSha256(frozenInput), binding: promptBinding, provenance: { selectedProposalId: id.proposal, proposalJobId: id.job, proposalContractId: id.contract, successfulModelAttemptId: id.attempt } });
+    const run = harness({ weeklyQuotaUsage: 29 });
+
+    await run.repository.startAiContentGenerationV3(run.command as never, {} as never, () => new Date(NOW));
+
+    expect(run.statements.some(({ sql }) => sql.includes("insert into ai_content_usage_ledger"))).toBe(true);
+    expect(run.statements.at(-1)?.sql).toBe("COMMIT");
+  });
+
+  it("rejects weekly generation quota exhaustion before writes", async () => {
+    const promptBinding = await binding();
+    assembler.assemble.mockReturnValue({ input: frozenInput, canonicalJson: JSON.stringify(frozenInput), contentHash: proposalSha256(frozenInput), binding: promptBinding, provenance: { selectedProposalId: id.proposal, proposalJobId: id.job, proposalContractId: id.contract, successfulModelAttemptId: id.attempt } });
+    const run = harness({ weeklyQuotaUsage: 30 });
+
+    await expect(run.repository.startAiContentGenerationV3(run.command as never, {} as never, () => new Date(NOW)))
+      .rejects.toThrow("generation_weekly_quota_exceeded");
+
     expect(run.statements.map(({ sql }) => sql).filter((sql) => /^(?:insert|update|delete)\b/i.test(sql.trim()))).toEqual([]);
     expect(run.statements.at(-1)?.sql).toBe("ROLLBACK");
   });

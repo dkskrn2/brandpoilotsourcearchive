@@ -7,6 +7,7 @@ import type {
   ProductServiceImageAsset,
 } from "../../features/libraries/libraryGateway";
 import { libraryGateway } from "../../features/libraries/libraryGateway";
+import { PUBLISH_CALENDAR_USAGE_CHANGED_EVENT } from "../../features/publishing/publishCalendar";
 import {
   createChannelCapabilityGateway,
   type ChannelCapabilityState,
@@ -81,6 +82,12 @@ const validationFieldLabels = {
 } as const;
 
 function validationMessage(error: unknown) {
+  if (error instanceof ApiRequestError && error.errorCode === "generation_weekly_quota_exceeded") {
+    return "이번 주 콘텐츠 생성 한도를 모두 사용했습니다. 다음 구독 주기에 다시 사용할 수 있습니다.";
+  }
+  if (error instanceof ApiRequestError && error.errorCode === "generation_subscription_inactive") {
+    return "콘텐츠 생성을 사용하려면 구독 플랜을 확인해 주세요.";
+  }
   if (error instanceof ApiRequestError && error.errorCode === "ai_content_limit_reached") {
     return "오늘 AI 콘텐츠 생성 10회를 모두 사용했습니다. 내일 00:00(KST)에 다시 사용할 수 있습니다.";
   }
@@ -628,6 +635,7 @@ export function ContentProposalFlow({
         keyForRequest(generationStartKey, { generationId: selectedGenerationId, finalizationDraft, manualVisualSelection }),
       );
       if (activeBrandId.current !== requestedBrandId) return;
+      window.dispatchEvent(new Event(PUBLISH_CALENDAR_USAGE_CHANGED_EVENT));
       setMachine((current) => transitionContentWizard(current, { type: "start_generation" }));
       navigate(`/ai-content/${selectedGenerationId}`);
     } catch (caught) {

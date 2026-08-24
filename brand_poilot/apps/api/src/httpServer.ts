@@ -1273,10 +1273,19 @@ export function createServer(
         "publish_calendar_subscription_inactive",
         "publish_calendar_channel_not_connected",
         "publish_calendar_slot_not_assignable",
+        "publish_calendar_slot_not_reschedulable",
         "publish_calendar_generation_quota_exceeded",
         "publish_weekly_quota_exceeded",
       ].includes(message);
       reply.code(unavailable ? 503 : conflict ? 409 : 400).send({ error: message });
+      return;
+    }
+    if (message === "generation_weekly_quota_exceeded") {
+      reply.code(429).send({ error: message });
+      return;
+    }
+    if (message === "generation_subscription_inactive") {
+      reply.code(409).send({ error: message });
       return;
     }
     if (message === "topic_upload_invalid_csv" || message === "faq_upload_invalid_file" || message === "knowledge_upload_invalid_file") {
@@ -4244,6 +4253,21 @@ export function createServer(
       generationOutputId: body.generationOutputId ? String(body.generationOutputId) : null,
       topicPublishGroupId: body.topicPublishGroupId ? String(body.topicPublishGroupId) : null,
       title: typeof body.title === "string" ? body.title.trim() : null,
+    });
+  });
+
+  app.patch<{
+    Params: { brandId: string; slotId: string };
+    Body: unknown;
+  }>("/brands/:brandId/publish-calendar/slots/:slotId/schedule", async (request) => {
+    if (!repository.rescheduleSlot) throw new Error("publish_calendar_not_configured");
+    if (!hasExactKeys(request.body, ["scheduledFor"])) {
+      throw new Error("publish_calendar_schedule_invalid");
+    }
+    return repository.rescheduleSlot({
+      ...aiContentScope(request, request.params.brandId),
+      slotId: request.params.slotId,
+      scheduledFor: publishCalendarDate(request.body.scheduledFor),
     });
   });
 
