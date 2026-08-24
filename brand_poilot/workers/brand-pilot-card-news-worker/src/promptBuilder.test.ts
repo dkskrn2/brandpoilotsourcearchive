@@ -8,7 +8,7 @@ const frozenManualVisualSelection = {
 
 describe("card-news V3 prompt", () => {
   it("uses the revised marketing-evidence skill version", () => {
-    expect(cardNewsPlanSkillVersion).toBe("card-manuscript-plan-skill.v3");
+    expect(cardNewsPlanSkillVersion).toBe("card-manuscript-plan-skill.v4");
   });
 
   it.each(["informational", "marketing"] as const)("uses an explicit %s purpose branch", (purpose) => {
@@ -44,6 +44,101 @@ describe("card-news V3 prompt", () => {
     expect(prompt).toContain("동결된 subject, 승인된 제품 사실과 Research Evidence");
     expect(prompt).toContain("서로 다른 대상의 사실을 전이");
     expect(prompt).toContain("CTA Scene은 최대 1개");
+  });
+
+  it("keeps a generation-scoped product attachment out of registered product image bindings", () => {
+    const attachmentId = "70000000-0000-4000-8000-000000000070";
+    const selection = {
+      contractVersion: "manual-visual-selection-frozen.v1",
+      product: {
+        productServiceId: "70000000-0000-4000-8000-000000000071",
+        versionId: "70000000-0000-4000-8000-000000000072",
+        kind: "product",
+        name: "답례품",
+        description: "커피와 쿠키",
+        features: [],
+        benefits: [],
+        cautions: [],
+        evergreenPurchaseInfo: "",
+        images: [],
+      },
+      stylePreset: null,
+      avatar: null,
+    } as const;
+    const prompt = buildCardNewsPlanPrompt(job, {
+      generationId: job.generationId,
+      subject: { kind: "topic_text", title: "결혼식 답례품" },
+      selectedProposal: { assetCount: 2, outline: [] },
+      outputSettings: { purpose: "marketing", outputFormat: "card_news" },
+      researchEvidence: { items: [] },
+      references: {
+        selected: [],
+        brandStyleImages: [],
+        avatarStyleImageId: null,
+        attachments: [{
+          id: attachmentId,
+          role: "product_image",
+          fileName: "uploaded-product.jpg",
+        }],
+      },
+    } as never, selection);
+
+    expect(prompt).toContain("productImageAssetIds에는 factualSources.product.availableImages의 assetId만");
+    expect(prompt).toContain("visualReferences.attachments의 id를 productImageAssetIds에 넣지 마세요");
+    expect(prompt).toContain("role이 product_image인 첨부 이미지는 후속 이미지 워커가 제품 외형 참고 파일로 별도 전달");
+    expect(prompt).toContain(`"id": "${attachmentId}"`);
+    expect(prompt).toContain('"availableImages": []');
+  });
+
+  it("keeps registered product images and uploaded product attachments in separate namespaces", () => {
+    const registeredImageId = "70000000-0000-4000-8000-000000000073";
+    const attachmentId = "70000000-0000-4000-8000-000000000074";
+    const selection = {
+      contractVersion: "manual-visual-selection-frozen.v1",
+      product: {
+        productServiceId: "70000000-0000-4000-8000-000000000075",
+        versionId: "70000000-0000-4000-8000-000000000076",
+        kind: "product",
+        name: "답례품",
+        description: "커피와 쿠키",
+        features: [],
+        benefits: [],
+        cautions: [],
+        evergreenPurchaseInfo: "",
+        images: [{
+          assetId: registeredImageId,
+          role: "hero",
+          storageUrl: "https://cdn.example/registered.jpg",
+          storagePath: "products/registered.jpg",
+          mimeType: "image/jpeg",
+          checksum: "a".repeat(64),
+        }],
+      },
+      stylePreset: null,
+      avatar: null,
+    } as const;
+    const prompt = buildCardNewsPlanPrompt(job, {
+      generationId: job.generationId,
+      subject: { kind: "topic_text", title: "결혼식 답례품" },
+      selectedProposal: { assetCount: 2, outline: [] },
+      outputSettings: { purpose: "marketing", outputFormat: "card_news" },
+      researchEvidence: { items: [] },
+      references: {
+        selected: [],
+        brandStyleImages: [],
+        avatarStyleImageId: null,
+        attachments: [{
+          id: attachmentId,
+          role: "product_image",
+          fileName: "uploaded-product.jpg",
+        }],
+      },
+    } as never, selection);
+
+    expect(prompt).toContain("등록 제품 이미지와 생성 중 첨부 이미지는 서로 다른 ID 체계입니다");
+    expect(prompt).toContain(`"assetId": "${registeredImageId}"`);
+    expect(prompt).toContain(`"id": "${attachmentId}"`);
+    expect(prompt).toContain("첨부 이미지는 등록 제품 이미지와 함께 후속 이미지 모델에 제공됩니다");
   });
 
   it("locks the selected concept and count while reopening scene editorial decisions", () => {

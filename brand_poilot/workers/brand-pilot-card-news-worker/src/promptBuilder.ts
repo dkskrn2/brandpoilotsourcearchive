@@ -3,7 +3,7 @@ import type { FrozenManualVisualSelectionV1 } from "@brand-pilot/content-contrac
 import type { AiContentJob } from "./contracts.js";
 import { buildCardDeckSourceBundle } from "./sourceBundle.js";
 
-export const cardNewsPlanSkillVersion = "card-manuscript-plan-skill.v3";
+export const cardNewsPlanSkillVersion = "card-manuscript-plan-skill.v4";
 
 function safePromptJson(value: unknown): string {
   return JSON.stringify(value, null, 2).replace(/[<>&\u2028\u2029]/g, (character) => {
@@ -108,7 +108,12 @@ export function buildCardNewsPlanPrompt(
     "related_facts는 서로 관련되지만 동일 분모나 직접 수치 비교가 아닌 독립 Claim을 함께 전달할 때 사용하세요.",
     "relation entries 규칙: none은 0개, number는 role=value 1~4개, before_after는 before/after, comparison은 label이 있는 left/right, steps는 step 2~4개, quote는 quote와 선택 attribution, related_facts는 의미 role을 가진 2~4개입니다.",
     'role은 의미 라벨을 쓰는 자유 텍스트 칸이 아닙니다. number의 모든 entry.role은 정확히 "value"이고 의미 이름은 label에 쓰세요. before_after/comparison/steps/quote도 위 고정 role 문자열을 그대로 사용하세요.',
-    "제품 이미지나 아바타가 Scene 내용에 실제 필요할 때만 visualReferences의 허용 ID를 선택하세요. 스타일·보조 이미지는 후속 이미지 모델에 현행대로 전달되며 여기서 디자인 규칙으로 재작성하지 마세요.",
+    "등록 제품 이미지와 생성 중 첨부 이미지는 서로 다른 ID 체계입니다.",
+    "productImageAssetIds에는 factualSources.product.availableImages의 assetId만 넣으세요. 등록 제품 이미지가 현재 Scene에 직접 필요할 때만 해당 assetId를 중복 없이 선택하고, availableImages가 비어 있거나 필요하지 않으면 []로 두세요.",
+    "visualReferences.attachments의 id를 productImageAssetIds에 넣지 마세요.",
+    "visualReferences.attachments는 후속 이미지 워커가 별도 참고 파일로 전달합니다. role이 product_image인 첨부 이미지는 후속 이미지 워커가 제품 외형 참고 파일로 별도 전달하며, 첨부 이미지는 등록 제품 이미지와 함께 후속 이미지 모델에 제공됩니다.",
+    "visualReferences.avatar가 현재 Scene에 직접 필요할 때만 그 imageAssetIds 중 사용할 ID를 avatarImageAssetIds에 중복 없이 넣고, 필요하지 않으면 []로 두세요.",
+    "스타일 이미지는 후속 이미지 모델에 현행대로 전달되며 여기서 디자인 규칙으로 재작성하지 마세요.",
     "색상, 타이포그래피, 그래픽 언어, 사진·일러스트 매체, 레이아웃, visualSystem, visualThesis, layoutArchetype을 만들거나 반환하지 마세요.",
     "페이지 번호, 장면 번호, 현재/전체 장수, 진행률 배지 또는 페이지 인디케이터를 기획하거나 출력하지 마세요.",
     "파일, 웹, shell, image_generation 도구를 호출하지 마세요. 제공된 고정 맥락만 사용하세요.",
