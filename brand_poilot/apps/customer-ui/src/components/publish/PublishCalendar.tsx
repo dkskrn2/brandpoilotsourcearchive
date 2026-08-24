@@ -18,6 +18,7 @@ type Props = {
   slotsError: string | null;
   slotsLoading: boolean;
   unreservedItems?: PublishItem[];
+  generatedPreviews?: ReadonlyMap<string, PublishCardPreview>;
   focusedItemKey?: string | null;
   onFocusedItemHandled?(): void;
   assignableContents: Array<{ id: string; title: string }>;
@@ -50,7 +51,7 @@ function shiftMonth(value: string, amount: number) {
   return `${next.getUTCFullYear()}-${String(next.getUTCMonth() + 1).padStart(2, "0")}`;
 }
 function fullDate(key: string) { const [, month, day] = key.split("-"); return `${Number(month)}월 ${Number(day)}일`; }
-function generatedMediaPreview(item: PublishItem): PublishCardPreview | null {
+function generatedMediaPreview(item: PublishItem, generatedPreviews: ReadonlyMap<string, PublishCardPreview>): PublishCardPreview | null {
   if (item.contentStatus !== "completed") return null;
   const target = item.targets.find((candidate) => candidate.artifactPublicUrl || candidate.previewBody || candidate.previewTitle) ?? item.targets[0];
   const reviewTarget = item.reviewTargets.find((candidate) => candidate.previewBody || candidate.previewTitle) ?? item.reviewTargets[0];
@@ -60,7 +61,10 @@ function generatedMediaPreview(item: PublishItem): PublishCardPreview | null {
     outputJson: target?.outputJson ?? reviewTarget?.outputJson,
     previewBody: target?.previewBody ?? reviewTarget?.previewBody
   });
-  return preview.kind === "image" || preview.kind === "video" ? preview : null;
+  if (preview.kind === "image" || preview.kind === "video") return preview;
+  return item.sourceRefs.generationOutputId
+    ? generatedPreviews.get(item.sourceRefs.generationOutputId) ?? null
+    : null;
 }
 function detailTimes(entry: CalendarEntry) {
   if (entry.status === "published") return [{ label: "게시 완료 시각", value: entry.publishedAt ?? entry.calendarDate }];
@@ -103,7 +107,7 @@ function SettingsUnavailableDialog({ message, onClose }: { message: string; onCl
   return <div className="modal-backdrop"><FocusTrap active initialFocusSelector=".auto-publish-settings__close" className="modal-panel auto-publish-settings" role="dialog" aria-modal="true" aria-label="자동 게시 설정" onKeyDown={(event) => event.key === "Escape" && onClose()}><header className="auto-publish-settings__header"><div><h2>자동 게시 설정</h2><p>{message}</p></div><button className="button icon-button auto-publish-settings__close" type="button" aria-label="닫기" onClick={onClose}><X size={18} /></button></header><div className="auto-publish-settings__body"><p role="alert">설정을 불러온 뒤에만 변경할 수 있습니다.</p></div></FocusTrap></div>;
 }
 
-export function PublishCalendar({ monthKey, entries, connectedChannels, settings, settingsError, slotsError, slotsLoading, unreservedItems = [], focusedItemKey, onFocusedItemHandled, assignableContents, manualOptions, manualOptionsError, manualOptionsLoading, onMonthChange, onStartNew, initialBulkDraft, onStartBulk, onContinueBulk, onProvisionBatch, onAssign, onCancel, onScheduleItem, onLoadManualOptions, onSaveSettings, saving }: Props) {
+export function PublishCalendar({ monthKey, entries, connectedChannels, settings, settingsError, slotsError, slotsLoading, unreservedItems = [], generatedPreviews = new Map(), focusedItemKey, onFocusedItemHandled, assignableContents, manualOptions, manualOptionsError, manualOptionsLoading, onMonthChange, onStartNew, initialBulkDraft, onStartBulk, onContinueBulk, onProvisionBatch, onAssign, onCancel, onScheduleItem, onLoadManualOptions, onSaveSettings, saving }: Props) {
   const cells = useMemo(() => monthCells(monthKey), [monthKey]);
   const byDate = useMemo(() => entries.reduce((map, entry) => { const key = dateKey(entry.calendarDate); map.set(key, [...(map.get(key) ?? []), entry]); return map; }, new Map<string, CalendarEntry[]>()), [entries]);
   const today = dateKey(new Date());
@@ -163,7 +167,7 @@ export function PublishCalendar({ monthKey, entries, connectedChannels, settings
         <section aria-label="미예약 콘텐츠 보관함" className="publish-calendar-unreserved">
           <div className="publish-calendar-unreserved__header"><div><h3>미예약 콘텐츠</h3><span>{filteredUnreservedItems.length}개</span></div>{unreservedItems.length > 0 ? <div className="publish-calendar-unreserved__controls"><input type="search" aria-label="미예약 콘텐츠 검색" placeholder="제목 검색" value={unreservedQuery} onChange={(event) => setUnreservedQuery(event.target.value)} /><select aria-label="미예약 콘텐츠 상태" value={unreservedStatus} onChange={(event) => setUnreservedStatus(event.target.value)}><option value="all">전체 상태</option>{unreservedStatuses.map((status) => <option value={status} key={status}>{label[status] ?? status}</option>)}</select></div> : null}</div>
           {filteredUnreservedItems.length === 0 ? <p className="publish-calendar-unreserved__empty">{unreservedItems.length === 0 ? "게시 일정을 설정할 콘텐츠가 없습니다." : "검색 조건에 맞는 콘텐츠가 없습니다."}</p> : <div className="publish-calendar-unreserved__list">{visibleUnreservedItems.map((item) => {
-            const preview = generatedMediaPreview(item);
+            const preview = generatedMediaPreview(item, generatedPreviews);
             return <article className={`publish-calendar-unreserved__item${preview ? " has-thumbnail" : ""}`} aria-label={item.title} data-item-key={item.itemKey} data-publish-focus-key={item.itemKey} tabIndex={-1} key={item.itemKey}>
               {preview ? <div className="publish-calendar-unreserved__thumbnail"><PublishManagementPreview title={item.title} preview={preview} /></div> : null}
               <div className="publish-calendar-unreserved__body"><strong>{item.title}</strong><div className="publish-calendar-unreserved__footer"><div className="publish-calendar-unreserved__meta"><Badge variant="neutral">{label[item.status] ?? item.status}</Badge><span>{item.contentFormat === "reel" ? "릴스" : item.contentFormat === "card_news" ? "카드뉴스" : "형식 설정 전"}</span></div>{item.schedulable && item.contentFormat ? <button className="button" type="button" onClick={(event) => onScheduleItem(item, selectedDate, event.currentTarget)}>게시 설정</button> : null}</div></div>

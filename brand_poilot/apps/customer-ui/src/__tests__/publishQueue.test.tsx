@@ -1,6 +1,7 @@
 import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { AiContentGateway, AiContentGeneration } from "../features/ai-content/types";
 import type { PublishArtifact, PublishItem, PublishItemTarget } from "../types";
 
 const artifact: PublishArtifact = {
@@ -66,7 +67,10 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
-async function renderPage(overrides: Record<string, ReturnType<typeof vi.fn>> = {}) {
+async function renderPage(
+  overrides: Record<string, ReturnType<typeof vi.fn>> = {},
+  generationGateway: Pick<AiContentGateway, "listGenerations"> = { listGenerations: vi.fn(async () => []) },
+) {
   const api = {
     listPublishItems: vi.fn(async () => [] as PublishItem[]),
     listChannels: vi.fn(async () => []),
@@ -89,9 +93,13 @@ async function renderPage(overrides: Record<string, ReturnType<typeof vi.fn>> = 
     downloadPublishResult: vi.fn(async () => ({ fileName: "result.zip", blob: new Blob(["result"], { type: "application/zip" }) })),
     ...overrides
   };
-  vi.doMock("../lib/apiClient", () => ({ DEMO_BRAND_ID: "brand-1", api }));
+  vi.doMock("../lib/apiClient", async (importOriginal) => ({
+    ...await importOriginal<typeof import("../lib/apiClient")>(),
+    DEMO_BRAND_ID: "brand-1",
+    api,
+  }));
   const { PublishQueuePage } = await import("../pages/PublishQueuePage");
-  await act(async () => { render(<PublishQueuePage />); });
+  await act(async () => { render(<PublishQueuePage generationGateway={generationGateway} />); });
   return api;
 }
 
@@ -192,6 +200,49 @@ describe("PublishQueuePage canonical collection", () => {
     const tray = await screen.findByRole("region", { name: "미예약 콘텐츠 보관함" });
     expect(within(tray).getByRole("img", { name: "생성 완료 카드뉴스 미리보기" })).toHaveAttribute("src", "https://cdn.example.com/card-1.webp");
     expect(within(within(tray).getByRole("article", { name: "생성 전 콘텐츠" })).queryByRole("img")).not.toBeInTheDocument();
+  });
+
+  it("loads a generated output artifact for an unreserved item whose publish DTO has no media", async () => {
+    const generated = item({
+      itemKey: "output:generated-artifact-thumbnail",
+      title: "생성 결과 카드뉴스",
+      targets: [],
+      reviewTargets: [],
+      contentStatus: "completed",
+      publishStatus: "unreserved",
+      status: "completed_unpublished",
+      scheduledFor: null,
+      effectiveScheduledFor: null,
+      calendarDate: null,
+      calendarPlacement: "unreserved",
+      sourceRefs: { ...item().sourceRefs, generationId: "generation-thumbnail", generationOutputId: "output-thumbnail", calendarSlotId: null, queueIds: [] },
+      schedulable: true,
+      scheduleBlockedReason: null,
+    });
+    const listGenerations = vi.fn(async () => [{
+      id: "generation-thumbnail",
+      outputs: [{
+        id: "output-thumbnail",
+        status: "completed",
+        artifact: {
+          queueId: "output-thumbnail",
+          kind: "image_gallery",
+          deliveryFormat: "instagram_feed_carousel",
+          assets: [{ url: "https://cdn.example.com/generated-card.webp", fileName: "card.webp", mimeType: "image/webp", width: 1080, height: 1350 }],
+          posterUrl: null,
+          html: null,
+          text: null,
+        },
+      }],
+    }] as AiContentGeneration[]);
+    await renderPage({ listPublishItems: vi.fn(async () => [generated]) }, { listGenerations });
+
+    expect(listGenerations).not.toHaveBeenCalled();
+    await userEvent.click(await screen.findByRole("tab", { name: "캘린더" }));
+    const tray = await screen.findByRole("region", { name: "미예약 콘텐츠 보관함" });
+    expect(await within(tray).findByRole("img", { name: "생성 결과 카드뉴스 미리보기" })).toHaveAttribute("src", "https://cdn.example.com/generated-card.webp");
+    expect(listGenerations).toHaveBeenCalledTimes(1);
+    expect(listGenerations).toHaveBeenCalledWith("brand-1");
   });
 
   it("shows the common-list skeleton and fail-closed empty state", async () => {

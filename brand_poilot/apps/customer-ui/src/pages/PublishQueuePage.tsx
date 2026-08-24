@@ -4,7 +4,7 @@ import { PageHeader } from "../components/layout/PageHeader";
 import { PublishArtifactPreview } from "../components/publish/PublishArtifactPreview";
 import { ContentArtifactDialog } from "../components/publish/ContentArtifactDialog";
 import { ChannelLogo } from "../components/channels/ChannelLogo";
-import { PublishManagementPreview, resolvePublishPreview } from "../components/publish/PublishManagementPreview";
+import { PublishManagementPreview, resolvePublishPreview, type PublishCardPreview } from "../components/publish/PublishManagementPreview";
 import { CardSkeleton, InlineSpinner, ListSkeleton } from "../components/ui/LoadingState";
 import { Alert } from "../components/ui/Alert";
 import { Badge } from "../components/ui/Badge";
@@ -22,6 +22,8 @@ import { api, DEMO_BRAND_ID } from "../lib/apiClient";
 import { dateKey, PUBLISH_CALENDAR_USAGE_CHANGED_EVENT, type CalendarEntry } from "../features/publishing/publishCalendar";
 import { datedItems, entryFromPublishItem, listItems, unreservedItems } from "../features/publishing/publishItems";
 import { clearPublishCalendarBulkDraft, loadPublishCalendarBulkDraft, savePublishCalendarBulkDraft, type PublishCalendarBulkDraft, type PublishCalendarBulkDraftRow } from "../features/publishing/publishCalendarBulkDraft";
+import { aiContentApiGateway } from "../features/ai-content/aiContentApiGateway";
+import type { AiContentGateway, AiGenerationOutput } from "../features/ai-content/types";
 import type { BadgeVariant, ChannelType, ContentOutput, PublishArtifact, PublishCalendarManualOptions, PublishCalendarManualSlotInput, PublishCalendarNewContentSetup, PublishCalendarSettings, PublishItem, PublishItemReviewTarget, PublishItemStatus, PublishItemTarget, PublishResult, PublishResultChannel, ReviewStatus } from "../types";
 
 const channelLabels: Record<ChannelType, string> = {
@@ -59,6 +61,22 @@ const reviewStatusMeta: Record<ReviewStatus, { label: string; variant: BadgeVari
 type ManagementFilterId = PublishManagementFilterId;
 type ManagementStatus = PublishManagementStatus;
 type PublishView = "list" | "calendar";
+
+type PublishQueuePageProps = {
+  generationGateway?: Pick<AiContentGateway, "listGenerations">;
+};
+
+function generationOutputPreview(output: AiGenerationOutput): PublishCardPreview | null {
+  const artifact = output.artifact;
+  if (!artifact) return null;
+  const image = artifact.assets.find((asset) => asset.mimeType?.startsWith("image/"))
+    ?? (["image", "image_gallery"].includes(artifact.kind) ? artifact.assets[0] : null);
+  if (image?.url) return { kind: "image", url: image.url };
+  if (artifact.posterUrl) return { kind: "image", url: artifact.posterUrl };
+  const video = artifact.assets.find((asset) => asset.mimeType?.startsWith("video/"))
+    ?? (artifact.kind === "video" ? artifact.assets[0] : null);
+  return video?.url ? { kind: "video", url: video.url, posterUrl: artifact.posterUrl } : null;
+}
 
 function formatDateTime(value: string) {
   return new Date(value).toLocaleString("ko-KR", {
@@ -449,7 +467,7 @@ function PublishResultDialog({
   );
 }
 
-export function PublishQueuePage() {
+export function PublishQueuePage({ generationGateway = aiContentApiGateway }: PublishQueuePageProps = {}) {
   const initialQuery = useMemo(() => new URLSearchParams(window.location.search), []);
   const highlightedQueueId = useMemo(() => initialQuery.get("queueId"), [initialQuery]);
   const [view, setView] = useState<PublishView>(() => initialQuery.get("view") === "calendar" ? "calendar" : "list");
@@ -463,6 +481,7 @@ export function PublishQueuePage() {
   const [calendarSaving, setCalendarSaving] = useState(false);
   const [calendarSettingsError, setCalendarSettingsError] = useState<string | null>(null);
   const [publishItems, setPublishItems] = useState<PublishItem[]>([]);
+  const [generationPreviews, setGenerationPreviews] = useState<ReadonlyMap<string, PublishCardPreview>>(() => new Map());
   const [activeFilter, setActiveFilter] = useState<ManagementFilterId>(() => {
     const requested = new URLSearchParams(window.location.search).get("status");
     return publishManagementFilters.some((filter) => filter.id === requested) ? requested as ManagementFilterId : "all";
@@ -477,6 +496,7 @@ export function PublishQueuePage() {
   const scheduleFocusItemKeyRef = useRef<string | null>(null);
   const manualOptionsRequestRef = useRef(0);
   const reviewingOutputIdsRef = useRef(new Set<string>());
+  const generationPreviewRequestRef = useRef<string | null>(null);
   const [reviewingOutputIds, setReviewingOutputIds] = useState<Set<string>>(() => new Set());
 
   const calendarEntries = useMemo<CalendarEntry[]>(() => datedItems(publishItems).map(entryFromPublishItem), [publishItems]);
@@ -582,6 +602,31 @@ export function PublishQueuePage() {
     }
     return () => { ignore = true; };
   }, [calendarMonth, view]);
+
+  useEffect(() => {
+    if (view !== "calendar") return;
+    const outputIds = [...new Set(calendarUnreservedItems.flatMap((item) => item.contentStatus === "completed" && item.sourceRefs.generationOutputId
+      ? [item.sourceRefs.generationOutputId]
+      : []))].sort();
+    const signature = outputIds.join(",");
+    if (!signature || generationPreviewRequestRef.current === signature) return;
+    generationPreviewRequestRef.current = signature;
+    let ignore = false;
+    const requested = new Set(outputIds);
+    void generationGateway.listGenerations(DEMO_BRAND_ID)
+      .then((generations) => {
+        if (ignore) return;
+        const previews = new Map<string, PublishCardPreview>();
+        for (const output of generations.flatMap((generation) => generation.outputs)) {
+          if (!requested.has(output.id)) continue;
+          const preview = generationOutputPreview(output);
+          if (preview) previews.set(output.id, preview);
+        }
+        setGenerationPreviews(previews);
+      })
+      .catch(() => { if (!ignore) setGenerationPreviews(new Map()); });
+    return () => { ignore = true; };
+  }, [calendarUnreservedItems, generationGateway, view]);
 
   async function loadManualOptions() {
     setCalendarManualOptions(null);
@@ -857,6 +902,7 @@ export function PublishQueuePage() {
           slotsError={null}
           slotsLoading={false}
           unreservedItems={calendarUnreservedItems}
+          generatedPreviews={generationPreviews}
           focusedItemKey={calendarFocusItemKey}
           onFocusedItemHandled={() => setCalendarFocusItemKey(null)}
           assignableContents={assignableCalendarContents}
