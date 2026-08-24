@@ -53,6 +53,13 @@ export interface ProductServiceImageAsset {
   sizeBytes: number;
 }
 
+export interface ProductImageImportStatus {
+  status: "pending" | "processing" | "succeeded" | "failed";
+  attemptCount: number;
+  errorCode: string | null;
+  updatedAt: string;
+}
+
 export interface BrandStylePresetInput {
   contractVersion: "brand-style-preset.v1";
   name: string;
@@ -403,6 +410,18 @@ export function createLibraryGateway(client: Client = apiClient(), blobPut: type
         { method: "GET" },
       );
     },
+    getProductImageImportStatus(brandId: string, productId: string, versionId: string) {
+      return client.requestJson<ProductImageImportStatus | null>(
+        `/brands/${brandId}/products/${productId}/versions/${versionId}/image-import`,
+        { method: "GET" },
+      );
+    },
+    retryProductImageImport(brandId: string, productId: string, versionId: string) {
+      return client.requestJson<ProductImageImportStatus>(
+        `/brands/${brandId}/products/${productId}/versions/${versionId}/image-import/retry`,
+        { method: "POST" },
+      );
+    },
     async uploadProductImage(
       brandId: string,
       productId: string,
@@ -437,12 +456,22 @@ export function createLibraryGateway(client: Client = apiClient(), blobPut: type
         body: JSON.stringify(metadata),
         ...(options.signal ? { signal: options.signal } : {}),
       });
+      const cancel = () => client.requestJson(
+        `/brands/${brandId}/products/${productId}/images/upload-sessions/${token.sessionId}`,
+        { method: "DELETE" },
+      ).catch(() => undefined);
+      let stored: Awaited<ReturnType<typeof blobPut>>;
       try {
-        const stored = await blobPut(token.pathname, file, {
+        stored = await blobPut(token.pathname, file, {
           access: "public", token: token.clientToken, contentType: mimeType, abortSignal: options.signal,
           onUploadProgress: ({ percentage }) => onProgress(10 + Math.round(percentage * 0.6)),
         });
-        onProgress(70);
+      } catch {
+        await cancel();
+        throw new Error("product_image_blob_upload_failed");
+      }
+      onProgress(70);
+      try {
         const confirmed = await client.requestJson<ProductServiceImageAsset>(
           `/brands/${brandId}/products/${productId}/images/confirm`,
           {
@@ -457,12 +486,9 @@ export function createLibraryGateway(client: Client = apiClient(), blobPut: type
         );
         onProgress(100);
         return confirmed;
-      } catch (error) {
-        await client.requestJson(
-          `/brands/${brandId}/products/${productId}/images/upload-sessions/${token.sessionId}`,
-          { method: "DELETE" },
-        ).catch(() => undefined);
-        throw error;
+      } catch {
+        await cancel();
+        throw new Error("product_image_confirm_failed");
       }
     },
     deleteProductImage(brandId: string, productId: string, imageId: string) {

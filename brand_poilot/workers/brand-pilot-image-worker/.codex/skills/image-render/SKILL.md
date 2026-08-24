@@ -15,11 +15,12 @@ description: 내장 image_generation으로 Brand Pilot의 확정된 이미지 �
 ## 카드·릴스 공유 Visual Session
 
 `ai-content-visual-session-render.v1`에서는 `inputs/compiled-render-prompt.txt`를 유일한 최종 렌더 지시로 사용하세요.
-현재 canonical 렌더 정책 버전은 `visual-render-policy.d2pp.v2`이며, prompt에 기록된 version/hash를 그대로 따르세요.
+현재 canonical 렌더 정책 버전은 `visual-render-policy.d2pp.v3`이며, prompt에 기록된 version/hash를 그대로 따르세요.
 
 - `inputs/visual-session.json`은 전체 원고 의미와 장면 순서의 읽기 전용 원본입니다.
 - 하나의 Codex 실행 안에서 장면 index 순서로 `image_generation`을 장면당 정확히 한 번 호출하세요. 실패한 장면을 재시도하거나 다음 장면을 계속 만들지 마세요.
 - 첫 장면 전에 하나의 주 시각 매체를 결정하고 전체 장면에서 유지하세요. 승인된 브랜드 스타일 이미지가 있으면 이를 최우선 기준으로 사용하세요.
+- 모든 장면에서 동일하거나 가장 유사한 폰트 계열·굵기 체계·타이포그래피 성격을 최대한 유지하고, 정보 위계에 필요한 크기와 굵기만 조절하세요.
 - 앞에서 생성한 PNG를 다음 장면의 reference image로 사용하지 마세요.
 - `informationRelation`은 의미 관계일 뿐 레이아웃 명령이 아닙니다. 같은 관계 타입이라도 구성을 반복할 의무가 없습니다.
 - 잠긴 표시 문구 외 설명, 말풍선, 스티커, 가짜 UI, 장식 영문, 페이지 번호나 `1/5` 카운터를 추가하지 마세요. 번호가 생겼다는 이유로 재시도하지 마세요.

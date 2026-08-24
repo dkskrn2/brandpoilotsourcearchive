@@ -1355,6 +1355,23 @@ export function createBrandIntelligenceRepository(
             "update product_services set active_version_id = $2 where id = $1",
             [product.rows[0]!.id, approvedVersion.rows[0]!.id],
           );
+          if (offering.kind === "product" && offering.purchaseUrl) {
+            await client.query(
+              `insert into product_service_image_import_jobs(
+                 workspace_id,brand_id,product_service_id,product_service_version_id,
+                 requested_by_user_id,source_urls_json,status
+               ) values($1,$2,$3,$4,$5,$6::jsonb,'pending')
+               on conflict(product_service_version_id) do nothing`,
+              [
+                input.workspaceId,
+                input.brandId,
+                product.rows[0]!.id,
+                approvedVersion.rows[0]!.id,
+                input.actorUserId ?? null,
+                JSON.stringify([offering.purchaseUrl]),
+              ],
+            );
+          }
         }
         if (effective.contractVersion === "brand-intelligence-result.v2") {
           for (const faq of effective.faqSuggestions) {

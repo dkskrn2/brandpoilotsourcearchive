@@ -64,6 +64,21 @@ describe("visual-session image tool audit", () => {
     })).toThrow("visual_session_image_call_count_invalid");
   });
 
+  it("requires every selected product identity reference in the actual image tool arguments", () => {
+    const required = ["inputs/product-1.png", "inputs/product-url-1.webp"];
+    const audit = createVisualSessionImageAudit([1]);
+    expect(() => applyVisualSessionImageHookEvent(audit, {
+      hookEventName: "PreToolUse", toolName: "image_gen__imagegen", toolUseId: "call-one",
+      toolInput: imageInput(1, { referenced_image_paths: [required[0]] }),
+      requiredProductReferencePaths: required, workspaceDir, nowMs: 100,
+    })).toThrow("visual_session_image_required_product_reference_missing");
+    expect(() => applyVisualSessionImageHookEvent(audit, {
+      hookEventName: "PreToolUse", toolName: "image_gen__imagegen", toolUseId: "call-one",
+      toolInput: imageInput(1, { referenced_image_paths: required }),
+      requiredProductReferencePaths: required, workspaceDir, nowMs: 100,
+    })).not.toThrow();
+  });
+
   it("ignores unrelated tool hook events", () => {
     const audit = createVisualSessionImageAudit([1]);
     expect(applyVisualSessionImageHookEvent(audit, {

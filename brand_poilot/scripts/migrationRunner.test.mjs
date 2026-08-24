@@ -4614,6 +4614,7 @@ test("an installation applied through 064 has every later migration pending", as
       "085_publish_calendar_idempotency_expand.sql",
       "086_publish_calendar_same_time_contract.sql",
       "087_ai_content_prompt_lineage_v3.sql",
+      "088_onboarding_product_image_imports.sql",
     ],
   );
 });
@@ -4713,6 +4714,25 @@ test("AI content prompt lineage v3 follows migration 086 deterministically", asy
   );
 });
 
+test("onboarding product image imports follow migration 087 deterministically", async () => {
+  const loaded = await migrationRunner.loadMigrations();
+  const ids = loaded.map(({ id }) => id);
+  const migration088Index = ids.indexOf("088_onboarding_product_image_imports.sql");
+
+  assert.equal(
+    migration088Index,
+    ids.indexOf("087_ai_content_prompt_lineage_v3.sql") + 1,
+  );
+  assert.equal(
+    migrationRunner.post075SchemaMigrationChecksums["088_onboarding_product_image_imports.sql"],
+    "a83e1adecd9df47980051328c2a6bde13a3c0c58a6636f21462d77800299374c",
+  );
+  assert.equal(
+    loaded[migration088Index].checksum,
+    migrationRunner.post075SchemaMigrationChecksums["088_onboarding_product_image_imports.sql"],
+  );
+});
+
 const post076SchemaMigrationIdsForTests = [
   "077_content_suggestion_batches.sql",
   "078_faq_utterance_matching.sql",
@@ -4725,6 +4745,7 @@ const post076SchemaMigrationIdsForTests = [
   "085_publish_calendar_idempotency_expand.sql",
   "086_publish_calendar_same_time_contract.sql",
   "087_ai_content_prompt_lineage_v3.sql",
+  "088_onboarding_product_image_imports.sql",
 ];
 
 test("post-075 data migrations are a closed DML-only contract", async () => {

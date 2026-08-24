@@ -54,6 +54,7 @@ import {
   compileStructuredScene,
   parseStructuredSceneCopyV1,
 } from "@brand-pilot/content-contracts/structured-scene-copy";
+import { parseProductVisualSourceSnapshotV1 } from "@brand-pilot/content-contracts/product-visual-references";
 
 type Queryable = Pick<PoolClient, "query">;
 
@@ -601,6 +602,10 @@ async function visualSessionImageAssetPayloadV1(
     throw new Error("ai_content_render_snapshot_mismatch");
   }
   const generationPayload = record(state.rows[0].generation_job_payload);
+  const productVisualSourceSnapshot = generationPayload.productVisualSourceSnapshot === null
+    || generationPayload.productVisualSourceSnapshot === undefined
+    ? null
+    : parseProductVisualSourceSnapshotV1(generationPayload.productVisualSourceSnapshot);
   let visualSession: AiContentVisualSessionV1;
   if (binding.sourceContractVersion === "reel-storyboard.v1" || binding.sourceContractVersion === "reel-storyboard.v2") {
     const contract = binding.sourceContractVersion === "reel-storyboard.v2"
@@ -630,7 +635,9 @@ async function visualSessionImageAssetPayloadV1(
   return {
     ...storedPayload,
     contentGenerationInput,
-    contentPlan,
+    contentPlan: productVisualSourceSnapshot
+      ? { ...contentPlan, _privateProductVisualSourceSnapshot: productVisualSourceSnapshot }
+      : contentPlan,
     visualSession: parseAiContentVisualSessionV1(visualSession),
   };
 }

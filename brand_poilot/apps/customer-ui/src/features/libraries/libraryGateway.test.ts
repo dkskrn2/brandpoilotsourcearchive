@@ -71,6 +71,17 @@ describe("library gateway", () => {
     expect(requestJson).toHaveBeenNthCalledWith(3, "/brands/brand-1/products/product-1/images/image-1", { method: "DELETE" });
   });
 
+  it("loads and retries an onboarding product image import", async () => {
+    const requestJson = vi.fn().mockResolvedValue({ status: "pending", attemptCount: 0, errorCode: null });
+    const gateway = createLibraryGateway({ requestJson } as never);
+    await gateway.getProductImageImportStatus("brand-1", "product-1", "version-1");
+    await gateway.retryProductImageImport("brand-1", "product-1", "version-1");
+    expect(requestJson).toHaveBeenNthCalledWith(1,
+      "/brands/brand-1/products/product-1/versions/version-1/image-import", { method: "GET" });
+    expect(requestJson).toHaveBeenNthCalledWith(2,
+      "/brands/brand-1/products/product-1/versions/version-1/image-import/retry", { method: "POST" });
+  });
+
   it("cancels the product upload reservation when confirmation fails", async () => {
     const token = {
       pathname: "brands/brand-1/asset-library/products/product-1/session-1/checksum-product.png",
@@ -88,10 +99,29 @@ describe("library gateway", () => {
       "brand-1", "product-1", "version-1",
       new File(["image"], "product.png", { type: "image/png" }),
       { role: "hero", position: 1, checksum: "a".repeat(64) },
-    )).rejects.toBe(confirmError);
+    )).rejects.toThrow("product_image_confirm_failed");
     expect(requestJson).toHaveBeenNthCalledWith(
       3, "/brands/brand-1/products/product-1/images/upload-sessions/session-1", { method: "DELETE" },
     );
+  });
+
+  it("preserves the direct Blob upload failure stage before cancellation", async () => {
+    const token = {
+      pathname: "brands/brand-1/asset-library/products/product-1/session-1/checksum-product.png",
+      clientToken: "client-token", sessionId: "session-1", nonce: "nonce-1",
+      expiresAt: "2026-08-14T01:00:00.000Z",
+    };
+    const requestJson = vi.fn().mockResolvedValueOnce(token).mockResolvedValueOnce({ status: "cleanup_pending" });
+    const gateway = createLibraryGateway({ requestJson } as never, vi.fn(async () => {
+      throw new Error("provider rejected");
+    }) as never);
+    await expect(gateway.uploadProductImage(
+      "brand-1", "product-1", "version-1",
+      new File(["image"], "product.png", { type: "image/png" }),
+      { role: "hero", position: 1, checksum: "a".repeat(64) },
+    )).rejects.toThrow("product_image_blob_upload_failed");
+    expect(requestJson).toHaveBeenNthCalledWith(2,
+      "/brands/brand-1/products/product-1/images/upload-sessions/session-1", { method: "DELETE" });
   });
 
   it("loads a scoped reference detail for persisted style previews", async () => {

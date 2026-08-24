@@ -4340,6 +4340,97 @@ export function createServer(
   }
 
   app.post<{ Body: Record<string, unknown> }>(
+    "/worker/product-image-import-jobs/claim",
+    async (request, reply) => {
+      if (!authenticateAiContentWorker(request.headers.authorization, reply)) return;
+      if (typeof repository.claimProductImageImportJob !== "function") throw new Error("product_image_import_repository_not_configured");
+      const body = request.body ?? {};
+      assertExactAiContentWorkerBody(body, ["workerId", "leaseSeconds"], "product_image_import_claim_invalid");
+      const workerId = requiredAiContentField(body.workerId, "product_image_import_worker_id_required", 200);
+      const leaseSeconds = Number(body.leaseSeconds);
+      if (!Number.isSafeInteger(leaseSeconds) || leaseSeconds < 30 || leaseSeconds > 600) {
+        throw new Error("product_image_import_lease_seconds_invalid");
+      }
+      return { job: await repository.claimProductImageImportJob({ workerId, leaseSeconds }) };
+    },
+  );
+
+  app.post<{ Params: { jobId: string }; Body: Record<string, unknown> }>(
+    "/worker/product-image-import-jobs/:jobId/heartbeat",
+    async (request, reply) => {
+      if (!authenticateAiContentWorker(request.headers.authorization, reply)) return;
+      if (typeof repository.heartbeatProductImageImportJob !== "function") throw new Error("product_image_import_repository_not_configured");
+      const body = request.body ?? {};
+      assertExactAiContentWorkerBody(body, ["workerId", "leaseToken", "leaseSeconds"], "product_image_import_heartbeat_invalid");
+      const input = {
+        jobId: request.params.jobId,
+        workerId: requiredAiContentField(body.workerId, "product_image_import_worker_id_required", 200),
+        leaseToken: requiredAiContentField(body.leaseToken, "product_image_import_lease_token_required", 200),
+        leaseSeconds: Number(body.leaseSeconds),
+      };
+      if (!Number.isSafeInteger(input.leaseSeconds) || input.leaseSeconds < 30 || input.leaseSeconds > 600) {
+        throw new Error("product_image_import_lease_seconds_invalid");
+      }
+      if (!await repository.heartbeatProductImageImportJob(input)) {
+        reply.code(409);
+        return { error: "product_image_import_lease_invalid" };
+      }
+      return { id: input.jobId, status: "processing" };
+    },
+  );
+
+  app.post<{ Params: { jobId: string }; Body: Record<string, unknown> }>(
+    "/worker/product-image-import-jobs/:jobId/complete",
+    async (request, reply) => {
+      if (!authenticateAiContentWorker(request.headers.authorization, reply)) return;
+      if (typeof repository.completeProductImageImportJob !== "function") throw new Error("product_image_import_repository_not_configured");
+      const body = request.body ?? {};
+      assertExactAiContentWorkerBody(body, ["workerId", "leaseToken", "selectionAudit", "images"], "product_image_import_completion_invalid");
+      if (!isObject(body.selectionAudit) || !Array.isArray(body.images) || body.images.length > 5
+        || body.images.some((image) => !isObject(image))) {
+        throw new Error("product_image_import_completion_invalid");
+      }
+      const completion = await repository.completeProductImageImportJob({
+        jobId: request.params.jobId,
+        workerId: requiredAiContentField(body.workerId, "product_image_import_worker_id_required", 200),
+        leaseToken: requiredAiContentField(body.leaseToken, "product_image_import_lease_token_required", 200),
+        selectionAudit: body.selectionAudit,
+        images: body.images as never,
+      });
+      if (!completion.completed) {
+        reply.code(409);
+        return { error: "product_image_import_lease_invalid" };
+      }
+      return {
+        id: request.params.jobId,
+        status: "succeeded",
+        retainedStoragePaths: completion.retainedStoragePaths,
+      };
+    },
+  );
+
+  app.post<{ Params: { jobId: string }; Body: Record<string, unknown> }>(
+    "/worker/product-image-import-jobs/:jobId/fail",
+    async (request, reply) => {
+      if (!authenticateAiContentWorker(request.headers.authorization, reply)) return;
+      if (typeof repository.failProductImageImportJob !== "function") throw new Error("product_image_import_repository_not_configured");
+      const body = request.body ?? {};
+      assertExactAiContentWorkerBody(body, ["workerId", "leaseToken", "errorCode"], "product_image_import_failure_invalid");
+      const status = await repository.failProductImageImportJob({
+        jobId: request.params.jobId,
+        workerId: requiredAiContentField(body.workerId, "product_image_import_worker_id_required", 200),
+        leaseToken: requiredAiContentField(body.leaseToken, "product_image_import_lease_token_required", 200),
+        errorCode: requiredAiContentField(body.errorCode, "product_image_import_error_code_required", 200),
+      });
+      if (status === "lease_lost") {
+        reply.code(409);
+        return { error: "product_image_import_lease_invalid" };
+      }
+      return { id: request.params.jobId, status };
+    },
+  );
+
+  app.post<{ Body: Record<string, unknown> }>(
     "/worker/content-proposal-jobs/heartbeat",
     async (request, reply) => {
       if (!authenticateContentProposalWorker(request.headers.authorization, reply)) return;

@@ -7,6 +7,27 @@ import { ProductServiceImageManager } from "./ProductServiceImageManager";
 afterEach(cleanup);
 
 describe("ProductServiceImageManager", () => {
+  it("shows onboarding URL image import progress and retries an explicit failure", async () => {
+    const gateway = {
+      listProductImages: vi.fn().mockResolvedValue([]),
+      getProductImageImportStatus: vi.fn().mockResolvedValue({
+        status: "failed", attemptCount: 3, errorCode: "fetch_failed", updatedAt: "2026-08-24T00:00:00.000Z",
+      }),
+      retryProductImageImport: vi.fn().mockResolvedValue({
+        status: "pending", attemptCount: 0, errorCode: null, updatedAt: "2026-08-24T00:01:00.000Z",
+      }),
+      uploadProductImage: vi.fn(), deleteProductImage: vi.fn(),
+    };
+    const user = userEvent.setup();
+    render(<ProductServiceImageManager
+      brandId="brand-1" productId="product-1" versionId="version-1" gateway={gateway as never}
+    />);
+    expect(await screen.findByText("제품 페이지 이미지를 가져오지 못했습니다.")).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "제품 이미지 다시 가져오기" }));
+    await waitFor(() => expect(gateway.retryProductImageImport).toHaveBeenCalledWith("brand-1", "product-1", "version-1"));
+    expect(await screen.findByText("제품 페이지에서 이미지를 가져오는 중입니다.")).toBeVisible();
+  });
+
   it("keeps product images optional and assigns the first image as the hero", async () => {
     const uploaded = {
       id: "image-1", productServiceId: "product-1", versionId: "version-1",

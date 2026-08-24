@@ -98,6 +98,7 @@ export const applicationRuntimeRelationSecurityCatalog = Object.freeze([
   applicationRelationGrant("manual_ai_content_visual_selections", ["INSERT", "SELECT", "UPDATE"]),
   applicationRelationGrant("master_drafts", ["INSERT", "SELECT"]),
   applicationRelationGrant("product_service_assets", ["DELETE", "INSERT", "SELECT"]),
+  applicationRelationGrant("product_service_image_import_jobs", ["INSERT", "SELECT", "UPDATE"]),
   applicationRelationGrant("product_service_versions", ["SELECT"]),
   applicationRelationGrant("product_services", ["SELECT"]),
   applicationRelationGrant("publish_attempts", ["SELECT"]),

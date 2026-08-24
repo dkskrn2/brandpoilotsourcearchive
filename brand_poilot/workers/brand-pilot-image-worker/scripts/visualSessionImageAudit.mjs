@@ -47,6 +47,20 @@ function assertReferencePaths(toolInput, workspaceDir) {
   }
 }
 
+function assertRequiredProductReferences(toolInput, requiredPaths, workspaceDir) {
+  if (requiredPaths === undefined || requiredPaths === null || requiredPaths.length === 0) return;
+  if (!Array.isArray(requiredPaths) || requiredPaths.some((value) => typeof value !== "string" || !value)
+    || typeof workspaceDir !== "string" || !path.isAbsolute(workspaceDir)) {
+    throw new Error("visual_session_image_required_product_reference_invalid");
+  }
+  const supplied = Array.isArray(toolInput.referenced_image_paths)
+    ? new Set(toolInput.referenced_image_paths.map((value) => path.resolve(workspaceDir, value)))
+    : new Set();
+  if (requiredPaths.some((value) => !supplied.has(path.resolve(workspaceDir, value)))) {
+    throw new Error("visual_session_image_required_product_reference_missing");
+  }
+}
+
 export function createVisualSessionImageAudit(expectedSceneIndices) {
   if (!Array.isArray(expectedSceneIndices) || expectedSceneIndices.length < 1 || expectedSceneIndices.length > 5
     || expectedSceneIndices.some((value, offset) => value !== offset + 1)) {
@@ -73,6 +87,7 @@ export function applyVisualSessionImageHookEvent(audit, event) {
       throw new Error("visual_session_image_previous_output_reference_forbidden");
     }
     assertReferencePaths(input, event.workspaceDir);
+    assertRequiredProductReferences(input, event.requiredProductReferencePaths, event.workspaceDir);
     const boundSceneIndex = sceneIndex(input);
     if (boundSceneIndex === null) throw new Error("visual_session_image_scene_binding_invalid");
     if (boundSceneIndex !== audit.expectedSceneIndices[calls.length]) throw new Error("visual_session_image_scene_order_invalid");

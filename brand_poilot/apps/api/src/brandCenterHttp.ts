@@ -437,22 +437,49 @@ export function registerBrandCenterRoutes(
         ...scope, productServiceId: request.params.productId, imageId: request.params.imageId,
       });
       if (!image) throw new Error("product_service_image_not_found");
-      await repository.deleteProductServiceImageAsset({
+      const deletion = await repository.deleteProductServiceImageAsset({
         ...scope, actorUserId: requireActor(options, request), productServiceId: request.params.productId,
         imageId: request.params.imageId,
       });
-      try {
-        await deleteAssetLibraryBlob(image.storagePath, {
-          token: options.assetLibraryUpload.readWriteToken,
-          deleteBlob: options.assetLibraryUpload.deleteBlob,
-        });
-      } catch (error) {
-        request.log.warn({
-          error: error instanceof Error ? error.message : "unknown", imageId: request.params.imageId,
-        }, "product image blob cleanup deferred after database deletion");
+      if (deletion.deleteBlob) {
+        try {
+          await deleteAssetLibraryBlob(image.storagePath, {
+            token: options.assetLibraryUpload.readWriteToken,
+            deleteBlob: options.assetLibraryUpload.deleteBlob,
+          });
+        } catch (error) {
+          request.log.warn({
+            error: error instanceof Error ? error.message : "unknown", imageId: request.params.imageId,
+          }, "product image blob cleanup deferred after database deletion");
+        }
       }
       reply.code(204);
       return reply.send();
+    },
+  );
+
+  app.get<{ Params: { brandId: string; productId: string; versionId: string } }>(
+    "/brands/:brandId/products/:productId/versions/:versionId/image-import",
+    async (request) => {
+      if (!repository.getProductImageImportStatus) throw new Error("product_image_import_not_configured");
+      return await repository.getProductImageImportStatus({
+        ...options.scope(request, request.params.brandId),
+        productServiceId: request.params.productId,
+        versionId: request.params.versionId,
+      });
+    },
+  );
+
+  app.post<{ Params: { brandId: string; productId: string; versionId: string } }>(
+    "/brands/:brandId/products/:productId/versions/:versionId/image-import/retry",
+    async (request) => {
+      if (!repository.retryProductImageImportJob) throw new Error("product_image_import_not_configured");
+      requireActor(options, request);
+      return repository.retryProductImageImportJob({
+        ...options.scope(request, request.params.brandId),
+        productServiceId: request.params.productId,
+        versionId: request.params.versionId,
+      });
     },
   );
 

@@ -227,6 +227,16 @@ describe("brand intelligence repository", () => {
         created_at timestamptz not null default now(), updated_at timestamptz not null default now(),
         unique (workspace_id, brand_id, product_service_id, version)
       );
+      create table product_service_image_import_jobs (
+        id uuid primary key default gen_random_uuid(),workspace_id uuid not null,brand_id uuid not null,
+        product_service_id uuid not null,product_service_version_id uuid not null,
+        requested_by_user_id uuid null,source_urls_json jsonb not null,status text not null default 'pending',
+        attempt_count integer not null default 0,available_at timestamptz not null default now(),
+        lease_owner text null,lease_token uuid null,lease_expires_at timestamptz null,
+        selection_audit_json jsonb null,error_code text null,created_at timestamptz not null default now(),
+        updated_at timestamptz not null default now(),completed_at timestamptz null,
+        unique(product_service_version_id)
+      );
       create table brand_core_versions (
         id uuid primary key default gen_random_uuid(), workspace_id uuid not null, brand_id uuid not null,
         source_analysis_id uuid, version integer not null, status text not null,
@@ -426,6 +436,57 @@ describe("brand intelligence repository", () => {
       category: "price",
       status: "draft",
       enabled: false,
+    }]);
+  });
+
+  it("enqueues automatic image import only for a newly confirmed product with a source URL", async () => {
+    const repository = createBrandIntelligenceRepository(pglitePool(database));
+    const requested = await repository.requestBrandAnalysis({
+      workspaceId,
+      brandId,
+      companyName: "제품 회사",
+      ownedUrl: "https://example.com",
+      uploadIds: [],
+      idempotencyKey: "product-image-import",
+    });
+    const claim = await repository.claimBrandAnalysis({
+      workerId: "worker-product",
+      leaseSeconds: 60,
+      supportedPipelineVersions: [2],
+    });
+    const productResult = resultV2();
+    productResult.offerings = [{
+      ...productResult.offerings[0]!,
+      kind: "product",
+      name: "자동 이미지 제품",
+      purchaseUrl: "https://shop.example/products/automatic",
+    }];
+    await repository.completeBrandAnalysis({
+      analysisId: requested.id,
+      workerId: "worker-product",
+      leaseToken: claim!.leaseToken,
+      evidence: evidenceV2(),
+      result: productResult,
+      registry: { ownedFactIds: ["fact-1"], externalSources: [] },
+    });
+    await repository.confirmBrandAnalysis({
+      workspaceId,
+      brandId,
+      analysisId: requested.id,
+      companyName: "제품 회사",
+    });
+
+    const jobs = await database.query<{
+      source_urls_json: string[]; status: string; kind: string;
+    }>(
+      `select job.source_urls_json,job.status,item.kind
+         from product_service_image_import_jobs job
+         join product_services item on item.id=job.product_service_id`,
+    );
+    expect(jobs.rows).toEqual([{
+      source_urls_json: ["https://shop.example/products/automatic"],
+      status: "pending",
+      kind: "product",
     }]);
   });
 

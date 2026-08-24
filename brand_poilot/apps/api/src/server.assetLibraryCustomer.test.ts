@@ -101,7 +101,7 @@ function setup(overrides: Partial<ApiRepository> = {}) {
       mimeType: "image/webp", sizeBytes: 100,
       storagePath: `brands/${brandId}/asset-library/products/${productId}/${sessionId}/${checksum}-face.webp`,
     })),
-    deleteProductServiceImageAsset: vi.fn(async () => undefined),
+    deleteProductServiceImageAsset: vi.fn(async () => ({ deleteBlob: true })),
     ...overrides,
   } as unknown as ApiRepository;
   const kakaoAuth = {
@@ -224,6 +224,30 @@ describe("asset library customer routes", () => {
     await app.close();
   });
 
+  it("returns and explicitly retries an onboarding product image import", async () => {
+    const getProductImageImportStatus = vi.fn(async () => ({
+      status: "failed" as const, attemptCount: 3, errorCode: "fetch_failed", updatedAt: "2026-08-24T00:00:00.000Z",
+    }));
+    const retryProductImageImportJob = vi.fn(async () => ({
+      status: "pending" as const, attemptCount: 0, errorCode: null, updatedAt: "2026-08-24T00:01:00.000Z",
+    }));
+    const { app } = setup({ getProductImageImportStatus, retryProductImageImportJob });
+    const status = await app.inject({
+      method: "GET", headers: auth,
+      url: `/brands/${brandId}/products/${productId}/versions/${versionId}/image-import`,
+    });
+    expect(status.statusCode).toBe(200);
+    expect(status.json().status).toBe("failed");
+    const retry = await app.inject({
+      method: "POST", headers: auth,
+      url: `/brands/${brandId}/products/${productId}/versions/${versionId}/image-import/retry`,
+    });
+    expect(retry.statusCode).toBe(200);
+    expect(retry.json().status).toBe("pending");
+    expect(retryProductImageImportJob).toHaveBeenCalledWith({ workspaceId, brandId, productServiceId: productId, versionId });
+    await app.close();
+  });
+
   it("cancels an unconfirmed product upload using the authenticated product scope", async () => {
     const { app, repository } = setup();
     const cancelled = await app.inject({
@@ -254,6 +278,19 @@ describe("asset library customer routes", () => {
     expect(databaseDeleteOrder).toBeDefined();
     expect(blobDeleteOrder).toBeDefined();
     expect(databaseDeleteOrder!).toBeLessThan(blobDeleteOrder!);
+    await app.close();
+  });
+
+  it("does not delete the physical product blob while another version still references it", async () => {
+    const deleteProductServiceImageAsset = vi.fn(async () => ({ deleteBlob: false })) as never;
+    const { app, deleteBlob } = setup({ deleteProductServiceImageAsset });
+    const deleted = await app.inject({
+      method: "DELETE",
+      url: `/brands/${brandId}/products/${productId}/images/${referenceId}`,
+      headers: auth,
+    });
+    expect(deleted.statusCode).toBe(204);
+    expect(deleteBlob).not.toHaveBeenCalled();
     await app.close();
   });
 

@@ -8,6 +8,10 @@ import {
   type FrozenManualVisualSelectionV1,
   type ManualVisualSelectionV1,
 } from "@brand-pilot/content-contracts/manual-visual-selection";
+import {
+  parseProductVisualSourceSnapshotV1,
+  type ProductVisualSourceSnapshotV1,
+} from "@brand-pilot/content-contracts/product-visual-references";
 import type { FrozenStyleImageV2 } from "./aiContentContracts.js";
 import { parseProductServiceProfile } from "./productLibraryContracts.js";
 import { canonicalProposalJson, proposalSha256 } from "./aiContentProposalV2Service.js";
@@ -32,6 +36,54 @@ export interface MaterializedManualVisualAssets {
   product: ApprovedProductSnapshotV2 | null;
   brandStyleImages: FrozenStyleImageV2[];
   avatarStyleImageId: string | null;
+}
+
+function safeProductSourceUrls(sourceUrls: readonly string[]): string[] {
+  const unique = new Set<string>();
+  for (const value of sourceUrls) {
+    try {
+      const parsed = new URL(value);
+      if (parsed.protocol !== "https:" || parsed.username || parsed.password || parsed.hash) continue;
+      unique.add(parsed.toString());
+      if (unique.size === 5) break;
+    } catch {
+      // An unavailable product page must not make content generation fail.
+    }
+  }
+  return [...unique];
+}
+
+export async function loadFrozenProductVisualSourceSnapshot(
+  client: Queryable,
+  scope: ManualVisualSelectionScope,
+  raw: FrozenManualVisualSelectionV1,
+): Promise<ProductVisualSourceSnapshotV1 | null> {
+  const selection = parseFrozenManualVisualSelectionV1(raw);
+  if (!selection.product) return null;
+  const selected = await client.query(
+    `select item.kind,version.profile_json
+       from product_services item
+       join product_service_versions version
+         on version.id=$2 and version.product_service_id=item.id
+        and version.workspace_id=item.workspace_id and version.brand_id=item.brand_id
+      where item.id=$1 and item.workspace_id=$3 and item.brand_id=$4
+        and item.status='active' and item.active_version_id=version.id
+        and version.status='approved'`,
+    [selection.product.productServiceId, selection.product.versionId, scope.workspaceId, scope.brandId],
+  );
+  const row = selected.rows[0];
+  if (!row || String(row.kind) !== selection.product.kind) unavailable();
+  const profile = parseProductServiceProfile(json(row.profile_json));
+  if (profile.kind !== selection.product.kind) unavailable();
+  const sourceUrls = safeProductSourceUrls(profile.sourceUrls);
+  if (sourceUrls.length === 0) return null;
+  return parseProductVisualSourceSnapshotV1({
+    contractVersion: "product-visual-source-snapshot.v1",
+    productServiceId: selection.product.productServiceId,
+    versionId: selection.product.versionId,
+    kind: selection.product.kind,
+    sourceUrls,
+  });
 }
 
 function json<T>(value: unknown): T {

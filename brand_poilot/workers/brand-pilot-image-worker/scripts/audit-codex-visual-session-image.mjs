@@ -44,6 +44,17 @@ async function main() {
   const lock = await acquireLock(lockPath);
   try {
     const job = parseJob(await readFile(path.join(workspaceDir, "visual-session-job.json"), "utf8"));
+    const requiredProductReferencePaths = await readFile(
+      path.join(workspaceDir, "required-product-reference-paths.json"),
+      "utf8",
+    ).then((value) => JSON.parse(value), (error) => {
+      if (error?.code === "ENOENT") return [];
+      throw error;
+    });
+    if (!Array.isArray(requiredProductReferencePaths)
+      || requiredProductReferencePaths.some((value) => typeof value !== "string" || !value)) {
+      throw new Error("visual_session_image_required_product_reference_invalid");
+    }
     let audit;
     try {
       audit = JSON.parse(await readFile(path.join(workspaceDir, AUDIT_FILE), "utf8"));
@@ -57,6 +68,7 @@ async function main() {
       toolUseId: event.tool_use_id,
       toolInput: event.tool_input,
       workspaceDir,
+      requiredProductReferencePaths,
       nowMs: Date.now(),
     });
     if (updated !== audit) {

@@ -3,6 +3,7 @@ import type { ClientRequest, IncomingMessage } from "node:http";
 import { Readable } from "node:stream";
 import { describe, expect, it, vi } from "vitest";
 import {
+  readPublicUrlBytes,
   readRepresentativeSource,
   type NodeRequestLike,
   type SourceReaderDependencies
@@ -50,6 +51,17 @@ function requestMock(
 }
 
 describe("readRepresentativeSource", () => {
+  it("keeps binary product image reads on validated public HTTPS targets", async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(redirect("http://10.0.0.1/private.png"));
+    await expect(readPublicUrlBytes(
+      "https://example.com/product.png",
+      { acceptedMimeTypes: new Set(["image/png"]), maxBytes: 1024, httpsOnly: true },
+      dependencies({ fetch: fetchMock }),
+    )).resolves.toEqual({ status: "blocked" });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
   it("pins the production HTTPS connection to only the validated address while preserving Host and TLS SNI", async () => {
     const pinnedLookups: string[][] = [];
     const request = requestMock([

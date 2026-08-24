@@ -1,4 +1,5 @@
 import type { Pool, PoolClient } from "pg";
+import { lockProductServiceAssetVersion } from "./productServiceAssetLock.js";
 import type { BrandScope } from "./brandCoreRepository.js";
 import {
   parseBrandStylePresetInput,
@@ -54,7 +55,7 @@ export interface ManualVisualAssetsRepository {
   ): Promise<(ProductServiceImageAsset & { storagePath: string }) | null>;
   deleteProductServiceImageAsset(
     scope: BrandScope & { actorUserId: string; productServiceId: string; imageId: string },
-  ): Promise<void>;
+  ): Promise<{ deleteBlob: boolean }>;
 }
 
 function parseJson<T>(value: unknown): T {
@@ -309,18 +310,19 @@ export function createManualVisualAssetsRepository(pool: Pool): ManualVisualAsse
           || new Date(session.rows[0].expires_at as string).getTime() <= Date.now()) {
           throw new Error("asset_library_upload_path_mismatch");
         }
+        await lockProductServiceAssetVersion(client, scope.versionId);
         const version = await client.query(
           `select version.id from product_service_versions version
             join product_services product on product.id=version.product_service_id
              and product.workspace_id=version.workspace_id and product.brand_id=version.brand_id
             where product.id=$1 and version.id=$2 and version.workspace_id=$3 and version.brand_id=$4
-              and product.status='active' and version.status in ('draft','approved') for update`,
+              and product.status='active' and version.status in ('draft','approved')`,
           [scope.productServiceId, scope.versionId, scope.workspaceId, scope.brandId],
         );
         if (!version.rowCount) throw new Error("product_service_version_not_found");
         const existing = await client.query(
           `select role,position from product_service_assets
-            where product_service_version_id=$1 and workspace_id=$2 and brand_id=$3 for update`,
+            where product_service_version_id=$1 and workspace_id=$2 and brand_id=$3`,
           [scope.versionId, scope.workspaceId, scope.brandId],
         );
         if (existing.rows.length >= 5 || existing.rows.some((row) => Number(row.position) === scope.position)
@@ -353,20 +355,29 @@ export function createManualVisualAssetsRepository(pool: Pool): ManualVisualAsse
     },
     getProductServiceImageAsset: getProductImage,
     async deleteProductServiceImageAsset(scope) {
-      await transaction(pool, async (client) => {
+      return transaction(pool, async (client) => {
         await member(client, scope);
+        const target = await client.query(
+          `select asset.product_service_version_id
+             from product_service_assets asset
+            where asset.id=$1 and asset.product_service_id=$2
+              and asset.workspace_id=$3 and asset.brand_id=$4`,
+          [scope.imageId, scope.productServiceId, scope.workspaceId, scope.brandId],
+        );
+        if (!target.rowCount) throw new Error("product_service_image_not_found");
+        await lockProductServiceAssetVersion(client, String(target.rows[0].product_service_version_id));
         const locked = await client.query(
           `select asset.id,asset.storage_artifact_id,asset.product_service_version_id,asset.role,asset.position
              from product_service_assets asset
             where asset.id=$1 and asset.product_service_id=$2
-              and asset.workspace_id=$3 and asset.brand_id=$4 for update`,
+              and asset.workspace_id=$3 and asset.brand_id=$4`,
           [scope.imageId, scope.productServiceId, scope.workspaceId, scope.brandId],
         );
         if (!locked.rowCount) throw new Error("product_service_image_not_found");
         const siblings = await client.query(
           `select asset.id,asset.role,asset.position from product_service_assets asset
             where asset.product_service_version_id=$1 and asset.workspace_id=$2 and asset.brand_id=$3
-            order by asset.position,asset.id for update`,
+            order by asset.position,asset.id`,
           [locked.rows[0].product_service_version_id, scope.workspaceId, scope.brandId],
         );
         await client.query(
@@ -385,10 +396,18 @@ export function createManualVisualAssetsRepository(pool: Pool): ManualVisualAsse
             [role, offset + 1, asset.id, scope.workspaceId, scope.brandId],
           );
         }
-        await client.query(
-          "update storage_artifacts set deleted_at=now() where id=$1 and workspace_id=$2 and brand_id=$3",
+        const retired = await client.query(
+          `update storage_artifacts artifact set deleted_at=now()
+            where artifact.id=$1 and artifact.workspace_id=$2 and artifact.brand_id=$3
+              and not exists(
+                select 1 from product_service_assets remaining
+                 where remaining.storage_artifact_id=artifact.id
+                   and remaining.workspace_id=artifact.workspace_id
+                   and remaining.brand_id=artifact.brand_id
+              )`,
           [locked.rows[0].storage_artifact_id, scope.workspaceId, scope.brandId],
         );
+        return { deleteBlob: Number(retired.rowCount ?? 0) === 1 };
       });
     },
   };

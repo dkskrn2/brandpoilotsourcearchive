@@ -48,4 +48,19 @@ describe("Codex visual-session hook command", () => {
     expect(result.status).toBe(2);
     expect(result.stderr).toContain("visual_session_image_scene_binding_invalid");
   });
+
+  it("loads the required product paths file and blocks omitted references", async () => {
+    const cwd = await mkdtemp(path.join(os.tmpdir(), "visual-hook-")); roots.push(cwd);
+    await writeFile(path.join(cwd, "visual-session-job.json"), JSON.stringify({
+      contractVersion: "ai-content-visual-session-render.v1", prompt: "prompt", expectedSceneIndices: [1],
+    }));
+    await writeFile(path.join(cwd, "required-product-reference-paths.json"), JSON.stringify(["inputs/product-1.png"]));
+    const result = run(cwd, {
+      cwd, hook_event_name: "PreToolUse", model: "gpt-5.6-terra", permission_mode: "default",
+      session_id: "thread", turn_id: "turn", transcript_path: null, tool_name: "image_genimagegen",
+      tool_use_id: "call-one", tool_input: { prompt: "BRAND_PILOT_SCENE_INDEX=1\nGenerate." },
+    });
+    expect(result.status).toBe(2);
+    expect(result.stderr).toContain("visual_session_image_required_product_reference_missing");
+  });
 });

@@ -202,7 +202,7 @@ async function cancelBody(response: Response) {
   }
 }
 
-async function readBoundedBody(response: Response): Promise<Uint8Array | null> {
+async function readBoundedBody(response: Response, maxBytes = MAX_RESPONSE_BYTES): Promise<Uint8Array | null> {
   if (!response.body) return new Uint8Array();
 
   const reader = response.body.getReader();
@@ -213,7 +213,7 @@ async function readBoundedBody(response: Response): Promise<Uint8Array | null> {
       const { done, value } = await reader.read();
       if (done) break;
       totalBytes += value.byteLength;
-      if (totalBytes > MAX_RESPONSE_BYTES) {
+      if (totalBytes > maxBytes) {
         await reader.cancel();
         return null;
       }
@@ -266,9 +266,75 @@ function extractSourceText(bytes: Uint8Array, mimeType: string) {
   return extractHtml(decoded);
 }
 
-function contentLengthExceedsLimit(response: Response) {
+function contentLengthExceedsLimit(response: Response, maxBytes = MAX_RESPONSE_BYTES) {
   const value = response.headers.get("content-length")?.trim();
-  return value !== undefined && /^\d+$/.test(value) && Number(value) > MAX_RESPONSE_BYTES;
+  return value !== undefined && /^\d+$/.test(value) && Number(value) > maxBytes;
+}
+
+export type PublicResourceReadResult =
+  | { status: "fetched"; finalUrl: string; mimeType: string; bytes: Uint8Array }
+  | { status: "blocked" | "dns_failed" | "redirect_invalid" | "redirect_limit_exceeded" | "http_error" | "too_large" | "mime_unsupported" | "timeout" | "fetch_failed" };
+
+export async function readPublicUrlBytes(
+  sourceUrl: string,
+  options: { acceptedMimeTypes: ReadonlySet<string>; maxBytes: number; httpsOnly?: boolean },
+  dependencies: Partial<SourceReaderDependencies> = {},
+): Promise<PublicResourceReadResult> {
+  const resolve = dependencies.resolve ?? defaultResolve;
+  const scheduleTimeout = dependencies.setTimeout ?? defaultSetTimeout;
+  const cancelTimeout = dependencies.clearTimeout ?? defaultClearTimeout;
+  let currentUrl: URL;
+  try { currentUrl = new URL(sourceUrl); } catch { return { status: "blocked" }; }
+  let redirects = 0;
+  while (true) {
+    if (options.httpsOnly && currentUrl.protocol !== "https:") return { status: "blocked" };
+    const controller = new AbortController();
+    const timeoutHandle = scheduleTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+    const validation = await awaitWithAbort(validateTarget(currentUrl, resolve), controller.signal);
+    if (!validation) { cancelTimeout(timeoutHandle); return { status: "timeout" }; }
+    if (validation.status !== "allowed") {
+      cancelTimeout(timeoutHandle);
+      return { status: validation.status === "blocked" ? "blocked" : "dns_failed" };
+    }
+    let response: Response;
+    try {
+      const init = { redirect: "manual" as const, signal: controller.signal };
+      response = dependencies.fetch
+        ? await dependencies.fetch(currentUrl.toString(), init)
+        : await fetchPinned(currentUrl, init, validation, dependencies.request);
+    } catch {
+      cancelTimeout(timeoutHandle);
+      return { status: controller.signal.aborted ? "timeout" : "fetch_failed" };
+    }
+    if (REDIRECT_STATUSES.has(response.status)) {
+      await cancelBody(response);
+      cancelTimeout(timeoutHandle);
+      if (redirects >= MAX_REDIRECTS) return { status: "redirect_limit_exceeded" };
+      const location = response.headers.get("location");
+      if (!location) return { status: "redirect_invalid" };
+      try { currentUrl = new URL(location, currentUrl); } catch { return { status: "redirect_invalid" }; }
+      redirects += 1;
+      continue;
+    }
+    if (!response.ok) { await cancelBody(response); cancelTimeout(timeoutHandle); return { status: "http_error" }; }
+    if (contentLengthExceedsLimit(response, options.maxBytes)) {
+      await cancelBody(response); cancelTimeout(timeoutHandle); return { status: "too_large" };
+    }
+    const mimeType = response.headers.get("content-type")?.split(";", 1)[0].trim().toLowerCase() ?? "";
+    if (!options.acceptedMimeTypes.has(mimeType)) {
+      await cancelBody(response); cancelTimeout(timeoutHandle); return { status: "mime_unsupported" };
+    }
+    try {
+      const bytes = await readBoundedBody(response, options.maxBytes);
+      cancelTimeout(timeoutHandle);
+      return bytes
+        ? { status: "fetched", finalUrl: currentUrl.toString(), mimeType, bytes }
+        : { status: "too_large" };
+    } catch {
+      cancelTimeout(timeoutHandle);
+      return { status: controller.signal.aborted ? "timeout" : "fetch_failed" };
+    }
+  }
 }
 
 export async function readRepresentativeSource(

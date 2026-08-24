@@ -20,6 +20,9 @@ import { createAiContentShutdownCoordinator, type AiContentWorkerExitSignal } fr
 import { runTextOnce } from "./textWorker.js";
 import { resolveAiContentLeaseTiming, runOnce } from "./worker.js";
 import { withWorkerResourceLease } from "./resourceLease.js";
+import { createProductImageImportClient } from "./productImageImportClient.js";
+import { createProductImageImportStorage } from "./productImageImportStorage.js";
+import { runProductImageImportOnce } from "./productImageImportWorker.js";
 
 function required(name: string) {
   const value = process.env[name];
@@ -74,12 +77,14 @@ async function main() {
   const apiConfig = { apiUrl: required("BRAND_PILOT_API_URL"), token: required("WORKER_API_TOKEN") };
   const client = createWorkerClient(apiConfig);
   const aiContentClient = createAiContentRenderClient(apiConfig);
+  const productImageImportClient = createProductImageImportClient(apiConfig);
   const textClient = createTextWorkerClient(apiConfig);
   const resourceClient = createWorkerResourceClient(apiConfig);
   const workerRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
   const textGenerator = createCodexTextGenerator({ rootDir: workerRoot });
   const blobToken = required("BLOB_READ_WRITE_TOKEN");
   const aiContentStorage = createAiContentBlobStorage({ token: blobToken });
+  const productImageImportStorage = createProductImageImportStorage({ token: blobToken });
   const accountPool = await createCodexAccountPoolFromEnv(process.env);
   const aiContentRenderer = createAiContentAssetRenderer({
     accountPool,
@@ -122,13 +127,24 @@ async function main() {
       signal: shutdown.signal,
       onAiContentActivityChange: shutdown.onAiContentActivityChange,
       onVisualSessionTiming: (timing) => process.stdout.write(`${JSON.stringify({ type: "ai_content_visual_session_timing", ...timing })}\n`),
-      runTextJob: () => runTextOnce({
-        workerId,
-        client: textClient,
-        generator: textGenerator,
-        heartbeatIntervalMs: Math.max(1000, Number(process.env.HEARTBEAT_INTERVAL_MS ?? "300000")),
-        retryDelayMs: Math.max(1000, Number(process.env.TEXT_RETRY_DELAY_MS ?? process.env.IMAGE_RETRY_DELAY_MS ?? "300000"))
-      }),
+      runTextJob: async () => {
+        const imported = await runProductImageImportOnce({
+          workerId,
+          client: productImageImportClient,
+          upload: productImageImportStorage.upload,
+          remove: productImageImportStorage.remove,
+          leaseSeconds: aiContentLeaseTiming.leaseSeconds,
+          heartbeatIntervalMs: aiContentLeaseTiming.heartbeatIntervalMs,
+        });
+        if (imported.status !== "idle") return imported;
+        return runTextOnce({
+          workerId,
+          client: textClient,
+          generator: textGenerator,
+          heartbeatIntervalMs: Math.max(1000, Number(process.env.HEARTBEAT_INTERVAL_MS ?? "300000")),
+          retryDelayMs: Math.max(1000, Number(process.env.TEXT_RETRY_DELAY_MS ?? process.env.IMAGE_RETRY_DELAY_MS ?? "300000"))
+        });
+      },
       heartbeatIntervalMs: Math.max(1000, Number(process.env.HEARTBEAT_INTERVAL_MS ?? "300000")),
       retryDelayMs: Math.max(1000, Number(process.env.IMAGE_RETRY_DELAY_MS ?? "300000"))
     });
