@@ -103,6 +103,15 @@ export function createKakaoAuthStore(pool: Pool) {
           "insert into brand_profiles (workspace_id, brand_id, auto_approval_enabled) values ($1, $2, true)",
           [workspaceId, brand.rows[0].id]
         );
+        await client.query(
+          `insert into brand_subscriptions(
+             brand_id,plan_code,status,started_at,current_period_start,current_period_end
+           )
+           select $1::uuid,'free','active',period.started_at,period.started_at,
+                  period.started_at + interval '1 month'
+             from (select clock_timestamp() as started_at) period`,
+          [brand.rows[0].id]
+        );
         await ensureBrandChannels(client as Pick<Pool, "query">, { workspaceId, brandId: brand.rows[0].id });
         await client.query("commit");
         return {
