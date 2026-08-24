@@ -61,9 +61,14 @@ import {
   parseFrozenManualVisualSelectionV1,
   parseManualVisualSelectionV1,
 } from "@brand-pilot/content-contracts/manual-visual-selection";
+import {
+  parseProductVisualSourceSnapshotV1,
+  type ProductVisualSourceSnapshotV1,
+} from "@brand-pilot/content-contracts/product-visual-references";
 import { parseResearchSourceAcquisitionV1 } from "@brand-pilot/content-contracts/research-source-acquisition";
 import {
   materializeFrozenManualVisualAssets,
+  loadFrozenProductVisualSourceSnapshot,
   prepareManualVisualSelection,
   saveManualVisualSelection,
   sealManualVisualSelection,
@@ -100,6 +105,10 @@ import {
   parseOnboardingProposalAuthority,
   type OnboardingContentSnapshot,
 } from "./onboardingContent.js";
+
+function optionalProductVisualSourceSnapshot(value: unknown): ProductVisualSourceSnapshotV1 | null {
+  return value === null || value === undefined ? null : parseProductVisualSourceSnapshotV1(value);
+}
 
 export interface BrandScope {
   workspaceId: string;
@@ -2323,6 +2332,11 @@ async function startAiContentGenerationV3Transaction(input: {
     }
     const preparedVisualSelection = await prepareManualVisualSelection(client, command);
     const frozenVisualSelection: FrozenManualVisualSelectionV1 = preparedVisualSelection.frozen;
+    const productVisualSourceSnapshot = await loadFrozenProductVisualSourceSnapshot(
+      client,
+      command,
+      frozenVisualSelection,
+    );
     const requestFingerprint = proposalSha256({
       generationId: command.generationId,
       contractVersion: command.contractVersion,
@@ -2537,6 +2551,7 @@ async function startAiContentGenerationV3Transaction(input: {
             outputId,
             contentGenerationInput: assembly.input,
             manualVisualSelection: frozenVisualSelection,
+            ...(productVisualSourceSnapshot ? { productVisualSourceSnapshot } : {}),
             planningMode: "selected_proposal",
             operationId,
           })],
@@ -3988,10 +4003,14 @@ export function createAiContentRepository(pool: Pool, options: AiContentReposito
         let parentInput: ReturnType<typeof parseCanonicalContentGenerationInputV3>;
         let parentBinding: ReturnType<typeof parseContentPromptBinding>;
         let parentManualVisualSelection: FrozenManualVisualSelectionV1;
+        let parentProductVisualSourceSnapshot: ProductVisualSourceSnapshotV1 | null;
         try {
           parentInput = parseCanonicalContentGenerationInputV3(parent.input_json);
           parentBinding = parseContentPromptBinding(parent.binding_json);
           parentManualVisualSelection = parseFrozenManualVisualSelectionV1(parent.manual_visual_selection);
+          parentProductVisualSourceSnapshot = optionalProductVisualSourceSnapshot(
+            object(parent.parent_job_payload).productVisualSourceSnapshot,
+          );
           assertPlannerPromptBinding(parentInput, parentBinding);
         } catch {
           throw new Error("ai_content_generation_retry_parent_invalid");
@@ -4200,6 +4219,7 @@ export function createAiContentRepository(pool: Pool, options: AiContentReposito
           planningMode: "selected_proposal",
           operationId,
           manualVisualSelection: parentManualVisualSelection,
+          ...(parentProductVisualSourceSnapshot ? { productVisualSourceSnapshot: parentProductVisualSourceSnapshot } : {}),
           ...(storedReelStoryboardContract
             ? { reelStoryboardContract: storedReelStoryboardContract }
             : {}),

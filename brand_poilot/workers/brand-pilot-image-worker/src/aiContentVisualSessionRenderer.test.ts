@@ -1,4 +1,5 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import sharp from "sharp";
@@ -117,5 +118,61 @@ describe("visual session renderer", () => {
     expect(await rgbAt(result[0]!.bytes, 1069, 960)).toEqual([255, 0, 0]);
     expect(await rgbAt(result[0]!.bytes, 540, 295)).toEqual([255, 0, 0]);
     expect(await rgbAt(result[0]!.bytes, 540, 1624)).toEqual([255, 0, 0]);
+  });
+
+  it("stages product attachments before registered and URL images, then requires all three in tool calls", async () => {
+    const input = batch("card_news");
+    const attachmentId = "10000000-0000-4000-8000-000000000001";
+    const registeredId = "10000000-0000-4000-8000-000000000002";
+    const productId = "10000000-0000-4000-8000-000000000003";
+    const versionId = "10000000-0000-4000-8000-000000000004";
+    const source = await sharp({ create: { width: 512, height: 512, channels: 4, background: "white" } }).png().toBuffer();
+    const checksum = createHash("sha256").update(source).digest("hex");
+    input.jobs[0]!.payload.imagePackage = input.jobs[1]!.payload.imagePackage = {
+      ...input.jobs[0]!.payload.imagePackage,
+      product: {
+        id: productId, versionId, kind: "product", name: "답례품", description: "커피와 쿠키",
+        features: [], benefits: [], cautions: [], evergreenPurchaseInfo: "",
+        images: [{ assetId: registeredId, role: "hero", storageUrl: "https://blob.example/product.png", storagePath: "registered.png", mimeType: "image/png", checksum }],
+      },
+      attachments: [{ id: attachmentId, role: "product_image", fileName: "attached.png", mimeType: "image/png", sizeBytes: source.byteLength, storageUrl: "https://blob.example/attached.png", storagePath: "attached.png", checksum }],
+    } as never;
+    for (const job of input.jobs) job.payload.contentPlan = {
+      _privateProductVisualSourceSnapshot: {
+        contractVersion: "product-visual-source-snapshot.v1", productServiceId: productId,
+        versionId, kind: "product", sourceUrls: ["https://shop.example/item?token=secret"],
+      },
+    };
+    let workspaceDir = "";
+    const runChild = vi.fn(async (run: { outputFiles: string[]; workspaceDir: string; prompt: string }) => {
+      workspaceDir = run.workspaceDir;
+      expect(JSON.parse(await readFile(path.join(run.workspaceDir, "required-product-reference-paths.json"), "utf8"))).toEqual([
+        "inputs/attachments/attachment-1.png", "inputs/product-1.png", "inputs/product-url-1.png",
+      ]);
+      expect(run.prompt).toContain("Every image_generation call MUST include every local path");
+      for (const output of run.outputFiles) { await mkdir(path.dirname(output), { recursive: true }); await writeFile(output, source); }
+    });
+    const acquire = vi.fn(async ({ inputDir }: { inputDir: string }) => {
+      const absolutePath = path.join(inputDir, "product-url-1.png");
+      await writeFile(absolutePath, source);
+      const candidate = {
+        candidateId: "a".repeat(64), sourcePageUrl: "https://shop.example/item?token=secret",
+        imageUrl: "https://cdn.example/product.png?token=secret", discoveryMethod: "json_ld" as const,
+        mimeType: "image/png" as const, width: 512, height: 512, contentSha256: checksum,
+        decision: "selected" as const, reason: "url_fill",
+      };
+      return { references: [{ candidate, absolutePath, relativePath: "inputs/product-url-1.png" }], candidates: [candidate], events: [] };
+    });
+    const renderer = createAiContentVisualSessionRenderer({
+      workerRoot,
+      readOwned: vi.fn(async () => source),
+      runChild: runChild as never,
+      acquireProductUrlReferences: acquire as never,
+    });
+
+    await renderer.renderSession(input as never, new AbortController().signal);
+
+    expect(acquire).toHaveBeenCalledWith(expect.objectContaining({ slots: 3 }));
+    await expect(readFile(workspaceDir)).rejects.toMatchObject({ code: expect.stringMatching(/ENOENT|EISDIR/) });
   });
 });

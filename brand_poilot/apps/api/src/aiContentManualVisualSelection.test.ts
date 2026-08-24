@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   freezeManualVisualSelection,
+  loadFrozenProductVisualSourceSnapshot,
   materializeFrozenManualVisualAssets,
   saveManualVisualSelection,
 } from "./aiContentManualVisualSelection.js";
@@ -32,6 +33,7 @@ function client(options: {
   avatarRevisionAfterImages?: number;
   partialPresetReference?: boolean;
   presetRevisionAfterReferences?: number;
+  productSourceUrls?: string[];
 } = {}) {
   let stored: Record<string, unknown> | null = null;
   let presetReads = 0;
@@ -43,7 +45,8 @@ function client(options: {
       profile_json: {
         contractVersion: "product-service.v1", name: "차 세트", kind: "product",
         description: "온도별 차 맛을 안내합니다.", features: ["세 종류"], benefits: ["선택 도움"],
-        cautions: [], audiences: [], appealsByTarget: {}, evergreenPurchaseInfo: "상시 판매", sourceUrls: [],
+        cautions: [], audiences: [], appealsByTarget: {}, evergreenPurchaseInfo: "상시 판매",
+        sourceUrls: options.productSourceUrls ?? ["https://shop.example.com/tea"],
       },
     }], rowCount: 1 };
     if (sql.includes("from product_service_assets")) return { rows: [{
@@ -141,6 +144,41 @@ describe("manual visual selection persistence", () => {
       avatar: { avatarId: ids.avatar, revision: 2, imageAssetIds: [ids.avatarImage] },
     });
     expect(database.query.mock.calls.some(([sql]) => String(sql).startsWith("update manual_ai_content_visual_selections"))).toBe(true);
+  });
+
+  it("freezes the selected approved product source URLs into a private sidecar", async () => {
+    const database = client();
+    await expect(loadFrozenProductVisualSourceSnapshot(database, scope, {
+      contractVersion: "manual-visual-selection-frozen.v1",
+      product: {
+        productServiceId: ids.product, versionId: ids.version, kind: "product",
+        name: "차 세트", description: "온도별 차 맛을 안내합니다.", features: ["세 종류"],
+        benefits: ["선택 도움"], cautions: [], evergreenPurchaseInfo: "상시 판매",
+        images: [{ assetId: ids.productImage, role: "hero", position: 1 }],
+      },
+      stylePreset: null,
+      avatar: null,
+    })).resolves.toEqual({
+      contractVersion: "product-visual-source-snapshot.v1",
+      productServiceId: ids.product,
+      versionId: ids.version,
+      kind: "product",
+      sourceUrls: ["https://shop.example.com/tea"],
+    });
+  });
+
+  it("keeps a product or service without a safe HTTPS page as a valid no-image case", async () => {
+    const database = client({ productSourceUrls: ["http://shop.example.com/legacy"] });
+    await expect(loadFrozenProductVisualSourceSnapshot(database, scope, {
+      contractVersion: "manual-visual-selection-frozen.v1",
+      product: {
+        productServiceId: ids.product, versionId: ids.version, kind: "product",
+        name: "차 세트", description: "", features: [], benefits: [], cautions: [],
+        evergreenPurchaseInfo: "", images: [],
+      },
+      stylePreset: null,
+      avatar: null,
+    })).resolves.toBeNull();
   });
 
   it("rejects an avatar revision changed after the user selected it", async () => {
