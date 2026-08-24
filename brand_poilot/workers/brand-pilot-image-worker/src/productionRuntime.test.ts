@@ -83,6 +83,9 @@ describe("production image worker runtime", () => {
     expect(runnerSource).toContain("permissions.worker.network.enabled=false");
     expect(runnerSource).toContain("assertCompleteVisualSessionImageAudit");
     expect(runnerSource).toContain("parseAiContentVisualSessionFinalMessage");
+    expect(runnerSource).toContain("buildAiContentVisualSessionOutputSchema");
+    expect(runnerSource).toContain('path.join(workspaceDir, "final-response-schema.json")');
+    expect(runnerSource).toContain("outputSchemaPath");
     expect(runnerSource).not.toContain("if (visualSession) parseAiContentVisualSessionRunnerResult(JSON.parse(result.finalMessage), job)");
     expect(runnerSource).toContain("visual-session-hook-audit.json");
     expect(runnerSource).toContain("ai_content_visual_session_hook_audit_missing");

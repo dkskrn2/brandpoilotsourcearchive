@@ -30,7 +30,7 @@ describe("resolveCodexInvocation", () => {
 
   it("pins the image renderer to the strict read-only worker profile", () => {
     const hookCommand = '"C:\\Program Files\\nodejs\\node.exe" "C:\\worker\\scripts\\audit-codex-visual-session-image.mjs"';
-    const args = buildCodexExecArguments({ rootDir: "C:\\worker", hookCommand });
+    const args = buildCodexExecArguments({ rootDir: "C:\\worker", hookCommand, outputSchemaPath: "C:\\worker\\final-response-schema.json" });
 
     expect(args.slice(0, 6)).toEqual([
       "--model", "gpt-5.6-terra", "--enable", "hooks", "--dangerously-bypass-hook-trust", "exec",
@@ -40,6 +40,8 @@ describe("resolveCodexInvocation", () => {
     expect(args).not.toContain("codex_hooks");
     expect(args).not.toContain("--sandbox");
     expect(args.indexOf("gpt-5.6-terra")).toBeLessThan(args.indexOf("exec"));
+    expect(args).toContain("--output-schema");
+    expect(args).toContain("C:\\worker\\final-response-schema.json");
     expect(args.join(" ")).not.toContain("creative brief");
   });
 
@@ -48,6 +50,7 @@ describe("resolveCodexInvocation", () => {
     expect(args).not.toContain("hooks");
     expect(args).not.toContain("--dangerously-bypass-hook-trust");
     expect(args.join("\n")).not.toContain("hooks.PreToolUse");
+    expect(args).not.toContain("--output-schema");
   });
 
   it("pins Threads text to the strict read-only worker profile with image tools disabled", () => {

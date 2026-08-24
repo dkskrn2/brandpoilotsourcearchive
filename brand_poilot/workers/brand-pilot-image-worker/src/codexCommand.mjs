@@ -16,7 +16,7 @@ export function resolveCodexInvocation({
   return { command: "codex", argsPrefix: [] };
 }
 
-export function buildCodexExecArguments({ rootDir, hookCommand }) {
+export function buildCodexExecArguments({ rootDir, hookCommand, outputSchemaPath }) {
   const hookArguments = hookCommand
     ? ["--enable", "hooks", "--dangerously-bypass-hook-trust"]
     : [];
@@ -42,6 +42,7 @@ export function buildCodexExecArguments({ rootDir, hookCommand }) {
     "--skip-git-repo-check",
     "--ephemeral",
     "--json",
+    ...(outputSchemaPath ? ["--output-schema", outputSchemaPath] : []),
     "-C", rootDir,
     "-"
   ];

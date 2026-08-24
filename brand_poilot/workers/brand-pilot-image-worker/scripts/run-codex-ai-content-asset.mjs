@@ -9,7 +9,7 @@ import { findGeneratedImages, parseCodexFinalMessage, parseCodexThreadId, resolv
 import { assertCompleteVisualSessionImageAudit } from "./visualSessionImageAudit.mjs";
 import { forwardParentTermination } from "../dist/processTermination.mjs";
 import { parseAiContentAssetRenderResult, parseAiContentAssetRunnerJob } from "../dist/aiContentAssetRunnerContract.js";
-import { parseAiContentVisualSessionFinalMessage, parseAiContentVisualSessionRunnerJob } from "../dist/aiContentVisualSessionRunnerContract.js";
+import { buildAiContentVisualSessionOutputSchema, parseAiContentVisualSessionFinalMessage, parseAiContentVisualSessionRunnerJob } from "../dist/aiContentVisualSessionRunnerContract.js";
 import { codexFailureDiagnostic } from "../dist/codexFailureDiagnostic.js";
 
 function argument(name) {
@@ -42,7 +42,15 @@ async function main() {
   await mkdir(imagegenOutputDir, { recursive: true });
   const codex = resolveCodexInvocation();
   const visualSessionHookCommand = `${commandArgument(process.execPath)} ${commandArgument(fileURLToPath(new URL("./audit-codex-visual-session-image.mjs", import.meta.url)))}`;
-  const codexArgs = buildCodexExecArguments({ rootDir: workspaceDir, hookCommand: visualSession ? visualSessionHookCommand : undefined });
+  const outputSchemaPath = visualSession ? path.join(workspaceDir, "final-response-schema.json") : undefined;
+  if (visualSession) {
+    await writeFile(outputSchemaPath, `${JSON.stringify(buildAiContentVisualSessionOutputSchema(job), null, 2)}\n`, { encoding: "utf8", mode: 0o444 });
+  }
+  const codexArgs = buildCodexExecArguments({
+    rootDir: workspaceDir,
+    hookCommand: visualSession ? visualSessionHookCommand : undefined,
+    outputSchemaPath,
+  });
   if (!codexArgs.includes("image_generation") || !codexArgs.includes("permissions.worker.network.enabled=false")) throw new Error("ai_content_asset_codex_permissions_invalid");
   if (visualSession && (!codexArgs.includes("hooks")
     || !codexArgs.includes("--dangerously-bypass-hook-trust")
