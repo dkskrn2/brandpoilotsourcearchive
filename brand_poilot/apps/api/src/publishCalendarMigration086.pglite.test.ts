@@ -177,7 +177,7 @@ describe("migration 086 publish calendar same-time contract", () => {
     );
   });
 
-  it("keeps the Release A allocator and repository extending duplicate and near-time settings", async () => {
+  it("keeps allocator persistence idempotent for duplicate and near-time weekly rows", async () => {
     const workspaceId = "10000000-0000-4000-8000-000000000090";
     const brandId = "20000000-0000-4000-8000-000000000090";
     await database.query("insert into workspaces(id) values($1)", [workspaceId]);
@@ -208,7 +208,11 @@ describe("migration 086 publish calendar same-time contract", () => {
         channels: ["instagram" as const],
         informationalFormat: "card_news" as const,
         trendFormat: "reel" as const,
-        slotTimes: ["11:30", "11:30", "11:31"],
+        weeklySchedule: [
+          { id: "30000000-0000-4000-8000-000000000086", dayOfWeek: 4 as const, time: "11:30", sortOrder: 0 },
+          { id: "30000000-0000-4000-8000-000000000087", dayOfWeek: 4 as const, time: "11:30", sortOrder: 1 },
+          { id: "30000000-0000-4000-8000-000000000088", dayOfWeek: 4 as const, time: "11:31", sortOrder: 2 },
+        ],
         updatedAt: "2099-08-12T00:00:00.000Z",
       },
     };
@@ -237,11 +241,11 @@ describe("migration 086 publish calendar same-time contract", () => {
       new Date(scheduled_for).toISOString() >= "2099-08-20T00:00:00.000Z"
     ));
 
-    expect(first.openSlotsCreated).toBe(21);
+    expect(first.openSlotsCreated).toBe(3);
     expect(second.openSlotsCreated).toBe(3);
-    expect(stored.rows).toHaveLength(24);
-    expect(new Set(publishItemKeys).size).toBe(24);
-    expect(new Set(slotIds).size).toBe(24);
+    expect(stored.rows).toHaveLength(6);
+    expect(new Set(publishItemKeys).size).toBe(6);
+    expect(new Set(slotIds).size).toBe(6);
     expect(nextHorizon.map(({ scheduled_for }) => new Date(scheduled_for).toISOString())).toEqual([
       "2099-08-20T02:30:00.000Z",
       "2099-08-20T02:30:00.000Z",

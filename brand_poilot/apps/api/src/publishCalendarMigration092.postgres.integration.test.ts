@@ -3,6 +3,7 @@ import { resolve } from "node:path";
 import { PostgreSqlContainer, type StartedPostgreSqlContainer } from "@testcontainers/postgresql";
 import { Pool, type PoolClient } from "pg";
 import { expect, it } from "vitest";
+import { listEnabledAutomaticCalendarBrands } from "./publishCalendarAllocator.js";
 import { createPublishCalendarRepository } from "./publishCalendarRepository.js";
 
 const applicationPassword = "publish-calendar-weekly-application-test";
@@ -332,6 +333,13 @@ it("runs the actual weekly settings repository transaction as the application ro
       expect(created.weeklySchedule).toHaveLength(3);
       expect(new Set(created.weeklySchedule.map(({ id }) => id)).size).toBe(3);
       const retainedId = created.weeklySchedule[1]!.id;
+
+      await expect(listEnabledAutomaticCalendarBrands(application, new Date()))
+        .resolves.toEqual([{
+          workspaceId,
+          brandId,
+          settings: created,
+        }]);
 
       const updated = await repository.saveWeeklyConfiguration({
         workspaceId,

@@ -1218,7 +1218,7 @@ export function createPublishCalendarRepository(
       const channels = validateChannels(input.channels);
       const idempotencyKey = input.idempotencyKey;
       if (input.assignmentMode !== "automatic"
-        || !/^automatic:v1:[0-9a-f]{64}$/.test(idempotencyKey)) {
+        || !/^[0-9a-f]{64}$/.test(idempotencyKey)) {
         throw new Error("publish_calendar_idempotency_key_invalid");
       }
       if (!Number.isFinite(input.scheduledFor.getTime())) throw new Error("publish_calendar_time_invalid");

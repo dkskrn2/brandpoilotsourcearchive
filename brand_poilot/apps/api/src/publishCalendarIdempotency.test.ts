@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import {
   automaticSlotKey,
@@ -56,9 +57,17 @@ describe("publish calendar idempotency keys", () => {
     expect(first.legacyKey).toBe(batchSlotKey("batch-1", "row-1"));
   });
 
-  it("distinguishes repeated automatic occurrences at the same time", () => {
-    expect(automaticSlotKey({ kstDate: "2026-08-21", time: "11:30", occurrence: 0 }))
-      .not.toBe(automaticSlotKey({ kstDate: "2026-08-21", time: "11:30", occurrence: 1 }));
+  it("hashes only the stable weekly entry id and KST occurrence date", () => {
+    const scheduleEntryId = "30000000-0000-4000-8000-000000000001";
+    const expected = createHash("sha256")
+      .update(JSON.stringify(["weekly-auto", scheduleEntryId, "2026-08-21"]))
+      .digest("hex");
+
+    expect(automaticSlotKey({ scheduleEntryId, kstDate: "2026-08-21" })).toBe(expected);
+    expect(automaticSlotKey({
+      scheduleEntryId: "30000000-0000-4000-8000-000000000002",
+      kstDate: "2026-08-21",
+    })).not.toBe(expected);
   });
 
   it("deduplicates and sorts calendar channels", () => {

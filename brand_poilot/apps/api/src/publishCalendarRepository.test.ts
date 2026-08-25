@@ -24,6 +24,10 @@ const scope = {
   brandId: "20000000-0000-4000-8000-000000000001",
 };
 
+function automaticKey(kstDate: string, scheduleEntryId = "30000000-0000-4000-8000-000000000091") {
+  return automaticSlotKey({ scheduleEntryId, kstDate });
+}
+
 const slotRow = (overrides: Record<string, unknown> = {}) => ({
   id: "30000000-0000-4000-8000-000000000001",
   workspace_id: scope.workspaceId,
@@ -464,7 +468,7 @@ describe("publish calendar repository settings and slot validation", () => {
       recommendationKind: "informational",
       contentFormat: "card_news",
       channels: ["instagram"],
-      idempotencyKey: automaticSlotKey({ kstDate: "2099-08-15", time: "11:30", occurrence: 0 }),
+      idempotencyKey: automaticKey("2099-08-15"),
     })).resolves.toMatchObject({ status: "open", contentSuggestionId: null });
 
     const sql = run.statements.map(({ sql }) => sql);
@@ -489,7 +493,7 @@ describe("publish calendar repository settings and slot validation", () => {
       };
       throw new Error(`unexpected query: ${sql}`);
     });
-    const idempotencyKey = automaticSlotKey({ kstDate: "2099-08-15", time: "11:30", occurrence: 1 });
+    const idempotencyKey = automaticKey("2099-08-15", "30000000-0000-4000-8000-000000000092");
 
     await expect(createPublishCalendarRepository(run.pool).createSlot({
       ...scope,
@@ -507,7 +511,7 @@ describe("publish calendar repository settings and slot validation", () => {
   });
 
   it("returns an existing automatic key before time, channel, and quota checks", async () => {
-    const idempotencyKey = automaticSlotKey({ kstDate: "2000-01-01", time: "11:30", occurrence: 0 });
+    const idempotencyKey = automaticKey("2000-01-01");
     const run = harness((sql) => {
       if (sql.includes("idempotency_key=$3::text")) return {
         rows: [slotRow({
@@ -547,7 +551,7 @@ describe("publish calendar repository settings and slot validation", () => {
       recommendationKind: "informational",
       contentFormat: "card_news",
       channels: ["instagram"],
-      idempotencyKey: automaticSlotKey({ kstDate: "2099-08-15", time: "11:30", occurrence: 0 }),
+      idempotencyKey: automaticKey("2099-08-15"),
     })).rejects.toThrowError("publish_calendar_time_past");
 
     const sql = run.statements.map(({ sql }) => sql);
@@ -570,7 +574,7 @@ describe("publish calendar repository settings and slot validation", () => {
       recommendationKind: "informational",
       contentFormat: "card_news",
       channels: ["instagram"],
-      idempotencyKey: automaticSlotKey({ kstDate: "2020-01-01", time: "09:00", occurrence: 0 }),
+      idempotencyKey: automaticKey("2020-01-01"),
     })).rejects.toThrowError("publish_calendar_time_past");
     await expect(disconnected.createSlot({
       ...scope,
@@ -579,7 +583,7 @@ describe("publish calendar repository settings and slot validation", () => {
       recommendationKind: "informational",
       contentFormat: "card_news",
       channels: ["instagram"],
-      idempotencyKey: automaticSlotKey({ kstDate: "2099-01-01", time: "09:00", occurrence: 0 }),
+      idempotencyKey: automaticKey("2099-01-01"),
     })).rejects.toThrowError("publish_calendar_channel_not_connected");
 
     const inactiveRun = harness((sql) => {
@@ -595,7 +599,7 @@ describe("publish calendar repository settings and slot validation", () => {
       recommendationKind: "informational",
       contentFormat: "card_news",
       channels: ["instagram"],
-      idempotencyKey: automaticSlotKey({ kstDate: "2099-01-01", time: "09:00", occurrence: 1 }),
+      idempotencyKey: automaticKey("2099-01-01", "30000000-0000-4000-8000-000000000092"),
     })).rejects.toThrowError("publish_calendar_subscription_inactive");
   });
 });
