@@ -104,6 +104,7 @@ export function PublishSchedulePanel({ mode = "create", item, options, optionsEr
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const idempotencyKeyRef = useRef(crypto.randomUUID());
+  const dateEditedRef = useRef(false);
   const timeEditedRef = useRef(false);
   const source = publishScheduleSource(item);
   const instagram = options?.channels.find((channel) => channel.value === "instagram") ?? null;
@@ -117,6 +118,7 @@ export function PublishSchedulePanel({ mode = "create", item, options, optionsEr
     const next = initialScheduleValue(editing, item, initialDateKey, preferredTimes);
     setDate(next.date);
     setTime(next.time);
+    dateEditedRef.current = false;
     timeEditedRef.current = false;
     setError(null);
     setSubmitting(false);
@@ -125,8 +127,9 @@ export function PublishSchedulePanel({ mode = "create", item, options, optionsEr
 
   useEffect(() => {
     if (timeEditedRef.current) return;
-    const next = initialScheduleValue(editing, item, initialDateKey, preferredTimesKey ? preferredTimesKey.split("\u0000") : []);
-    setDate(next.date);
+    const selectedDate = dateEditedRef.current ? date : initialDateKey;
+    const next = initialScheduleValue(editing && !dateEditedRef.current, item, selectedDate, preferredTimesKey ? preferredTimesKey.split("\u0000") : []);
+    if (!dateEditedRef.current) setDate(next.date);
     setTime(next.time);
   }, [preferredTimesKey]);
 
@@ -183,7 +186,7 @@ export function PublishSchedulePanel({ mode = "create", item, options, optionsEr
       {!editing && options?.usage.publishing ? <p>이번 주 추가 예약 가능 {options.usage.publishing.additionalAvailable}건 · 게시 한도 {options.usage.publishing.limit}건</p> : null}
       {!editing && options && !quotaAvailable ? <p role="alert">{scheduleErrorMessage("publish_weekly_quota_exceeded", options)}</p> : null}
       <div className="publish-calendar-manual-form">
-        <label>게시 날짜<input aria-label="게시 날짜" type="date" value={date} onChange={(event) => { const nextDate = event.target.value; setDate(nextDate); setTime(defaultScheduleTime(nextDate, new Date(), preferredTimes)); setError(null); }} /></label>
+        <label>게시 날짜<input aria-label="게시 날짜" type="date" value={date} onChange={(event) => { dateEditedRef.current = true; const next = initialScheduleValue(false, item, event.target.value, preferredTimes); setDate(next.date); setTime(next.time); setError(null); }} /></label>
         <label>게시 시간<input aria-label="게시 시간" type="time" value={time} onChange={(event) => { timeEditedRef.current = true; setTime(event.target.value); setError(null); }} /></label>
       </div>
       <p><strong>선택한 게시 시각</strong> {scheduledFor ? formatPublishDateTime(scheduledFor) : "날짜와 시간을 선택해 주세요."}</p>

@@ -78,6 +78,19 @@ describe("PublishSchedulePanel", () => {
     expect(screen.getByRole("button", { name: "게시 예약" })).toBeEnabled();
   });
 
+  it("rolls a manually selected today date and its default time together across midnight", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-08-25T14:50:00.000Z"));
+    render(<PublishSchedulePanel item={item()} options={options} optionsError={null} optionsLoading={false} initialDateKey="2026-08-26" preferredTimes={[]} onSubmit={vi.fn()} onSaved={vi.fn()} onOpenExistingReservation={vi.fn()} onRetryOptions={vi.fn()} onClose={vi.fn()} />);
+
+    await userEvent.clear(screen.getByLabelText("게시 날짜"));
+    await userEvent.type(screen.getByLabelText("게시 날짜"), "2026-08-25");
+
+    expect(screen.getByLabelText("게시 날짜")).toHaveValue("2026-08-26");
+    expect(screen.getByLabelText("게시 시간")).toHaveValue("00:05");
+    expect(screen.getByRole("button", { name: "게시 예약" })).toBeEnabled();
+  });
+
   it("switches to the earliest preferred time when a new reservation moves to a future date", async () => {
     vi.useFakeTimers({ toFake: ["Date"] });
     vi.setSystemTime(new Date("2026-08-25T06:00:00.000Z"));
@@ -112,6 +125,20 @@ describe("PublishSchedulePanel", () => {
     rerender(<PublishSchedulePanel {...props} preferredTimes={["14:00", "09:00"]} />);
 
     await waitFor(() => expect(screen.getByLabelText("게시 시간")).toHaveValue("16:20"));
+  });
+
+  it("keeps a manually selected date when saved preferred times arrive and updates its untouched default time", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-08-25T06:00:00.000Z"));
+    const props = { item: item(), options, optionsError: null, optionsLoading: false, initialDateKey: "2026-08-26", onSubmit: vi.fn(), onSaved: vi.fn(), onOpenExistingReservation: vi.fn(), onRetryOptions: vi.fn(), onClose: vi.fn() };
+    const { rerender } = render(<PublishSchedulePanel {...props} preferredTimes={[]} />);
+    await userEvent.clear(screen.getByLabelText("게시 날짜"));
+    await userEvent.type(screen.getByLabelText("게시 날짜"), "2026-08-27");
+
+    rerender(<PublishSchedulePanel {...props} preferredTimes={["14:00", "09:00"]} />);
+
+    await waitFor(() => expect(screen.getByLabelText("게시 시간")).toHaveValue("09:00"));
+    expect(screen.getByLabelText("게시 날짜")).toHaveValue("2026-08-27");
   });
 
   it("starts a delayed-today reservation change at a valid future time", () => {
