@@ -41,7 +41,7 @@ function item(overrides: Partial<PublishItem> = {}): PublishItem {
     createdAt: "2026-08-20T00:00:00.000Z", contentFormat: "card_news", channels: ["instagram"],
     source: { type: "topic_table", label: "주제표", detail: "사장님 콘텐츠", urls: [] }, targets: [target()],
     reviewTargets: [],
-    contentStatus: "completed", publishStatus: "scheduled", status: "scheduled", groupStatus: "ready", publicationProgress: "none",
+    contentStatus: "completed", publishStatus: "scheduled", status: "scheduled", operationalStatus: "upcoming", operationalReason: "future_reservation", groupStatus: "ready", publicationProgress: "none",
     scheduledFor: "2026-08-23T02:30:00.000Z", effectiveScheduledFor: "2026-08-23T02:30:00.000Z", publishedAt: null,
     calendarDate: "2026-08-23T02:30:00.000Z", calendarPlacement: "dated", assignmentMode: "manual",
     sourceRefs: { contentTopicId: null, proposalId: null, generationId: null, generationOutputId: "output-1", calendarSlotId: "slot-1", topicPublishGroupId: null, queueIds: ["queue-1"] },
@@ -115,10 +115,12 @@ describe("PublishQueuePage canonical collection", () => {
     const oldRead = vi.fn(async () => { throw new Error("retired_read"); });
     const api = await renderPage({ listPublishItems: vi.fn(async () => items), listPublishQueue: oldRead, listContentOutputs: oldRead, listPublishResults: oldRead, listPublishCalendarSlots: oldRead });
 
-    expect(await screen.findByRole("article", { name: "예약된 SNS 마케팅" })).toHaveAttribute("data-item-key", "output:dated");
+    const listCard = await screen.findByRole("article", { name: "예약된 SNS 마케팅" });
+    expect(listCard).toHaveAttribute("data-item-key", "output:dated");
+    expect(within(listCard).getByText("게시 예정")).toBeVisible();
     expect(screen.getByRole("article", { name: "숨김 실패 콘텐츠" })).toBeVisible();
     await userEvent.click(screen.getByRole("tab", { name: "캘린더" }));
-    expect(await screen.findByRole("button", { name: "예약된 SNS 마케팅 슬롯 상세 보기" })).toBeVisible();
+    expect(await screen.findByRole("button", { name: "예약된 SNS 마케팅 게시 예정 슬롯 상세 보기" })).toBeVisible();
     expect(within(screen.getByRole("region", { name: "미예약 콘텐츠 보관함" })).getByText("미예약 사장님 콘텐츠")).toBeVisible();
     expect(screen.queryByText("숨김 실패 콘텐츠")).not.toBeInTheDocument();
     expect(api.listPublishItems).toHaveBeenCalledTimes(1);
@@ -324,7 +326,7 @@ describe("PublishQueuePage canonical collection", () => {
     expect(await screen.findByText("예약 시간을 변경했습니다.")).toBeVisible();
 
     await userEvent.click(screen.getByRole("tab", { name: "캘린더" }));
-    await userEvent.click(await screen.findByRole("button", { name: "예약된 SNS 마케팅 슬롯 상세 보기" }));
+    await userEvent.click(await screen.findByRole("button", { name: "예약된 SNS 마케팅 게시 예정 슬롯 상세 보기" }));
     await userEvent.click(screen.getByRole("button", { name: "예약 변경" }));
     expect(await screen.findByRole("dialog", { name: "예약된 SNS 마케팅 예약 변경" })).toBeVisible();
   });
@@ -547,7 +549,7 @@ describe("PublishQueuePage canonical collection", () => {
     const listPublishItems = vi.fn(async () => [item()]);
     const api = await renderPage({ listPublishItems });
     await userEvent.click(await screen.findByRole("tab", { name: "캘린더" }));
-    await userEvent.click(await screen.findByRole("button", { name: "예약된 SNS 마케팅 슬롯 상세 보기" }));
+    await userEvent.click(await screen.findByRole("button", { name: "예약된 SNS 마케팅 게시 예정 슬롯 상세 보기" }));
     await userEvent.click(screen.getByRole("button", { name: "슬롯 취소" }));
     await waitFor(() => expect(api.cancelPublishCalendarSlot).toHaveBeenCalledWith("brand-1", "slot-1"));
     expect(listPublishItems).toHaveBeenCalledTimes(2);
@@ -574,28 +576,31 @@ describe("PublishQueuePage canonical collection", () => {
   });
 
   it("keeps calendar placement separate from original, effective and published times", async () => {
-    const deferred = item({ title: "지연 예약", status: "deferred", publishStatus: "deferred", scheduledFor: "2026-08-23T02:30:00.000Z", effectiveScheduledFor: "2026-08-23T03:00:00.000Z", calendarDate: "2026-08-23T03:00:00.000Z", targets: [target({ status: "deferred", scheduledFor: "2026-08-23T02:30:00.000Z" })] });
-    const published = item({ itemKey: "output:published", title: "게시 완료", status: "published", publishStatus: "published", publicationProgress: "complete", scheduledFor: "2026-08-22T02:30:00.000Z", effectiveScheduledFor: "2026-08-22T03:00:00.000Z", publishedAt: "2026-08-23T04:00:00.000Z", calendarDate: "2026-08-23T04:00:00.000Z", sourceRefs: { contentTopicId: null, proposalId: null, generationId: null, generationOutputId: "output-published", calendarSlotId: "slot-published", topicPublishGroupId: null, queueIds: ["queue-published"] }, targets: [target({ queueId: "queue-published", status: "published", scheduledFor: "2026-08-22T02:30:00.000Z", publishedAt: "2026-08-23T04:00:00.000Z" })] });
+    const deferred = item({ title: "지연 예약", status: "deferred", operationalStatus: "delayed_today", operationalReason: "reserved_time_passed", publishStatus: "deferred", scheduledFor: "2026-08-23T02:30:00.000Z", effectiveScheduledFor: "2026-08-23T03:00:00.000Z", calendarDate: "2026-08-23T03:00:00.000Z", targets: [target({ status: "deferred", scheduledFor: "2026-08-23T02:30:00.000Z" })] });
+    const published = item({ itemKey: "output:published", title: "게시 완료", status: "published", operationalStatus: "published", operationalReason: "published", publishStatus: "published", publicationProgress: "complete", scheduledFor: "2026-08-22T02:30:00.000Z", effectiveScheduledFor: "2026-08-22T03:00:00.000Z", publishedAt: "2026-08-23T04:00:00.000Z", calendarDate: "2026-08-23T04:00:00.000Z", sourceRefs: { contentTopicId: null, proposalId: null, generationId: null, generationOutputId: "output-published", calendarSlotId: "slot-published", topicPublishGroupId: null, queueIds: ["queue-published"] }, targets: [target({ queueId: "queue-published", status: "published", scheduledFor: "2026-08-22T02:30:00.000Z", publishedAt: "2026-08-23T04:00:00.000Z" })] });
     await renderPage({ listPublishItems: vi.fn(async () => [deferred, published]) });
     await userEvent.click(await screen.findByRole("tab", { name: "캘린더" }));
 
-    await userEvent.click(await screen.findByRole("button", { name: "지연 예약 슬롯 상세 보기" }));
+    await userEvent.click(await screen.findByRole("button", { name: "지연 예약 게시 지연 슬롯 상세 보기" }));
     expect(screen.getByText("원래 예약 시각")).toBeVisible();
     expect(screen.getByText("지연 후 실제 게시 예정")).toBeVisible();
     await userEvent.click(screen.getByRole("button", { name: "전체 일정 보기" }));
-    await userEvent.click(screen.getByRole("button", { name: "게시 완료 슬롯 상세 보기" }));
+    await userEvent.click(screen.getByRole("button", { name: "게시 완료 게시 완료 슬롯 상세 보기" }));
     expect(screen.getByText("게시 완료 시각")).toBeVisible();
     expect(screen.queryByText("원래 예약 시각")).not.toBeInTheDocument();
   });
 
   it("keeps queue-specific cancellation and retry behavior", async () => {
     const cancellable = item({ itemKey: "direct:cancel", sourceRefs: { contentTopicId: null, proposalId: null, generationId: null, generationOutputId: "output-1", calendarSlotId: null, topicPublishGroupId: null, queueIds: ["queue-cancel"] }, targets: [target({ queueId: "queue-cancel", status: "scheduled" })] });
-    const failed = item({ itemKey: "direct:retry", title: "재시도 콘텐츠", status: "failed", publishStatus: "failed", calendarPlacement: "hidden", calendarDate: null, scheduledFor: null, effectiveScheduledFor: null, sourceRefs: { contentTopicId: null, proposalId: null, generationId: null, generationOutputId: "output-2", calendarSlotId: null, topicPublishGroupId: null, queueIds: ["queue-retry"] }, targets: [target({ queueId: "queue-retry", status: "failed", scheduledFor: null, lastError: "oauth_required" })], lastError: "oauth_required" });
+    const failed = item({ itemKey: "direct:retry", title: "재시도 콘텐츠", status: "failed", operationalStatus: "action_required", operationalReason: "publish_failed", publishStatus: "failed", calendarPlacement: "hidden", calendarDate: null, scheduledFor: null, effectiveScheduledFor: null, sourceRefs: { contentTopicId: null, proposalId: null, generationId: null, generationOutputId: "output-2", calendarSlotId: null, topicPublishGroupId: null, queueIds: ["queue-retry"] }, targets: [target({ queueId: "queue-retry", status: "failed", scheduledFor: null, lastError: "instagram_publish_failed" })], lastError: "instagram_publish_failed" });
     const listPublishItems = vi.fn(async () => [cancellable, failed]);
     const api = await renderPage({ listPublishItems });
 
     await userEvent.click(await screen.findByRole("button", { name: "예약 취소" }));
     await waitFor(() => expect(api.cancelPublishQueueItem).toHaveBeenCalledWith("queue-cancel"));
+    const failedCard = screen.getByRole("article", { name: "재시도 콘텐츠" });
+    expect(within(failedCard).getByText("Instagram 게시에 실패했습니다. 잠시 후 다시 시도해 주세요.")).toBeVisible();
+    expect(within(failedCard).queryByText("instagram_publish_failed")).not.toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "재시도" }));
     await waitFor(() => expect(api.retryPublishQueueItem).toHaveBeenCalledWith("queue-retry"));
     expect(listPublishItems).toHaveBeenCalledTimes(3);

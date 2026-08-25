@@ -16,6 +16,8 @@ const item = (overrides: Partial<PublishItem> = {}): PublishItem => ({
   contentStatus: "completed",
   publishStatus: "scheduled",
   status: "scheduled",
+  operationalStatus: "upcoming",
+  operationalReason: "future_reservation",
   groupStatus: "ready",
   publicationProgress: "none",
   scheduledFor: "2026-08-23T02:30:00.000Z",

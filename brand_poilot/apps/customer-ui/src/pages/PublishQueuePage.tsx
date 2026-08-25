@@ -19,12 +19,13 @@ import {
   type PublishManagementStatus
 } from "../components/publish/publishManagementFilters";
 import { api, DEMO_BRAND_ID } from "../lib/apiClient";
-import { dateKey, PUBLISH_CALENDAR_USAGE_CHANGED_EVENT, type CalendarEntry } from "../features/publishing/publishCalendar";
+import { dateKey, PUBLISH_CALENDAR_USAGE_CHANGED_EVENT } from "../features/publishing/publishCalendar";
 import { canReschedulePublishItem, datedItems, entryFromPublishItem, listItems, unreservedItems } from "../features/publishing/publishItems";
 import { clearPublishCalendarBulkDraft, loadPublishCalendarBulkDraft, savePublishCalendarBulkDraft, type PublishCalendarBulkDraft, type PublishCalendarBulkDraftRow } from "../features/publishing/publishCalendarBulkDraft";
 import { aiContentApiGateway } from "../features/ai-content/aiContentApiGateway";
 import type { AiContentGateway, AiGenerationOutput } from "../features/ai-content/types";
-import type { BadgeVariant, ChannelType, ContentOutput, PublishArtifact, PublishCalendarManualOptions, PublishCalendarManualSlotInput, PublishCalendarNewContentSetup, PublishCalendarSettings, PublishItem, PublishItemReviewTarget, PublishItemStatus, PublishItemTarget, PublishResult, PublishResultChannel, ReviewStatus } from "../types";
+import { publishErrorPresentation, publishStatusPresentation } from "../features/publishing/publishPresentation";
+import type { BadgeVariant, ChannelType, ContentOutput, PublishArtifact, PublishCalendarManualOptions, PublishCalendarManualSlotInput, PublishCalendarNewContentSetup, PublishCalendarSettings, PublishItem, PublishItemReviewTarget, PublishItemTarget, PublishResult, PublishResultChannel, ReviewStatus } from "../types";
 
 const channelLabels: Record<ChannelType, string> = {
   instagram: "Instagram",
@@ -86,22 +87,6 @@ function formatDateTime(value: string) {
     minute: "2-digit"
   });
 }
-
-const publishItemStatusMeta: Record<PublishItemStatus, { label: string; variant: BadgeVariant }> = {
-  pre_generation: { label: "생성 전", variant: "neutral" },
-  generating: { label: "생성 중", variant: "info" },
-  completed_unpublished: { label: "미게시", variant: "neutral" },
-  reserved: { label: "예약 · 생성 대기", variant: "info" },
-  publish_queued: { label: "게시 대기", variant: "neutral" },
-  scheduled: { label: "예약", variant: "info" },
-  deferred: { label: "게시 지연", variant: "warn" },
-  publishing: { label: "게시 중", variant: "info" },
-  partially_published: { label: "일부 게시", variant: "warn" },
-  published: { label: "완료", variant: "ok" },
-  failed: { label: "실패", variant: "bad" },
-  result_unknown: { label: "결과 확인 필요", variant: "warn" },
-  cancelled: { label: "취소", variant: "neutral" }
-};
 
 function filterStatusForPublishItem(item: PublishItem): ManagementStatus {
   const reviewTargets = item.reviewTargets ?? [];
@@ -206,10 +191,7 @@ function PublishItemCardGrid({
     </div></div>
     <div className="panel-body"><div className="publish-management-grid" role="region" aria-label="게시 관리 통합 목록">
       {filtered.length === 0 ? <EmptyState title="게시 관리 목록이 비어 있습니다" description="생성, 예약, 게시 결과가 생기면 이 목록에 표시됩니다." /> : filtered.map((item) => {
-        const filterStatus = filterStatusForPublishItem(item);
-        const meta = filterStatus === "needs_review" ? { label: "검토 필요", variant: "warn" as const }
-          : filterStatus === "rejected" ? { label: "거절됨", variant: "neutral" as const }
-          : publishItemStatusMeta[item.status];
+        const meta = publishStatusPresentation(item.operationalStatus);
         const deepLinked = highlightedQueueId ? item.targets.some((target) => target.queueId === highlightedQueueId) : false;
         const previewTarget = item.targets.find((target) => target.artifactPublicUrl || target.previewBody || target.previewTitle) ?? item.targets[0];
         const reviewTargets = item.reviewTargets ?? [];
@@ -219,7 +201,7 @@ function PublishItemCardGrid({
         const regeneratable = rejectable.filter((target) => target.channel === "instagram" || target.channel === "threads");
         const reviewPending = reviewTargets.some((target) => reviewingOutputIds.has(target.channelOutputId));
         return <article className={`publish-management-card${deepLinked ? " is-highlighted" : ""}`} aria-label={item.title} data-item-key={item.itemKey} data-publish-focus-key={item.itemKey} data-publish-deep-link={deepLinked ? "true" : undefined} tabIndex={-1} key={item.itemKey}>
-          <div className="publish-management-card__preview"><PublishManagementPreview title={item.title} preview={resolvePublishPreview({ title: item.title, artifactPublicUrl: previewTarget?.artifactPublicUrl ?? undefined, outputJson: previewTarget?.outputJson ?? previewReviewTarget?.outputJson, previewBody: previewTarget?.previewBody ?? previewReviewTarget?.previewBody ?? undefined, pending: item.contentStatus === "pre_generation" || item.contentStatus === "generating", failed: item.contentStatus === "failed" })} /></div>
+          <div className="publish-management-card__preview"><PublishManagementPreview title={item.title} preview={resolvePublishPreview({ title: item.title, artifactPublicUrl: previewTarget?.artifactPublicUrl ?? undefined, outputJson: previewTarget?.outputJson ?? previewReviewTarget?.outputJson, previewBody: previewTarget?.previewBody ?? previewReviewTarget?.previewBody ?? undefined, contentStatus: item.contentStatus })} /></div>
           <div className="publish-management-card__body">
             <div className="publish-management-card__heading"><strong className="publish-management-card__title">{item.title}</strong><Badge variant={meta.variant}>{meta.label}</Badge></div>
             <div className="row-meta">{formatDateTime(item.calendarDate ?? item.createdAt)}</div>
@@ -239,17 +221,20 @@ function PublishItemCardGrid({
             {item.scheduledFor ? <div className="row-meta">원래 예약 {formatDateTime(item.scheduledFor)}</div> : null}
             {item.effectiveScheduledFor && item.effectiveScheduledFor !== item.scheduledFor ? <div className="row-meta">실제 실행 예정 {formatDateTime(item.effectiveScheduledFor)}</div> : null}
             {item.publishedAt ? <div className="row-meta">게시 완료 {formatDateTime(item.publishedAt)}</div> : null}
-            {item.lastError ? <div className="row-meta is-error">{item.lastError}</div> : null}
+            {item.lastError ? <div className="row-meta is-error">{publishErrorPresentation(item.lastError).message}</div> : null}
             {item.targets.map((target) => {
               const resultUnknown = target.status === "failed" && target.lastError === "publish_delivery_unknown";
-              const retryAllowed = target.status === "failed" && (target.lastError === "oauth_required" || target.lastError === "provider_not_implemented");
+              const errorPresentation = publishErrorPresentation(target.lastError);
+              const retryAllowed = target.status === "failed" && errorPresentation.action === "retry_publish";
+              const reconnectAllowed = target.status === "failed" && errorPresentation.action === "reconnect_channel";
               const cancellable = item.publicationProgress === "none"
                 && !item.targets.some((candidate) => candidate.status === "publishing")
                 && (target.status === "queued" || target.status === "scheduled" || target.status === "deferred");
-              if (!resultUnknown && !retryAllowed && !cancellable) return null;
+              if (!resultUnknown && !retryAllowed && !reconnectAllowed && !cancellable) return null;
               return <div className="publish-management-card__actions" key={`actions-${target.queueId}`}>
                 {resultUnknown ? <button className="button" type="button" onClick={() => onVerifyPublish(target.queueId)}>게시 결과 확인</button> : null}
                 {retryAllowed ? <button className="button" type="button" onClick={() => onRetryPublish(target.queueId)}>재시도</button> : null}
+                {reconnectAllowed ? <a className="button" href="/channels">채널 다시 연결</a> : null}
                 {cancellable ? <button className="button" type="button" onClick={() => onCancelPublish(item, target)}>예약 취소</button> : null}
               </div>;
             })}
@@ -432,7 +417,7 @@ function PublishResultDialog({
               {channel.lastError ? (
                 <div>
                   <dt>오류 사유</dt>
-                  <dd>{channel.lastError}</dd>
+                  <dd>{publishErrorPresentation(channel.lastError).message}</dd>
                 </div>
               ) : null}
             </dl>
@@ -502,7 +487,11 @@ export function PublishQueuePage({ generationGateway = aiContentApiGateway }: Pu
   const generationPreviewRequestRef = useRef<string | null>(null);
   const [reviewingOutputIds, setReviewingOutputIds] = useState<Set<string>>(() => new Set());
 
-  const calendarEntries = useMemo<CalendarEntry[]>(() => datedItems(publishItems).map(entryFromPublishItem), [publishItems]);
+  const calendarEntries = useMemo(() => datedItems(publishItems).map((item) => ({
+    ...entryFromPublishItem(item),
+    operationalStatus: item.operationalStatus,
+    operationalReason: item.operationalReason,
+  })), [publishItems]);
   const calendarUnreservedItems = useMemo(() => unreservedItems(publishItems), [publishItems]);
   const assignableCalendarContents = useMemo(() => publishItems.flatMap((item) => item.sourceRefs.topicPublishGroupId && (item.status === "completed_unpublished" || item.status === "publish_queued")
     ? [{ id: item.sourceRefs.topicPublishGroupId, title: item.title }]

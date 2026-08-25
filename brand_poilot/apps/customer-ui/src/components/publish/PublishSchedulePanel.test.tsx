@@ -19,7 +19,7 @@ function item(overrides: Partial<PublishItem> = {}): PublishItem {
     itemKey: "output:output-1", workspaceId: "workspace-1", brandId: "brand-1", title: "사장님 SNS 마케팅",
     createdAt: "2099-08-20T00:00:00.000Z", contentFormat: "card_news", channels: [],
     source: { type: "topic_table", label: "주제표", detail: null, urls: [] }, targets: [], reviewTargets: [],
-    contentStatus: "completed", publishStatus: "unreserved", status: "completed_unpublished", groupStatus: null, publicationProgress: "none",
+    contentStatus: "completed", publishStatus: "unreserved", status: "completed_unpublished", operationalStatus: "action_required", operationalReason: "review_required", groupStatus: null, publicationProgress: "none",
     scheduledFor: null, effectiveScheduledFor: null, publishedAt: null, calendarDate: null, calendarPlacement: "unreserved", assignmentMode: null,
     sourceRefs: { contentTopicId: "topic-1", proposalId: null, generationId: "generation-1", generationOutputId: "output-1", calendarSlotId: null, topicPublishGroupId: null, queueIds: [] },
     schedulable: true, scheduleBlockedReason: null, lastError: null,
