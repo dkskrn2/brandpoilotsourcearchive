@@ -152,7 +152,7 @@ git add docs/operations/UBUNTU_DEPLOYMENT.md docs/operations/PUBLISH_SCHEDULER.m
 git commit -m "docs(publish): add scheduler activation gates"
 ```
 
-### Task 6: Release C full gate and production activation
+### Task 6: Single-release full gate and production activation
 
 **Files:**
 - No new files; change source only if verification exposes a proven defect.
@@ -167,16 +167,16 @@ Run: `npm run test:deployment`
 
 Run: `npm run test:migrations`
 
-- [ ] **Step 2: Create the Release C PR.** Diff may contain API publishing transaction, new scheduler worker, its exact Compose/release keys, deployment contract, and scheduler docs only. No UI, migration, Caddy, DM, Wiki, or unrelated worker change is allowed.
+- [ ] **Step 2: Create one cumulative PR** containing Workstreams 1–3: publish API/UI, migration 091, the new scheduler worker, exact Compose/release keys, deployment contracts, and related docs. No Caddy, DM, Wiki, provider adapter, automatic-response setting, or unrelated worker change is allowed.
 
-- [ ] **Step 3: Deploy API canary with execution fenced.** Verify `/health`, `/ready`, preview, revision, restart count, and no publication mutation.
+- [ ] **Step 3: Run one CI/CD release build** from the merged main SHA. Confirm API, UI, and scheduler artifacts all carry that SHA, every image is immutable, and the release bundle preserves unchanged service digests.
 
-- [ ] **Step 4: Promote API primary.** Re-run preview and compare exact candidate IDs/counts with DB read-only evidence and current weekly quota. If any candidate is unexpected, stop without starting scheduler.
+- [ ] **Step 4: Apply the single release in a fixed order.** Reconfirm the production baseline and zero unexpected hotfix/digest drift, apply migration 091, deploy API canary, verify `/health`, `/ready`, preview and no mutation, promote API primary, then deploy the customer UI.
 
-- [ ] **Step 5: Deploy scheduler digest but keep profile stopped.** Verify image revision and no unrelated service digest changed.
+- [ ] **Step 5: Verify UI before activation.** Confirm status truth, reservation change, bounded list, content picker, responsive agenda, master OFF, channel controls, and weekly settings read/write. Deploy the scheduler digest from the same release but keep its profile stopped.
 
-- [ ] **Step 6: Start exactly one scheduler.** Observe three successful ticks, heartbeat age, zero overlap, provider attempts, recent errors, and API restart count.
+- [ ] **Step 6: Run the final preview gate.** Compare exact due/expired candidate IDs and counts with read-only DB evidence, current subscription-week quota, and provider readiness. Any unexpected candidate stops the single deployment before scheduler activation; it does not trigger another CI/CD run.
 
-- [ ] **Step 7: Verify customer app.** Due work leaves `게시 예정`, same-day waiting work is orange `게시 지연`, successful work is green, expired unstarted work becomes gray with the 23:59 reason.
+- [ ] **Step 7: Start exactly one scheduler.** Observe three successful ticks, heartbeat age, zero overlap, provider attempts, recent errors, and API restart count. Verify future work stays `게시 예정`, same-day waiting work is orange `게시 지연`, successful work is green, and expired unstarted work becomes gray with the 23:59 reason.
 
-- [ ] **Step 8: Update `state/current` and `PRODUCTION_RELEASE_SHA`** only after scheduler and customer checks pass. Failure rolls back scheduler first and only the API if its transaction is proven defective.
+- [ ] **Step 8: Update `state/current` and `PRODUCTION_RELEASE_SHA`** to the one new main SHA only after scheduler and customer checks pass. Failure stops scheduler first and restores changed API/UI/scheduler components to the pre-release SHA; migration 091 remains and no customer reservation is deleted or rewritten.

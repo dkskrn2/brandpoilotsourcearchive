@@ -36,7 +36,7 @@
 - 390px 화면에서 월간 캘린더는 약 4개 요일만 보이고 가로 탐색 안내가 없으며, 목록 상태 필터도 우측 항목이 잘렸다.
 - 목록과 캘린더가 같은 예약 항목을 표시하는 공통 데이터 연결, 캘린더의 grid/button 접근성 이름, 사이드바의 예약과 게시 성공 차감 구분은 유지할 가치가 있는 정상 동작이었다.
 
-이 점검 결과에 따라 구현을 세 릴리스로 분리한다. Release A에서 현재 운영 상태와 조작 동선을 먼저 사실대로 만들고, Release B에서 주간 설정·자동 배정을 추가하되 마스터는 OFF로 유지하며, Release C에서 singleton scheduler와 23:59 만료를 활성화한다.
+이 점검 결과를 하나의 PR과 하나의 운영 릴리스에 함께 반영한다. 구현과 검증은 현재 운영 상태·조작 동선, 주간 설정·자동 배정, singleton scheduler·23:59 만료 순서로 진행하지만 중간 PR이나 중간 운영 배포는 만들지 않는다. 같은 배포 안에서도 실제 게시 실행은 DB migration, API, UI 검증이 끝난 뒤 마지막에 활성화한다.
 
 ## 2. 확정된 제품 결정
 
@@ -77,7 +77,7 @@
 - DM, FAQ, crawl, wiki, 자동응답 설정 또는 무관 worker 변경
 - Caddy 변경
 - 게시 실패 분류와 명시적 재시도 정책의 전면 재설계
-- 이번 작업 중 운영 배포
+- 이 계획 작성 단계에서의 즉시 운영 배포
 
 ## 4. 검토한 접근과 선택
 
@@ -237,7 +237,7 @@ API 선배포와 UI 선배포 사이의 짧은 전환 구간만 구형 `slotTime
 - `expired`: 예약일 23:59가 지났고 미시작 target이 만료 처리됨
 - `publishing`, `partially_published`, `published`, `cancelled`
 
-목록과 캘린더는 이 필드를 같은 status presentation 함수로 렌더링한다. `게시 예정` 필터에 지난 날짜의 미완료 항목을 넣지 않는다. Release A에서는 과거에 남아 있는 active reservation을 `처리 필요`로 드러내고 자동 취소는 하지 않는다. Release C의 만료 transaction이 적용된 뒤에만 `cancelled`로 전환한다.
+목록과 캘린더는 이 필드를 같은 status presentation 함수로 렌더링한다. `게시 예정` 필터에 지난 날짜의 미완료 항목을 넣지 않는다. Workstream 1에서는 과거에 남아 있는 active reservation을 `처리 필요`로 드러내고 자동 취소는 하지 않는다. Workstream 3의 만료 transaction이 적용된 뒤에만 `cancelled`로 전환한다.
 
 ### 7.5 목록 정보 구조
 
@@ -245,7 +245,7 @@ API 선배포와 UI 선배포 사이의 짧은 전환 구간만 구형 `slotTime
 - 각 필터는 처음 30개만 렌더링하고 `더 보기`로 30개씩 확장한다. 공통 `PublishItem[]` 계약은 유지하되 306개 DOM 카드를 한 번에 만들지 않는다.
 - 실패 카드는 안정적인 오류 코드에 대응하는 사용자 문구와 `채널 다시 연결`, `재시도`, `콘텐츠 다시 생성`, `결과 확인` 중 실제 가능한 행동만 노출한다.
 - 같은 제목의 반복 실패는 별도 항목으로 유지하되 제목·시각·실패 단계가 보여야 하며, 내부 오류 문자열을 그대로 노출하지 않는다.
-- 상단 `정책 큐 배정`, `다음 게시 실행`은 Release A에서 `운영 도구` 메뉴로 내리고 실행 대상과 결과를 확인하는 안내를 추가한다. Release C scheduler가 검증된 뒤 고객 화면에서 제거한다.
+- 상단 `정책 큐 배정`, `다음 게시 실행`은 Workstream 1에서 `운영 도구` 메뉴로 내리고 실행 대상과 결과를 확인하는 안내를 추가한다. 같은 릴리스의 scheduler가 검증된 뒤 고객 화면에서 제거한다.
 
 ### 7.6 일정 상세과 콘텐츠 배정 분리
 
@@ -263,7 +263,7 @@ API 선배포와 UI 선배포 사이의 짧은 전환 구간만 구형 `slotTime
 - 오늘 날짜를 선택하면 현재보다 15분 뒤의 시각을 5분 단위로 올림한 값을 기본값으로 사용한다. 이는 슬롯 간격 제한이 아니며 사용자는 같은 시각을 포함해 임의 시각으로 바꿀 수 있다.
 - 미래 예약은 기존 조건대로 변경할 수 있다.
 - `delayed_today`는 target이 모두 `queued` 또는 `scheduled`이고 provider 호출이 시작되지 않았을 때 미래 시각으로 변경할 수 있다.
-- 전날 이전의 stale active reservation은 Release A에서 `처리 필요`로 보이고 변경 대신 운영 오류 안내를 제공한다. Release C 이후에는 23:59 만료 transaction으로 자동 취소된다.
+- 전날 이전의 stale active reservation은 Workstream 1에서 `처리 필요`로 보이고 변경 대신 운영 오류 안내를 제공한다. Workstream 3이 합쳐지면 23:59 만료 transaction으로 자동 취소된다.
 - 상세에는 날짜를 생략하지 않고 `2026년 8월 25일 오전 11:30`처럼 전체 시각을 표시한다.
 
 ### 7.8 좁은 화면
@@ -429,7 +429,7 @@ DM, FAQ, crawl, wiki와 무관 worker는 변경하지 않고 영향 테스트 �
 
 ## 13. 배포 경계
 
-이번 설계·구현 단계에서는 운영 배포하지 않는다. 향후 배포 승인을 받으면 다음 경계를 지킨다.
+이번 계획 문서 수정 단계에서는 운영 배포하지 않는다. 구현 완료 후 단일 운영 배포 승인을 받으면 다음 경계를 지킨다.
 
 1. 배포 직전 원격 main, Ubuntu `state/current`, GitHub `PRODUCTION_RELEASE_SHA`, 실행 digest와 별도 hotfix를 다시 확인한다.
 2. 운영의 자동 설정·미래 자동 슬롯 0건 전제를 다시 확인한다. 달라졌으면 자동 변환하지 않고 중단한다.
@@ -442,13 +442,19 @@ DM, FAQ, crawl, wiki와 무관 worker는 변경하지 않고 영향 테스트 �
 
 rollback은 변경한 구성요소만 대상으로 한다. scheduler를 먼저 중지하고 UI, API를 각 직전 검증 revision/digest로 되돌린다. additive schedule table은 기존 API와 충돌하지 않으므로 자동 DROP하지 않는다. 이미 생성된 예약이나 게시 결과를 rollback 과정에서 삭제·재배정하지 않는다.
 
-### 13.1 릴리스 분리
+### 13.1 단일 릴리스 내부 적용 순서
 
-- **Release A — 운영 상태·예약 UX:** API read model, 예약 변경 조건, 사용자 오류 문구, 목록 점진 렌더링, 캘린더 상태색, 상세·콘텐츠 배정 분리, 모바일 agenda. DB migration과 scheduler 활성화 없음.
-- **Release B — 주간 자동 게시 설정:** migration 091, weekly settings API, 헤더 마스터 토글, 채널별 ON/OFF, 요일별 여러 시간, allocator. 마스터 기본 OFF, scheduler 미활성.
-- **Release C — 게시 실행·만료:** singleton scheduler service, API advisory lock, 1분 publish-due, 23:59 만료, heartbeat/운영 runbook. 첫 활성화 전에 due·expired dry-run과 롤백 digest 확인.
+이번 변경은 하나의 기능 브랜치, 하나의 PR, 한 번의 CI/CD와 하나의 운영 release SHA로 배포한다. 다만 실제 적용은 다음 순서를 고정한다.
 
-Release A는 현재 기능의 사실성과 조작성을 개선하지만 운영 데이터 자동 보정은 하지 않는다. Release B는 새 설정을 저장해도 운영자가 마스터를 켜기 전 자동 슬롯을 만들지 않는다. Release C가 성공적으로 검증되기 전에는 자동 게시를 고객에게 `사용 중`으로 표시하지 않는다.
+1. migration 091을 운영 application role 검증 결과와 함께 적용한다.
+2. weekly schema를 읽을 수 있는 API를 canary에서 검증하고 primary로 승격한다.
+3. 고객 UI를 배포하고 목록·캘린더·예약 변경·주간 설정을 운영 브라우저에서 확인한다.
+4. 새 scheduler 이미지를 같은 release SHA의 immutable digest로 배치하되 정지 상태로 둔다.
+5. `publish-due/preview`로 due·expired 대상, 주간 한도와 provider 호출 예정 건을 확인한다.
+6. 이상이 없을 때 scheduler 한 개만 시작하고 연속 세 tick과 heartbeat를 확인한다.
+7. 전체 확인 후 `state/current`와 `PRODUCTION_RELEASE_SHA`를 같은 새 SHA로 갱신한다.
+
+이 순서는 CI/CD를 여러 번 실행하기 위한 분리가 아니다. 한 번의 배포 안에서 실제 게시 mutation만 마지막까지 닫아 두기 위한 activation gate다. 실패하면 scheduler를 먼저 정지하고, API와 UI는 같은 직전 운영 SHA로 되돌린다. migration 091은 additive이므로 DROP하지 않는다.
 
 ## 14. 완료 조건
 

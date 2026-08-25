@@ -201,7 +201,7 @@ git add apps/customer-ui/src/components/publish/AutoPublishHeaderControl.tsx app
 git commit -m "feat(publish): add weekly automatic settings UI"
 ```
 
-### Task 6: Remove transition fallback and verify Release B
+### Task 6: Remove transition fallback and verify Workstream 2
 
 **Files:**
 - Modify: `apps/api/src/types.ts`
@@ -233,9 +233,8 @@ Run: `npm test --workspace @brand-pilot/customer-ui -- AutoPublishHeaderControl.
 
 Run: `npm run build --workspace @brand-pilot/customer-ui`
 
-- [ ] **Step 5: Create the Release B PR.** Diff may contain migration 091, API, customer UI, and directly related docs only. It must not contain scheduler/Compose/Caddy/provider/other-worker changes.
+- [ ] **Step 5: Review the cumulative diff.** At this checkpoint it may contain Workstream 1 plus migration 091, API, customer UI, and directly related docs. Scheduler/Compose changes start only in Workstream 3; Caddy/provider/unrelated-worker changes remain forbidden.
 
-- [ ] **Step 6: Production deployment gate.** Reconfirm existing auto settings and future automatic slots are still zero. Apply migration 091, deploy compatible API canary → primary, then UI. Keep master OFF and verify save/read with a non-enabled test schedule. Do not start a scheduler.
+- [ ] **Step 6: Run a local migration/API/UI rehearsal.** Apply migration 091 only to the disposable test PostgreSQL, start the candidate API/UI locally, keep master OFF, and verify weekly settings read/write and allocator idempotency. Do not apply the migration or deploy any service to production at this checkpoint.
 
-- [ ] **Step 7: Update release SHA only after checks pass.** On failure, roll back API/UI only; leave additive migration 091 in place and delete no rows.
-
+- [ ] **Step 7: Continue on the same branch** to Workstream 3 only after the application-role PostgreSQL test and customer UI build pass. Do not create an intermediate PR or release SHA.

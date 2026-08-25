@@ -163,7 +163,7 @@ Run: `npm test --workspace @brand-pilot/customer-ui -- publishManagementFilters.
 
 - [ ] **Step 4: Extract `PublishManagementList`.** Preserve all existing review, retry, result, schedule, reschedule, and cancel callbacks. Default a URL without `status` to `action_required`; preserve explicit deep links and highlighted items even when outside the first 30.
 
-- [ ] **Step 5: Move `정책 큐 배정` and `다음 게시 실행`** into an `운영 도구` disclosure. Before execution, show the concrete target count/title; do not change their API calls in Release A.
+- [ ] **Step 5: Move `정책 큐 배정` and `다음 게시 실행`** into an `운영 도구` disclosure. Before execution, show the concrete target count/title; do not change their API calls in Workstream 1.
 
 - [ ] **Step 6: Re-run tests and commit.**
 
@@ -236,7 +236,7 @@ git add apps/customer-ui/src/components/publish/PublishMobileAgenda.tsx apps/cus
 git commit -m "feat(publish): add responsive operational calendar"
 ```
 
-### Task 7: Release A regression and production gate
+### Task 7: Workstream 1 regression gate
 
 **Files:**
 - Modify only if evidence requires: `docs/operations/UBUNTU_DEPLOYMENT.md`
@@ -253,10 +253,10 @@ Run: `npm run build --workspace @brand-pilot/customer-ui`
 
 - [ ] **Step 3: Inspect the diff.** It may contain API and customer UI only. It must not contain `db/migrations`, `deploy/compose.production.yml`, Caddy, worker, DM, or provider-adapter changes.
 
-- [ ] **Step 4: Create and merge the Release A PR** only after CI is green and the production baseline has been re-confirmed.
+- [ ] **Step 4: Record the Workstream 1 checkpoint** in the same feature branch. Do not create, merge, or deploy an intermediate PR; continue to Workstream 2 only when the focused API/UI suites are green.
 
-- [ ] **Step 5: Deploy API canary → primary, then Vercel UI.** Verify `/health`, `/ready`, API revision/restart count, and customer list/calendar. Do not deploy workers or run migrations.
+- [ ] **Step 5: Capture local browser evidence** at 1280x720, 1024x768, and 390x844 for list, calendar, reservation edit, content picker, and error states. Do not write operating data.
 
-- [ ] **Step 6: Production browser acceptance.** Confirm the known 8월 25 11:30 item is not ordinary upcoming, completed entries are green, raw errors are hidden, today’s reservation opens with a future time, and list initial DOM has at most 30 cards.
+- [ ] **Step 6: Confirm Workstream 1 acceptance.** The known 8월 25 11:30 fixture is not ordinary upcoming, completed entries are green, raw errors are hidden, today’s reservation opens with a future time, and list initial DOM has at most 30 cards.
 
-- [ ] **Step 7: Update `state/current` and `PRODUCTION_RELEASE_SHA`** only after both API and UI checks pass. On failure, roll back API/UI independently to their pre-Release-A revision.
+- [ ] **Step 7: Continue on the same branch** to Workstream 2. Do not update `state/current`, `PRODUCTION_RELEASE_SHA`, release manifests, or production services at this checkpoint.
