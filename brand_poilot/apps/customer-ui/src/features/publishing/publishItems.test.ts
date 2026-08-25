@@ -2,6 +2,24 @@ import { describe, expect, it } from "vitest";
 import type { PublishItem } from "../../types";
 import { canReschedulePublishItem, datedItems, entryFromPublishItem, listItems, unreservedItems } from "./publishItems";
 
+const target = (queueId: string, status: PublishItem["targets"][number]["status"]): PublishItem["targets"][number] => ({
+  queueId,
+  channelOutputId: `output-${queueId}`,
+  channel: "instagram",
+  status,
+  scheduledFor: "2026-08-25T05:30:00.000Z",
+  publishedAt: null,
+  failedAt: null,
+  lastError: null,
+  externalPostId: null,
+  externalUrl: null,
+  previewTitle: null,
+  previewBody: null,
+  outputJson: {},
+  artifactPublicUrl: null,
+  sourceSummary: null,
+});
+
 const item = (overrides: Partial<PublishItem> = {}): PublishItem => ({
   itemKey: "output:one",
   workspaceId: "workspace-1",
@@ -34,7 +52,7 @@ const item = (overrides: Partial<PublishItem> = {}): PublishItem => ({
 });
 
 describe("publish item derivations", () => {
-  it("allows a delayed-today reservation when publication has not started and every target is still queued or scheduled", () => {
+  it("allows a delayed-today reservation when every target is still queued in a ready lineage", () => {
     const delayed = item({
       operationalStatus: "delayed_today",
       operationalReason: "reserved_time_passed",
@@ -43,13 +61,35 @@ describe("publish item derivations", () => {
       scheduledFor: "2026-08-25T05:30:00.000Z",
       effectiveScheduledFor: "2026-08-25T05:45:00.000Z",
       publicationProgress: "none",
-      targets: [
-        { queueId: "queue-1", channelOutputId: "output-1", channel: "instagram", status: "queued", scheduledFor: "2026-08-25T05:30:00.000Z", publishedAt: null, failedAt: null, lastError: null, externalPostId: null, externalUrl: null, previewTitle: null, previewBody: null, outputJson: {}, artifactPublicUrl: null, sourceSummary: null },
-        { queueId: "queue-2", channelOutputId: "output-2", channel: "threads", status: "scheduled", scheduledFor: "2026-08-25T05:30:00.000Z", publishedAt: null, failedAt: null, lastError: null, externalPostId: null, externalUrl: null, previewTitle: null, previewBody: null, outputJson: {}, artifactPublicUrl: null, sourceSummary: null },
-      ],
+      groupStatus: "ready",
+      sourceRefs: { ...item().sourceRefs, topicPublishGroupId: "group-1" },
+      targets: [target("queue-1", "queued"), target("queue-2", "queued")],
     });
 
     expect(canReschedulePublishItem(delayed)).toBe(true);
+  });
+
+  it("allows scheduled targets only for a coherent scheduled group lineage", () => {
+    const scheduled = item({
+      groupStatus: "scheduled",
+      sourceRefs: { ...item().sourceRefs, topicPublishGroupId: "group-1" },
+      targets: [target("queue-1", "scheduled"), target("queue-2", "scheduled")],
+    });
+
+    expect(canReschedulePublishItem(scheduled)).toBe(true);
+    expect(canReschedulePublishItem({ ...scheduled, groupStatus: "ready" })).toBe(false);
+    expect(canReschedulePublishItem({
+      ...scheduled,
+      sourceRefs: { ...scheduled.sourceRefs, topicPublishGroupId: null },
+    })).toBe(false);
+  });
+
+  it("rejects mixed queued and scheduled targets", () => {
+    expect(canReschedulePublishItem(item({
+      groupStatus: "scheduled",
+      sourceRefs: { ...item().sourceRefs, topicPublishGroupId: "group-1" },
+      targets: [target("queue-1", "queued"), target("queue-2", "scheduled")],
+    }))).toBe(false);
   });
 
   it.each([

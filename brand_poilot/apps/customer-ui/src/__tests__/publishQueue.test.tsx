@@ -308,6 +308,8 @@ describe("PublishQueuePage canonical collection", () => {
       scheduledFor: "2026-08-23T23:30:00.000Z",
       effectiveScheduledFor: "2026-08-23T23:45:00.000Z",
       calendarDate: "2026-08-23T23:45:00.000Z",
+      groupStatus: "scheduled",
+      sourceRefs: { ...item().sourceRefs, topicPublishGroupId: "group-1" },
       targets: [target({ status: "scheduled", scheduledFor: "2026-08-23T23:30:00.000Z" })],
     });
     const listPublishItems = vi.fn(async () => [reserved]);
@@ -333,6 +335,25 @@ describe("PublishQueuePage canonical collection", () => {
     await userEvent.click(await screen.findByRole("button", { name: "예약된 SNS 마케팅 게시 지연 슬롯 상세 보기" }));
     await userEvent.click(screen.getByRole("button", { name: "예약 변경" }));
     expect(await screen.findByRole("dialog", { name: "예약된 SNS 마케팅 예약 변경" })).toBeVisible();
+  });
+
+  it("hides reservation changes for mixed queued and scheduled targets in both views", async () => {
+    const mixed = item({
+      groupStatus: "scheduled",
+      sourceRefs: { ...item().sourceRefs, topicPublishGroupId: "group-1", queueIds: ["queue-1", "queue-2"] },
+      targets: [
+        target({ queueId: "queue-1", status: "queued" }),
+        target({ queueId: "queue-2", channelOutputId: "channel-output-2", status: "scheduled" }),
+      ],
+    });
+    await renderPage({ listPublishItems: vi.fn(async () => [mixed]) });
+
+    const card = await screen.findByRole("article", { name: "예약된 SNS 마케팅" });
+    expect(within(card).queryByRole("button", { name: "예약 변경" })).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("tab", { name: "캘린더" }));
+    await userEvent.click(await screen.findByRole("button", { name: "예약된 SNS 마케팅 게시 예정 슬롯 상세 보기" }));
+    expect(screen.queryByRole("button", { name: "예약 변경" })).not.toBeInTheDocument();
   });
 
   it("uses saved preferred times when a new reservation date changes", async () => {
