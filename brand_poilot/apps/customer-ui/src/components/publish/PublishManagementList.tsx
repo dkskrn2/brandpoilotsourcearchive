@@ -131,6 +131,11 @@ export function PublishManagementList({
     () => rows.filter((item) => matchesItemFilter(item, activeFilter)),
     [activeFilter, rows],
   );
+  const legacySelectedFilter = activeFilter === "needs_review"
+    ? { label: "검토 대기" }
+    : activeFilter === "failed"
+      ? { label: "게시 실패" }
+      : null;
 
   const visibleItems = useMemo(() => {
     const visible = filtered.slice(0, visibleLimit);
@@ -153,6 +158,7 @@ export function PublishManagementList({
 
   return <section className="panel">
     <div className="panel-head"><h2>게시 목록</h2><div className="actions queue-filters">
+      {legacySelectedFilter ? <button type="button" className="button primary" aria-pressed="true" onClick={() => setVisibleLimit(PAGE_SIZE)}>{legacySelectedFilter.label} <span>{filtered.length}</span></button> : null}
       {publishManagementFilters.map((filter) => <button key={filter.id} type="button" className={activeFilter === filter.id ? "button primary" : "button"} aria-pressed={activeFilter === filter.id} onClick={() => changeFilter(filter.id)}>{filter.label} <span>{counts[filter.id]}</span></button>)}
     </div></div>
     <div className="panel-body"><div className="publish-management-grid" role="region" aria-label="게시 관리 통합 목록">

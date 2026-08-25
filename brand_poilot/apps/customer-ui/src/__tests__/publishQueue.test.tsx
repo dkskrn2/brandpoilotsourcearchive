@@ -124,9 +124,9 @@ describe("PublishQueuePage canonical collection", () => {
   });
 
   it.each([
-    ["needs_review", "검토할 콘텐츠", "게시 실패 콘텐츠"],
-    ["failed", "게시 실패 콘텐츠", "검토할 콘텐츠"],
-  ])("preserves the precise semantics of the active %s legacy link", async (status, visibleTitle, hiddenTitle) => {
+    ["needs_review", "검토할 콘텐츠", "게시 실패 콘텐츠", "검토 대기 1"],
+    ["failed", "게시 실패 콘텐츠", "검토할 콘텐츠", "게시 실패 1"],
+  ])("preserves the precise semantics of the active %s legacy link", async (status, visibleTitle, hiddenTitle, selectedLabel) => {
     window.history.replaceState({}, "", `/publish-queue?status=${status}`);
     const review = item({
       itemKey: "legacy:review",
@@ -156,6 +156,13 @@ describe("PublishQueuePage canonical collection", () => {
 
     expect(await screen.findByRole("article", { name: visibleTitle })).toBeVisible();
     expect(screen.queryByRole("article", { name: hiddenTitle })).not.toBeInTheDocument();
+    expect(screen.getAllByRole("button", { pressed: true })).toHaveLength(1);
+    expect(screen.getByRole("button", { name: selectedLabel, pressed: true })).toBeVisible();
+    expect(screen.getByRole("button", { name: "처리 필요 2" })).toHaveAttribute("aria-pressed", "false");
+    await userEvent.click(screen.getByRole("button", { name: "전체 2" }));
+    expect(screen.getAllByRole("button", { pressed: true })).toHaveLength(1);
+    expect(screen.getByRole("button", { name: "전체 2", pressed: true })).toBeVisible();
+    expect(screen.queryByRole("button", { name: selectedLabel })).not.toBeInTheDocument();
   });
 
   it("keeps the selected list filter after visiting the calendar", async () => {
