@@ -160,6 +160,81 @@ describe("publish calendar manual provisioning with postgres semantics", () => {
     expect(rows.rows.map(({ id }) => id)).not.toEqual(expect.arrayContaining(omittedIds));
   });
 
+  it("changes only enabled and prevents a later configuration save from restoring a stale toggle", async () => {
+    const created = await repository.saveWeeklySettings({
+      workspaceId: ids.workspace,
+      brandId: ids.brand,
+      enabled: true,
+      channels: ["instagram"],
+      informationalFormat: "card_news",
+      trendFormat: "reel",
+      weeklySchedule: [{ id: null, dayOfWeek: 1, time: "11:30", sortOrder: 0 }],
+    });
+    const scheduleId = created.weeklySchedule[0]!.id;
+    const beforeSettings = await db.query<{
+      channels: string[];
+      informational_format: string;
+      trend_format: string;
+    }>(
+      "select channels,informational_format,trend_format from publish_calendar_settings where brand_id=$1",
+      [ids.brand],
+    );
+    const beforeSchedule = await db.query<{
+      id: string;
+      day_of_week: number;
+      slot_time: string;
+      sort_order: number;
+      created_at: string;
+      updated_at: string;
+    }>(
+      `select id,day_of_week,slot_time::text,sort_order,created_at::text,updated_at::text
+         from publish_calendar_weekly_schedule_entries where brand_id=$1`,
+      [ids.brand],
+    );
+
+    await db.query("delete from brand_subscriptions where brand_id=$1", [ids.brand]);
+    await db.query("update brand_channels set enabled=false,status='not_connected' where brand_id=$1", [ids.brand]);
+    await expect(repository.setWeeklyEnabled({ workspaceId: ids.workspace, brandId: ids.brand, enabled: false }))
+      .resolves.toMatchObject({ enabled: false });
+    await expect(repository.setWeeklyEnabled({ workspaceId: ids.workspace, brandId: ids.otherBrand, enabled: false }))
+      .resolves.toMatchObject({ enabled: false, channels: [], weeklySchedule: [] });
+
+    await expect(db.query(
+      "select channels,informational_format,trend_format from publish_calendar_settings where brand_id=$1",
+      [ids.brand],
+    )).resolves.toEqual(beforeSettings);
+    await expect(db.query(
+      `select id,day_of_week,slot_time::text,sort_order,created_at::text,updated_at::text
+         from publish_calendar_weekly_schedule_entries where brand_id=$1`,
+      [ids.brand],
+    )).resolves.toEqual(beforeSchedule);
+    await expect(repository.setWeeklyEnabled({ workspaceId: ids.workspace, brandId: ids.brand, enabled: true }))
+      .rejects.toThrowError("publish_calendar_settings_incomplete");
+
+    await db.query("update brand_channels set enabled=true,status='connected' where brand_id=$1", [ids.brand]);
+    await expect(repository.setWeeklyEnabled({ workspaceId: ids.workspace, brandId: ids.brand, enabled: true }))
+      .resolves.toMatchObject({ enabled: true });
+    await repository.setWeeklyEnabled({ workspaceId: ids.workspace, brandId: ids.brand, enabled: false });
+    await db.query(
+      "insert into brand_subscriptions values($1,'pro','active','2026-08-01','2026-08-01','2100-01-01')",
+      [ids.brand],
+    );
+    const saved = await repository.saveWeeklyConfiguration({
+      workspaceId: ids.workspace,
+      brandId: ids.brand,
+      channels: ["instagram"],
+      informationalFormat: "reel",
+      trendFormat: "card_news",
+      weeklySchedule: [{ id: scheduleId, dayOfWeek: 2, time: "12:30", sortOrder: 0 }],
+    });
+    expect(saved).toMatchObject({
+      enabled: false,
+      informationalFormat: "reel",
+      trendFormat: "card_news",
+      weeklySchedule: [{ id: scheduleId, dayOfWeek: 2, time: "12:30", sortOrder: 0 }],
+    });
+  });
+
   it("rejects a foreign weekly id and rolls the complete settings transaction back", async () => {
     const existing = await repository.saveWeeklySettings({
       workspaceId: ids.workspace,

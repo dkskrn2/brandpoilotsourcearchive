@@ -4255,32 +4255,23 @@ export function createServer(
   });
 
   app.put<{ Params: { brandId: string }; Body: unknown }>("/brands/:brandId/publish-calendar/settings/weekly", async (request) => {
-    if (!repository.getWeeklySettings || !repository.saveWeeklySettings) {
+    if (!repository.saveWeeklyConfiguration) {
       throw new Error("publish_calendar_not_configured");
     }
     const scope = aiContentScope(request, request.params.brandId);
     const input = publishCalendarWeeklySettingsInput(request.body);
-    const current = await repository.getWeeklySettings(scope);
-    return repository.saveWeeklySettings({ ...scope, enabled: current.enabled, ...input });
+    return repository.saveWeeklyConfiguration({ ...scope, ...input });
   });
 
   app.patch<{ Params: { brandId: string }; Body: unknown }>("/brands/:brandId/publish-calendar/settings/enabled", async (request) => {
     if (!hasExactKeys(request.body, ["enabled"]) || typeof request.body.enabled !== "boolean") {
       throw new Error("publish_calendar_enabled_invalid");
     }
-    if (!repository.getWeeklySettings || !repository.saveWeeklySettings) {
+    if (!repository.setWeeklyEnabled) {
       throw new Error("publish_calendar_not_configured");
     }
     const scope = aiContentScope(request, request.params.brandId);
-    const current = await repository.getWeeklySettings(scope);
-    return repository.saveWeeklySettings({
-      ...scope,
-      enabled: request.body.enabled,
-      channels: current.channels,
-      informationalFormat: current.informationalFormat,
-      trendFormat: current.trendFormat,
-      weeklySchedule: current.weeklySchedule,
-    });
+    return repository.setWeeklyEnabled({ ...scope, enabled: request.body.enabled });
   });
 
   app.get<{

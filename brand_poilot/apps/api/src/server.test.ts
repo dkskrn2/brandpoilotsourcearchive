@@ -157,6 +157,34 @@ function createRepository(): ApiRepository {
       })),
       updatedAt: "2026-08-14T00:00:00.000Z",
     })),
+    saveWeeklyConfiguration: vi.fn(async (
+      input: Parameters<NonNullable<ApiRepository["saveWeeklyConfiguration"]>>[0],
+    ) => ({
+      brandId: input.brandId,
+      enabled: false,
+      channels: input.channels,
+      informationalFormat: input.informationalFormat,
+      trendFormat: input.trendFormat,
+      weeklySchedule: input.weeklySchedule.map((row, index) => ({
+        ...row,
+        id: row.id ?? `40000000-0000-4000-8000-${String(index + 2).padStart(12, "0")}`,
+      })),
+      updatedAt: "2026-08-14T00:00:00.000Z",
+    })),
+    setWeeklyEnabled: vi.fn(async (input) => ({
+      brandId: input.brandId,
+      enabled: input.enabled,
+      channels: ["instagram" as const],
+      informationalFormat: "card_news" as const,
+      trendFormat: "reel" as const,
+      weeklySchedule: [{
+        id: "40000000-0000-4000-8000-000000000001",
+        dayOfWeek: 1 as const,
+        time: "11:30",
+        sortOrder: 0,
+      }],
+      updatedAt: "2026-08-14T00:00:00.000Z",
+    })),
     listSlots: vi.fn(async () => []),
     createSlot: vi.fn(async (input) => ({
       id: "30000000-0000-4000-8000-000000000001",
@@ -3163,6 +3191,8 @@ describe("API server", () => {
     }));
     expect(repository.getWeeklySettings).not.toHaveBeenCalled();
     expect(repository.saveWeeklySettings).not.toHaveBeenCalled();
+    expect(repository.saveWeeklyConfiguration).not.toHaveBeenCalled();
+    expect(repository.setWeeklyEnabled).not.toHaveBeenCalled();
   });
 
   it("reads and writes only the strict versioned weekly settings contract without changing enabled", async () => {
@@ -3182,6 +3212,18 @@ describe("API server", () => {
       }],
       updatedAt: "2026-08-14T00:00:00.000Z",
     });
+    vi.mocked(repository.saveWeeklyConfiguration!).mockImplementation(async (input) => ({
+      brandId: input.brandId,
+      enabled: true,
+      channels: input.channels,
+      informationalFormat: input.informationalFormat,
+      trendFormat: input.trendFormat,
+      weeklySchedule: input.weeklySchedule.map((row, index) => ({
+        ...row,
+        id: row.id ?? `40000000-0000-4000-8000-${String(index + 2).padStart(12, "0")}`,
+      })),
+      updatedAt: "2026-08-14T00:00:00.000Z",
+    }));
     const app = createServer({ repository, logger: false });
     const payload = {
       channels: ["instagram"],
@@ -3222,12 +3264,13 @@ describe("API server", () => {
       ],
       updatedAt: "2026-08-14T00:00:00.000Z",
     });
-    expect(repository.saveWeeklySettings).toHaveBeenCalledWith({
+    expect(repository.saveWeeklyConfiguration).toHaveBeenCalledWith({
       workspaceId: "22222222-2222-4222-8222-222222222222",
       brandId,
-      enabled: true,
       ...payload,
     });
+    expect(repository.getWeeklySettings).toHaveBeenCalledTimes(1);
+    expect(repository.saveWeeklySettings).not.toHaveBeenCalled();
     expect(repository.getSettings).not.toHaveBeenCalled();
     expect(repository.saveSettings).not.toHaveBeenCalled();
   });
@@ -3255,6 +3298,7 @@ describe("API server", () => {
     expect(response.json()).toEqual({ error: "publish_calendar_weekly_settings_invalid" });
     expect(repository.getWeeklySettings).not.toHaveBeenCalled();
     expect(repository.saveWeeklySettings).not.toHaveBeenCalled();
+    expect(repository.saveWeeklyConfiguration).not.toHaveBeenCalled();
   });
 
   it("patches only the master enabled flag while preserving saved weekly settings", async () => {
@@ -3275,36 +3319,32 @@ describe("API server", () => {
 
     expect(off.statusCode).toBe(200);
     expect(on.statusCode).toBe(200);
-    expect(repository.saveWeeklySettings).toHaveBeenNthCalledWith(1, expect.objectContaining({
+    expect(repository.setWeeklyEnabled).toHaveBeenNthCalledWith(1, {
       workspaceId: "22222222-2222-4222-8222-222222222222",
       brandId,
       enabled: false,
-      channels: ["instagram"],
-      weeklySchedule: [{ id: "40000000-0000-4000-8000-000000000001", dayOfWeek: 1, time: "11:30", sortOrder: 0 }],
-    }));
-    expect(repository.saveWeeklySettings).toHaveBeenNthCalledWith(2, expect.objectContaining({ enabled: true }));
+    });
+    expect(repository.setWeeklyEnabled).toHaveBeenNthCalledWith(2, {
+      workspaceId: "22222222-2222-4222-8222-222222222222",
+      brandId,
+      enabled: true,
+    });
+    expect(repository.getWeeklySettings).not.toHaveBeenCalled();
+    expect(repository.saveWeeklySettings).not.toHaveBeenCalled();
+    expect(repository.saveWeeklyConfiguration).not.toHaveBeenCalled();
   });
 
   it("allows disabling incomplete weekly settings but preserves the repository ON validation error", async () => {
     vi.stubEnv("BRAND_PILOT_DEV_WORKSPACE_ID", "22222222-2222-4222-8222-222222222222");
     const repository = createRepository();
-    vi.mocked(repository.getWeeklySettings!).mockResolvedValue({
-      brandId,
-      enabled: false,
-      channels: [],
-      informationalFormat: "card_news",
-      trendFormat: "reel",
-      weeklySchedule: [],
-      updatedAt: null,
-    });
-    vi.mocked(repository.saveWeeklySettings!).mockImplementation(async (input) => {
+    vi.mocked(repository.setWeeklyEnabled!).mockImplementation(async (input) => {
       if (input.enabled) throw new Error("publish_calendar_settings_incomplete");
       return {
         brandId: input.brandId,
         enabled: false,
-        channels: input.channels,
-        informationalFormat: input.informationalFormat,
-        trendFormat: input.trendFormat,
+        channels: [],
+        informationalFormat: "card_news",
+        trendFormat: "reel",
         weeklySchedule: [],
         updatedAt: null,
       };
@@ -3345,6 +3385,7 @@ describe("API server", () => {
     expect(response.json()).toEqual({ error: "publish_calendar_enabled_invalid" });
     expect(repository.getWeeklySettings).not.toHaveBeenCalled();
     expect(repository.saveWeeklySettings).not.toHaveBeenCalled();
+    expect(repository.setWeeklyEnabled).not.toHaveBeenCalled();
   });
 
   it("returns canonical publish items with the authenticated workspace scope", async () => {

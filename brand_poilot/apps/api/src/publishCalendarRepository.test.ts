@@ -213,6 +213,131 @@ describe("publish calendar repository settings and slot validation", () => {
     })).rejects.toThrowError("publish_calendar_channel_not_connected");
   });
 
+  it("saves weekly configuration with the enabled value read under the brand lock", async () => {
+    const scheduleId = "30000000-0000-4000-8000-000000000001";
+    const run = harness((sql, values) => {
+      if (sql.startsWith("select enabled,channels,informational_format,trend_format,updated_at")) {
+        return {
+          rows: [{
+            enabled: true,
+            channels: ["instagram"],
+            informational_format: "card_news",
+            trend_format: "reel",
+            updated_at: "2026-08-26T00:00:00Z",
+          }],
+          rowCount: 1,
+        };
+      }
+      if (sql.startsWith("select id,workspace_id,brand_id,day_of_week")) {
+        return {
+          rows: [{ id: scheduleId, workspace_id: scope.workspaceId, brand_id: scope.brandId, day_of_week: 1, slot_time: "11:30", sort_order: 0 }],
+          rowCount: 1,
+        };
+      }
+      if (sql.includes("from brand_subscriptions subscription")) return activeSubscription(sql)!;
+      if (sql.includes("from brand_channels")) return { rows: [{ channel: "instagram" }], rowCount: 1 };
+      if (sql.startsWith("insert into publish_calendar_settings")) {
+        expect(values[2]).toBe(true);
+        return {
+          rows: [{ enabled: true, channels: ["instagram"], informational_format: "reel", trend_format: "card_news", updated_at: "2026-08-27T00:00:00Z" }],
+          rowCount: 1,
+        };
+      }
+      if (sql.startsWith("update publish_calendar_weekly_schedule_entries")) return { rows: [], rowCount: 1 };
+      if (sql.startsWith("delete from publish_calendar_weekly_schedule_entries")) return { rows: [], rowCount: 0 };
+      if (sql.startsWith("select id,day_of_week,slot_time,sort_order")) {
+        return { rows: [{ id: scheduleId, day_of_week: 2, slot_time: "12:30", sort_order: 0 }], rowCount: 1 };
+      }
+      return { rows: [], rowCount: 0 };
+    });
+
+    await expect(createPublishCalendarRepository(run.pool).saveWeeklyConfiguration({
+      ...scope,
+      channels: ["instagram"],
+      informationalFormat: "reel",
+      trendFormat: "card_news",
+      weeklySchedule: [{ id: scheduleId, dayOfWeek: 2, time: "12:30", sortOrder: 0 }],
+    })).resolves.toMatchObject({ enabled: true, informationalFormat: "reel", trendFormat: "card_news" });
+
+    const statements = run.statements.map(({ sql }) => sql);
+    expect(statements.findIndex((sql) => sql.includes("pg_advisory_xact_lock")))
+      .toBeLessThan(statements.findIndex((sql) => sql.startsWith("select enabled,")));
+    expect(statements.find((sql) => sql.startsWith("select enabled,"))).toContain("for update");
+  });
+
+  it("turns weekly publishing OFF without plan or channel validation and without rewriting configuration", async () => {
+    const scheduleId = "30000000-0000-4000-8000-000000000001";
+    const run = harness((sql) => {
+      if (sql.startsWith("select enabled,channels,informational_format,trend_format,updated_at")) {
+        return {
+          rows: [{ enabled: true, channels: ["instagram"], informational_format: "reel", trend_format: "card_news", updated_at: "2026-08-26T00:00:00Z" }],
+          rowCount: 1,
+        };
+      }
+      if (sql.startsWith("select id,day_of_week,slot_time,sort_order")) {
+        return { rows: [{ id: scheduleId, day_of_week: 2, slot_time: "12:30", sort_order: 0 }], rowCount: 1 };
+      }
+      if (sql.startsWith("insert into publish_calendar_settings")) {
+        return {
+          rows: [{ enabled: false, channels: ["instagram"], informational_format: "reel", trend_format: "card_news", updated_at: "2026-08-27T00:00:00Z" }],
+          rowCount: 1,
+        };
+      }
+      throw new Error(`unexpected query: ${sql}`);
+    });
+
+    await expect(createPublishCalendarRepository(run.pool).setWeeklyEnabled({ ...scope, enabled: false }))
+      .resolves.toEqual({
+        brandId: scope.brandId,
+        enabled: false,
+        channels: ["instagram"],
+        informationalFormat: "reel",
+        trendFormat: "card_news",
+        weeklySchedule: [{ id: scheduleId, dayOfWeek: 2, time: "12:30", sortOrder: 0 }],
+        updatedAt: "2026-08-27T00:00:00.000Z",
+      });
+
+    const sql = run.statements.map((statement) => statement.sql).join("\n");
+    expect(sql).not.toContain("from brand_subscriptions subscription");
+    expect(sql).not.toContain("from brand_channels");
+    expect(sql).not.toContain("update publish_calendar_weekly_schedule_entries");
+    expect(sql).not.toContain("delete from publish_calendar_weekly_schedule_entries");
+    const settingsWrite = run.statements.find(({ sql: statement }) => statement.startsWith("insert into publish_calendar_settings"))!.sql;
+    expect(settingsWrite).not.toContain("channels=excluded.channels");
+    expect(settingsWrite).not.toContain("informational_format=excluded.informational_format");
+    expect(settingsWrite).not.toContain("trend_format=excluded.trend_format");
+  });
+
+  it("turns weekly publishing ON only with a saved row and a currently connected supported selected channel", async () => {
+    const scheduleId = "30000000-0000-4000-8000-000000000001";
+    const connected = harness((sql) => {
+      if (sql.startsWith("select enabled,channels,informational_format,trend_format,updated_at")) {
+        return { rows: [{ enabled: false, channels: ["instagram"], informational_format: "card_news", trend_format: "reel", updated_at: null }], rowCount: 1 };
+      }
+      if (sql.startsWith("select id,day_of_week,slot_time,sort_order")) {
+        return { rows: [{ id: scheduleId, day_of_week: 1, slot_time: "11:30", sort_order: 0 }], rowCount: 1 };
+      }
+      if (sql.includes("from brand_channels")) return { rows: [{ channel: "instagram" }], rowCount: 1 };
+      if (sql.startsWith("insert into publish_calendar_settings")) {
+        return { rows: [{ enabled: true, channels: ["instagram"], informational_format: "card_news", trend_format: "reel", updated_at: "2026-08-27T00:00:00Z" }], rowCount: 1 };
+      }
+      return { rows: [], rowCount: 0 };
+    });
+    await expect(createPublishCalendarRepository(connected.pool).setWeeklyEnabled({ ...scope, enabled: true }))
+      .resolves.toMatchObject({ enabled: true, weeklySchedule: [{ id: scheduleId }] });
+    expect(connected.statements.some(({ sql }) => sql.includes("from brand_subscriptions subscription"))).toBe(false);
+
+    const incomplete = harness((sql) => {
+      if (sql.startsWith("select enabled,channels,informational_format,trend_format,updated_at")) {
+        return { rows: [{ enabled: false, channels: ["instagram"], informational_format: "card_news", trend_format: "reel", updated_at: null }], rowCount: 1 };
+      }
+      if (sql.startsWith("select id,day_of_week,slot_time,sort_order")) return { rows: [], rowCount: 0 };
+      return { rows: [], rowCount: 0 };
+    });
+    await expect(createPublishCalendarRepository(incomplete.pool).setWeeklyEnabled({ ...scope, enabled: true }))
+      .rejects.toThrowError("publish_calendar_settings_incomplete");
+  });
+
   it("returns the effective queue time without replacing the original slot reservation", async () => {
     const run = harness((sql) => sql.includes("queue_schedule.effective_scheduled_for") ? { rows: [slotRow({ effective_scheduled_for: "2099-08-15T03:30:00Z" })], rowCount: 1 } : { rows: [], rowCount: 0 });
     await expect(createPublishCalendarRepository(run.pool).listSlots({ ...scope, startsAt: new Date("2099-08-01T00:00:00Z"), endsAt: new Date("2099-09-01T00:00:00Z") })).resolves.toEqual([

@@ -333,10 +333,9 @@ it("runs the actual weekly settings repository transaction as the application ro
       expect(new Set(created.weeklySchedule.map(({ id }) => id)).size).toBe(3);
       const retainedId = created.weeklySchedule[1]!.id;
 
-      const updated = await repository.saveWeeklySettings({
+      const updated = await repository.saveWeeklyConfiguration({
         workspaceId,
         brandId,
-        enabled: true,
         channels: ["instagram"],
         informationalFormat: "reel",
         trendFormat: "card_news",
@@ -352,15 +351,71 @@ it("runs the actual weekly settings repository transaction as the application ro
       ];
       expect(updated.weeklySchedule).toEqual(expectedSchedule);
 
+      const rawConfigurationBeforeToggle = await client.query<{
+        channels: string[];
+        informational_format: string;
+        trend_format: string;
+      }>(
+        `select channels,informational_format,trend_format
+           from publish_calendar_settings where workspace_id=$1 and brand_id=$2`,
+        [workspaceId, brandId],
+      );
+      const rawScheduleBeforeToggle = await client.query<{
+        id: string;
+        created_at: string;
+        updated_at: string;
+      }>(
+        `select id,created_at::text,updated_at::text
+           from publish_calendar_weekly_schedule_entries
+          where workspace_id=$1 and brand_id=$2 order by id`,
+        [workspaceId, brandId],
+      );
+      await expect(repository.setWeeklyEnabled({ workspaceId, brandId, enabled: false }))
+        .resolves.toMatchObject({ enabled: false, weeklySchedule: expectedSchedule });
+      const rawConfigurationAfterToggle = await client.query<{
+        channels: string[];
+        informational_format: string;
+        trend_format: string;
+      }>(
+        `select channels,informational_format,trend_format
+           from publish_calendar_settings where workspace_id=$1 and brand_id=$2`,
+        [workspaceId, brandId],
+      );
+      const rawScheduleAfterToggle = await client.query<{
+        id: string;
+        created_at: string;
+        updated_at: string;
+      }>(
+        `select id,created_at::text,updated_at::text
+           from publish_calendar_weekly_schedule_entries
+          where workspace_id=$1 and brand_id=$2 order by id`,
+        [workspaceId, brandId],
+      );
+      expect(rawConfigurationAfterToggle.rows).toEqual(rawConfigurationBeforeToggle.rows);
+      expect(rawScheduleAfterToggle.rows).toEqual(rawScheduleBeforeToggle.rows);
+
+      await repository.setWeeklyEnabled({ workspaceId, brandId, enabled: true });
+      await Promise.all([
+        repository.setWeeklyEnabled({ workspaceId, brandId, enabled: false }),
+        repository.saveWeeklyConfiguration({
+          workspaceId,
+          brandId,
+          channels: ["instagram"],
+          informationalFormat: "reel",
+          trendFormat: "card_news",
+          weeklySchedule: expectedSchedule,
+        }),
+      ]);
+
       const read = await repository.getWeeklySettings({ workspaceId, brandId });
       expect(read).toEqual({
         brandId,
-        enabled: true,
+        enabled: false,
         channels: ["instagram"],
         informationalFormat: "reel",
         trendFormat: "card_news",
         weeklySchedule: expectedSchedule,
-        updatedAt: updated.updatedAt,
+        updatedAt: expect.any(String),
       });
 
       const foreign = await administrator.query<{ id: string }>(

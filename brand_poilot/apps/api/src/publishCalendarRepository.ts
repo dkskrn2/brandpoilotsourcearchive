@@ -23,6 +23,14 @@ type BrandScope = { workspaceId: string; brandId: string };
 type ContentFormat = "card_news" | "reel";
 type RecommendationKind = "informational" | "trend";
 type AssignmentMode = "automatic" | "manual";
+type WeeklyScheduleInput = Array<Omit<PublishCalendarWeeklyScheduleEntryDto, "id"> & { id: string | null }>;
+type WeeklyConfigurationInput = BrandScope & {
+  channels: Channel[];
+  informationalFormat: ContentFormat;
+  trendFormat: ContentFormat;
+  weeklySchedule: WeeklyScheduleInput;
+};
+type WeeklySettingsInput = WeeklyConfigurationInput & { enabled: boolean };
 type ManualSlotProvisionInput = BrandScope & {
   scheduledFor: Date;
   channel: Channel;
@@ -64,13 +72,9 @@ export interface PublishCalendarRepository {
     slotTimes: string[];
   }): Promise<PublishCalendarSettingsDto>;
   getWeeklySettings(scope: BrandScope): Promise<PublishCalendarWeeklySettingsDto>;
-  saveWeeklySettings(input: BrandScope & {
-    enabled: boolean;
-    channels: Channel[];
-    informationalFormat: ContentFormat;
-    trendFormat: ContentFormat;
-    weeklySchedule: Array<Omit<PublishCalendarWeeklyScheduleEntryDto, "id"> & { id: string | null }>;
-  }): Promise<PublishCalendarWeeklySettingsDto>;
+  saveWeeklySettings(input: WeeklySettingsInput): Promise<PublishCalendarWeeklySettingsDto>;
+  saveWeeklyConfiguration(input: WeeklyConfigurationInput): Promise<PublishCalendarWeeklySettingsDto>;
+  setWeeklyEnabled(input: BrandScope & { enabled: boolean }): Promise<PublishCalendarWeeklySettingsDto>;
   listSlots(input: BrandScope & { startsAt: Date; endsAt: Date }): Promise<PublishCalendarSlotDto[]>;
   createSlot(input: BrandScope & {
     scheduledFor: Date;
@@ -464,6 +468,167 @@ function addAnchoredUtcMonth(value: Date, anchorDay: number): Date {
     value.getUTCSeconds(),
     value.getUTCMilliseconds(),
   ));
+}
+
+async function saveWeeklySettingsTransaction(
+  pool: Pool,
+  input: WeeklyConfigurationInput,
+  requestedEnabled: boolean | null,
+): Promise<PublishCalendarWeeklySettingsDto> {
+  const channels = validateChannels(input.channels);
+  if (input.informationalFormat !== "card_news" && input.informationalFormat !== "reel") {
+    throw new Error("publish_calendar_format_invalid");
+  }
+  if (input.trendFormat !== "card_news" && input.trendFormat !== "reel") {
+    throw new Error("publish_calendar_format_invalid");
+  }
+  const weeklySchedule = validateWeeklySchedule(input.weeklySchedule);
+  return transaction(pool, async (client) => {
+    await lockBrand(client, input.brandId);
+    const settings = await client.query(
+      `select enabled,channels,informational_format,trend_format,updated_at
+         from publish_calendar_settings
+        where brand_id=$1::uuid and workspace_id=$2::uuid
+        for update`,
+      [input.brandId, input.workspaceId],
+    );
+    const enabled = requestedEnabled ?? (settings.rows[0]?.enabled === true);
+    if (enabled && (channels.length === 0 || weeklySchedule.length === 0)) {
+      throw new Error("publish_calendar_settings_incomplete");
+    }
+    const existingSchedule = await client.query(
+      `select id,workspace_id,brand_id,day_of_week,slot_time,sort_order
+         from publish_calendar_weekly_schedule_entries
+        where brand_id=$1::uuid and workspace_id=$2::uuid
+        order by day_of_week,sort_order,id
+        for update`,
+      [input.brandId, input.workspaceId],
+    );
+
+    if (weeklySchedule.length > 0) {
+      const plan = await activeSubscriptionPlan(client, input);
+      if (weeklySchedule.length > plan.weeklyPublishLimit) {
+        throw new Error("publish_calendar_publish_limit_exceeded");
+      }
+    }
+
+    const connected = await connectedCalendarChannels(client, input, channels);
+    const existingChannels = new Set((settings.rows[0]?.channels ?? []) as Channel[]);
+    if (channels.some((channel) => !existingChannels.has(channel) && !connected.has(channel))) {
+      throw new Error("publish_calendar_channel_not_connected");
+    }
+    if (enabled && !channels.some((channel) => connected.has(channel))) {
+      throw new Error("publish_calendar_settings_incomplete");
+    }
+
+    const existingIds = new Set(existingSchedule.rows.map(({ id }) => String(id)));
+    const suppliedIds = weeklySchedule.flatMap(({ id }) => id === null ? [] : [id]);
+    if (suppliedIds.some((id) => !existingIds.has(id))) {
+      throw new Error("publish_calendar_weekly_schedule_id_invalid");
+    }
+
+    const savedSettings = await client.query(
+      `insert into publish_calendar_settings(
+         brand_id,workspace_id,enabled,channels,informational_format,trend_format
+       ) values($1::uuid,$2::uuid,$3,$4::text[],$5,$6)
+       on conflict(brand_id) do update set
+         workspace_id=excluded.workspace_id,enabled=excluded.enabled,channels=excluded.channels,
+         informational_format=excluded.informational_format,trend_format=excluded.trend_format,
+         updated_at=now()
+       returning enabled,channels,informational_format,trend_format,updated_at`,
+      [input.brandId, input.workspaceId, enabled, channels,
+        input.informationalFormat, input.trendFormat],
+    );
+
+    const temporarySortOrders = temporaryWeeklySortOrders(existingSchedule.rows, weeklySchedule);
+    for (const row of existingSchedule.rows) {
+      const staged = await client.query(
+        `update publish_calendar_weekly_schedule_entries
+            set sort_order=$4
+          where id=$1::uuid and brand_id=$2::uuid and workspace_id=$3::uuid`,
+        [String(row.id), input.brandId, input.workspaceId, temporarySortOrders.get(String(row.id))],
+      );
+      if (!staged.rowCount) throw new Error("publish_calendar_weekly_schedule_id_invalid");
+    }
+    await client.query(
+      `delete from publish_calendar_weekly_schedule_entries
+        where brand_id=$1::uuid and workspace_id=$2::uuid
+          and not(id=any($3::uuid[]))`,
+      [input.brandId, input.workspaceId, suppliedIds],
+    );
+    for (const row of weeklySchedule) {
+      if (row.id === null) {
+        await client.query(
+          `insert into publish_calendar_weekly_schedule_entries(
+             workspace_id,brand_id,day_of_week,slot_time,sort_order
+           ) values($1::uuid,$2::uuid,$3,$4::time,$5)
+           returning id,day_of_week,slot_time,sort_order`,
+          [input.workspaceId, input.brandId, row.dayOfWeek, row.time, row.sortOrder],
+        );
+      } else {
+        const updated = await client.query(
+          `update publish_calendar_weekly_schedule_entries
+              set day_of_week=$4,slot_time=$5::time,sort_order=$6,updated_at=now()
+            where id=$1::uuid and brand_id=$2::uuid and workspace_id=$3::uuid`,
+          [row.id, input.brandId, input.workspaceId, row.dayOfWeek, row.time, row.sortOrder],
+        );
+        if (!updated.rowCount) throw new Error("publish_calendar_weekly_schedule_id_invalid");
+      }
+    }
+    const savedSchedule = await client.query(
+      `select id,day_of_week,slot_time,sort_order
+         from publish_calendar_weekly_schedule_entries
+        where brand_id=$1::uuid and workspace_id=$2::uuid
+        order by day_of_week,sort_order,id`,
+      [input.brandId, input.workspaceId],
+    );
+    return mapWeeklySettings(savedSettings.rows[0], input.brandId, savedSchedule.rows);
+  });
+}
+
+async function setWeeklyEnabledTransaction(
+  pool: Pool,
+  input: BrandScope & { enabled: boolean },
+): Promise<PublishCalendarWeeklySettingsDto> {
+  return transaction(pool, async (client) => {
+    await lockBrand(client, input.brandId);
+    const settings = await client.query(
+      `select enabled,channels,informational_format,trend_format,updated_at
+         from publish_calendar_settings
+        where brand_id=$1::uuid and workspace_id=$2::uuid
+        for update`,
+      [input.brandId, input.workspaceId],
+    );
+    const schedule = await client.query(
+      `select id,day_of_week,slot_time,sort_order
+         from publish_calendar_weekly_schedule_entries
+        where brand_id=$1::uuid and workspace_id=$2::uuid
+        order by day_of_week,sort_order,id
+        for update`,
+      [input.brandId, input.workspaceId],
+    );
+    if (input.enabled) {
+      const selectedChannels = ((settings.rows[0]?.channels ?? []) as Channel[])
+        .filter((channel) => SUPPORTED_CHANNELS.has(channel));
+      if (schedule.rows.length === 0 || selectedChannels.length === 0) {
+        throw new Error("publish_calendar_settings_incomplete");
+      }
+      const connected = await connectedCalendarChannels(client, input, selectedChannels);
+      if (!selectedChannels.some((channel) => connected.has(channel))) {
+        throw new Error("publish_calendar_settings_incomplete");
+      }
+    }
+    const saved = await client.query(
+      `insert into publish_calendar_settings(brand_id,workspace_id,enabled)
+       values($1::uuid,$2::uuid,$3)
+       on conflict(brand_id) do update set enabled=excluded.enabled,updated_at=now()
+       where publish_calendar_settings.workspace_id=excluded.workspace_id
+       returning enabled,channels,informational_format,trend_format,updated_at`,
+      [input.brandId, input.workspaceId, input.enabled],
+    );
+    if (!saved.rowCount) throw new Error("publish_calendar_settings_invalid");
+    return mapWeeklySettings(saved.rows[0], input.brandId, schedule.rows);
+  });
 }
 
 export function createPublishCalendarRepository(
@@ -1016,114 +1181,15 @@ export function createPublishCalendarRepository(
     },
 
     async saveWeeklySettings(input) {
-      const channels = validateChannels(input.channels);
-      if (input.informationalFormat !== "card_news" && input.informationalFormat !== "reel") {
-        throw new Error("publish_calendar_format_invalid");
-      }
-      if (input.trendFormat !== "card_news" && input.trendFormat !== "reel") {
-        throw new Error("publish_calendar_format_invalid");
-      }
-      const weeklySchedule = validateWeeklySchedule(input.weeklySchedule);
-      if (input.enabled && (channels.length === 0 || weeklySchedule.length === 0)) {
-        throw new Error("publish_calendar_settings_incomplete");
-      }
-      return transaction(fencedPool, async (client) => {
-        await lockBrand(client, input.brandId);
-        const settings = await client.query(
-          `select enabled,channels,informational_format,trend_format,updated_at
-             from publish_calendar_settings
-            where brand_id=$1::uuid and workspace_id=$2::uuid
-            for update`,
-          [input.brandId, input.workspaceId],
-        );
-        const existingSchedule = await client.query(
-          `select id,workspace_id,brand_id,day_of_week,slot_time,sort_order
-             from publish_calendar_weekly_schedule_entries
-            where brand_id=$1::uuid and workspace_id=$2::uuid
-            order by day_of_week,sort_order,id
-            for update`,
-          [input.brandId, input.workspaceId],
-        );
+      return saveWeeklySettingsTransaction(fencedPool, input, input.enabled);
+    },
 
-        if (weeklySchedule.length > 0) {
-          const plan = await activeSubscriptionPlan(client, input);
-          if (weeklySchedule.length > plan.weeklyPublishLimit) {
-            throw new Error("publish_calendar_publish_limit_exceeded");
-          }
-        }
+    async saveWeeklyConfiguration(input) {
+      return saveWeeklySettingsTransaction(fencedPool, input, null);
+    },
 
-        const connected = await connectedCalendarChannels(client, input, channels);
-        const existingChannels = new Set((settings.rows[0]?.channels ?? []) as Channel[]);
-        if (channels.some((channel) => !existingChannels.has(channel) && !connected.has(channel))) {
-          throw new Error("publish_calendar_channel_not_connected");
-        }
-        if (input.enabled && !channels.some((channel) => connected.has(channel))) {
-          throw new Error("publish_calendar_settings_incomplete");
-        }
-
-        const existingIds = new Set(existingSchedule.rows.map(({ id }) => String(id)));
-        const suppliedIds = weeklySchedule.flatMap(({ id }) => id === null ? [] : [id]);
-        if (suppliedIds.some((id) => !existingIds.has(id))) {
-          throw new Error("publish_calendar_weekly_schedule_id_invalid");
-        }
-
-        const savedSettings = await client.query(
-          `insert into publish_calendar_settings(
-             brand_id,workspace_id,enabled,channels,informational_format,trend_format
-           ) values($1::uuid,$2::uuid,$3,$4::text[],$5,$6)
-           on conflict(brand_id) do update set
-             workspace_id=excluded.workspace_id,enabled=excluded.enabled,channels=excluded.channels,
-             informational_format=excluded.informational_format,trend_format=excluded.trend_format,
-             updated_at=now()
-           returning enabled,channels,informational_format,trend_format,updated_at`,
-          [input.brandId, input.workspaceId, input.enabled, channels,
-            input.informationalFormat, input.trendFormat],
-        );
-
-        const temporarySortOrders = temporaryWeeklySortOrders(existingSchedule.rows, weeklySchedule);
-        for (const row of existingSchedule.rows) {
-          const staged = await client.query(
-            `update publish_calendar_weekly_schedule_entries
-                set sort_order=$4
-              where id=$1::uuid and brand_id=$2::uuid and workspace_id=$3::uuid`,
-            [String(row.id), input.brandId, input.workspaceId, temporarySortOrders.get(String(row.id))],
-          );
-          if (!staged.rowCount) throw new Error("publish_calendar_weekly_schedule_id_invalid");
-        }
-        await client.query(
-          `delete from publish_calendar_weekly_schedule_entries
-            where brand_id=$1::uuid and workspace_id=$2::uuid
-              and not(id=any($3::uuid[]))`,
-          [input.brandId, input.workspaceId, suppliedIds],
-        );
-        for (const row of weeklySchedule) {
-          if (row.id === null) {
-            await client.query(
-              `insert into publish_calendar_weekly_schedule_entries(
-                 workspace_id,brand_id,day_of_week,slot_time,sort_order
-               ) values($1::uuid,$2::uuid,$3,$4::time,$5)
-               returning id,day_of_week,slot_time,sort_order`,
-              [input.workspaceId, input.brandId, row.dayOfWeek, row.time, row.sortOrder],
-            );
-          } else {
-            const updated = await client.query(
-              `update publish_calendar_weekly_schedule_entries
-                  set day_of_week=$4,slot_time=$5::time,sort_order=$6,updated_at=now()
-                where id=$1::uuid and brand_id=$2::uuid and workspace_id=$3::uuid`,
-              [row.id, input.brandId, input.workspaceId, row.dayOfWeek, row.time, row.sortOrder],
-            );
-            if (!updated.rowCount) throw new Error("publish_calendar_weekly_schedule_id_invalid");
-          }
-        }
-        const savedSchedule = await client.query(
-          `select id,day_of_week,slot_time,sort_order
-             from publish_calendar_weekly_schedule_entries
-            where brand_id=$1::uuid and workspace_id=$2::uuid
-            order by day_of_week,sort_order,id`,
-          [input.brandId, input.workspaceId],
-        );
-        return mapWeeklySettings(savedSettings.rows[0], input.brandId, savedSchedule.rows);
-      });
+    async setWeeklyEnabled(input) {
+      return setWeeklyEnabledTransaction(fencedPool, input);
     },
 
     async listSlots(input) {

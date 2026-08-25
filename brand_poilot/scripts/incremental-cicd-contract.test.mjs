@@ -144,10 +144,18 @@ test("migration changes run both publish-calendar PostgreSQL contracts without a
     /createPublishCalendarRepository\(application\)/,
   );
   assert.match(migration091Test, /repository\.saveWeeklySettings\s*\(/);
+  assert.match(migration091Test, /repository\.saveWeeklyConfiguration\s*\(/);
+  assert.match(migration091Test, /repository\.setWeeklyEnabled\s*\(/);
+  assert.match(
+    migration091Test,
+    /Promise\.all\s*\(\s*\[[\s\S]*?repository\.setWeeklyEnabled\s*\([\s\S]*?repository\.saveWeeklyConfiguration\s*\(/,
+  );
   assert.match(migration091Test, /repository\.getWeeklySettings\s*\(/);
   assert.match(migration091Test, /from pg_auth_members[\s\S]*where member\.rolname=current_user/);
 
   const weeklyRepository = readFileSync("apps/api/src/publishCalendarRepository.ts", "utf8");
+  assert.match(weeklyRepository, /saveWeeklyConfiguration\s*\(/);
+  assert.match(weeklyRepository, /setWeeklyEnabled\s*\(/);
   assert.match(
     weeklyRepository,
     /insert into publish_calendar_weekly_schedule_entries\([\s\S]*?returning id,day_of_week,slot_time,sort_order/,
