@@ -123,6 +123,66 @@ describe("PublishQueuePage canonical collection", () => {
     expect(screen.getByRole("button", { name: /처리 필요/ })).toHaveAttribute("aria-pressed", "true");
   });
 
+  it.each([
+    ["needs_review", "검토할 콘텐츠", "게시 실패 콘텐츠"],
+    ["failed", "게시 실패 콘텐츠", "검토할 콘텐츠"],
+  ])("preserves the precise semantics of the active %s legacy link", async (status, visibleTitle, hiddenTitle) => {
+    window.history.replaceState({}, "", `/publish-queue?status=${status}`);
+    const review = item({
+      itemKey: "legacy:review",
+      title: "검토할 콘텐츠",
+      targets: [],
+      reviewTargets: [reviewTarget()],
+      status: "completed_unpublished",
+      publishStatus: "unreserved",
+      operationalStatus: "action_required",
+      operationalReason: "review_required",
+      scheduledFor: null,
+      effectiveScheduledFor: null,
+      calendarDate: null,
+      calendarPlacement: "unreserved",
+    });
+    const failed = item({
+      itemKey: "legacy:failed",
+      title: "게시 실패 콘텐츠",
+      status: "failed",
+      publishStatus: "failed",
+      operationalStatus: "action_required",
+      operationalReason: "publish_failed",
+      targets: [target({ status: "failed", lastError: "provider_not_implemented" })],
+    });
+
+    await renderPage({ listPublishItems: vi.fn(async () => [review, failed]) });
+
+    expect(await screen.findByRole("article", { name: visibleTitle })).toBeVisible();
+    expect(screen.queryByRole("article", { name: hiddenTitle })).not.toBeInTheDocument();
+  });
+
+  it("keeps the selected list filter after visiting the calendar", async () => {
+    const published = item({
+      itemKey: "filter:published",
+      title: "완료 콘텐츠",
+      status: "published",
+      publishStatus: "published",
+      operationalStatus: "published",
+      operationalReason: "published",
+      publicationProgress: "complete",
+      targets: [target({ status: "published", publishedAt: "2026-08-23T03:00:00.000Z" })],
+    });
+    const upcoming = item({ itemKey: "filter:upcoming", title: "예정 콘텐츠" });
+    await renderPage({ listPublishItems: vi.fn(async () => [published, upcoming]) });
+
+    await userEvent.click(await screen.findByRole("button", { name: /완료 1/ }));
+    expect(screen.getByRole("article", { name: "완료 콘텐츠" })).toBeVisible();
+    expect(screen.queryByRole("article", { name: "예정 콘텐츠" })).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("tab", { name: "캘린더" }));
+    await userEvent.click(screen.getByRole("tab", { name: "목록" }));
+
+    expect(screen.getByRole("button", { name: /완료 1/ })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("article", { name: "완료 콘텐츠" })).toBeVisible();
+    expect(screen.queryByRole("article", { name: "예정 콘텐츠" })).not.toBeInTheDocument();
+  });
+
   it("uses one collection for both views and never calls retired base reads", async () => {
     const items = [
       item(),

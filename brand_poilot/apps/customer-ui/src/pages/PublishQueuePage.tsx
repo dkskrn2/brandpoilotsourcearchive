@@ -5,7 +5,7 @@ import { PublishArtifactPreview } from "../components/publish/PublishArtifactPre
 import { ContentArtifactDialog } from "../components/publish/ContentArtifactDialog";
 import { ChannelLogo } from "../components/channels/ChannelLogo";
 import type { PublishCardPreview } from "../components/publish/PublishManagementPreview";
-import { PublishManagementList } from "../components/publish/PublishManagementList";
+import { PublishManagementList, type PublishManagementListFilterId } from "../components/publish/PublishManagementList";
 import { CardSkeleton, InlineSpinner, ListSkeleton } from "../components/ui/LoadingState";
 import { Alert } from "../components/ui/Alert";
 import { Badge } from "../components/ui/Badge";
@@ -13,7 +13,6 @@ import { PublishCalendar } from "../components/publish/PublishCalendar";
 import { PublishSchedulePanel, scheduleErrorMessage } from "../components/publish/PublishSchedulePanel";
 import {
   publishManagementFilters,
-  type PublishManagementFilterId,
 } from "../components/publish/publishManagementFilters";
 import { api, DEMO_BRAND_ID } from "../lib/apiClient";
 import { dateKey, formatPublishDateTime as formatDateTime, PUBLISH_CALENDAR_USAGE_CHANGED_EVENT } from "../features/publishing/publishCalendar";
@@ -49,7 +48,6 @@ const resultStatusMeta: Record<PublishResultChannel["status"], { label: string; 
   cancelled: { label: "취소", variant: "neutral", clickable: false }
 };
 
-type ManagementFilterId = PublishManagementFilterId;
 type PublishView = "list" | "calendar";
 
 type PublishQueuePageProps = {
@@ -342,10 +340,13 @@ export function PublishQueuePage({ generationGateway = aiContentApiGateway }: Pu
   const [publishItems, setPublishItems] = useState<PublishItem[]>([]);
   const [generationPreviews, setGenerationPreviews] = useState<ReadonlyMap<string, PublishCardPreview>>(() => new Map());
   const [operationsOpen, setOperationsOpen] = useState(false);
-  const initialFilter = useMemo<ManagementFilterId>(() => {
+  const [activeFilter, setActiveFilter] = useState<PublishManagementListFilterId>(() => {
     const requested = new URLSearchParams(window.location.search).get("status");
-    return publishManagementFilters.some((filter) => filter.id === requested) ? requested as ManagementFilterId : "action_required";
-  }, []);
+    if (publishManagementFilters.some((filter) => filter.id === requested)) {
+      return requested as PublishManagementListFilterId;
+    }
+    return requested === "needs_review" || requested === "failed" ? requested : "action_required";
+  });
   const [notice, setNotice] = useState<string | null>(null);
   const [selectedResult, setSelectedResult] = useState<{ result: PublishResult; channel: PublishResultChannel } | null>(null);
   const [selectedReviewOutput, setSelectedReviewOutput] = useState<ContentOutput | null>(null);
@@ -832,7 +833,8 @@ export function PublishQueuePage({ generationGateway = aiContentApiGateway }: Pu
       ) : (
         <PublishManagementList
           items={publishItems}
-          initialFilter={initialFilter}
+          activeFilter={activeFilter}
+          onFilterChange={setActiveFilter}
           onSelectResult={(item, target) => setSelectedResult({ result: resultFromPublishItem(item), channel: resultFromPublishItem(item).channels.find((channel) => channel.queueId === target.queueId)! })}
           onSelectReviewTarget={(item, target) => setSelectedReviewOutput(contentOutputFromReviewTarget(item, target))}
           onReviewTargets={(targets, action, message) => void reviewTargets(targets, action, message)}

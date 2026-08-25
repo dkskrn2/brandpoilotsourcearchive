@@ -1,9 +1,10 @@
+import { useState } from "react";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
 import type { PublishItem } from "../../types";
-import { PublishManagementList } from "./PublishManagementList";
+import { PublishManagementList, type PublishManagementListFilterId } from "./PublishManagementList";
 
 function publishItem(index: number, overrides: Partial<PublishItem> = {}): PublishItem {
   return {
@@ -47,10 +48,12 @@ function publishItem(index: number, overrides: Partial<PublishItem> = {}): Publi
 }
 
 function renderList(items: PublishItem[], highlightedQueueId: string | null = null) {
-  return render(
-    <PublishManagementList
+  function ListHarness() {
+    const [activeFilter, setActiveFilter] = useState<PublishManagementListFilterId>("action_required");
+    return <PublishManagementList
       items={items}
-      initialFilter="action_required"
+      activeFilter={activeFilter}
+      onFilterChange={setActiveFilter}
       highlightedQueueId={highlightedQueueId}
       onSelectResult={vi.fn()}
       onSelectReviewTarget={vi.fn()}
@@ -61,8 +64,10 @@ function renderList(items: PublishItem[], highlightedQueueId: string | null = nu
       onCancelPublish={vi.fn()}
       onSchedule={vi.fn()}
       onReschedule={vi.fn()}
-    />,
-  );
+    />;
+  }
+
+  return render(<ListHarness />);
 }
 
 describe("PublishManagementList", () => {
@@ -102,5 +107,40 @@ describe("PublishManagementList", () => {
 
     expect(await screen.findAllByRole("article")).toHaveLength(30);
     expect(screen.getByRole("article", { name: "게시 항목 0" })).toHaveAttribute("data-publish-deep-link", "true");
+  });
+
+  it("keeps more available when an outside highlight displaces the thirtieth filtered item", async () => {
+    const filtered = Array.from({ length: 30 }, (_, index) => publishItem(index + 1));
+    const highlighted = publishItem(0, {
+      operationalStatus: "upcoming",
+      operationalReason: "future_reservation",
+      publishStatus: "scheduled",
+      status: "scheduled",
+      targets: [{
+        queueId: "queue-outside-filter",
+        channelOutputId: "output-outside-filter",
+        channel: "instagram",
+        status: "scheduled",
+        scheduledFor: "2026-08-26T02:30:00.000Z",
+        publishedAt: null,
+        failedAt: null,
+        lastError: null,
+        externalPostId: null,
+        externalUrl: null,
+        previewTitle: null,
+        previewBody: null,
+        outputJson: {},
+        artifactPublicUrl: null,
+        sourceSummary: null,
+      }],
+    });
+
+    renderList([...filtered, highlighted], "queue-outside-filter");
+
+    expect(await screen.findAllByRole("article")).toHaveLength(30);
+    expect(screen.queryByRole("article", { name: "게시 항목 1" })).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "더 보기" }));
+    expect(screen.getAllByRole("article")).toHaveLength(31);
+    expect(screen.getByRole("article", { name: "게시 항목 1" })).toBeVisible();
   });
 });

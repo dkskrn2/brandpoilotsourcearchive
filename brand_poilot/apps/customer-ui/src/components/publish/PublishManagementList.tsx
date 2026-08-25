@@ -72,9 +72,26 @@ function isHighlighted(item: PublishItem, highlightedQueueId: string | null) {
   return Boolean(highlightedQueueId && item.targets.some((target) => target.queueId === highlightedQueueId));
 }
 
+export type PublishManagementListFilterId = PublishManagementFilterId | "needs_review" | "failed";
+
+function hasPendingReview(item: PublishItem) {
+  return item.reviewTargets.some((target) => (
+    target.status === "pending_review"
+    || target.status === "auto_approval_blocked"
+    || target.status === "generation_failed"
+  ));
+}
+
+function matchesItemFilter(item: PublishItem, filter: PublishManagementListFilterId) {
+  if (filter === "needs_review") return hasPendingReview(item);
+  if (filter === "failed") return !hasPendingReview(item) && item.operationalReason === "publish_failed";
+  return matchesPublishManagementFilter(publishManagementStatusForItem(item), filter);
+}
+
 export interface PublishManagementListProps {
   items: PublishItem[];
-  initialFilter: PublishManagementFilterId;
+  activeFilter: PublishManagementListFilterId;
+  onFilterChange: (filter: PublishManagementFilterId) => void;
   highlightedQueueId: string | null;
   onSelectResult: (item: PublishItem, target: PublishItemTarget) => void;
   onSelectReviewTarget: (item: PublishItem, target: PublishItemReviewTarget) => void;
@@ -93,7 +110,8 @@ export interface PublishManagementListProps {
 
 export function PublishManagementList({
   items,
-  initialFilter,
+  activeFilter,
+  onFilterChange,
   highlightedQueueId,
   onSelectResult,
   onSelectReviewTarget,
@@ -105,13 +123,12 @@ export function PublishManagementList({
   onSchedule,
   onReschedule,
 }: PublishManagementListProps) {
-  const [activeFilter, setActiveFilter] = useState(initialFilter);
   const [visibleLimit, setVisibleLimit] = useState(PAGE_SIZE);
   const rows = useMemo(() => listItems(items), [items]);
   const statuses = useMemo(() => rows.map(publishManagementStatusForItem), [rows]);
   const counts = useMemo(() => countPublishManagementFilters(statuses), [statuses]);
   const filtered = useMemo(
-    () => rows.filter((item) => matchesPublishManagementFilter(publishManagementStatusForItem(item), activeFilter)),
+    () => rows.filter((item) => matchesItemFilter(item, activeFilter)),
     [activeFilter, rows],
   );
 
@@ -124,9 +141,13 @@ export function PublishManagementList({
     if (visible.length < visibleLimit) return [...visible, highlighted];
     return [...visible.slice(0, Math.max(0, visible.length - 1)), highlighted];
   }, [filtered, highlightedQueueId, rows, visibleLimit]);
+  const visibleFilteredCount = useMemo(
+    () => visibleItems.filter((item) => matchesItemFilter(item, activeFilter)).length,
+    [activeFilter, visibleItems],
+  );
 
   function changeFilter(filter: PublishManagementFilterId) {
-    setActiveFilter(filter);
+    onFilterChange(filter);
     setVisibleLimit(PAGE_SIZE);
   }
 
@@ -187,7 +208,7 @@ export function PublishManagementList({
         </article>;
       })}
     </div>
-    {filtered.length > visibleLimit ? <div className="actions"><button className="button" type="button" onClick={() => setVisibleLimit((current) => current + PAGE_SIZE)}>더 보기</button></div> : null}
+    {visibleFilteredCount < filtered.length ? <div className="actions"><button className="button" type="button" onClick={() => setVisibleLimit((current) => current + PAGE_SIZE)}>더 보기</button></div> : null}
     </div>
   </section>;
 }
