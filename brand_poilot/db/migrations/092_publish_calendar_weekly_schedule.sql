@@ -44,6 +44,7 @@ do $$
 declare
   schema_owner_role_name name;
   application_role_name name;
+  acl_grantee record;
 begin
   if to_regclass('public.ai_content_bootstrap_state') is null then return; end if;
   select bootstrap.schema_owner_role_name, bootstrap.application_role_name
@@ -54,7 +55,30 @@ begin
     'alter table public.publish_calendar_weekly_schedule_entries owner to %I',
     schema_owner_role_name
   );
-  execute 'revoke all on table public.publish_calendar_weekly_schedule_entries from public';
+  for acl_grantee in
+    select scrub.grantee,scrub.grantee_role_name
+      from (
+        select distinct acl.grantee,
+               case acl.grantee when 0 then 'PUBLIC' else grantee.rolname::text end grantee_role_name
+          from pg_class relation
+          cross join lateral aclexplode(coalesce(relation.relacl,acldefault('r',relation.relowner))) acl
+          left join pg_roles grantee on grantee.oid=acl.grantee
+         where relation.oid='public.publish_calendar_weekly_schedule_entries'::regclass
+           and acl.grantee<>relation.relowner
+      ) scrub
+     order by scrub.grantee_role_name collate "C"
+  loop
+    if acl_grantee.grantee_role_name='PUBLIC' then
+      execute 'revoke all on table public.publish_calendar_weekly_schedule_entries from public';
+    elsif acl_grantee.grantee_role_name is null then
+      raise exception 'publish_calendar_weekly_schedule_acl_grantee_invalid';
+    else
+      execute format(
+        'revoke all on table public.publish_calendar_weekly_schedule_entries from %I',
+        acl_grantee.grantee_role_name
+      );
+    end if;
+  end loop;
   execute format(
     'grant select,insert,update,delete on public.publish_calendar_weekly_schedule_entries to %I',
     application_role_name

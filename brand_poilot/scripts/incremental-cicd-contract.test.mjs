@@ -131,7 +131,7 @@ test("migration changes run both publish-calendar PostgreSQL contracts without a
   );
 
   const migration091Test = readFileSync(
-    "apps/api/src/publishCalendarMigration091.postgres.integration.test.ts",
+    "apps/api/src/publishCalendarMigration092.postgres.integration.test.ts",
     "utf8",
   );
   assert.doesNotMatch(migration091Test, /\b(?:describe|it|test)\.skip\s*\(|\bskip\s*:/);

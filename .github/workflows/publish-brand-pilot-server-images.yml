@@ -225,7 +225,7 @@ jobs:
           AI_CONTENT_074_ENFORCE_BENCHMARK=false node --test scripts/ai-content-074.postgres.integration.test.mjs
           npm run test:migrations
           npm exec --workspace @brand-pilot/api -- vitest run src/publishCalendarMigration086.postgres.integration.test.ts
-          npm exec --workspace @brand-pilot/api -- vitest run src/publishCalendarMigration091.postgres.integration.test.ts
+          npm exec --workspace @brand-pilot/api -- vitest run src/publishCalendarMigration092.postgres.integration.test.ts
           echo "migration_approval_required"
       - name: Verify API
         if: fromJSON(needs.impact.outputs.components).api

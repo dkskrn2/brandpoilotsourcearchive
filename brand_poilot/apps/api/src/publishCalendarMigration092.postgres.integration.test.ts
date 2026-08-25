@@ -7,6 +7,7 @@ import { expect, it } from "vitest";
 const applicationPassword = "publish-calendar-weekly-application-test";
 const schemaOwnerRole = "publish_calendar_weekly_schema_owner";
 const applicationRole = "publish_calendar_weekly_application";
+const leakyRole = "publish_calendar_weekly_acl_leak";
 const workspaceId = "10000000-0000-4000-8000-000000000091";
 const brandId = "20000000-0000-4000-8000-000000000091";
 
@@ -107,6 +108,7 @@ it("runs the exact weekly schedule replacement transaction as the application ro
     container = await new PostgreSqlContainer("postgres:16-alpine").start();
     administrator = new Pool({ connectionString: container.getConnectionUri() });
     await administrator.query(`create role ${schemaOwnerRole} noinherit`);
+    await administrator.query(`create role ${leakyRole} noinherit`);
     await administrator.query(
       `create role ${applicationRole} login noinherit nosuperuser nobypassrls
          nocreatedb nocreaterole noreplication password '${applicationPassword}'`,
@@ -115,8 +117,15 @@ it("runs the exact weekly schedule replacement transaction as the application ro
 
     const owner = await administrator.connect();
     try {
+      const providerIdentity = await owner.query<{ current_user: string; database_owner: string }>(
+        `select current_user,database_owner.rolname::text database_owner
+           from pg_database database
+           join pg_roles database_owner on database_owner.oid=database.datdba
+          where database.datname=current_database()`,
+      );
+      expect(providerIdentity.rows[0]?.current_user).toBeTruthy();
+      expect(providerIdentity.rows[0]?.database_owner).toBe(providerIdentity.rows[0]?.current_user);
       await bootstrapControlPlane(owner);
-      await owner.query(`set role ${schemaOwnerRole}`);
       await bootstrapCalendarDependencies(owner);
       await owner.query("insert into workspaces(id) values($1)", [workspaceId]);
       await owner.query("insert into brands(id,workspace_id) values($1,$2)", [brandId, workspaceId]);
@@ -124,17 +133,25 @@ it("runs the exact weekly schedule replacement transaction as the application ro
         "079_publish_calendar_runtime.sql",
         "085_publish_calendar_idempotency_expand.sql",
         "086_publish_calendar_same_time_contract.sql",
-        "092_publish_calendar_weekly_schedule.sql",
       ]) {
         await owner.query(await readFile(resolve(process.cwd(), `../../db/migrations/${migration}`), "utf8"));
       }
+      await owner.query(
+        `alter default privileges in schema public grant select,update on tables to ${leakyRole}`,
+      );
+      await owner.query(await readFile(
+        resolve(process.cwd(), "../../db/migrations/092_publish_calendar_weekly_schedule.sql"),
+        "utf8",
+      ));
+      await owner.query(
+        `alter default privileges in schema public revoke select,update on tables from ${leakyRole}`,
+      );
       await owner.query(
         `insert into publish_calendar_weekly_schedule_entries(
            workspace_id,brand_id,day_of_week,slot_time,sort_order
          ) values($1,$2,1,'09:00',0)`,
         [workspaceId, brandId],
       );
-      await owner.query("reset role");
       await owner.query(`revoke create on schema public from ${schemaOwnerRole}`);
       await owner.query(`grant usage on schema public to ${applicationRole}`);
       await owner.query(`grant select on brands to ${applicationRole}`);
@@ -192,6 +209,39 @@ it("runs the exact weekly schedule replacement transaction as the application ro
         can_update: true,
         can_delete: true,
       });
+
+      const directAcl = await client.query<{
+        grantee_role_name: string;
+        privileges: string[];
+        grantable: boolean;
+      }>(
+        `select case acl.grantee when 0 then 'PUBLIC' else grantee.rolname::text end grantee_role_name,
+                array_agg(acl.privilege_type::text order by acl.privilege_type)::text[] privileges,
+                bool_or(acl.is_grantable) grantable
+           from pg_class relation
+           cross join lateral aclexplode(relation.relacl) acl
+           left join pg_roles grantee on grantee.oid=acl.grantee
+          where relation.oid='public.publish_calendar_weekly_schedule_entries'::regclass
+          group by acl.grantee,grantee.rolname
+          order by grantee_role_name collate "C"`,
+      );
+      expect(directAcl.rows).toEqual([{
+        grantee_role_name: applicationRole,
+        privileges: ["DELETE", "INSERT", "SELECT", "UPDATE"],
+        grantable: false,
+      }]);
+      expect(directAcl.rows.some(({ grantee_role_name }) => (
+        ["PUBLIC", leakyRole].includes(grantee_role_name)
+      ))).toBe(false);
+
+      const ownedSequences = await client.query<{ sequence_name: string }>(
+        `select sequence.relname::text sequence_name
+           from pg_class table_relation
+           join pg_depend dependency on dependency.refobjid=table_relation.oid
+           join pg_class sequence on sequence.oid=dependency.objid and sequence.relkind='S'
+          where table_relation.oid='public.publish_calendar_weekly_schedule_entries'::regclass`,
+      );
+      expect(ownedSequences.rows).toEqual([]);
 
       await client.query("begin");
       try {

@@ -4813,7 +4813,7 @@ test("weekly publish schedule storage 092 follows prompt lineage 091 determinist
   );
   assert.equal(
     migrationRunner.post075SchemaMigrationChecksums["092_publish_calendar_weekly_schedule.sql"],
-    "a237dd38f85e8ef53473ee3ba5e75289133e8e209271045a61b467835625056d",
+    "139600314c4f819b7ea05262a4260221f0996b3b19fea8bf3652693d3109b9fe",
   );
   assert.equal(
     loaded[migration092Index].checksum,

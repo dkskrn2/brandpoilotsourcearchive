@@ -155,7 +155,7 @@ export const post075SchemaMigrationChecksums = Object.freeze({
   "089_free_subscription_plan.sql": "fd58a829eb658b0ac650e033a5edd085ec452a6eb0420251c60abcd51231267a",
   "090_existing_brand_free_subscriptions.sql": "8134f35d21f72f7418b5502bb5cfb10c8f296f147788bcd8b539d6d930588552",
   "091_ai_content_prompt_lineage_v4.sql": "05696c55ee959cd80ef7cdf30fcb07e93e0579da515042ebd8e8aafb9cde5e10",
-  "092_publish_calendar_weekly_schedule.sql": "a237dd38f85e8ef53473ee3ba5e75289133e8e209271045a61b467835625056d",
+  "092_publish_calendar_weekly_schedule.sql": "139600314c4f819b7ea05262a4260221f0996b3b19fea8bf3652693d3109b9fe",
 });
 const post075DeferredMigrationIds = Object.freeze([
   ...post075DataMigrationIds,
@@ -4584,6 +4584,26 @@ async function verifyPublishCalendarSchemaCatalog(client, {
               as public_calendar_slot_privilege,
             coalesce((select bool_or(acl.grantee=0) from aclexplode(weekly_schedule.relacl) acl),false)
               as public_weekly_schedule_privilege,
+            (select count(*)::integer
+               from aclexplode(weekly_schedule.relacl) acl
+               join pg_roles grantee on grantee.oid=acl.grantee
+              where grantee.rolname=$1
+                and acl.privilege_type in ('SELECT','INSERT','UPDATE','DELETE')
+                and not acl.is_grantable) as weekly_schedule_application_acl_count,
+            (select count(*)::integer
+               from aclexplode(coalesce(weekly_schedule.relacl,acldefault('r',weekly_schedule.relowner))) acl
+               left join pg_roles grantee on grantee.oid=acl.grantee
+              where acl.grantee<>weekly_schedule.relowner
+                and not (
+                  grantee.rolname=$1
+                  and acl.privilege_type in ('SELECT','INSERT','UPDATE','DELETE')
+                  and not acl.is_grantable
+                )) as weekly_schedule_unexpected_acl_count,
+            (select count(*)::integer
+               from pg_attribute attribute
+               cross join lateral aclexplode(attribute.attacl) acl
+              where attribute.attrelid=weekly_schedule.oid
+                and attribute.attnum>0 and not attribute.attisdropped) as weekly_schedule_column_acl_count,
             not exists (
               select 1 from expected_column expected
                left join information_schema.columns column_row
@@ -4760,6 +4780,9 @@ async function verifyPublishCalendarSchemaCatalog(client, {
     || sealed.public_calendar_settings_privilege !== false
     || sealed.public_calendar_slot_privilege !== false
     || sealed.public_weekly_schedule_privilege !== false
+    || sealed.weekly_schedule_application_acl_count !== 4
+    || sealed.weekly_schedule_unexpected_acl_count !== 0
+    || sealed.weekly_schedule_column_acl_count !== 0
     || sealed.runtime_columns_valid !== true || sealed.idempotency_column_valid !== true
     || sealed.enabled_default_false !== true
     || sealed.constraint_catalog_valid !== true || sealed.idempotency_constraint_valid !== true
