@@ -457,6 +457,7 @@ export function createPublishItemsRepository(pool: Queryable): PublishItemsRepos
           ?? (slot?.slot_last_error ? String(slot.slot_last_error) : null);
         const operationalState = derivePublishOperationalState({
           status: state.status,
+          contentStatus,
           scheduledFor: state.scheduledFor,
           publicationProgress: state.publicationProgress,
           targets,

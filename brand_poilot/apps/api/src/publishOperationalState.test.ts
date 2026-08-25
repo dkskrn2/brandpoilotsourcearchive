@@ -71,4 +71,13 @@ describe("derivePublishOperationalState", () => {
       targets: [],
     }, now)).toEqual({ status: "action_required", reason: "review_required" });
   });
+
+  it("keeps a content failure without publish targets out of publish-failed provenance", () => {
+    expect(derivePublishOperationalState({
+      status: "failed",
+      contentStatus: "failed",
+      scheduledFor: null,
+      targets: [],
+    }, now)).toEqual({ status: "action_required", reason: "review_required" });
+  });
 });

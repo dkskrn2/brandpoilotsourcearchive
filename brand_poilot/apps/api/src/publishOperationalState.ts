@@ -6,6 +6,7 @@ import type {
 
 export interface PublishOperationalStateInput {
   status: PublishItemStatus;
+  contentStatus?: "pre_generation" | "generating" | "completed" | "failed";
   scheduledFor: string | null;
   publicationProgress?: "none" | "partial" | "complete";
   targets: ReadonlyArray<Pick<PublishItemTargetDto, "status"> & { lastError?: string | null }>;
@@ -36,6 +37,9 @@ export function derivePublishOperationalState(
     return { status: "action_required", reason: "result_unknown" };
   }
   if (input.status === "failed") {
+    if (input.contentStatus === "failed" && !input.targets.some((target) => target.status === "failed")) {
+      return { status: "action_required", reason: "review_required" };
+    }
     return { status: "action_required", reason: "publish_failed" };
   }
   if (input.status === "published") {
