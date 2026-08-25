@@ -2,6 +2,7 @@ import AxeBuilder from "@axe-core/playwright";
 import { expect, test, type Page, type Route } from "@playwright/test";
 
 const brandId = "00000000-0000-4000-8000-000000000100";
+const publishFixtureNow = new Date("2026-08-25T06:00:00.000Z");
 const session = {
   user: { id: "user-a11y", displayName: "접근성 사용자", email: "a11y@example.com" },
   workspace: { id: "workspace-a11y", name: "접근성 워크스페이스" },
@@ -13,7 +14,7 @@ const schedulablePublishItem = {
   workspaceId: "workspace-a11y",
   brandId,
   title: "예약 가능한 콘텐츠",
-  createdAt: "2099-08-20T00:00:00.000Z",
+  createdAt: "2026-08-20T00:00:00.000Z",
   contentFormat: "card_news",
   channels: [],
   source: { type: "topic_table", label: "주제표", detail: null, urls: [] },
@@ -304,7 +305,7 @@ async function installFixture(page: Page) {
       brandId, enabled: true, channels: ["instagram"], informationalFormat: "card_news", trendFormat: "reel", slotTimes: ["11:30"], updatedAt: null,
     });
     if (path.endsWith("/publish-calendar/usage")) return json(route, {
-      startsAt: "2099-08-20T00:00:00.000Z", endsAt: "2099-08-27T00:00:00.000Z",
+      startsAt: "2026-08-24T00:00:00.000Z", endsAt: "2026-08-31T00:00:00.000Z",
       generation: { limit: 10, succeeded: 1, reserved: 0, remaining: 9, additionalAvailable: 9 },
       publishing: { limit: 7, succeeded: 1, reserved: 2, remaining: 6, additionalAvailable: 4 },
     });
@@ -314,7 +315,7 @@ async function installFixture(page: Page) {
       channels: [{ value: "instagram", label: "Instagram", formats: [{ value: "card_news", label: "카드뉴스" }, { value: "reel", label: "릴스" }] }],
       products: [], suggestions: [], references: [],
       usage: {
-        startsAt: "2099-08-20T00:00:00.000Z", endsAt: "2099-08-27T00:00:00.000Z",
+        startsAt: "2026-08-24T00:00:00.000Z", endsAt: "2026-08-31T00:00:00.000Z",
         generation: { limit: 10, succeeded: 1, reserved: 0, remaining: 9, additionalAvailable: 9 },
         publishing: { limit: 7, succeeded: 1, reserved: 2, remaining: 6, additionalAvailable: 4 },
       },
@@ -496,6 +497,8 @@ test(`${path} does not overflow at approved widths`, async ({ page }) => {
 }
 
 test("publish filters, responsive calendar, and content submit controls remain reachable", async ({ page }) => {
+  await page.clock.install({ time: publishFixtureNow });
+
   for (const viewport of [
     { width: 1280, height: 720 },
     { width: 1024, height: 768 },
