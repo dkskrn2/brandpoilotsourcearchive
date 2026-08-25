@@ -143,6 +143,41 @@ function publishCalendarDate(value: unknown): Date {
   return parsed;
 }
 
+function publishCalendarWeeklySettingsInput(value: unknown) {
+  if (!hasExactKeys(value, ["channels", "informationalFormat", "trendFormat", "weeklySchedule"])) {
+    throw new Error("publish_calendar_weekly_settings_invalid");
+  }
+  const { channels: selectedChannels, informationalFormat, trendFormat, weeklySchedule } = value;
+  if (!Array.isArray(selectedChannels)
+    || selectedChannels.some((channel) => typeof channel !== "string" || !publishCalendarChannels.has(channel))
+    || new Set(selectedChannels).size !== selectedChannels.length
+    || !publishCalendarFormats.has(String(informationalFormat))
+    || !publishCalendarFormats.has(String(trendFormat))
+    || !Array.isArray(weeklySchedule)) {
+    throw new Error("publish_calendar_weekly_settings_invalid");
+  }
+  for (const row of weeklySchedule) {
+    if (!hasExactKeys(row, ["id", "dayOfWeek", "time", "sortOrder"])
+      || !(row.id === null || typeof row.id === "string" && uuidPattern.test(row.id))
+      || !Number.isInteger(row.dayOfWeek) || Number(row.dayOfWeek) < 1 || Number(row.dayOfWeek) > 7
+      || typeof row.time !== "string" || !/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(row.time)
+      || !Number.isSafeInteger(row.sortOrder) || Number(row.sortOrder) < 0 || Number(row.sortOrder) > 2_147_483_647) {
+      throw new Error("publish_calendar_weekly_settings_invalid");
+    }
+  }
+  return {
+    channels: selectedChannels as Channel[],
+    informationalFormat: informationalFormat as "card_news" | "reel",
+    trendFormat: trendFormat as "card_news" | "reel",
+    weeklySchedule: weeklySchedule as Array<{
+      id: string | null;
+      dayOfWeek: 1 | 2 | 3 | 4 | 5 | 6 | 7;
+      time: string;
+      sortOrder: number;
+    }>,
+  };
+}
+
 function aiContentWorkerJob(job: AiContentJobRecord | null) {
   if (!job) return null;
   if (!job.outputId || !job.leaseToken) throw new Error("ai_content_job_contract_invalid");
@@ -4170,6 +4205,11 @@ export function createServer(
     return repository.getSettings(aiContentScope(request, request.params.brandId));
   });
 
+  app.get<{ Params: { brandId: string } }>("/brands/:brandId/publish-calendar/settings/weekly", async (request) => {
+    if (!repository.getWeeklySettings) throw new Error("publish_calendar_not_configured");
+    return repository.getWeeklySettings(aiContentScope(request, request.params.brandId));
+  });
+
   app.get<{ Params: { brandId: string } }>("/brands/:brandId/publish-calendar/manual-options", async (request) => {
     if (!repository.getManualOptions) throw new Error("publish_calendar_not_configured");
     return repository.getManualOptions(aiContentScope(request, request.params.brandId));
@@ -4211,6 +4251,35 @@ export function createServer(
       informationalFormat: informationalFormat as "card_news" | "reel",
       trendFormat: trendFormat as "card_news" | "reel",
       slotTimes: slotTimes as string[],
+    });
+  });
+
+  app.put<{ Params: { brandId: string }; Body: unknown }>("/brands/:brandId/publish-calendar/settings/weekly", async (request) => {
+    if (!repository.getWeeklySettings || !repository.saveWeeklySettings) {
+      throw new Error("publish_calendar_not_configured");
+    }
+    const scope = aiContentScope(request, request.params.brandId);
+    const input = publishCalendarWeeklySettingsInput(request.body);
+    const current = await repository.getWeeklySettings(scope);
+    return repository.saveWeeklySettings({ ...scope, enabled: current.enabled, ...input });
+  });
+
+  app.patch<{ Params: { brandId: string }; Body: unknown }>("/brands/:brandId/publish-calendar/settings/enabled", async (request) => {
+    if (!hasExactKeys(request.body, ["enabled"]) || typeof request.body.enabled !== "boolean") {
+      throw new Error("publish_calendar_enabled_invalid");
+    }
+    if (!repository.getWeeklySettings || !repository.saveWeeklySettings) {
+      throw new Error("publish_calendar_not_configured");
+    }
+    const scope = aiContentScope(request, request.params.brandId);
+    const current = await repository.getWeeklySettings(scope);
+    return repository.saveWeeklySettings({
+      ...scope,
+      enabled: request.body.enabled,
+      channels: current.channels,
+      informationalFormat: current.informationalFormat,
+      trendFormat: current.trendFormat,
+      weeklySchedule: current.weeklySchedule,
     });
   });
 

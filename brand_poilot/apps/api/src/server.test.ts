@@ -129,6 +129,34 @@ function createRepository(): ApiRepository {
       slotTimes: input.slotTimes,
       updatedAt: "2026-08-14T00:00:00.000Z",
     })),
+    getWeeklySettings: vi.fn(async (input) => ({
+      brandId: input.brandId,
+      enabled: false,
+      channels: ["instagram" as const],
+      informationalFormat: "card_news" as const,
+      trendFormat: "reel" as const,
+      weeklySchedule: [{
+        id: "40000000-0000-4000-8000-000000000001",
+        dayOfWeek: 1 as const,
+        time: "11:30",
+        sortOrder: 0,
+      }],
+      updatedAt: "2026-08-14T00:00:00.000Z",
+    })),
+    saveWeeklySettings: vi.fn(async (
+      input: Parameters<NonNullable<ApiRepository["saveWeeklySettings"]>>[0],
+    ) => ({
+      brandId: input.brandId,
+      enabled: input.enabled,
+      channels: input.channels,
+      informationalFormat: input.informationalFormat,
+      trendFormat: input.trendFormat,
+      weeklySchedule: input.weeklySchedule.map((row, index) => ({
+        ...row,
+        id: row.id ?? `40000000-0000-4000-8000-${String(index + 2).padStart(12, "0")}`,
+      })),
+      updatedAt: "2026-08-14T00:00:00.000Z",
+    })),
     listSlots: vi.fn(async () => []),
     createSlot: vi.fn(async (input) => ({
       id: "30000000-0000-4000-8000-000000000001",
@@ -3100,6 +3128,223 @@ describe("API server", () => {
     expect(unsupportedSlot.statusCode).toBe(404);
     expect(repository.saveSettings).toHaveBeenCalledTimes(1);
     expect(repository.createSlot).not.toHaveBeenCalled();
+  });
+
+  it("keeps the legacy calendar settings contract isolated from weekly settings", async () => {
+    vi.stubEnv("BRAND_PILOT_DEV_WORKSPACE_ID", "22222222-2222-4222-8222-222222222222");
+    const repository = createRepository();
+    const app = createServer({ repository, logger: false });
+    const payload = {
+      enabled: true,
+      channels: ["instagram"],
+      informationalFormat: "card_news",
+      trendFormat: "reel",
+      slotTimes: ["11:30", "20:30"],
+    };
+
+    const read = await app.inject({ method: "GET", url: `/brands/${brandId}/publish-calendar/settings` });
+    const write = await app.inject({ method: "PUT", url: `/brands/${brandId}/publish-calendar/settings`, payload });
+
+    expect(read.statusCode).toBe(200);
+    expect(read.json()).toEqual({
+      brandId,
+      enabled: false,
+      channels: [],
+      informationalFormat: "card_news",
+      trendFormat: "reel",
+      slotTimes: ["11:30"],
+      updatedAt: null,
+    });
+    expect(write.statusCode).toBe(200);
+    expect(repository.saveSettings).toHaveBeenCalledWith(expect.objectContaining({
+      workspaceId: "22222222-2222-4222-8222-222222222222",
+      brandId,
+      ...payload,
+    }));
+    expect(repository.getWeeklySettings).not.toHaveBeenCalled();
+    expect(repository.saveWeeklySettings).not.toHaveBeenCalled();
+  });
+
+  it("reads and writes only the strict versioned weekly settings contract without changing enabled", async () => {
+    vi.stubEnv("BRAND_PILOT_DEV_WORKSPACE_ID", "22222222-2222-4222-8222-222222222222");
+    const repository = createRepository();
+    vi.mocked(repository.getWeeklySettings!).mockResolvedValue({
+      brandId,
+      enabled: true,
+      channels: ["instagram"],
+      informationalFormat: "card_news",
+      trendFormat: "reel",
+      weeklySchedule: [{
+        id: "40000000-0000-4000-8000-000000000001",
+        dayOfWeek: 1,
+        time: "11:30",
+        sortOrder: 0,
+      }],
+      updatedAt: "2026-08-14T00:00:00.000Z",
+    });
+    const app = createServer({ repository, logger: false });
+    const payload = {
+      channels: ["instagram"],
+      informationalFormat: "reel",
+      trendFormat: "card_news",
+      weeklySchedule: [
+        { id: "40000000-0000-4000-8000-000000000001", dayOfWeek: 1, time: "12:30", sortOrder: 0 },
+        { id: null, dayOfWeek: 1, time: "12:30", sortOrder: 1 },
+      ],
+    };
+
+    const read = await app.inject({ method: "GET", url: `/brands/${brandId}/publish-calendar/settings/weekly` });
+    const write = await app.inject({ method: "PUT", url: `/brands/${brandId}/publish-calendar/settings/weekly`, payload });
+
+    expect(read.statusCode).toBe(200);
+    expect(read.json()).toEqual({
+      brandId,
+      enabled: true,
+      channels: ["instagram"],
+      informationalFormat: "card_news",
+      trendFormat: "reel",
+      weeklySchedule: [{
+        id: "40000000-0000-4000-8000-000000000001",
+        dayOfWeek: 1,
+        time: "11:30",
+        sortOrder: 0,
+      }],
+      updatedAt: "2026-08-14T00:00:00.000Z",
+    });
+    expect(write.statusCode).toBe(200);
+    expect(write.json()).toEqual({
+      brandId,
+      enabled: true,
+      ...payload,
+      weeklySchedule: [
+        payload.weeklySchedule[0],
+        { ...payload.weeklySchedule[1], id: "40000000-0000-4000-8000-000000000003" },
+      ],
+      updatedAt: "2026-08-14T00:00:00.000Z",
+    });
+    expect(repository.saveWeeklySettings).toHaveBeenCalledWith({
+      workspaceId: "22222222-2222-4222-8222-222222222222",
+      brandId,
+      enabled: true,
+      ...payload,
+    });
+    expect(repository.getSettings).not.toHaveBeenCalled();
+    expect(repository.saveSettings).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { label: "top-level unknown field", payload: { channels: ["instagram"], informationalFormat: "card_news", trendFormat: "reel", weeklySchedule: [], enabled: false } },
+    { label: "row unknown field", payload: { channels: ["instagram"], informationalFormat: "card_news", trendFormat: "reel", weeklySchedule: [{ id: null, dayOfWeek: 1, time: "11:30", sortOrder: 0, extra: true }] } },
+    { label: "missing row field", payload: { channels: ["instagram"], informationalFormat: "card_news", trendFormat: "reel", weeklySchedule: [{ id: null, dayOfWeek: 1, time: "11:30" }] } },
+    { label: "non-null non-UUID id", payload: { channels: ["instagram"], informationalFormat: "card_news", trendFormat: "reel", weeklySchedule: [{ id: "new", dayOfWeek: 1, time: "11:30", sortOrder: 0 }] } },
+    { label: "invalid weekday", payload: { channels: ["instagram"], informationalFormat: "card_news", trendFormat: "reel", weeklySchedule: [{ id: null, dayOfWeek: 0, time: "11:30", sortOrder: 0 }] } },
+    { label: "invalid time", payload: { channels: ["instagram"], informationalFormat: "card_news", trendFormat: "reel", weeklySchedule: [{ id: null, dayOfWeek: 1, time: "24:00", sortOrder: 0 }] } },
+    { label: "invalid sort order", payload: { channels: ["instagram"], informationalFormat: "card_news", trendFormat: "reel", weeklySchedule: [{ id: null, dayOfWeek: 1, time: "11:30", sortOrder: -1 }] } },
+  ])("rejects an invalid weekly settings body: $label", async ({ payload }) => {
+    vi.stubEnv("BRAND_PILOT_DEV_WORKSPACE_ID", "22222222-2222-4222-8222-222222222222");
+    const repository = createRepository();
+    const app = createServer({ repository, logger: false });
+
+    const response = await app.inject({
+      method: "PUT",
+      url: `/brands/${brandId}/publish-calendar/settings/weekly`,
+      payload,
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toEqual({ error: "publish_calendar_weekly_settings_invalid" });
+    expect(repository.getWeeklySettings).not.toHaveBeenCalled();
+    expect(repository.saveWeeklySettings).not.toHaveBeenCalled();
+  });
+
+  it("patches only the master enabled flag while preserving saved weekly settings", async () => {
+    vi.stubEnv("BRAND_PILOT_DEV_WORKSPACE_ID", "22222222-2222-4222-8222-222222222222");
+    const repository = createRepository();
+    const app = createServer({ repository, logger: false });
+
+    const off = await app.inject({
+      method: "PATCH",
+      url: `/brands/${brandId}/publish-calendar/settings/enabled`,
+      payload: { enabled: false },
+    });
+    const on = await app.inject({
+      method: "PATCH",
+      url: `/brands/${brandId}/publish-calendar/settings/enabled`,
+      payload: { enabled: true },
+    });
+
+    expect(off.statusCode).toBe(200);
+    expect(on.statusCode).toBe(200);
+    expect(repository.saveWeeklySettings).toHaveBeenNthCalledWith(1, expect.objectContaining({
+      workspaceId: "22222222-2222-4222-8222-222222222222",
+      brandId,
+      enabled: false,
+      channels: ["instagram"],
+      weeklySchedule: [{ id: "40000000-0000-4000-8000-000000000001", dayOfWeek: 1, time: "11:30", sortOrder: 0 }],
+    }));
+    expect(repository.saveWeeklySettings).toHaveBeenNthCalledWith(2, expect.objectContaining({ enabled: true }));
+  });
+
+  it("allows disabling incomplete weekly settings but preserves the repository ON validation error", async () => {
+    vi.stubEnv("BRAND_PILOT_DEV_WORKSPACE_ID", "22222222-2222-4222-8222-222222222222");
+    const repository = createRepository();
+    vi.mocked(repository.getWeeklySettings!).mockResolvedValue({
+      brandId,
+      enabled: false,
+      channels: [],
+      informationalFormat: "card_news",
+      trendFormat: "reel",
+      weeklySchedule: [],
+      updatedAt: null,
+    });
+    vi.mocked(repository.saveWeeklySettings!).mockImplementation(async (input) => {
+      if (input.enabled) throw new Error("publish_calendar_settings_incomplete");
+      return {
+        brandId: input.brandId,
+        enabled: false,
+        channels: input.channels,
+        informationalFormat: input.informationalFormat,
+        trendFormat: input.trendFormat,
+        weeklySchedule: [],
+        updatedAt: null,
+      };
+    });
+    const app = createServer({ repository, logger: false });
+
+    const off = await app.inject({
+      method: "PATCH",
+      url: `/brands/${brandId}/publish-calendar/settings/enabled`,
+      payload: { enabled: false },
+    });
+    const on = await app.inject({
+      method: "PATCH",
+      url: `/brands/${brandId}/publish-calendar/settings/enabled`,
+      payload: { enabled: true },
+    });
+
+    expect(off.statusCode).toBe(200);
+    expect(on.statusCode).toBe(400);
+    expect(on.json()).toEqual({ error: "publish_calendar_settings_incomplete" });
+  });
+
+  it.each([
+    {},
+    { enabled: "true" },
+    { enabled: false, channels: [] },
+  ])("rejects a non-exact master toggle body %#", async (payload) => {
+    const repository = createRepository();
+    const app = createServer({ repository, logger: false });
+
+    const response = await app.inject({
+      method: "PATCH",
+      url: `/brands/${brandId}/publish-calendar/settings/enabled`,
+      payload,
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toEqual({ error: "publish_calendar_enabled_invalid" });
+    expect(repository.getWeeklySettings).not.toHaveBeenCalled();
+    expect(repository.saveWeeklySettings).not.toHaveBeenCalled();
   });
 
   it("returns canonical publish items with the authenticated workspace scope", async () => {

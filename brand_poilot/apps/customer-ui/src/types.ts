@@ -967,6 +967,30 @@ export interface PublishCalendarSettings {
   updatedAt: string | null;
 }
 
+export interface PublishCalendarWeeklyScheduleEntry {
+  id: string;
+  dayOfWeek: 1 | 2 | 3 | 4 | 5 | 6 | 7;
+  time: string;
+  sortOrder: number;
+}
+
+export interface PublishCalendarWeeklySettings {
+  brandId: string;
+  enabled: boolean;
+  channels: ChannelType[];
+  informationalFormat: "card_news" | "reel";
+  trendFormat: "card_news" | "reel";
+  weeklySchedule: PublishCalendarWeeklyScheduleEntry[];
+  updatedAt: string | null;
+}
+
+export interface PublishCalendarWeeklySettingsInput {
+  channels: ChannelType[];
+  informationalFormat: "card_news" | "reel";
+  trendFormat: "card_news" | "reel";
+  weeklySchedule: Array<Omit<PublishCalendarWeeklyScheduleEntry, "id"> & { id: string | null }>;
+}
+
 export interface PublishCalendarSlot {
   id: string;
   workspaceId: string;
