@@ -685,6 +685,23 @@ export interface PublishCalendarSettingsDto {
   updatedAt: string | null;
 }
 
+export interface PublishCalendarWeeklyScheduleEntryDto {
+  id: string;
+  dayOfWeek: 1 | 2 | 3 | 4 | 5 | 6 | 7;
+  time: string;
+  sortOrder: number;
+}
+
+export interface PublishCalendarWeeklySettingsDto {
+  brandId: string;
+  enabled: boolean;
+  channels: Channel[];
+  informationalFormat: "card_news" | "reel";
+  trendFormat: "card_news" | "reel";
+  weeklySchedule: PublishCalendarWeeklyScheduleEntryDto[];
+  updatedAt: string | null;
+}
+
 export interface PublishCalendarSlotDto {
   id: string;
   workspaceId: string;

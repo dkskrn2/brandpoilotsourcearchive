@@ -7,6 +7,7 @@ import { createPublishCalendarRepository } from "./publishCalendarRepository.js"
 const ids = {
   workspace: "10000000-0000-4000-8000-000000000001",
   brand: "20000000-0000-4000-8000-000000000001",
+  otherBrand: "20000000-0000-4000-8000-000000000002",
   generation1: "30000000-0000-4000-8000-000000000001",
   generation2: "30000000-0000-4000-8000-000000000002",
   output: "40000000-0000-4000-8000-000000000001",
@@ -28,6 +29,18 @@ describe("publish calendar manual provisioning with postgres semantics", () => {
       create table brand_channels(id uuid primary key default gen_random_uuid(), workspace_id uuid not null, brand_id uuid not null, channel text not null, enabled boolean not null, status text not null, deleted_at timestamptz);
       create table billing_plan_catalog(code text primary key, weekly_generation_limit integer not null, weekly_publish_limit integer not null, active boolean not null);
       create table brand_subscriptions(brand_id uuid primary key, plan_code text not null, status text not null, started_at timestamptz not null, current_period_start timestamptz not null, current_period_end timestamptz not null);
+      create table publish_calendar_settings(
+        brand_id uuid primary key, workspace_id uuid not null, enabled boolean not null default false,
+        channels text[] not null default '{}', informational_format text not null default 'card_news',
+        trend_format text not null default 'reel', slot_times time[] not null default array['11:30'::time],
+        updated_at timestamptz not null default now()
+      );
+      create table publish_calendar_weekly_schedule_entries(
+        id uuid primary key default gen_random_uuid(), workspace_id uuid not null, brand_id uuid not null,
+        day_of_week smallint not null check(day_of_week between 1 and 7), slot_time time not null,
+        sort_order integer not null check(sort_order >= 0), created_at timestamptz not null default now(),
+        updated_at timestamptz not null default now(), unique(brand_id,day_of_week,sort_order)
+      );
       create table ai_content_generations(id uuid primary key, workspace_id uuid not null, brand_id uuid not null, title text not null, output_format text not null, status text not null, created_at timestamptz not null default now());
       create table ai_content_generation_outputs(id uuid primary key, generation_id uuid not null, workspace_id uuid not null, brand_id uuid not null, title text, status text not null, created_at timestamptz not null default now());
       create table content_topics(
@@ -68,7 +81,7 @@ describe("publish calendar manual provisioning with postgres semantics", () => {
         on publish_calendar_slots(brand_id,topic_publish_group_id)
         where topic_publish_group_id is not null and status<>'cancelled';
     `);
-    await db.query("insert into brands values($1,$2)", [ids.brand, ids.workspace]);
+    await db.query("insert into brands values($1,$2),($3,$2)", [ids.brand, ids.workspace, ids.otherBrand]);
     await db.query("insert into brand_channels(workspace_id,brand_id,channel,enabled,status) values($1,$2,'instagram',true,'connected')", [ids.workspace, ids.brand]);
     await db.query("insert into billing_plan_catalog values('pro',10,10,true)");
     await db.query("insert into brand_subscriptions values($1,'pro','active','2026-08-01','2026-08-01','2100-01-01')", [ids.brand]);
@@ -99,6 +112,89 @@ describe("publish calendar manual provisioning with postgres semantics", () => {
       kind: "existing_generation" as const,
       generationId: overrides.generationId ?? ids.generation1,
     },
+  });
+
+  it("atomically inserts, updates, and deletes normalized weekly rows while preserving stable ids", async () => {
+    const created = await repository.saveWeeklySettings({
+      workspaceId: ids.workspace,
+      brandId: ids.brand,
+      enabled: true,
+      channels: ["instagram"],
+      informationalFormat: "card_news",
+      trendFormat: "reel",
+      weeklySchedule: [
+        { id: null, dayOfWeek: 1, time: "11:30", sortOrder: 0 },
+        { id: null, dayOfWeek: 1, time: "11:30", sortOrder: 1 },
+        { id: null, dayOfWeek: 7, time: "09:05", sortOrder: 0 },
+      ],
+    });
+    expect(created.weeklySchedule).toHaveLength(3);
+    expect(created.weeklySchedule[0]).toMatchObject({ dayOfWeek: 1, time: "11:30", sortOrder: 0 });
+    expect(created.weeklySchedule[1]).toMatchObject({ dayOfWeek: 1, time: "11:30", sortOrder: 1 });
+    expect(new Set(created.weeklySchedule.map(({ id }) => id)).size).toBe(3);
+
+    const retainedId = created.weeklySchedule[1]!.id;
+    const omittedIds = [created.weeklySchedule[0]!.id, created.weeklySchedule[2]!.id];
+    const saved = await repository.saveWeeklySettings({
+      workspaceId: ids.workspace,
+      brandId: ids.brand,
+      enabled: false,
+      channels: ["instagram"],
+      informationalFormat: "reel",
+      trendFormat: "card_news",
+      weeklySchedule: [
+        { id: retainedId, dayOfWeek: 2, time: "08:15", sortOrder: 0 },
+        { id: null, dayOfWeek: 2, time: "08:15", sortOrder: 1 },
+      ],
+    });
+    expect(saved).toMatchObject({ enabled: false, informationalFormat: "reel", trendFormat: "card_news" });
+    expect(saved.weeklySchedule).toEqual([
+      { id: retainedId, dayOfWeek: 2, time: "08:15", sortOrder: 0 },
+      expect.objectContaining({ dayOfWeek: 2, time: "08:15", sortOrder: 1 }),
+    ]);
+    expect(saved.weeklySchedule[1]!.id).not.toBe(retainedId);
+    const rows = await db.query<{ id: string }>(
+      "select id from publish_calendar_weekly_schedule_entries where brand_id=$1 order by id",
+      [ids.brand],
+    );
+    expect(rows.rows.map(({ id }) => id)).not.toEqual(expect.arrayContaining(omittedIds));
+  });
+
+  it("rejects a foreign weekly id and rolls the complete settings transaction back", async () => {
+    const existing = await repository.saveWeeklySettings({
+      workspaceId: ids.workspace,
+      brandId: ids.brand,
+      enabled: false,
+      channels: [],
+      informationalFormat: "card_news",
+      trendFormat: "reel",
+      weeklySchedule: [{ id: null, dayOfWeek: 1, time: "11:30", sortOrder: 0 }],
+    });
+    const foreign = await db.query<{ id: string }>(
+      `insert into publish_calendar_weekly_schedule_entries(workspace_id,brand_id,day_of_week,slot_time,sort_order)
+       values($1,$2,3,'20:00',0) returning id`,
+      [ids.workspace, ids.otherBrand],
+    );
+
+    await expect(repository.saveWeeklySettings({
+      workspaceId: ids.workspace,
+      brandId: ids.brand,
+      enabled: false,
+      channels: [],
+      informationalFormat: "reel",
+      trendFormat: "card_news",
+      weeklySchedule: [
+        { id: existing.weeklySchedule[0]!.id, dayOfWeek: 1, time: "12:30", sortOrder: 0 },
+        { id: foreign.rows[0]!.id, dayOfWeek: 2, time: "13:30", sortOrder: 0 },
+      ],
+    })).rejects.toThrowError("publish_calendar_weekly_schedule_id_invalid");
+
+    await expect(repository.getWeeklySettings({ workspaceId: ids.workspace, brandId: ids.brand }))
+      .resolves.toMatchObject({
+        informationalFormat: "card_news",
+        trendFormat: "reel",
+        weeklySchedule: [{ id: existing.weeklySchedule[0]!.id, dayOfWeek: 1, time: "11:30", sortOrder: 0 }],
+      });
   });
 
   it("reserves a selected content topic without starting generation or provider publication", async () => {
