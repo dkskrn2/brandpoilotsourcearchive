@@ -50,6 +50,7 @@ export function PublishMobileAgenda({ anchorDate, selectedDate, selectedId, entr
     map.set(key, [...(map.get(key) ?? []), entry]);
     return map;
   }, new Map<string, PresentedCalendarEntry[]>()), [entries]);
+  const selectedEntries = [...(entriesByDate.get(selectedDate) ?? [])].sort((left, right) => Date.parse(left.calendarDate) - Date.parse(right.calendarDate));
 
   return <section className="publish-mobile-agenda" aria-label="주간 게시 일정">
     <header className="publish-mobile-agenda__header">
@@ -57,24 +58,26 @@ export function PublishMobileAgenda({ anchorDate, selectedDate, selectedId, entr
       <strong>{shortDayLabel(dates[0])} – {shortDayLabel(dates[6])}</strong>
       <button className="button icon-button" type="button" aria-label="다음 주" onClick={() => onWeekChange(shiftDate(anchorDate, 7))}><ChevronRight size={18} aria-hidden="true" /></button>
     </header>
-    <ol className="publish-mobile-agenda__days">
+    <div className="publish-mobile-agenda__dates" role="group" aria-label="주간 날짜 선택">
       {dates.map((key) => {
-        const dayEntries = [...(entriesByDate.get(key) ?? [])].sort((left, right) => Date.parse(left.calendarDate) - Date.parse(right.calendarDate));
-        return <li className={`publish-mobile-agenda__day${selectedDate === key ? " is-selected" : ""}`} key={key}>
-          <div className="publish-mobile-agenda__date">
-            <h3><button type="button" aria-label={`${shortDayLabel(key)} 일정 보기`} aria-current={selectedDate === key ? "date" : undefined} onClick={() => onSelectDate(key)}>{dayLabel(key)}</button></h3>
-            <span>{dayEntries.length}개 일정</span>
-          </div>
-          {dayEntries.length === 0 ? <p>일정 없음</p> : <div className="publish-mobile-agenda__slots">{dayEntries.map((entry) => {
-            const presentation = publishStatusPresentation(entry.operationalStatus);
-            return <button className={`publish-mobile-agenda__slot ${presentation.className}`} type="button" aria-label={`${entry.title} ${presentation.label} 슬롯 상세 보기`} aria-pressed={selectedId === entry.id} data-publish-focus-key={entry.id} onClick={() => onSelectEntry(key, entry.id)} key={entry.id}>
-              <span className="publish-mobile-agenda__time">{timeLabel(entry)}</span>
-              <strong>{entry.title}</strong>
-              <span className="publish-mobile-agenda__status">{presentation.label}</span>
-            </button>;
-          })}</div>}
-        </li>;
+        const date = parseDate(key);
+        return <button className={`publish-mobile-agenda__date${selectedDate === key ? " is-selected" : ""}`} type="button" aria-label={`${shortDayLabel(key)} 일정 보기`} aria-current={selectedDate === key ? "date" : undefined} onClick={() => onSelectDate(key)} key={key}>
+          <span>{weekdays[date.getUTCDay()].slice(0, 1)}</span>
+          <strong>{date.getUTCDate()}</strong>
+          <small>{entriesByDate.get(key)?.length ?? 0}개</small>
+        </button>;
       })}
-    </ol>
+    </div>
+    <div className="publish-mobile-agenda__selected">
+      <h3>{dayLabel(selectedDate)} 일정</h3>
+      {selectedEntries.length === 0 ? <p>선택한 날짜에 게시 일정이 없습니다.</p> : <div className="publish-mobile-agenda__slots">{selectedEntries.map((entry) => {
+        const presentation = publishStatusPresentation(entry.operationalStatus);
+        return <button className={`publish-mobile-agenda__slot ${presentation.className}`} type="button" aria-label={`${entry.title} ${presentation.label} 슬롯 상세 보기`} aria-pressed={selectedId === entry.id} data-publish-focus-key={entry.id} onClick={() => onSelectEntry(selectedDate, entry.id)} key={entry.id}>
+          <span className="publish-mobile-agenda__time">{timeLabel(entry)}</span>
+          <strong>{entry.title}</strong>
+          <span className="publish-mobile-agenda__status">{presentation.label}</span>
+        </button>;
+      })}</div>}
+    </div>
   </section>;
 }

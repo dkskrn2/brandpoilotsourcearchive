@@ -75,6 +75,35 @@ describe("PublishDateDetail", () => {
     }
   });
 
+  it("does not duplicate the selected mobile agenda in the surrounding date detail", () => {
+    const previousMatchMedia = window.matchMedia;
+    window.matchMedia = vi.fn((query: string) => ({
+      matches: query === "(max-width: 639px)", media: query, onchange: null,
+      addListener: vi.fn(), removeListener: vi.fn(), addEventListener: vi.fn(), removeEventListener: vi.fn(), dispatchEvent: vi.fn(),
+    }));
+    const selectedDate = dateKey(new Date());
+    const selectedEntry = entry({
+      calendarDate: `${selectedDate}T02:30:00+09:00`,
+      scheduledFor: `${selectedDate}T02:30:00+09:00`,
+      effectiveScheduledFor: `${selectedDate}T02:30:00+09:00`,
+    });
+
+    try {
+      render(<PublishCalendar
+        monthKey={selectedDate.slice(0, 7)} entries={[selectedEntry]} connectedChannels={[]} settings={null} settingsError={null}
+        slotsError={null} slotsLoading={false} assignableContents={[]} manualOptions={null} manualOptionsError={null}
+        onMonthChange={vi.fn()} onStartNew={vi.fn()} initialBulkDraft={null} onStartBulk={vi.fn()} onContinueBulk={vi.fn()}
+        onProvisionBatch={vi.fn(async () => true)} onAssign={vi.fn(async () => true)} onCancel={vi.fn()} onScheduleItem={vi.fn()}
+        onRescheduleItem={vi.fn()} onLoadManualOptions={vi.fn()} onSaveSettings={vi.fn(async () => ({ ok: true }))}
+      />);
+
+      expect(screen.getAllByText("예약된 콘텐츠")).toHaveLength(1);
+      expect(screen.getByRole("button", { name: "콘텐츠 추가" })).toBeVisible();
+    } finally {
+      window.matchMedia = previousMatchMedia;
+    }
+  });
+
   it("shows only the selected date schedule, slot details, and the content trigger", async () => {
     const onSelectEntry = vi.fn();
     const props = { dateKey: "2099-08-24", entries: [entry()], selectedId: null as string | null, slotsLoading: false, slotsError: null, assignableContents: [], onSelectEntry, onAssign: vi.fn(async () => true), onCancel: vi.fn(), onRescheduleItem: vi.fn(), onOpenContentPicker: vi.fn() };

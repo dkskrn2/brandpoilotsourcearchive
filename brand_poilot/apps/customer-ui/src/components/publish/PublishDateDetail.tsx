@@ -22,6 +22,7 @@ type Props = {
   onCancel(id: string): void;
   onRescheduleItem(itemKey: string, trigger: HTMLButtonElement): void;
   onOpenContentPicker(trigger: HTMLButtonElement): void;
+  hideEntryList?: boolean;
 };
 
 const channelLabel = { instagram: "Instagram", threads: "Threads", tiktok: "TikTok", youtube: "YouTube", linkedin: "LinkedIn", x: "X" } as const;
@@ -39,7 +40,7 @@ function detailTimes(entry: CalendarEntry) {
   return [{ label: "게시 예정 시각", value: entry.scheduledFor ?? entry.effectiveScheduledFor ?? entry.calendarDate }];
 }
 
-export function PublishDateDetail({ dateKey, entries, selectedId, slotsLoading, slotsError, assignableContents, onSelectEntry, onAssign, onCancel, onRescheduleItem, onOpenContentPicker }: Props) {
+export function PublishDateDetail({ dateKey, entries, selectedId, slotsLoading, slotsError, assignableContents, onSelectEntry, onAssign, onCancel, onRescheduleItem, onOpenContentPicker, hideEntryList = false }: Props) {
   const [assignedContentId, setAssignedContentId] = useState("");
   const detailHeadingRef = useRef<HTMLHeadingElement>(null);
   const selected = entries.find((entry) => entry.id === selectedId) ?? null;
@@ -62,7 +63,7 @@ export function PublishDateDetail({ dateKey, entries, selectedId, slotsLoading, 
       {selected.reschedulable ? <button className="button primary" type="button" onClick={(event) => onRescheduleItem(selected.id, event.currentTarget)}>예약 변경</button> : null}
       {(selected.cancellable ?? !["published", "cancelled", "publishing"].includes(selected.status)) ? <button className="button" type="button" onClick={() => onCancel(selected.id)}>슬롯 취소</button> : null}
       <button className="button" type="button" onClick={() => onSelectEntry(null)}>전체 일정 보기</button>
-    </div> : <div className="publish-calendar-detail__list">
+    </div> : hideEntryList ? null : <div className="publish-calendar-detail__list">
       {entries.map((entry) => { const presentation = publishStatusPresentation(entry.operationalStatus); return <button className={`publish-calendar-entry ${presentation.className}`} type="button" aria-label={`${entry.title} ${presentation.label} 일정 선택`} onClick={() => onSelectEntry(entry.id)} key={entry.id}><span>{timeLabel(entry)}</span><strong>{entry.title}</strong><Badge variant={presentation.variant}>{presentation.label}</Badge></button>; })}
     </div>}
     <div className="publish-calendar-detail__actions"><button className="button primary" type="button" onClick={(event) => onOpenContentPicker(event.currentTarget)}>콘텐츠 추가</button></div>
