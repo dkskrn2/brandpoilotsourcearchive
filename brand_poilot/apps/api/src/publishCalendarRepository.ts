@@ -104,6 +104,7 @@ const DEFAULT_SLOT_TIMES = ["11:30", "14:30", "17:30", "20:30"];
 const SUPPORTED_CHANNELS = new Set<Channel>(["instagram"]);
 const MAX_WEEKLY_SCHEDULE_ENTRIES_PER_DAY = 24;
 const MAX_WEEKLY_SCHEDULE_ENTRIES = MAX_WEEKLY_SCHEDULE_ENTRIES_PER_DAY * 7;
+const MAX_POSTGRES_INTEGER = 2_147_483_647;
 const ACTIVE_RESERVATION_STATUSES = [
   "proposal_assigned", "generation_pending", "content_assigned", "ready",
   "scheduled", "publish_delayed", "quota_blocked",
@@ -237,7 +238,7 @@ function validateWeeklySchedule(
     if (!/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(row.time)) {
       throw new Error("publish_calendar_time_invalid");
     }
-    if (!Number.isInteger(row.sortOrder) || row.sortOrder < 0) {
+    if (!Number.isInteger(row.sortOrder) || row.sortOrder < 0 || row.sortOrder > MAX_POSTGRES_INTEGER) {
       throw new Error("publish_calendar_sort_order_invalid");
     }
     const sortOrders = perDay.get(row.dayOfWeek) ?? new Set<number>();
@@ -256,6 +257,42 @@ function validateWeeklySchedule(
     }
   }
   return values.map((row) => ({ ...row }));
+}
+
+function temporaryWeeklySortOrders(
+  existingRows: Array<Record<string, unknown>>,
+  incomingRows: Array<Omit<PublishCalendarWeeklyScheduleEntryDto, "id"> & { id: string | null }>,
+): Map<string, number> {
+  const unavailableByDay = new Map<number, Set<number>>();
+  for (const row of existingRows) {
+    const day = Number(row.day_of_week);
+    const unavailable = unavailableByDay.get(day) ?? new Set<number>();
+    unavailable.add(Number(row.sort_order));
+    unavailableByDay.set(day, unavailable);
+  }
+  for (const row of incomingRows) {
+    const unavailable = unavailableByDay.get(row.dayOfWeek) ?? new Set<number>();
+    unavailable.add(row.sortOrder);
+    unavailableByDay.set(row.dayOfWeek, unavailable);
+  }
+
+  const temporary = new Map<string, number>();
+  for (const row of existingRows) {
+    const day = Number(row.day_of_week);
+    const unavailable = unavailableByDay.get(day)!;
+    const searchLimit = unavailable.size;
+    let allocated: number | undefined;
+    for (let candidate = 0; candidate <= searchLimit; candidate += 1) {
+      if (!unavailable.has(candidate)) {
+        allocated = candidate;
+        break;
+      }
+    }
+    if (allocated === undefined) throw new Error("publish_calendar_schedule_limit_exceeded");
+    temporary.set(String(row.id), allocated);
+    unavailable.add(allocated);
+  }
+  return temporary;
 }
 
 async function transaction<T>(pool: Pool, action: (client: PoolClient) => Promise<T>): Promise<T> {
@@ -1043,17 +1080,15 @@ export function createPublishCalendarRepository(
             input.informationalFormat, input.trendFormat],
         );
 
-        if (existingSchedule.rowCount) {
-          const temporarySortOffset = Math.max(
-            MAX_WEEKLY_SCHEDULE_ENTRIES,
-            ...existingSchedule.rows.map(({ sort_order }) => Number(sort_order)),
-          ) + 1;
-          await client.query(
+        const temporarySortOrders = temporaryWeeklySortOrders(existingSchedule.rows, weeklySchedule);
+        for (const row of existingSchedule.rows) {
+          const staged = await client.query(
             `update publish_calendar_weekly_schedule_entries
-                set sort_order=sort_order+$3,updated_at=now()
-              where brand_id=$1::uuid and workspace_id=$2::uuid`,
-            [input.brandId, input.workspaceId, temporarySortOffset],
+                set sort_order=$4
+              where id=$1::uuid and brand_id=$2::uuid and workspace_id=$3::uuid`,
+            [String(row.id), input.brandId, input.workspaceId, temporarySortOrders.get(String(row.id))],
           );
+          if (!staged.rowCount) throw new Error("publish_calendar_weekly_schedule_id_invalid");
         }
         await client.query(
           `delete from publish_calendar_weekly_schedule_entries

@@ -197,6 +197,80 @@ describe("publish calendar manual provisioning with postgres semantics", () => {
       });
   });
 
+  it("stages around an incoming sort order that collides with the old offset", async () => {
+    const existing = await repository.saveWeeklySettings({
+      workspaceId: ids.workspace,
+      brandId: ids.brand,
+      enabled: false,
+      channels: [],
+      informationalFormat: "card_news",
+      trendFormat: "reel",
+      weeklySchedule: [{ id: null, dayOfWeek: 1, time: "10:00", sortOrder: 0 }],
+    });
+    const retainedId = existing.weeklySchedule[0]!.id;
+
+    const saved = await repository.saveWeeklySettings({
+      workspaceId: ids.workspace,
+      brandId: ids.brand,
+      enabled: false,
+      channels: [],
+      informationalFormat: "card_news",
+      trendFormat: "reel",
+      weeklySchedule: [
+        { id: null, dayOfWeek: 1, time: "11:30", sortOrder: 169 },
+        { id: retainedId, dayOfWeek: 1, time: "10:00", sortOrder: 0 },
+      ],
+    });
+
+    expect(saved.weeklySchedule).toEqual([
+      { id: retainedId, dayOfWeek: 1, time: "10:00", sortOrder: 0 },
+      expect.objectContaining({ dayOfWeek: 1, time: "11:30", sortOrder: 169 }),
+    ]);
+  });
+
+  it("updates and deletes max-int rows without overflow while accepting arbitrary int32 sort orders", async () => {
+    const existing = await repository.saveWeeklySettings({
+      workspaceId: ids.workspace,
+      brandId: ids.brand,
+      enabled: false,
+      channels: [],
+      informationalFormat: "card_news",
+      trendFormat: "reel",
+      weeklySchedule: [
+        { id: null, dayOfWeek: 1, time: "10:00", sortOrder: 2_147_483_647 },
+        { id: null, dayOfWeek: 2, time: "12:00", sortOrder: 2_147_483_647 },
+      ],
+    });
+    const retainedId = existing.weeklySchedule[0]!.id;
+    const omittedId = existing.weeklySchedule[1]!.id;
+    const before = await db.query<{ created_at: string }>(
+      "select created_at from publish_calendar_weekly_schedule_entries where id=$1",
+      [retainedId],
+    );
+
+    const saved = await repository.saveWeeklySettings({
+      workspaceId: ids.workspace,
+      brandId: ids.brand,
+      enabled: false,
+      channels: [],
+      informationalFormat: "card_news",
+      trendFormat: "reel",
+      weeklySchedule: [
+        { id: null, dayOfWeek: 1, time: "09:00", sortOrder: 1_500_000_000 },
+        { id: retainedId, dayOfWeek: 3, time: "10:30", sortOrder: 2_147_483_647 },
+      ],
+    });
+
+    expect(saved.weeklySchedule).toEqual([
+      expect.objectContaining({ dayOfWeek: 1, time: "09:00", sortOrder: 1_500_000_000 }),
+      { id: retainedId, dayOfWeek: 3, time: "10:30", sortOrder: 2_147_483_647 },
+    ]);
+    await expect(db.query("select id from publish_calendar_weekly_schedule_entries where id=$1", [omittedId]))
+      .resolves.toMatchObject({ rows: [] });
+    await expect(db.query("select created_at from publish_calendar_weekly_schedule_entries where id=$1", [retainedId]))
+      .resolves.toMatchObject({ rows: [{ created_at: before.rows[0]!.created_at }] });
+  });
+
   it("reserves a selected content topic without starting generation or provider publication", async () => {
     await db.query(
       `insert into content_topics(id,workspace_id,brand_id,title,status,selected_instagram_format)

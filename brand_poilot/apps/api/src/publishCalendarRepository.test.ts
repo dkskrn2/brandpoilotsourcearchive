@@ -124,6 +124,12 @@ describe("publish calendar repository settings and slot validation", () => {
     await expect(repository.saveWeeklySettings({ ...base, weeklySchedule: [
       { id: null, dayOfWeek: 1, time: "11:30", sortOrder: -1 },
     ] })).rejects.toThrowError("publish_calendar_sort_order_invalid");
+    const oversizedSort = harness(() => ({ rows: [], rowCount: 0 }));
+    await expect(createPublishCalendarRepository(oversizedSort.pool).saveWeeklySettings({
+      ...base,
+      weeklySchedule: [{ id: null, dayOfWeek: 1, time: "11:30", sortOrder: 2_147_483_648 }],
+    })).rejects.toThrowError("publish_calendar_sort_order_invalid");
+    expect(oversizedSort.statements).toEqual([]);
     await expect(repository.saveWeeklySettings({ ...base, weeklySchedule: [
       { id: null, dayOfWeek: 1, time: "11:30", sortOrder: 0 },
       { id: null, dayOfWeek: 1, time: "12:30", sortOrder: 0 },
