@@ -8,7 +8,7 @@ const frozenManualVisualSelection = {
 } as const;
 
 it("uses the revised marketing-evidence skill version", () => {
-  expect(reelPlanSkillVersion).toBe("reel-storyboard-skill.v5");
+  expect(reelPlanSkillVersion).toBe("reel-storyboard-skill.v6");
 });
 
 const marketingManualVisualSelection = {
@@ -144,6 +144,24 @@ function promptInput(purpose: "informational" | "marketing") {
 }
 
 describe("reel purpose prompt", () => {
+  it.each(["informational", "marketing"] as const)("adds narrative architecture and adjacent-scene checks to %s planning", (purpose) => {
+    const prompt = buildReelPlanPrompt(
+      promptInput(purpose),
+      purpose === "marketing" ? marketingManualVisualSelection : frozenManualVisualSelection,
+    );
+
+    expect(prompt).toContain("콘텐츠 전체의 중심 결과를 먼저 결정");
+    expect(prompt).toContain("bridge Evidence");
+    expect(prompt).toContain("Scene 1은 hook 또는 cover 기능");
+    expect(prompt).toContain("Scene 2부터는 바로 앞 Scene과의 의미 관계");
+    expect(prompt).toContain("설명되지 않은 주제 전환은 허용하지 마세요");
+    expect(prompt).toContain("headline을 전환 문장으로 소비하지 마세요");
+    expect(prompt).toContain("Delete test");
+    expect(prompt).toContain("Missing-link test");
+    expect(prompt).toContain("Headline-only test");
+    expect(prompt).toContain("Adjacent-scene test");
+  });
+
   it.each(["informational", "marketing"] as const)("uses an explicit %s branch with required creative context", (purpose) => {
     const prompt = buildReelPlanPrompt(
       promptInput(purpose),

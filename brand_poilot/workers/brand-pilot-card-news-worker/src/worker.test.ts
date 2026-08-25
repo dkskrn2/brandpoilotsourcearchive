@@ -115,7 +115,7 @@ describe("card-news worker", () => {
     expect(planner.run).toHaveBeenCalledOnce();
     expect(api.complete).toHaveBeenCalledWith(item.id, {
       workerId: "worker-1", leaseToken: "lease-v3", jobType: "generate",
-      skillVersion: "card-manuscript-plan-skill.v4", planDraft: compiledV1(v3Input(purpose)),
+      skillVersion: "card-manuscript-plan-skill.v5", planDraft: compiledV1(v3Input(purpose)),
       cardManuscriptContract: expect.objectContaining({
         contractVersion: "card-manuscript-plan.v1",
         manuscriptSha256: expect.stringMatching(/^[0-9a-f]{64}$/),

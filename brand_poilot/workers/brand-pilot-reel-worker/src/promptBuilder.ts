@@ -5,7 +5,7 @@ import {
   projectManualEditorialVisualInputs,
 } from "@brand-pilot/content-contracts/editorial-visual-context";
 
-export const reelPlanSkillVersion = "reel-storyboard-skill.v5";
+export const reelPlanSkillVersion = "reel-storyboard-skill.v6";
 
 function safePromptJson(value: unknown): string {
   return JSON.stringify(value, null, 2).replace(/[<>&\u2028\u2029]/g, (character) => {
@@ -177,6 +177,13 @@ export function buildReelPlanPrompt(
     "topic_url이면 subject.text 전체를 검토하고 원문의 핵심 사실을 요약이나 구성안 문구로 대체하지 마세요.",
     "원문의 모든 세부사항을 모든 장면에 억지로 넣지 마세요. 선택한 관점에 불필요한 세부사항은 덜어내되 주제 정체성과 핵심 주장은 유지하세요.",
     "동결된 전체 researchEvidence를 다시 검토해 선택된 구성안의 콘셉트와 목적을 가장 잘 살리는 장면 역할, 정보 선택, 정보 순서와 장면 배분을 다시 결정하세요.",
+    "원고 작성을 시작하기 전에 전체 Subject, Research Evidence Pool, Proposal Lens를 함께 검토하고, 마지막 Scene까지 본 사용자가 새롭게 이해·느끼거나 판단해야 할 콘텐츠 전체의 중심 결과를 먼저 결정하세요.",
+    "중심 결과에 도달하기 위해 사용자가 갖게 될 핵심 질문(예: 왜, 어떻게, 그래서)을 내부적으로 찾고, 그 질문을 해소하는 데 반드시 필요한 Evidence와 그렇지 않은 Evidence를 구분하세요. 이 질문 예시는 고정된 서사 순서나 출력 필드가 아닙니다.",
+    "앞뒤 논리를 잇는 bridge Evidence가 빠지면 핵심 주장으로 건너뛰게 되는지 확인하세요. 단순히 다음 Scene과 연결하기 쉬운 Evidence보다 전체 결론을 이해하는 데 필요한 bridge Evidence를 우선하세요.",
+    "Scene 1은 hook 또는 cover 기능을 수행하며 전체 주제의 긴장, 질문, 변화, 약속 또는 핵심 주장을 세우세요. 정보성·마케팅 목적에 맞게 선택하고 정형화된 훅 문구를 강제하지 마세요.",
+    "Scene 2부터는 바로 앞 Scene과의 의미 관계를 내부적으로 결정하세요. 설명·확장·증명·대조·구체화·심화·해결 또는 필요한 관점 전환 중 콘텐츠에 맞는 관계를 선택하되 이를 enum이나 출력 필드로 만들지 마세요.",
+    "다른 관점이나 하위 주제로 전환할 수 있지만, 표시 문구만 읽어도 그 전환이 바로 앞 Scene에서 제기된 내용 또는 콘텐츠 전체의 중심 결과와 왜 연결되는지 이해되어야 합니다. 설명되지 않은 주제 전환은 허용하지 마세요.",
+    "각 Scene은 앞 Scene과 연결되는 것에 그치지 않고 새로운 Editorial Point, 사실, 관계, 해석 또는 판단을 추가해야 합니다.",
     "강한 원문 Evidence를 Scene 수에 맞추기 위해 제외하지 마세요. Scene보다 강한 Point가 많으면 의미상 같은 Point를 설명하는 Evidence끼리 재그룹하고 재배분하는 방법을 먼저 사용하세요.",
     "Proposal Lens에 직접 언급되지 않았다는 이유만으로 Evidence를 제외하지 마세요. Proposal은 편집 관점이지 원문 정보 범위의 제한이 아닙니다.",
     "원문 주제의 핵심 변화·범위·후속 확장·효과를 보완하는 Evidence도 관련 Evidence로 취급하세요.",
@@ -196,6 +203,7 @@ export function buildReelPlanPrompt(
     "supportingTexts는 headline 또는 informationRelation에 없는 새로운 정보만 최대 2개 제공하세요. headline이나 informationRelation을 다시 풀어 쓴 문장을 만들지 마세요.",
     "supportingTexts를 모두 삭제해도 장면의 의미가 완전하다면 supportingTexts를 생성하지 마세요. 정확성에 필요한 단서만 footnote로 내리세요.",
     "모든 장면의 headline만 순서대로 읽어도 콘텐츠의 핵심 흐름과 각 장면의 관계를 이해할 수 있어야 합니다. 동일한 내용을 반복하거나 각 장면이 서로 단절된 제목이 되지 않도록 하고 선택된 구성안의 콘셉트와 목적을 유지하세요.",
+    "장면 연결을 위해 headline을 전환 문장으로 소비하지 마세요. headline은 해당 Scene에서 새롭게 전달되는 핵심 주장·사실·질문·변화를 담고, 연결은 정보 순서와 필요한 경우 supportingTexts로 드러내세요.",
     "첫 장면이 선택 구성안에서 표지, 도입 또는 훅 기능을 담당한다면 headline 외에 넘겨보았을 때 얻는 내용을 한 줄 이하의 supportingTexts promise로 포함할 수 있습니다.",
     "정보량을 문장 수로 판단하지 마세요. headline 하나만으로 완결되면 충분하며 불필요한 supportingTexts나 footnote는 비워 두세요.",
     "각 장면의 evidenceIds는 researchEvidence.items의 ID 중 실제 사용한 근거만 중복 없이 넣으세요.",
@@ -206,6 +214,10 @@ export function buildReelPlanPrompt(
     "색상, 타이포그래피, 그래픽 언어, 사진·일러스트 매체, 레이아웃, visualSystem, visualThesis, layoutArchetype을 만들거나 반환하지 마세요.",
     "영상 조립과 이미지 생성은 후속 단계의 책임입니다. 파일, 웹, shell, image_generation 도구를 호출하지 마세요.",
     "최종 JSON을 제출하기 직전에 전체 초안을 내부적으로 다시 읽고 Scene별 정보 밀도, 정보 전진성, Evidence 관련성과 과적재 여부를 검토하세요.",
+    "Delete test: 각 Scene을 하나씩 삭제하고 앞뒤를 붙여 읽으세요. 전체 이해·긴장·설득력에 거의 변화가 없다면 해당 Scene을 통합하거나 더 필요한 Editorial Point로 재배분하세요.",
+    "Missing-link test: 첫 핵심 주장부터 마지막 결론까지 따라가며 사용자가 왜·어떻게·그래서라는 질문을 갖는 지점을 찾으세요. 후속 Scene에서 해소되지 않으면 필요한 bridge Evidence가 누락됐는지 다시 검토하세요.",
+    "Headline-only test: headline만 순서대로 읽었을 때 각 Scene의 새로운 정보와 전체 전진이 드러나는지 확인하세요. 단순 접속 문장만 남으면 headline을 정보 중심으로 고치세요.",
+    "Adjacent-scene test: Scene 2부터 각 Scene이 바로 앞 Scene과 어떤 의미 관계인지 설명할 수 있어야 하며, 표시 문구에서 그 관계가 이해되지 않는 unexplained topic switch가 없는지 확인하세요.",
     "Scene별 정보량을 기계적으로 균등화하지 마세요. Editorial importance와 Narrative progression을 우선하며 중요한 Scene이 더 높은 정보 밀도를 가지는 것은 허용합니다.",
     "명백한 과적재가 있으면 Evidence 제외보다 의미상 재그룹과 Scene 간 재배분을 먼저 검토하세요. 중복·낮은 관련성이 아닌 강한 Evidence를 과적재 해소 목적으로 버리지 말고, 장면 수와 frozen Evidence 사실 경계는 바꾸지 마세요.",
     "제출 전에 모든 복수-Evidence Scene의 각 Evidence가 같은 coreMessage를 직접 뒷받침하는지 다시 확인하세요. 직접 뒷받침하지 않으면 제외하지 말고 가장 관련 높은 다른 Scene으로 재배분하세요.",

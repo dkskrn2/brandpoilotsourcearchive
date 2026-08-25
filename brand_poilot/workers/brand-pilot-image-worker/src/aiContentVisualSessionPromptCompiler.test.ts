@@ -18,15 +18,32 @@ describe("visual session prompt compiler", () => {
     expect(prompt).toContain("BRAND_PILOT_SCENE_INDEX=1");
     expect(prompt).toContain("BRAND_PILOT_SCENE_INDEX=2");
     expect(prompt).toContain("Vary composition without changing the primary medium");
-    expect(prompt).toContain("Do not add explanatory text");
+    expect(prompt).toContain("cohesive social editorial card series");
+    expect(prompt).toContain("Short structural labels are allowed");
+    expect(prompt).toContain("Step 1");
+    expect(prompt).toContain("핵심");
+    expect(prompt).toContain("Do not add new facts, claims, numbers, dates, conditions, sources, or quotes");
+    expect(prompt).toContain("Do not add long explanatory text");
     expect(prompt).toContain("page numbering");
-    expect(prompt).toMatch(/CANONICAL_D2PP_RENDER_POLICY_VERSION=visual-render-policy\.d2pp\.v\d+/);
+    expect(prompt).toContain("CANONICAL_D2PP_RENDER_POLICY_VERSION=visual-render-policy.d2pp.v4");
     expect(prompt).toMatch(/CANONICAL_D2PP_RENDER_POLICY_SHA256=[a-f0-9]{64}/);
     expect(prompt.match(/CANONICAL_D2PP_RENDER_POLICY_VERSION=/g)).toHaveLength(1);
     expect(prompt.match(/CANONICAL_D2PP_RENDER_POLICY_SHA256=/g)).toHaveLength(1);
     expect(prompt).not.toContain("Use editorial illustration");
     expect(prompt).not.toContain("GLOBAL VISUAL SYSTEM");
     expect(prompt).not.toContain("layoutArchetype");
+  });
+
+  it.each(["card_news", "reel"] as const)("uses the same bounded structural-label policy for %s", (outputFormat) => {
+    const prompt = compileAiContentVisualSessionPrompt({
+      session: { contractVersion: "ai-content-visual-session.v1", outputFormat, source: { contractVersion: outputFormat === "reel" ? "reel-storyboard.v1" : "card-manuscript-plan.v1", sha256: "f".repeat(64) }, narrative: "Narrative", primaryMediumPolicy: { mode: "free_once", styleReferenceIds: [] }, scenes: [scene(1)] },
+      userImageInstruction: null, staged: { productImages: [], styleImages: [], references: [], attachments: [] },
+    });
+
+    expect(prompt).toContain("Short structural labels are allowed");
+    expect(prompt).toContain("must not add substantive meaning");
+    expect(prompt).toContain("CTA or button copy");
+    expect(prompt).toContain("page counters, pagination, or progress markers");
   });
 
   it("makes registered brand style the primary medium authority", () => {

@@ -8,7 +8,7 @@ const frozenManualVisualSelection = {
 
 describe("card-news V3 prompt", () => {
   it("uses the revised marketing-evidence skill version", () => {
-    expect(cardNewsPlanSkillVersion).toBe("card-manuscript-plan-skill.v4");
+    expect(cardNewsPlanSkillVersion).toBe("card-manuscript-plan-skill.v5");
   });
 
   it.each(["informational", "marketing"] as const)("uses an explicit %s purpose branch", (purpose) => {
@@ -27,6 +27,29 @@ describe("card-news V3 prompt", () => {
     expect(prompt).not.toContain("attachmentIds");
     expect(prompt).not.toContain("logoPolicy");
     expect(prompt).not.toContain("content-generation-input.v2");
+  });
+
+  it.each(["informational", "marketing"] as const)("adds narrative architecture and adjacent-scene checks to %s planning", (purpose) => {
+    const prompt = buildCardNewsPlanPrompt(job, {
+      generationId: job.generationId,
+      subject: { kind: "topic_text", title: "주제" },
+      product: null,
+      selectedProposal: { assetCount: 3, outline: [] },
+      outputSettings: { purpose, outputFormat: "card_news" },
+      researchEvidence: { items: [] },
+      references: { selected: [], brandStyleImages: [], avatarStyleImageId: null, attachments: [] },
+    } as never, frozenManualVisualSelection);
+
+    expect(prompt).toContain("콘텐츠 전체의 중심 결과를 먼저 결정");
+    expect(prompt).toContain("bridge Evidence");
+    expect(prompt).toContain("Scene 1은 hook 또는 cover 기능");
+    expect(prompt).toContain("Scene 2부터는 바로 앞 Scene과의 의미 관계");
+    expect(prompt).toContain("설명되지 않은 주제 전환은 허용하지 마세요");
+    expect(prompt).toContain("headline을 전환 문장으로 소비하지 마세요");
+    expect(prompt).toContain("Delete test");
+    expect(prompt).toContain("Missing-link test");
+    expect(prompt).toContain("Headline-only test");
+    expect(prompt).toContain("Adjacent-scene test");
   });
 
   it("grounds marketing manuscripts in both approved product facts and Subject Evidence", () => {

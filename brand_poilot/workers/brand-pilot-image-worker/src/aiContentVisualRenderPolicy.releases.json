@@ -12,6 +12,10 @@
     {
       "version": "visual-render-policy.d2pp.v3",
       "sha256": "f8b0b64420c09217634c08ba27d6359cdf7bd721568c33852974713d5cb0ad22"
+    },
+    {
+      "version": "visual-render-policy.d2pp.v4",
+      "sha256": "a12a91338d33d690796256f4782d10c00542bc794fe5c88ddca7ab9c2425bc2c"
     }
   ]
 }

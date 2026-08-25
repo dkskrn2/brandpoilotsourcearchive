@@ -3,7 +3,7 @@ import type { FrozenManualVisualSelectionV1 } from "@brand-pilot/content-contrac
 import type { AiContentJob } from "./contracts.js";
 import { buildCardDeckSourceBundle } from "./sourceBundle.js";
 
-export const cardNewsPlanSkillVersion = "card-manuscript-plan-skill.v4";
+export const cardNewsPlanSkillVersion = "card-manuscript-plan-skill.v5";
 
 function safePromptJson(value: unknown): string {
   return JSON.stringify(value, null, 2).replace(/[<>&\u2028\u2029]/g, (character) => {
@@ -74,6 +74,13 @@ export function buildCardNewsPlanPrompt(
     "Proposal Lens는 방향·대상·목적·질문·의도만 제공하며 Scene 순서·문구·Evidence 배치를 제공하거나 고정하지 않습니다.",
     "Review and partition every Research Evidence Pool item before writing deckNarrative.",
     "최종 JSON을 쓰기 전에 현재 한 번의 응답 안에서 반드시 다음 순서로 내부 편집하세요: 전체 Evidence 검토 → Lens 관련성·정보 가치 평가 → 의미상 Editorial Point 형성 → Point 간 중복·종속 관계 검토 → Scene budget 안에서 모든 강한 Point를 보존할 그룹 구성 → Narrative order 결정 → Scene allocation → Manuscript 작성 → self-check.",
+    "원고 작성을 시작하기 전에 전체 Subject, Research Evidence Pool, Proposal Lens를 함께 검토하고, 마지막 Scene까지 본 사용자가 새롭게 이해·느끼거나 판단해야 할 콘텐츠 전체의 중심 결과를 먼저 결정하세요.",
+    "중심 결과에 도달하기 위해 사용자가 갖게 될 핵심 질문(예: 왜, 어떻게, 그래서)을 내부적으로 찾고, 그 질문을 해소하는 데 반드시 필요한 Evidence와 그렇지 않은 Evidence를 구분하세요. 이 질문 예시는 고정된 서사 순서나 출력 필드가 아닙니다.",
+    "앞뒤 논리를 잇는 bridge Evidence가 빠지면 핵심 주장으로 건너뛰게 되는지 확인하세요. 단순히 다음 Scene과 연결하기 쉬운 Evidence보다 전체 결론을 이해하는 데 필요한 bridge Evidence를 우선하세요.",
+    "Scene 1은 hook 또는 cover 기능을 수행하며 전체 주제의 긴장, 질문, 변화, 약속 또는 핵심 주장을 세우세요. 정보성·마케팅 목적에 맞게 선택하고 정형화된 훅 문구를 강제하지 마세요.",
+    "Scene 2부터는 바로 앞 Scene과의 의미 관계를 내부적으로 결정하세요. 설명·확장·증명·대조·구체화·심화·해결 또는 필요한 관점 전환 중 콘텐츠에 맞는 관계를 선택하되 이를 enum이나 출력 필드로 만들지 마세요.",
+    "다른 관점이나 하위 주제로 전환할 수 있지만, 표시 문구만 읽어도 그 전환이 바로 앞 Scene에서 제기된 내용 또는 콘텐츠 전체의 중심 결과와 왜 연결되는지 이해되어야 합니다. 설명되지 않은 주제 전환은 허용하지 마세요.",
+    "각 Scene은 앞 Scene과 연결되는 것에 그치지 않고 새로운 Editorial Point, 사실, 관계, 해석 또는 판단을 추가해야 합니다.",
     "Editorial Point는 출력 JSON에 새 필드로 추가하지 말고 내부 편집 판단에만 사용하세요.",
     "한 Scene은 원칙적으로 하나의 명확한 Editorial Point를 담당합니다. 여러 Evidence가 같은 Point를 설명하면 함께 사용할 수 있습니다.",
     "evidenceSelection.selectedEvidenceIds와 excludedEvidenceIds는 전체 Research Evidence Pool을 중복·누락 없이 정확히 분할해야 합니다.",
@@ -100,6 +107,7 @@ export function buildCardNewsPlanPrompt(
     "headline은 coreMessage의 축약본이어야 하며 새로운 사실을 추가하지 마세요.",
     "supportingTexts는 headline 또는 informationRelation에 없는 새 정보만 최대 2개 제공하고, 없어도 의미가 완전하면 비워 두세요.",
     "모든 headline만 순서대로 읽어도 핵심 흐름과 Scene 관계를 이해할 수 있어야 하며 선택된 Proposal의 서사 관점은 유지하세요.",
+    "장면 연결을 위해 headline을 전환 문장으로 소비하지 마세요. headline은 해당 Scene에서 새롭게 전달되는 핵심 주장·사실·질문·변화를 담고, 연결은 정보 순서와 필요한 경우 supportingTexts로 드러내세요.",
     "informationRelation은 semantic relationship일 뿐 레이아웃·차트·배치 방식의 지시가 아닙니다.",
     "before_after는 동일 대상·동일 지표의 실제 전후 관계에만 사용하세요.",
     "comparison은 직접 비교 가능한 동일 차원의 값에만 사용하세요.",
@@ -118,6 +126,10 @@ export function buildCardNewsPlanPrompt(
     "페이지 번호, 장면 번호, 현재/전체 장수, 진행률 배지 또는 페이지 인디케이터를 기획하거나 출력하지 마세요.",
     "파일, 웹, shell, image_generation 도구를 호출하지 마세요. 제공된 고정 맥락만 사용하세요.",
     "최종 JSON을 제출하기 직전에 전체 초안을 내부적으로 다시 읽고 Scene별 정보 밀도, 정보 전진성, Evidence 관련성과 과적재 여부를 검토하세요.",
+    "Delete test: 각 Scene을 하나씩 삭제하고 앞뒤를 붙여 읽으세요. 전체 이해·긴장·설득력에 거의 변화가 없다면 해당 Scene을 통합하거나 더 필요한 Editorial Point로 재배분하세요.",
+    "Missing-link test: 첫 핵심 주장부터 마지막 결론까지 따라가며 사용자가 왜·어떻게·그래서라는 질문을 갖는 지점을 찾으세요. 후속 Scene에서 해소되지 않으면 필요한 bridge Evidence가 누락됐는지 다시 검토하세요.",
+    "Headline-only test: headline만 순서대로 읽었을 때 각 Scene의 새로운 정보와 전체 전진이 드러나는지 확인하세요. 단순 접속 문장만 남으면 headline을 정보 중심으로 고치세요.",
+    "Adjacent-scene test: Scene 2부터 각 Scene이 바로 앞 Scene과 어떤 의미 관계인지 설명할 수 있어야 하며, 표시 문구에서 그 관계가 이해되지 않는 unexplained topic switch가 없는지 확인하세요.",
     "Scene별 정보량을 기계적으로 균등화하지 마세요. Editorial importance와 Narrative progression을 우선하며 중요한 Scene이 더 높은 정보 밀도를 가지는 것은 허용합니다.",
     "비어 있는 Scene이 없더라도 하나의 Scene이 명백히 과적재되어 있으면 Evidence 제외보다 의미상 재그룹과 Scene 간 재배분을 먼저 검토하세요. 중복·낮은 관련성이 아닌 강한 Evidence를 과적재 해소 목적으로 버리지 말고, 정보량을 기계적으로 균등화하거나 장면 수와 Evidence 사실 경계를 바꾸지 마세요.",
     "제출 전에 모든 복수-Evidence Scene의 각 Evidence가 같은 coreMessage를 직접 뒷받침하는지 다시 확인하세요. 직접 뒷받침하지 않으면 제외하지 말고 가장 관련 높은 다른 Scene으로 재배분하세요.",
