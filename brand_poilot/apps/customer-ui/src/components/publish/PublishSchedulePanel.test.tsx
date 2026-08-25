@@ -139,6 +139,7 @@ describe("PublishSchedulePanel", () => {
     expect(scheduleErrorMessage("publish_calendar_channel_not_connected", options)).toMatch(/Instagram 연결/);
     expect(scheduleErrorMessage("publish_calendar_content_format_mismatch", options)).toMatch(/형식/);
     expect(scheduleErrorMessage("tenant_scope_rejected", options)).toBe("이 콘텐츠는 현재 브랜드에서 예약할 수 없습니다.");
+    expect(scheduleErrorMessage("internal_error", options)).toBe("게시 예약을 처리하지 못했습니다. 잠시 후 다시 시도해 주세요.");
 
     const onOpenExistingReservation = vi.fn();
     render(<PublishSchedulePanel item={item()} options={options} optionsError={null} optionsLoading={false} initialDateKey="2099-08-23" onSubmit={vi.fn(async () => ({ ok: false as const, errorCode: "publish_calendar_content_already_scheduled" }))} onSaved={vi.fn()} onOpenExistingReservation={onOpenExistingReservation} onRetryOptions={vi.fn()} onClose={vi.fn()} />);

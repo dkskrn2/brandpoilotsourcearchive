@@ -24,4 +24,27 @@ describe("repository AI-content pool isolation", () => {
     expect(contentQuery).toHaveBeenCalledTimes(1);
     expect(mainQuery).not.toHaveBeenCalled();
   });
+
+  it("routes publish calendar queries through the dedicated content pool", async () => {
+    const mainQuery = vi.fn(async () => {
+      throw new Error("main_pool_must_not_receive_publish_calendar_sql");
+    });
+    const contentQuery = vi.fn(async (sql: string) => {
+      expect(sql).toContain("from publish_calendar_slots");
+      return { rows: [], rowCount: 0 };
+    });
+    const repository = createRepository(
+      { query: mainQuery } as unknown as Pool,
+      { aiContentPool: { query: contentQuery } as unknown as Pool },
+    );
+
+    await expect(repository.listSlots!({
+      workspaceId: "00000000-0000-4000-8000-000000000001",
+      brandId: "00000000-0000-4000-8000-000000000002",
+      startsAt: new Date("2026-08-25T00:00:00.000Z"),
+      endsAt: new Date("2026-08-26T00:00:00.000Z"),
+    })).resolves.toEqual([]);
+    expect(contentQuery).toHaveBeenCalledTimes(1);
+    expect(mainQuery).not.toHaveBeenCalled();
+  });
 });

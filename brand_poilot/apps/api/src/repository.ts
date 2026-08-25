@@ -1484,7 +1484,7 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
   const brandIntelligenceProvider = createBrandIntelligenceProvider(createBrandIntelligenceRepository(pool));
   const instagramPublish = resolveInstagramPublishOptions(options);
   const aiContentPublish = createAiContentPublishRepository(fencedAiContentSubrepositoryPool);
-  const publishCalendar = createPublishCalendarRepository(pool, {
+  const publishCalendar = createPublishCalendarRepository(aiContentPool, {
     afterManualSlotProvisioned: async (input) => {
       await aiContentPublish.prepareCompletedCalendarPublish({
         workspaceId: input.workspaceId,

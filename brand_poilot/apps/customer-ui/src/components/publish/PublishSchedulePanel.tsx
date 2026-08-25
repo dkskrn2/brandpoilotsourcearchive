@@ -59,7 +59,10 @@ export function scheduleErrorMessage(errorCode: string | null, options: PublishC
   if (errorCode === "publish_calendar_content_already_scheduled") return "이미 예약된 콘텐츠입니다. 기존 예약 상세를 엽니다.";
   if (errorCode === "publish_calendar_slot_not_reschedulable") return "게시가 시작되었거나 결과 확인이 필요한 예약은 변경할 수 없습니다.";
   if (errorCode === "publish_calendar_slot_not_found") return "예약 정보를 찾지 못했습니다. 목록을 새로고침해 주세요.";
-  return "이 콘텐츠는 현재 브랜드에서 예약할 수 없습니다.";
+  if (errorCode === "tenant_scope_rejected" || errorCode === "workspace_access_denied") {
+    return "이 콘텐츠는 현재 브랜드에서 예약할 수 없습니다.";
+  }
+  return "게시 예약을 처리하지 못했습니다. 잠시 후 다시 시도해 주세요.";
 }
 
 function toScheduledFor(date: string, time: string) {
