@@ -1,7 +1,7 @@
 import { X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import type { PublishCalendarManualOptions, PublishCalendarManualSlotInput, PublishCalendarManualSlotSource, PublishItem } from "../../types";
-import { defaultScheduleTime, formatPublishDateTime } from "../../features/publishing/publishCalendar";
+import { dateKey, defaultScheduleTime, formatPublishDateTime } from "../../features/publishing/publishCalendar";
 import { FocusTrap } from "../ui/FocusTrap";
 
 type SubmitResult =
@@ -80,19 +80,31 @@ function seoulTime(value: string | null) {
   return `${parts.find((part) => part.type === "hour")?.value}:${parts.find((part) => part.type === "minute")?.value}`;
 }
 
-function initialScheduleTime(editing: boolean, item: PublishItem, initialDateKey: string, preferredTimes: readonly string[]) {
-  return editing && item.operationalStatus !== "delayed_today"
-    ? seoulTime(item.scheduledFor)
-    : defaultScheduleTime(initialDateKey, new Date(), preferredTimes);
+function initialScheduleValue(editing: boolean, item: PublishItem, initialDateKey: string, preferredTimes: readonly string[]) {
+  if (editing && item.operationalStatus !== "delayed_today") {
+    return { date: initialDateKey, time: seoulTime(item.scheduledFor) };
+  }
+  const now = new Date();
+  const time = defaultScheduleTime(initialDateKey, now, preferredTimes);
+  const scheduledFor = toScheduledFor(initialDateKey, time);
+  if (initialDateKey === dateKey(now) && scheduledFor && scheduledFor.getTime() <= now.getTime()) {
+    const fiveMinutes = 5 * 60 * 1000;
+    const earliest = new Date(Math.ceil((now.getTime() + 15 * 60 * 1000) / fiveMinutes) * fiveMinutes);
+    return { date: dateKey(earliest), time };
+  }
+  return { date: initialDateKey, time };
 }
 
 export function PublishSchedulePanel({ mode = "create", item, options, optionsError, optionsLoading, initialDateKey, preferredTimes = [], onSubmit, onSaved, onOpenExistingReservation, onRetryOptions, onClose }: Props) {
   const editing = mode === "edit";
-  const [date, setDate] = useState(initialDateKey);
-  const [time, setTime] = useState(() => initialScheduleTime(editing, item, initialDateKey, preferredTimes));
+  const preferredTimesKey = preferredTimes.join("\u0000");
+  const initialValue = initialScheduleValue(editing, item, initialDateKey, preferredTimes);
+  const [date, setDate] = useState(initialValue.date);
+  const [time, setTime] = useState(initialValue.time);
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const idempotencyKeyRef = useRef(crypto.randomUUID());
+  const timeEditedRef = useRef(false);
   const source = publishScheduleSource(item);
   const instagram = options?.channels.find((channel) => channel.value === "instagram") ?? null;
   const connected = Boolean(instagram);
@@ -102,12 +114,21 @@ export function PublishSchedulePanel({ mode = "create", item, options, optionsEr
   const past = Boolean(scheduledFor && scheduledFor.getTime() <= Date.now());
 
   useEffect(() => {
-    setDate(initialDateKey);
-    setTime(initialScheduleTime(editing, item, initialDateKey, preferredTimes));
+    const next = initialScheduleValue(editing, item, initialDateKey, preferredTimes);
+    setDate(next.date);
+    setTime(next.time);
+    timeEditedRef.current = false;
     setError(null);
     setSubmitting(false);
     idempotencyKeyRef.current = crypto.randomUUID();
   }, [editing, initialDateKey, item.itemKey, item.scheduledFor]);
+
+  useEffect(() => {
+    if (timeEditedRef.current) return;
+    const next = initialScheduleValue(editing, item, initialDateKey, preferredTimesKey ? preferredTimesKey.split("\u0000") : []);
+    setDate(next.date);
+    setTime(next.time);
+  }, [preferredTimesKey]);
 
   async function submit() {
     if (submitting) return;
@@ -163,7 +184,7 @@ export function PublishSchedulePanel({ mode = "create", item, options, optionsEr
       {!editing && options && !quotaAvailable ? <p role="alert">{scheduleErrorMessage("publish_weekly_quota_exceeded", options)}</p> : null}
       <div className="publish-calendar-manual-form">
         <label>게시 날짜<input aria-label="게시 날짜" type="date" value={date} onChange={(event) => { const nextDate = event.target.value; setDate(nextDate); setTime(defaultScheduleTime(nextDate, new Date(), preferredTimes)); setError(null); }} /></label>
-        <label>게시 시간<input aria-label="게시 시간" type="time" value={time} onChange={(event) => { setTime(event.target.value); setError(null); }} /></label>
+        <label>게시 시간<input aria-label="게시 시간" type="time" value={time} onChange={(event) => { timeEditedRef.current = true; setTime(event.target.value); setError(null); }} /></label>
       </div>
       <p><strong>선택한 게시 시각</strong> {scheduledFor ? formatPublishDateTime(scheduledFor) : "날짜와 시간을 선택해 주세요."}</p>
       {past ? <p role="alert">선택한 게시 시각이 지났습니다. 미래 시각을 선택해 주세요.</p> : null}

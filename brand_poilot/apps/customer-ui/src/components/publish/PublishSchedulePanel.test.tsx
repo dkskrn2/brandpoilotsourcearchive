@@ -67,6 +67,17 @@ describe("PublishSchedulePanel", () => {
     expect(screen.getByLabelText("게시 시간")).toHaveValue("15:15");
   });
 
+  it("advances the selected date with the default time when the safety window crosses midnight", () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-08-25T14:50:00.000Z"));
+
+    render(<PublishSchedulePanel item={item()} options={options} optionsError={null} optionsLoading={false} initialDateKey="2026-08-25" preferredTimes={[]} onSubmit={vi.fn()} onSaved={vi.fn()} onOpenExistingReservation={vi.fn()} onRetryOptions={vi.fn()} onClose={vi.fn()} />);
+
+    expect(screen.getByLabelText("게시 날짜")).toHaveValue("2026-08-26");
+    expect(screen.getByLabelText("게시 시간")).toHaveValue("00:05");
+    expect(screen.getByRole("button", { name: "게시 예약" })).toBeEnabled();
+  });
+
   it("switches to the earliest preferred time when a new reservation moves to a future date", async () => {
     vi.useFakeTimers({ toFake: ["Date"] });
     vi.setSystemTime(new Date("2026-08-25T06:00:00.000Z"));
@@ -76,6 +87,31 @@ describe("PublishSchedulePanel", () => {
     await userEvent.type(screen.getByLabelText("게시 날짜"), "2026-08-26");
 
     expect(screen.getByLabelText("게시 시간")).toHaveValue("09:00");
+  });
+
+  it("updates an untouched fallback when saved preferred times arrive asynchronously", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-08-25T06:00:00.000Z"));
+    const props = { item: item(), options, optionsError: null, optionsLoading: false, initialDateKey: "2026-08-26", onSubmit: vi.fn(), onSaved: vi.fn(), onOpenExistingReservation: vi.fn(), onRetryOptions: vi.fn(), onClose: vi.fn() };
+    const { rerender } = render(<PublishSchedulePanel {...props} preferredTimes={[]} />);
+    expect(screen.getByLabelText("게시 시간")).toHaveValue("11:30");
+
+    rerender(<PublishSchedulePanel {...props} preferredTimes={["14:00", "09:00"]} />);
+
+    await waitFor(() => expect(screen.getByLabelText("게시 시간")).toHaveValue("09:00"));
+  });
+
+  it("preserves a manually edited time when saved preferred times arrive asynchronously", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-08-25T06:00:00.000Z"));
+    const props = { item: item(), options, optionsError: null, optionsLoading: false, initialDateKey: "2026-08-26", onSubmit: vi.fn(), onSaved: vi.fn(), onOpenExistingReservation: vi.fn(), onRetryOptions: vi.fn(), onClose: vi.fn() };
+    const { rerender } = render(<PublishSchedulePanel {...props} preferredTimes={[]} />);
+    await userEvent.clear(screen.getByLabelText("게시 시간"));
+    await userEvent.type(screen.getByLabelText("게시 시간"), "16:20");
+
+    rerender(<PublishSchedulePanel {...props} preferredTimes={["14:00", "09:00"]} />);
+
+    await waitFor(() => expect(screen.getByLabelText("게시 시간")).toHaveValue("16:20"));
   });
 
   it("starts a delayed-today reservation change at a valid future time", () => {

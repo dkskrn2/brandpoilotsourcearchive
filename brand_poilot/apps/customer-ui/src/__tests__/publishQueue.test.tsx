@@ -608,6 +608,9 @@ describe("PublishQueuePage canonical collection", () => {
     const deferred = item({ title: "지연 예약", status: "deferred", operationalStatus: "delayed_today", operationalReason: "reserved_time_passed", publishStatus: "deferred", scheduledFor: "2026-08-23T02:30:00.000Z", effectiveScheduledFor: "2026-08-23T03:00:00.000Z", calendarDate: "2026-08-23T03:00:00.000Z", targets: [target({ status: "deferred", scheduledFor: "2026-08-23T02:30:00.000Z" })] });
     const published = item({ itemKey: "output:published", title: "게시 완료", status: "published", operationalStatus: "published", operationalReason: "published", publishStatus: "published", publicationProgress: "complete", scheduledFor: "2026-08-22T02:30:00.000Z", effectiveScheduledFor: "2026-08-22T03:00:00.000Z", publishedAt: "2026-08-23T04:00:00.000Z", calendarDate: "2026-08-23T04:00:00.000Z", sourceRefs: { contentTopicId: null, proposalId: null, generationId: null, generationOutputId: "output-published", calendarSlotId: "slot-published", topicPublishGroupId: null, queueIds: ["queue-published"] }, targets: [target({ queueId: "queue-published", status: "published", scheduledFor: "2026-08-22T02:30:00.000Z", publishedAt: "2026-08-23T04:00:00.000Z" })] });
     await renderPage({ listPublishItems: vi.fn(async () => [deferred, published]) });
+    const deferredCard = await screen.findByRole("article", { name: "지연 예약" });
+    expect(within(deferredCard).getByText("원래 예약 2026년 8월 23일 일요일 11:30")).toBeVisible();
+    expect(within(deferredCard).getByText("실제 실행 예정 2026년 8월 23일 일요일 12:00")).toBeVisible();
     await userEvent.click(await screen.findByRole("tab", { name: "캘린더" }));
 
     await userEvent.click(await screen.findByRole("button", { name: "지연 예약 게시 지연 슬롯 상세 보기" }));

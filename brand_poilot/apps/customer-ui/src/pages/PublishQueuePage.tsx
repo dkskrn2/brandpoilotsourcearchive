@@ -19,7 +19,7 @@ import {
   type PublishManagementStatus
 } from "../components/publish/publishManagementFilters";
 import { api, DEMO_BRAND_ID } from "../lib/apiClient";
-import { dateKey, PUBLISH_CALENDAR_USAGE_CHANGED_EVENT } from "../features/publishing/publishCalendar";
+import { dateKey, formatPublishDateTime as formatDateTime, PUBLISH_CALENDAR_USAGE_CHANGED_EVENT } from "../features/publishing/publishCalendar";
 import { canReschedulePublishItem, datedItems, entryFromPublishItem, listItems, unreservedItems } from "../features/publishing/publishItems";
 import { clearPublishCalendarBulkDraft, loadPublishCalendarBulkDraft, savePublishCalendarBulkDraft, type PublishCalendarBulkDraft, type PublishCalendarBulkDraftRow } from "../features/publishing/publishCalendarBulkDraft";
 import { aiContentApiGateway } from "../features/ai-content/aiContentApiGateway";
@@ -77,15 +77,6 @@ function generationOutputPreview(output: AiGenerationOutput): PublishCardPreview
   const video = artifact.assets.find((asset) => asset.mimeType?.startsWith("video/"))
     ?? (artifact.kind === "video" ? artifact.assets[0] : null);
   return video?.url ? { kind: "video", url: video.url, posterUrl: artifact.posterUrl } : null;
-}
-
-function formatDateTime(value: string) {
-  return new Date(value).toLocaleString("ko-KR", {
-    month: "numeric",
-    day: "numeric",
-    hour: "2-digit",
-    minute: "2-digit"
-  });
 }
 
 function filterStatusForPublishItem(item: PublishItem): ManagementStatus {
