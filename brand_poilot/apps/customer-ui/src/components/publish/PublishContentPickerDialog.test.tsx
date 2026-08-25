@@ -45,6 +45,30 @@ function renderDialog() {
 }
 
 describe("PublishContentPickerDialog", () => {
+  it("moves and selects tabs with wrapped arrows, Home, and End", async () => {
+    renderDialog();
+    const existing = screen.getByRole("tab", { name: "기존 콘텐츠" });
+    existing.focus();
+
+    await userEvent.keyboard("{ArrowRight}");
+    const create = screen.getByRole("tab", { name: "새 콘텐츠", selected: true });
+    expect(create).toHaveFocus();
+
+    await userEvent.keyboard("{ArrowRight}");
+    const bulk = screen.getByRole("tab", { name: "일괄 등록", selected: true });
+    expect(bulk).toHaveFocus();
+
+    await userEvent.keyboard("{ArrowRight}");
+    expect(screen.getByRole("tab", { name: "기존 콘텐츠", selected: true })).toHaveFocus();
+
+    await userEvent.keyboard("{End}");
+    expect(screen.getByRole("tab", { name: "일괄 등록", selected: true })).toHaveFocus();
+    await userEvent.keyboard("{Home}");
+    expect(screen.getByRole("tab", { name: "기존 콘텐츠", selected: true })).toHaveFocus();
+    await userEvent.keyboard("{ArrowLeft}");
+    expect(screen.getByRole("tab", { name: "일괄 등록", selected: true })).toHaveFocus();
+  });
+
   it("keeps existing-content search, status filtering, selection, and status presentation", async () => {
     const { onScheduleItem } = renderDialog();
     expect(screen.getAllByRole("tab").map((tab) => tab.textContent)).toEqual(["기존 콘텐츠", "새 콘텐츠", "일괄 등록"]);

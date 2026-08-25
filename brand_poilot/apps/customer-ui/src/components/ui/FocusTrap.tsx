@@ -54,10 +54,14 @@ export function FocusTrap({
     }
     const first = elements[0];
     const last = elements[elements.length - 1];
-    if (!event.shiftKey && document.activeElement === last) {
+    const activeElement = document.activeElement as HTMLElement | null;
+    if (!activeElement || !elements.includes(activeElement)) {
+      event.preventDefault();
+      (event.shiftKey ? last : first).focus();
+    } else if (!event.shiftKey && activeElement === last) {
       event.preventDefault();
       first.focus();
-    } else if (event.shiftKey && document.activeElement === first) {
+    } else if (event.shiftKey && activeElement === first) {
       event.preventDefault();
       last.focus();
     }

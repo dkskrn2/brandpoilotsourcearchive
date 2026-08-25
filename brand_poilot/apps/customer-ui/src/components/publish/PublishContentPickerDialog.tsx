@@ -1,5 +1,5 @@
 import { X } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState, type KeyboardEvent } from "react";
 import type { PublishCalendarManualOptions, PublishCalendarNewContentSetup, PublishItem } from "../../types";
 import type { PublishCalendarBulkDraft, PublishCalendarBulkDraftRow } from "../../features/publishing/publishCalendarBulkDraft";
 import { publishContentStatusPresentation } from "../../features/publishing/publishPresentation";
@@ -53,6 +53,7 @@ function fullDate(key: string) {
 }
 
 export function PublishContentPickerDialog({ dateKey, unreservedItems, generatedPreviews, connected, options, optionsError, optionsLoading, initialBulkDraft, onScheduleItem, onStartNew, onStartBulk, onContinueBulk, onProvisionBatch, onLoadOptions, onClose }: Props) {
+  const tabRefs = useRef<Partial<Record<PickerTab, HTMLButtonElement>>>({});
   const [activeTab, setActiveTab] = useState<PickerTab>(initialBulkDraft ? "bulk" : "existing_content");
   const [query, setQuery] = useState("");
   const [status, setStatus] = useState("all");
@@ -76,13 +77,26 @@ export function PublishContentPickerDialog({ dateKey, unreservedItems, generated
     if (tab === "existing_content") setVisibleCount(pageSize);
   }
 
+  function onTabKeyDown(event: KeyboardEvent<HTMLButtonElement>, index: number) {
+    let nextIndex: number | null = null;
+    if (event.key === "ArrowRight") nextIndex = (index + 1) % tabs.length;
+    else if (event.key === "ArrowLeft") nextIndex = (index - 1 + tabs.length) % tabs.length;
+    else if (event.key === "Home") nextIndex = 0;
+    else if (event.key === "End") nextIndex = tabs.length - 1;
+    if (nextIndex === null) return;
+    event.preventDefault();
+    const nextTab = tabs[nextIndex].id;
+    selectTab(nextTab);
+    tabRefs.current[nextTab]?.focus();
+  }
+
   return <div className="modal-backdrop"><FocusTrap active initialFocusSelector=".publish-content-picker__heading" className="modal-panel publish-content-picker" role="dialog" aria-modal="true" aria-labelledby="publish-content-picker-heading" onKeyDown={(event) => {
     if (event.key !== "Escape") return;
     event.preventDefault();
     onClose();
   }}>
     <header className="publish-content-picker__header"><div><span>선택 날짜 {fullDate(dateKey)}</span><h2 id="publish-content-picker-heading" className="publish-content-picker__heading" tabIndex={-1}>콘텐츠 추가</h2><p>기존 콘텐츠를 예약하거나 새 콘텐츠 생성 1단계를 시작합니다.</p></div><button className="button icon-button" type="button" aria-label="닫기" onClick={onClose}><X size={18} /></button></header>
-    <div className="publish-content-picker__tabs" role="tablist" aria-label="콘텐츠 추가 방식">{tabs.map((tab) => <button id={`publish-content-picker-tab-${tab.id}`} role="tab" aria-controls={`publish-content-picker-panel-${tab.id}`} aria-selected={activeTab === tab.id} tabIndex={activeTab === tab.id ? 0 : -1} className={`button${activeTab === tab.id ? " is-active" : ""}`} type="button" onClick={() => selectTab(tab.id)} key={tab.id}>{tab.label}</button>)}</div>
+    <div className="publish-content-picker__tabs" role="tablist" aria-label="콘텐츠 추가 방식">{tabs.map((tab, index) => <button ref={(element) => { if (element) tabRefs.current[tab.id] = element; else delete tabRefs.current[tab.id]; }} id={`publish-content-picker-tab-${tab.id}`} role="tab" aria-controls={`publish-content-picker-panel-${tab.id}`} aria-selected={activeTab === tab.id} tabIndex={activeTab === tab.id ? 0 : -1} className={`button${activeTab === tab.id ? " is-active" : ""}`} type="button" onClick={() => selectTab(tab.id)} onKeyDown={(event) => onTabKeyDown(event, index)} key={tab.id}>{tab.label}</button>)}</div>
     <div id="publish-content-picker-panel-existing_content" role="tabpanel" aria-labelledby="publish-content-picker-tab-existing_content" hidden={activeTab !== "existing_content"} className="publish-content-picker__body">
       <section aria-label="미예약 콘텐츠 보관함" className="publish-calendar-unreserved">
         <div className="publish-calendar-unreserved__header"><div><h3>미예약 콘텐츠</h3><span>{filteredItems.length}개</span></div>{unreservedItems.length > 0 ? <div className="publish-calendar-unreserved__controls"><input type="search" aria-label="미예약 콘텐츠 검색" placeholder="제목 검색" value={query} onChange={(event) => { setQuery(event.target.value); setVisibleCount(pageSize); }} /><select aria-label="미예약 콘텐츠 상태" value={status} onChange={(event) => { setStatus(event.target.value); setVisibleCount(pageSize); }}><option value="all">전체 상태</option>{statuses.map((value) => <option value={value} key={value}>{publishContentStatusPresentation(value).label}</option>)}</select></div> : null}</div>

@@ -526,13 +526,17 @@ describe("PublishQueuePage canonical collection", () => {
     const provisionPublishCalendarManualSlot = vi.fn(async (_brandId: string, _payload: unknown) => ({ id: "slot-new" }));
     await renderPage({ getPublishCalendarManualOptions, provisionPublishCalendarManualSlot, listPublishItems: vi.fn(async () => [schedulable]) });
     await userEvent.click(await screen.findByRole("tab", { name: "캘린더" }));
-    await userEvent.click(screen.getByRole("button", { name: "콘텐츠 추가" }));
+    const contentTrigger = screen.getByRole("button", { name: "콘텐츠 추가" });
+    await userEvent.click(contentTrigger);
     const tray = await screen.findByRole("region", { name: "미예약 콘텐츠 보관함" });
     await userEvent.click(within(tray).getByRole("button", { name: "게시 설정" }));
 
-    expect(await screen.findByRole("dialog", { name: "예약된 SNS 마케팅 게시 설정" })).toHaveClass("publish-schedule-panel");
+    const scheduleDialog = await screen.findByRole("dialog", { name: "예약된 SNS 마케팅 게시 설정" });
+    expect(scheduleDialog).toHaveClass("publish-schedule-panel");
     expect(screen.queryByRole("combobox", { name: "게시할 콘텐츠" })).not.toBeInTheDocument();
     expect(getPublishCalendarManualOptions).toHaveBeenCalledTimes(2);
+    await userEvent.click(within(scheduleDialog).getByRole("button", { name: "닫기" }));
+    await waitFor(() => expect(contentTrigger).toHaveFocus());
   });
 
   it("never offers a new schedule action for non-schedulable publish states", async () => {
