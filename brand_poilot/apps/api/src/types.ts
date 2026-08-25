@@ -73,6 +73,15 @@ export type PublishStatus = "unreserved" | "reserved" | "publish_queued" | "sche
   | "publishing" | "partially_published" | "published" | "failed" | "result_unknown" | "cancelled";
 export type PublishItemStatus = Exclude<PublishStatus, "unreserved">
   | "completed_unpublished" | "generating" | "pre_generation";
+export type PublishOperationalStatus = "action_required" | "upcoming" | "delayed_today" | "publishing"
+  | "partially_published" | "published" | "cancelled";
+
+export interface PublishOperationalState {
+  status: PublishOperationalStatus;
+  reason: "review_required" | "publish_failed" | "result_unknown" | "reserved_time_passed"
+    | "stale_reservation" | "reservation_expired" | "future_reservation" | "publishing"
+    | "partially_published" | "published" | "cancelled";
+}
 
 export interface PublishItemTargetDto {
   queueId: string;
@@ -119,6 +128,8 @@ export interface PublishItemDto {
   contentStatus: "pre_generation" | "generating" | "completed" | "failed";
   publishStatus: PublishStatus;
   status: PublishItemStatus;
+  operationalStatus: PublishOperationalStatus;
+  operationalReason: PublishOperationalState["reason"];
   groupStatus: string | null;
   publicationProgress: "none" | "partial" | "complete";
   scheduledFor: string | null;

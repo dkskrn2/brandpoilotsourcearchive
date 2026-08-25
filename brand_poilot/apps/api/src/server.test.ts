@@ -3110,6 +3110,7 @@ describe("API server", () => {
       title: "SNS 마케팅", createdAt: "2026-08-20T00:00:00.000Z", contentFormat: "card_news",
       channels: ["instagram"], source: { type: "topic_table", label: "SNS 운영", detail: null, urls: [] },
       targets: [], reviewTargets: [], contentStatus: "pre_generation", publishStatus: "unreserved", status: "pre_generation",
+      operationalStatus: "action_required", operationalReason: "review_required",
       groupStatus: null, publicationProgress: "none", scheduledFor: null, effectiveScheduledFor: null,
       publishedAt: null, calendarDate: null, calendarPlacement: "unreserved", assignmentMode: null,
       sourceRefs: { contentTopicId: "topic-1", proposalId: null, generationId: null, generationOutputId: null,

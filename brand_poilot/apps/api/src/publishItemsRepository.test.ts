@@ -39,6 +39,7 @@ describe("publish items repository", () => {
     await expect(repository.listPublishItems({ workspaceId: "workspace-1", brandId: "brand-1" }))
       .resolves.toEqual([expect.objectContaining({
         status: "cancelled", calendarDate: null, calendarPlacement: "hidden", schedulable: false,
+        operationalStatus: "cancelled", operationalReason: "cancelled",
         sourceRefs: expect.objectContaining({ calendarSlotId: "slot-1", topicPublishGroupId: "group-1" }),
       })]);
   });
@@ -60,6 +61,7 @@ describe("publish items repository", () => {
     await expect(repository.listPublishItems({ workspaceId: "workspace-1", brandId: "brand-1" }))
       .resolves.toEqual([expect.objectContaining({
         status: "publish_queued", calendarPlacement: "hidden", schedulable: false,
+        operationalStatus: "action_required", operationalReason: "review_required",
         sourceRefs: expect.objectContaining({ topicPublishGroupId: "group-2" }),
       })]);
   });
@@ -81,6 +83,7 @@ describe("publish items repository", () => {
     await expect(repository.listPublishItems({ workspaceId: "workspace-1", brandId: "brand-1" }))
       .resolves.toEqual([expect.objectContaining({
         status: "pre_generation", calendarPlacement: "unreserved", schedulable: true,
+        operationalStatus: "action_required", operationalReason: "review_required",
         sourceRefs: expect.objectContaining({ topicPublishGroupId: "group-3" }),
       })]);
   });
