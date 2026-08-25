@@ -205,6 +205,8 @@ describe("PublishQueuePage canonical collection", () => {
     expect(screen.getByRole("article", { name: "숨김 실패 콘텐츠" })).toBeVisible();
     await userEvent.click(screen.getByRole("tab", { name: "캘린더" }));
     expect(await screen.findByRole("button", { name: "예약된 SNS 마케팅 게시 예정 슬롯 상세 보기" })).toBeVisible();
+    expect(screen.queryByRole("region", { name: "미예약 콘텐츠 보관함" })).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "콘텐츠 추가" }));
     expect(within(screen.getByRole("region", { name: "미예약 콘텐츠 보관함" })).getByText("미예약 사장님 콘텐츠")).toBeVisible();
     expect(screen.queryByText("숨김 실패 콘텐츠")).not.toBeInTheDocument();
     expect(api.listPublishItems).toHaveBeenCalledTimes(1);
@@ -230,6 +232,7 @@ describe("PublishQueuePage canonical collection", () => {
     await renderPage({ listPublishItems: vi.fn(async () => unreserved) });
 
     await userEvent.click(await screen.findByRole("tab", { name: "캘린더" }));
+    await userEvent.click(screen.getByRole("button", { name: "콘텐츠 추가" }));
     const tray = await screen.findByRole("region", { name: "미예약 콘텐츠 보관함" });
     const search = within(tray).getByRole("searchbox", { name: "미예약 콘텐츠 검색" });
     const status = within(tray).getByRole("combobox", { name: "미예약 콘텐츠 상태" });
@@ -285,6 +288,7 @@ describe("PublishQueuePage canonical collection", () => {
     await renderPage({ listPublishItems: vi.fn(async () => [generated, pending]) });
 
     await userEvent.click(await screen.findByRole("tab", { name: "캘린더" }));
+    await userEvent.click(screen.getByRole("button", { name: "콘텐츠 추가" }));
     const tray = await screen.findByRole("region", { name: "미예약 콘텐츠 보관함" });
     expect(within(tray).getByRole("img", { name: "생성 완료 카드뉴스 미리보기" })).toHaveAttribute("src", "https://cdn.example.com/card-1.webp");
     expect(within(within(tray).getByRole("article", { name: "생성 전 콘텐츠" })).queryByRole("img")).not.toBeInTheDocument();
@@ -327,6 +331,7 @@ describe("PublishQueuePage canonical collection", () => {
 
     expect(listGenerations).not.toHaveBeenCalled();
     await userEvent.click(await screen.findByRole("tab", { name: "캘린더" }));
+    await userEvent.click(screen.getByRole("button", { name: "콘텐츠 추가" }));
     const tray = await screen.findByRole("region", { name: "미예약 콘텐츠 보관함" });
     expect(await within(tray).findByRole("img", { name: "생성 결과 카드뉴스 미리보기" })).toHaveAttribute("src", "https://cdn.example.com/generated-card.webp");
     expect(listGenerations).toHaveBeenCalledTimes(1);
@@ -454,6 +459,7 @@ describe("PublishQueuePage canonical collection", () => {
     expect(await screen.findByRole("dialog", { name: "자동 게시 설정" })).toBeVisible();
     expect(screen.getByLabelText("게시 시간")).toHaveValue("14:00, 09:00");
     await userEvent.click(screen.getByRole("button", { name: "닫기" }));
+    await userEvent.click(screen.getByRole("button", { name: "콘텐츠 추가" }));
     await userEvent.click(within(screen.getByRole("region", { name: "미예약 콘텐츠 보관함" })).getByRole("button", { name: "게시 설정" }));
     await userEvent.clear(screen.getByLabelText("게시 날짜"));
     await userEvent.type(screen.getByLabelText("게시 날짜"), "2026-08-26");
@@ -520,12 +526,13 @@ describe("PublishQueuePage canonical collection", () => {
     const provisionPublishCalendarManualSlot = vi.fn(async (_brandId: string, _payload: unknown) => ({ id: "slot-new" }));
     await renderPage({ getPublishCalendarManualOptions, provisionPublishCalendarManualSlot, listPublishItems: vi.fn(async () => [schedulable]) });
     await userEvent.click(await screen.findByRole("tab", { name: "캘린더" }));
+    await userEvent.click(screen.getByRole("button", { name: "콘텐츠 추가" }));
     const tray = await screen.findByRole("region", { name: "미예약 콘텐츠 보관함" });
     await userEvent.click(within(tray).getByRole("button", { name: "게시 설정" }));
 
     expect(await screen.findByRole("dialog", { name: "예약된 SNS 마케팅 게시 설정" })).toHaveClass("publish-schedule-panel");
     expect(screen.queryByRole("combobox", { name: "게시할 콘텐츠" })).not.toBeInTheDocument();
-    expect(getPublishCalendarManualOptions).toHaveBeenCalledTimes(1);
+    expect(getPublishCalendarManualOptions).toHaveBeenCalledTimes(2);
   });
 
   it("never offers a new schedule action for non-schedulable publish states", async () => {
@@ -608,12 +615,13 @@ describe("PublishQueuePage canonical collection", () => {
     await renderPage({ getPublishCalendarManualOptions, listChannels: vi.fn(async () => [{ type: "instagram", enabled: true, status: "connected" }]), listPublishItems: vi.fn(async () => []) });
     await userEvent.click(await screen.findByRole("tab", { name: "캘린더" }));
     expect(getPublishCalendarManualOptions).not.toHaveBeenCalled();
-    await userEvent.click(screen.getByRole("button", { name: "새 콘텐츠·일괄 등록" }));
+    await userEvent.click(screen.getByRole("button", { name: "콘텐츠 추가" }));
     await waitFor(() => expect(getPublishCalendarManualOptions).toHaveBeenCalledTimes(1));
+    await userEvent.click(screen.getByRole("tab", { name: "새 콘텐츠" }));
     expect(await screen.findByRole("combobox", { name: "콘텐츠 목적" })).toBeVisible();
     expect(screen.getByRole("combobox", { name: "주제 방식" })).toBeVisible();
     expect(screen.getByRole("combobox", { name: "콘텐츠 형식" })).toBeVisible();
-    await userEvent.click(screen.getByRole("radio", { name: "여러 주제 일괄 설정" }));
+    await userEvent.click(screen.getByRole("tab", { name: "일괄 등록" }));
     expect(screen.getByRole("table", { name: "일괄 주제 설정" })).toBeVisible();
   });
 
@@ -627,7 +635,8 @@ describe("PublishQueuePage canonical collection", () => {
     });
 
     await userEvent.click(await screen.findByRole("tab", { name: "캘린더" }));
-    await userEvent.click(screen.getByRole("button", { name: "새 콘텐츠·일괄 등록" }));
+    await userEvent.click(screen.getByRole("button", { name: "콘텐츠 추가" }));
+    await userEvent.click(screen.getByRole("tab", { name: "새 콘텐츠" }));
 
     expect(await screen.findByRole("alert")).toHaveTextContent("게시 예약을 사용하려면 구독 플랜을 확인해 주세요.");
     expect(screen.queryByText("게시 설정 선택 항목을 불러오지 못했습니다.")).not.toBeInTheDocument();

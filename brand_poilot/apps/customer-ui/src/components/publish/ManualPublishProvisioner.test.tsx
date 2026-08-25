@@ -23,6 +23,7 @@ const options: PublishCalendarManualOptions = {
 function renderProvisioner(dateKey = "2099-08-24") {
   const onStartBulk = vi.fn();
   render(<ManualPublishProvisioner
+    mode="bulk"
     dateKey={dateKey}
     connected
     options={options}
@@ -39,7 +40,6 @@ function renderProvisioner(dateKey = "2099-08-24") {
 describe("ManualPublishProvisioner bulk times", () => {
   it("allows duplicate and nearby times and copies the last time into a new row", async () => {
     const { onStartBulk } = renderProvisioner();
-    await userEvent.click(screen.getByRole("radio", { name: "여러 주제 일괄 설정" }));
     const table = screen.getByRole("table", { name: "일괄 주제 설정" });
     const times = [within(table).getByLabelText("1행 게시 시간"), within(table).getByLabelText("2행 게시 시간")];
     await userEvent.clear(times[1]);
@@ -70,7 +70,6 @@ describe("ManualPublishProvisioner bulk times", () => {
 
   it("still blocks bulk rows in the past", async () => {
     renderProvisioner("2000-01-01");
-    await userEvent.click(screen.getByRole("radio", { name: "여러 주제 일괄 설정" }));
     expect(screen.getByText("모든 게시 시간은 미래여야 합니다.")).toBeVisible();
     expect(screen.getByRole("button", { name: "일괄 설정 시작" })).toBeDisabled();
   });

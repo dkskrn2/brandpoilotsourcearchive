@@ -8,6 +8,7 @@ import type { PublishCalendarBulkDraft, PublishCalendarBulkDraftRow } from "../.
 type SourceMode = "new_content" | "bulk";
 
 type Props = {
+  mode: SourceMode;
   dateKey: string;
   connected: boolean;
   options: PublishCalendarManualOptions | null;
@@ -41,8 +42,7 @@ function SetupFields({ options, setup, onChange }: {
   </div>;
 }
 
-export function ManualPublishProvisioner({ dateKey, connected, options, optionsError, onStartNew, initialBulkDraft, onStartBulk, onContinueBulk, onProvisionBatch }: Props) {
-  const [mode, setMode] = useState<SourceMode>(initialBulkDraft ? "bulk" : "new_content");
+export function ManualPublishProvisioner({ mode, dateKey, connected, options, optionsError, onStartNew, initialBulkDraft, onStartBulk, onContinueBulk, onProvisionBatch }: Props) {
   const [time, setTime] = useState("11:30");
   const [error, setError] = useState<string | null>(null);
   const [setup, setSetup] = useState<PublishCalendarNewContentSetup & { contentFormat: "card_news" | "reel" }>({ purpose: "informational", subjectMode: "topic_text", topicText: "", contentFormat: "card_news" });
@@ -63,12 +63,9 @@ export function ManualPublishProvisioner({ dateKey, connected, options, optionsE
   }, [bulkRows, dateKey]);
 
   return <section className="publish-calendar-manual-form publish-calendar-provisioner" aria-label="콘텐츠가 연결된 게시 추가">
-    <strong>새 콘텐츠를 만들고 게시 시간을 설정하세요</strong>
+    <strong>{mode === "bulk" ? "여러 콘텐츠를 만들고 게시 시간을 설정하세요" : "새 콘텐츠를 만들고 게시 시간을 설정하세요"}</strong>
     {options?.usage?.publishing ? <small>이번 주 추가 예약 가능 {options.usage.publishing.additionalAvailable}건 · 게시 한도 {options.usage.publishing.limit}건{typeof generationAvailable === "number" ? ` · 생성 ${generationAvailable}건 가능` : ""}</small> : null}
-    <label>게시 시간<input type="time" aria-label="수동 게시 시간" value={time} onChange={(event) => { setTime(event.target.value); setError(null); }} /></label>
-    <fieldset aria-label="추가할 콘텐츠 선택"><legend>콘텐츠 선택</legend>{([
-      ["new_content", "새 콘텐츠 생성"], ["bulk", "여러 주제 일괄 설정"],
-    ] as const).map(([value, label]) => <label key={value}><input type="radio" name="manual-publish-source" value={value} checked={mode === value} onChange={() => setMode(value)} />{label}</label>)}</fieldset>
+    {mode === "new_content" ? <label>게시 시간<input type="time" aria-label="수동 게시 시간" value={time} onChange={(event) => { setTime(event.target.value); setError(null); }} /></label> : null}
     {!connected ? <p role="alert">연결·활성화된 Instagram 채널이 필요합니다.</p> : null}
     {optionsError ? <p role="alert">{optionsError}</p> : null}
     {mode === "new_content" && options ? <>
@@ -85,7 +82,7 @@ export function ManualPublishProvisioner({ dateKey, connected, options, optionsE
         <div className="actions"><button className="button" type="button" onClick={() => setBulkRows((current) => [...current, { clientRowId: crypto.randomUUID(), time: current.at(-1)?.time ?? "11:30", setup: { ...setup } }])}>행 추가</button><button className="button primary" type="button" disabled={!connected || !bulkTimesValid || bulkGenerationExceeded || bulkRows.some((row) => !row.time || (!row.setup.topicText?.trim() && !row.setup.topicUrl?.trim() && !row.setup.contentSuggestionId && !row.setup.referenceId) || (row.setup.purpose === "marketing" && !row.setup.productId))} onClick={() => onStartBulk(bulkRows.map((row) => ({ clientRowId: row.clientRowId, scheduledFor: scheduledFor(dateKey, row.time), contentFormat: row.setup.contentFormat, setup: row.setup, generationId: null })))}>일괄 설정 시작</button></div>
       </>}
     </div> : null}
-    {invalidTime ? <small role="alert">과거 시각에는 게시 일정을 추가할 수 없습니다.</small> : null}
+    {mode === "new_content" && invalidTime ? <small role="alert">과거 시각에는 게시 일정을 추가할 수 없습니다.</small> : null}
     {error ? <p role="alert">{error}</p> : null}
   </section>;
 }

@@ -2214,6 +2214,8 @@ details.panel > summary.panel-head::-webkit-details-marker {
 .publish-calendar-cell__entry strong { overflow: hidden; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
 .publish-calendar-detail { position: sticky; top: 16px; min-height: 360px; }
 .publish-calendar-slot-detail, .publish-calendar-detail__list { display: grid; gap: 14px; padding: 18px; }
+.publish-calendar-detail__actions { padding: 0 18px 18px; }
+.publish-calendar-detail__actions .button { width: 100%; }
 .publish-calendar-slot-detail__time { display: flex; align-items: center; gap: 10px; color: var(--primary); }
 .publish-calendar-slot-detail__time span { display: grid; gap: 2px; }
 .publish-calendar-slot-detail__time small, .publish-calendar-manual-form small { color: var(--muted); }
@@ -2259,6 +2261,20 @@ details.panel > summary.panel-head::-webkit-details-marker {
 .publish-calendar-bulk-progress { display: grid; gap: 8px; }
 .publish-calendar-bulk-progress > div { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 5px 8px; align-items: center; padding: 8px; border: 1px solid var(--line); border-radius: 6px; }
 .publish-calendar-bulk-progress > div .button { grid-column: 1 / -1; }
+.publish-content-picker { width: min(960px, calc(100vw - 32px)); max-height: min(800px, calc(100vh - 32px)); }
+.publish-content-picker__header, .publish-content-picker__footer { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 18px 20px; }
+.publish-content-picker__header { border-bottom: 1px solid var(--line); }
+.publish-content-picker__header > div > span { color: var(--muted); font-size: 12px; }
+.publish-content-picker__header h2 { margin: 4px 0; }
+.publish-content-picker__header p { margin: 0; color: var(--muted); }
+.publish-content-picker__tabs { display: flex; gap: 6px; padding: 12px 20px 0; border-bottom: 1px solid var(--line); }
+.publish-content-picker__tabs .button { margin-bottom: -1px; border-bottom-right-radius: 0; border-bottom-left-radius: 0; }
+.publish-content-picker__tabs .button.is-active { border-color: var(--primary); color: var(--primary); background: var(--info-bg); }
+.publish-content-picker__body { min-height: 360px; padding: 20px; }
+.publish-content-picker__body .publish-calendar-unreserved, .publish-content-picker__body .publish-calendar-manual-form { padding-top: 0; border-top: 0; }
+.publish-content-picker__body .publish-calendar-unreserved__list { grid-template-columns: repeat(2, minmax(0, 1fr)); max-height: min(430px, calc(100vh - 360px)); }
+.publish-content-picker__body .publish-calendar-bulk-table > [role="row"]:not(.publish-calendar-bulk-table__head) { grid-template-columns: 96px minmax(0, 1fr) auto; align-items: end; }
+.publish-content-picker__footer { justify-content: flex-end; border-top: 1px solid var(--line); }
 .auto-publish-settings { width: min(620px, calc(100vw - 32px)); max-height: min(760px, calc(100vh - 32px)); overflow: auto; }
 .auto-publish-settings__header, .auto-publish-settings__footer { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 18px; border-bottom: 1px solid var(--line); }
 .auto-publish-settings__header h2 { margin: 4px 0; }
@@ -2607,6 +2623,13 @@ details.panel > summary.panel-head::-webkit-details-marker {
   .dashboard-top-list__button { grid-template-columns: 22px minmax(0, 1fr); }
   .dashboard-top-list__exposure { grid-column: 2; }
   .modal-backdrop { padding: 0; }
+  .publish-content-picker { width: 100%; height: 100vh; max-height: 100vh; border: 0; border-radius: 0; }
+  .publish-content-picker__header { align-items: flex-start; }
+  .publish-content-picker__header p { display: none; }
+  .publish-content-picker__tabs { overflow-x: auto; }
+  .publish-content-picker__body .publish-calendar-unreserved__list { grid-template-columns: 1fr; }
+  .publish-content-picker__body .publish-calendar-bulk-table__head { display: none; }
+  .publish-content-picker__body .publish-calendar-bulk-table > [role="row"]:not(.publish-calendar-bulk-table__head) { grid-template-columns: 1fr; }
   .feedback-dialog { align-content: start; width: 100%; height: 100vh; max-height: 100vh; padding: 22px 16px; border: 0; border-radius: 0; }
   .support-history-dialog { width: 100%; height: 100vh; max-height: 100vh; border: 0; border-radius: 0; }
   .support-history-dialog__header { padding: 20px 16px 16px; }
