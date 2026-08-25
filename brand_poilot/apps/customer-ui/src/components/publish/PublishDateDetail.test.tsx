@@ -29,6 +29,52 @@ function unreservedItem(index: number): PublishItem {
 }
 
 describe("PublishDateDetail", () => {
+  it("keeps the shared status color class and a visible text label in the desktop month grid", () => {
+    render(<PublishCalendar
+      monthKey="2099-08" entries={[entry({ operationalStatus: "published", operationalReason: "published" })]} connectedChannels={[]} settings={null} settingsError={null}
+      slotsError={null} slotsLoading={false} assignableContents={[]} manualOptions={null} manualOptionsError={null}
+      onMonthChange={vi.fn()} onStartNew={vi.fn()} initialBulkDraft={null} onStartBulk={vi.fn()} onContinueBulk={vi.fn()}
+      onProvisionBatch={vi.fn(async () => true)} onAssign={vi.fn(async () => true)} onCancel={vi.fn()} onScheduleItem={vi.fn()}
+      onRescheduleItem={vi.fn()} onLoadManualOptions={vi.fn()} onSaveSettings={vi.fn(async () => ({ ok: true }))}
+    />);
+
+    const grid = screen.getByRole("grid", { name: "게시 캘린더" });
+    const slot = within(grid).getByRole("button", { name: "예약된 콘텐츠 게시 완료 슬롯 상세 보기" });
+    expect(slot).toHaveClass("is-completed");
+    expect(within(slot).getByText("게시 완료")).toBeVisible();
+  });
+
+  it("renders the seven-day agenda instead of the month grid below 640px", () => {
+    const previousMatchMedia = window.matchMedia;
+    window.matchMedia = vi.fn((query: string) => ({
+      matches: query === "(max-width: 639px)",
+      media: query,
+      onchange: null,
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+    }));
+
+    try {
+      render(<PublishCalendar
+        monthKey="2099-08" entries={[entry()]} connectedChannels={[]} settings={null} settingsError={null}
+        slotsError={null} slotsLoading={false} assignableContents={[]} manualOptions={null} manualOptionsError={null}
+        onMonthChange={vi.fn()} onStartNew={vi.fn()} initialBulkDraft={null} onStartBulk={vi.fn()} onContinueBulk={vi.fn()}
+        onProvisionBatch={vi.fn(async () => true)} onAssign={vi.fn(async () => true)} onCancel={vi.fn()} onScheduleItem={vi.fn()}
+        onRescheduleItem={vi.fn()} onLoadManualOptions={vi.fn()} onSaveSettings={vi.fn(async () => ({ ok: true }))}
+      />);
+
+      expect(screen.getByRole("region", { name: "주간 게시 일정" })).toBeVisible();
+      expect(screen.queryByRole("grid", { name: "게시 캘린더" })).not.toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "다음 주" })).toBeVisible();
+      expect(screen.queryByRole("button", { name: "다음 달" })).not.toBeInTheDocument();
+    } finally {
+      window.matchMedia = previousMatchMedia;
+    }
+  });
+
   it("shows only the selected date schedule, slot details, and the content trigger", async () => {
     const onSelectEntry = vi.fn();
     const props = { dateKey: "2099-08-24", entries: [entry()], selectedId: null as string | null, slotsLoading: false, slotsError: null, assignableContents: [], onSelectEntry, onAssign: vi.fn(async () => true), onCancel: vi.fn(), onRescheduleItem: vi.fn(), onOpenContentPicker: vi.fn() };

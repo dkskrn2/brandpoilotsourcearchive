@@ -8,6 +8,36 @@ const session = {
   brand: { id: brandId, name: "접근성 브랜드" },
 };
 
+const schedulablePublishItem = {
+  itemKey: "output:e2e-schedulable",
+  workspaceId: "workspace-a11y",
+  brandId,
+  title: "예약 가능한 콘텐츠",
+  createdAt: "2099-08-20T00:00:00.000Z",
+  contentFormat: "card_news",
+  channels: [],
+  source: { type: "topic_table", label: "주제표", detail: null, urls: [] },
+  targets: [],
+  reviewTargets: [],
+  contentStatus: "completed",
+  publishStatus: "unreserved",
+  status: "completed_unpublished",
+  operationalStatus: "action_required",
+  operationalReason: "review_required",
+  groupStatus: null,
+  publicationProgress: "none",
+  scheduledFor: null,
+  effectiveScheduledFor: null,
+  publishedAt: null,
+  calendarDate: null,
+  calendarPlacement: "unreserved",
+  assignmentMode: null,
+  sourceRefs: { contentTopicId: null, proposalId: null, generationId: null, generationOutputId: "output-e2e", calendarSlotId: null, topicPublishGroupId: null, queueIds: [] },
+  schedulable: true,
+  scheduleBlockedReason: null,
+  lastError: null,
+};
+
 const proposal = {
   contractVersion: "content-proposal.v1",
   title: "접근 가능한 구현안",
@@ -203,6 +233,26 @@ async function installFixture(page: Page) {
     if (path.endsWith("/channel-connection-request")) return json(route, {
       id: "request-1", brandId, status: "draft", requestedChannels: [], note: "", createdAt: null, updatedAt: null,
     });
+    if (path.endsWith("/publish-calendar/settings")) return json(route, {
+      brandId, enabled: true, channels: ["instagram"], informationalFormat: "card_news", trendFormat: "reel", slotTimes: ["11:30"], updatedAt: null,
+    });
+    if (path.endsWith("/publish-calendar/usage")) return json(route, {
+      startsAt: "2099-08-20T00:00:00.000Z", endsAt: "2099-08-27T00:00:00.000Z",
+      generation: { limit: 10, succeeded: 1, reserved: 0, remaining: 9, additionalAvailable: 9 },
+      publishing: { limit: 7, succeeded: 1, reserved: 2, remaining: 6, additionalAvailable: 4 },
+    });
+    if (path.endsWith("/publish-calendar/manual-options")) return json(route, {
+      purposes: [{ value: "informational", label: "정보성" }],
+      subjectModes: [{ value: "topic_text", label: "직접 입력", requiredField: "topicText" }],
+      channels: [{ value: "instagram", label: "Instagram", formats: [{ value: "card_news", label: "카드뉴스" }, { value: "reel", label: "릴스" }] }],
+      products: [], suggestions: [], references: [],
+      usage: {
+        startsAt: "2099-08-20T00:00:00.000Z", endsAt: "2099-08-27T00:00:00.000Z",
+        generation: { limit: 10, succeeded: 1, reserved: 0, remaining: 9, additionalAvailable: 9 },
+        publishing: { limit: 7, succeeded: 1, reserved: 2, remaining: 6, additionalAvailable: 4 },
+      },
+    });
+    if (path.endsWith("/publish-items")) return json(route, [schedulablePublishItem]);
     if (path.endsWith("/publish-queue") || path.endsWith("/publish-results") || path.endsWith("/content-outputs")) return json(route, []);
     if (path.endsWith("/instagram-dm/settings")) return json(route, {
       brandId, enabled: false, wikiReady: true, messagePermissionReady: true,
@@ -377,6 +427,62 @@ test(`${path} does not overflow at approved widths`, async ({ page }) => {
   }
 });
 }
+
+test("publish filters, responsive calendar, and content submit controls remain reachable", async ({ page }) => {
+  for (const viewport of [
+    { width: 1280, height: 720 },
+    { width: 1024, height: 768 },
+    { width: 390, height: 844 },
+  ]) {
+    await page.setViewportSize(viewport);
+    await page.goto("/publish-queue", { waitUntil: "domcontentloaded" });
+
+    const filters = page.locator(".queue-filters");
+    await expect(filters).toBeVisible();
+    const lastFilter = filters.getByRole("button").last();
+    await lastFilter.scrollIntoViewIfNeeded();
+    await expect(lastFilter).toBeVisible();
+
+    await page.getByRole("tab", { name: "캘린더" }).click();
+    if (viewport.width < 640) {
+      await expect(page.getByRole("region", { name: "주간 게시 일정" })).toBeVisible();
+      await expect(page.getByRole("grid", { name: "게시 캘린더" })).toHaveCount(0);
+    } else {
+      await expect(page.getByRole("grid", { name: "게시 캘린더" })).toBeVisible();
+      await expect(page.getByRole("region", { name: "주간 게시 일정" })).toHaveCount(0);
+    }
+
+    await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1), {
+      message: `publish calendar must not overflow at ${viewport.width}x${viewport.height}`,
+    }).toBe(true);
+
+    await page.getByRole("button", { name: "콘텐츠 추가" }).click();
+    const picker = page.getByRole("dialog", { name: "콘텐츠 추가" });
+    await picker.getByRole("article", { name: "예약 가능한 콘텐츠" }).getByRole("button", { name: "게시 설정" }).click();
+    const schedule = page.getByRole("dialog", { name: "예약 가능한 콘텐츠 게시 설정" });
+    for (const control of [
+      schedule.getByRole("textbox", { name: "게시 날짜" }),
+      schedule.getByRole("textbox", { name: "게시 시간" }),
+      schedule.getByRole("button", { name: "게시 예약" }),
+    ]) {
+      await control.scrollIntoViewIfNeeded();
+      await expect(control).toBeVisible();
+    }
+    await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1), {
+      message: `publish schedule must not overflow at ${viewport.width}x${viewport.height}`,
+    }).toBe(true);
+    await schedule.getByRole("button", { name: "닫기" }).click();
+
+    await page.getByRole("button", { name: "콘텐츠 추가" }).click();
+    const newContentPicker = page.getByRole("dialog", { name: "콘텐츠 추가" });
+    await newContentPicker.getByRole("tab", { name: "새 콘텐츠" }).click();
+    const submit = newContentPicker.getByRole("button", { name: "생성 1단계에서 계속" });
+    await submit.scrollIntoViewIfNeeded();
+    await expect(submit).toBeVisible();
+    await expectNoSeriousOrCriticalViolations(page, `publish picker ${viewport.width}x${viewport.height}`);
+    await newContentPicker.getByRole("button", { name: "닫기" }).click();
+  }
+});
 
 test("reduced motion removes transitions, animations, and smooth scrolling", async ({ page }) => {
   await page.emulateMedia({ reducedMotion: "reduce" });
