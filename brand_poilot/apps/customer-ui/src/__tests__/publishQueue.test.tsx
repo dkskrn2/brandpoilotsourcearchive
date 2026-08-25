@@ -592,15 +592,20 @@ describe("PublishQueuePage canonical collection", () => {
 
   it("keeps queue-specific cancellation and retry behavior", async () => {
     const cancellable = item({ itemKey: "direct:cancel", sourceRefs: { contentTopicId: null, proposalId: null, generationId: null, generationOutputId: "output-1", calendarSlotId: null, topicPublishGroupId: null, queueIds: ["queue-cancel"] }, targets: [target({ queueId: "queue-cancel", status: "scheduled" })] });
-    const failed = item({ itemKey: "direct:retry", title: "재시도 콘텐츠", status: "failed", operationalStatus: "action_required", operationalReason: "publish_failed", publishStatus: "failed", calendarPlacement: "hidden", calendarDate: null, scheduledFor: null, effectiveScheduledFor: null, sourceRefs: { contentTopicId: null, proposalId: null, generationId: null, generationOutputId: "output-2", calendarSlotId: null, topicPublishGroupId: null, queueIds: ["queue-retry"] }, targets: [target({ queueId: "queue-retry", status: "failed", scheduledFor: null, lastError: "instagram_publish_failed" })], lastError: "instagram_publish_failed" });
-    const listPublishItems = vi.fn(async () => [cancellable, failed]);
+    const retryable = item({ itemKey: "direct:retry", title: "재시도 콘텐츠", status: "failed", operationalStatus: "action_required", operationalReason: "publish_failed", publishStatus: "failed", calendarPlacement: "hidden", calendarDate: null, scheduledFor: null, effectiveScheduledFor: null, sourceRefs: { contentTopicId: null, proposalId: null, generationId: null, generationOutputId: "output-2", calendarSlotId: null, topicPublishGroupId: null, queueIds: ["queue-retry"] }, targets: [target({ queueId: "queue-retry", status: "failed", scheduledFor: null, lastError: "provider_not_implemented" })], lastError: "provider_not_implemented" });
+    const nonRetryable = item({ itemKey: "direct:no-retry", title: "재시도 불가 콘텐츠", status: "failed", operationalStatus: "action_required", operationalReason: "publish_failed", publishStatus: "failed", calendarPlacement: "hidden", calendarDate: null, scheduledFor: null, effectiveScheduledFor: null, sourceRefs: { contentTopicId: null, proposalId: null, generationId: null, generationOutputId: "output-3", calendarSlotId: null, topicPublishGroupId: null, queueIds: ["queue-no-retry"] }, targets: [target({ queueId: "queue-no-retry", status: "failed", scheduledFor: null, lastError: "instagram_publish_failed" })], lastError: "instagram_publish_failed" });
+    const listPublishItems = vi.fn(async () => [cancellable, retryable, nonRetryable]);
     const api = await renderPage({ listPublishItems });
 
     await userEvent.click(await screen.findByRole("button", { name: "예약 취소" }));
     await waitFor(() => expect(api.cancelPublishQueueItem).toHaveBeenCalledWith("queue-cancel"));
-    const failedCard = screen.getByRole("article", { name: "재시도 콘텐츠" });
-    expect(within(failedCard).getByText("Instagram 게시에 실패했습니다. 잠시 후 다시 시도해 주세요.")).toBeVisible();
-    expect(within(failedCard).queryByText("instagram_publish_failed")).not.toBeInTheDocument();
+    const retryableCard = screen.getByRole("article", { name: "재시도 콘텐츠" });
+    expect(within(retryableCard).getByText("이 채널은 아직 자동 게시를 지원하지 않습니다.")).toBeVisible();
+    expect(within(retryableCard).getByRole("button", { name: "재시도" })).toBeVisible();
+    const nonRetryableCard = screen.getByRole("article", { name: "재시도 불가 콘텐츠" });
+    expect(within(nonRetryableCard).getByText("Instagram 게시에 실패했습니다. 잠시 후 다시 시도해 주세요.")).toBeVisible();
+    expect(within(nonRetryableCard).queryByRole("button", { name: "재시도" })).not.toBeInTheDocument();
+    expect(within(nonRetryableCard).queryByText("instagram_publish_failed")).not.toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "재시도" }));
     await waitFor(() => expect(api.retryPublishQueueItem).toHaveBeenCalledWith("queue-retry"));
     expect(listPublishItems).toHaveBeenCalledTimes(3);

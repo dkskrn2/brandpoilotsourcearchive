@@ -25,8 +25,8 @@ const statusPresentations: Record<PublishOperationalStatus, {
 
 const errorPresentations: Record<string, { message: string; action: PublishErrorAction }> = {
   oauth_required: { message: "Instagram 연결이 만료되었습니다.", action: "reconnect_channel" },
-  instagram_publish_failed: { message: "Instagram 게시에 실패했습니다. 잠시 후 다시 시도해 주세요.", action: "retry_publish" },
-  provider_not_implemented: { message: "이 채널은 아직 자동 게시를 지원하지 않습니다.", action: "inspect_result" },
+  instagram_publish_failed: { message: "Instagram 게시에 실패했습니다. 잠시 후 다시 시도해 주세요.", action: "inspect_result" },
+  provider_not_implemented: { message: "이 채널은 아직 자동 게시를 지원하지 않습니다.", action: "retry_publish" },
   generation_failed: { message: "콘텐츠 생성에 실패했습니다.", action: "regenerate_content" },
   publish_delivery_unknown: { message: "게시 결과를 확인해야 합니다.", action: "inspect_result" },
 };
