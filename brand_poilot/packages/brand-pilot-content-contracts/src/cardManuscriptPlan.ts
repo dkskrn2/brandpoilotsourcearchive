@@ -172,12 +172,6 @@ export function parseCardManuscriptPlanV1(
   if (!equalSets(selected, sceneUnion) || [...sceneUnion].some((id) => !pool.has(id))) {
     throw new Error("card_manuscript_evidence_partition_invalid");
   }
-  if (frozenInput.outputSettings.purpose === "informational"
-    && scenes.some((scene) => scene.evidenceIds.length === 0
-      && scene.editorialRole.toLowerCase() !== "transition"
-      && scene.editorialRole.toLowerCase() !== "cta")) {
-    throw new Error("card_manuscript_scene_evidence_required");
-  }
   if (frozenInput.outputSettings.purpose === "marketing") {
     const ctaCount = scenes.filter((scene) => scene.editorialRole.toLowerCase() === "cta").length;
     const hasGroundedEditorialScene = scenes.some((scene) => {

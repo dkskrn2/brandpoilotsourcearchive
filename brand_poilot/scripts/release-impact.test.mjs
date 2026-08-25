@@ -359,6 +359,26 @@ test("Card Manuscript visual session selects exactly its five coordinated server
   assert.deepEqual(impact.unknownPaths, []);
 });
 
+test("URL-aware Card and Reel manuscript planning deploys only API and the two planner workers", () => {
+  const impact = classifyChangedPaths([
+    "brand_poilot/docs/superpowers/plans/2026-08-25-url-source-manuscript-evidence-relaxation.md",
+    "brand_poilot/docs/superpowers/specs/2026-08-25-url-source-manuscript-evidence-relaxation-design.md",
+    "brand_poilot/packages/brand-pilot-content-contracts/src/cardManuscriptPlan.test.ts",
+    "brand_poilot/packages/brand-pilot-content-contracts/src/cardManuscriptPlan.ts",
+    "brand_poilot/packages/brand-pilot-content-contracts/src/reelStoryboard.test.ts",
+    "brand_poilot/packages/brand-pilot-content-contracts/src/reelStoryboard.ts",
+    "brand_poilot/workers/brand-pilot-card-news-worker/src/worker.ts",
+    "brand_poilot/workers/brand-pilot-reel-worker/src/worker.ts",
+  ], { profile: CARD_MANUSCRIPT_VISUAL_SESSION_PROFILE });
+
+  assert.deepEqual(enabled(impact), ["api", "cardNewsWorker", "reelWorker"]);
+  assert.equal(impact.buildAllServer, false);
+  assert.equal(impact.migrationChanged, false);
+  assert.equal(impact.productionDeployAllowed, true);
+  assert.equal(impact.verifiedScope, true);
+  assert.deepEqual(impact.unknownPaths, []);
+});
+
 test("Card Manuscript visual session rejects UI, Blog, marketing, and migrations", () => {
   for (const path of [
     "brand_poilot/apps/customer-ui/src/App.tsx",

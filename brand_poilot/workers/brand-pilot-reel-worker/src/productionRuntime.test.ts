@@ -8,11 +8,13 @@ describe("reel production runtime", () => {
     const outputDir = await mkdtemp(path.join(os.tmpdir(), "reel-draft-schema-"));
     try {
       const runner = await import(new URL("../scripts/run-codex-reel-plan.mjs", import.meta.url).href) as {
-        buildCodexArgs(outputDir: string): string[];
+        buildCodexArgs(outputDir: string, allowBrowserUse?: boolean): string[];
+        buildCodexPrompt(prompt: string, allowBrowserUse?: boolean): string;
         writeReelStoryboardSchema(outputDir: string): Promise<string>;
       };
       const schemaPath = await runner.writeReelStoryboardSchema(outputDir);
-      const args = runner.buildCodexArgs(outputDir);
+      const args = runner.buildCodexArgs(outputDir, false);
+      const urlArgs = runner.buildCodexArgs(outputDir, true);
       const schema = JSON.parse(await readFile(schemaPath, "utf8")) as {
         additionalProperties: boolean;
         required: string[];
@@ -32,6 +34,13 @@ describe("reel production runtime", () => {
       expect(args[args.indexOf("--output-schema") + 1]).toBe(schemaPath);
       expect(args).toEqual(expect.arrayContaining(["--model", "gpt-5.6-sol"]));
       expect(args).toEqual(expect.arrayContaining(["-c", 'model_reasoning_effort="high"']));
+      expect(args.join(" ")).toContain("permissions.planner.network.enabled=false");
+      expect(args.some((value, index) => value === "--disable" && args[index + 1] === "browser_use")).toBe(true);
+      expect(urlArgs.join(" ")).toContain("permissions.planner.network.enabled=true");
+      expect(urlArgs.some((value, index) => value === "--enable" && urlArgs[index + 1] === "browser_use")).toBe(true);
+      expect(urlArgs.some((value, index) => value === "--disable" && urlArgs[index + 1] === "browser_use")).toBe(false);
+      expect(runner.buildCodexPrompt("fixed input", false)).toContain("웹을 조회하지 마세요");
+      expect(runner.buildCodexPrompt("fixed input", true)).toContain("prompt에 지정된 topic_url 원문만 브라우저로 직접 확인");
       expect(schemaPath).toContain("reel-storyboard-v2.schema.json");
       expect(args.join(" ")).not.toContain("reel-plan-v2.schema.json");
       expect(args.join(" ")).not.toContain("reel-plan-draft-v2.schema.json");

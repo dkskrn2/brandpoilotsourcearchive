@@ -167,6 +167,13 @@ const CARD_MANUSCRIPT_CONTRACT_PATHS = new Set([
   "packages/brand-pilot-content-contracts/src/visualRenderSession.ts",
 ]);
 
+const MANUSCRIPT_EVIDENCE_RELAXATION_CONTRACT_PATHS = new Set([
+  "packages/brand-pilot-content-contracts/src/cardManuscriptPlan.test.ts",
+  "packages/brand-pilot-content-contracts/src/cardManuscriptPlan.ts",
+  "packages/brand-pilot-content-contracts/src/reelStoryboard.test.ts",
+  "packages/brand-pilot-content-contracts/src/reelStoryboard.ts",
+]);
+
 const RETIRED_CARD_DECK_CONTRACT_PATHS = new Set([
   "packages/brand-pilot-content-contracts/src/cardDeckEditorialPlan.test.ts",
   "packages/brand-pilot-content-contracts/src/cardDeckEditorialPlan.ts",
@@ -180,6 +187,8 @@ const CARD_MANUSCRIPT_DOC_PATHS = new Set([
   "docs/superpowers/specs/2026-08-18-card-manuscript-plan-design.md",
   "docs/superpowers/specs/2026-08-19-no-crop-social-images-card-runner-design.md",
   "docs/superpowers/specs/2026-08-21-reel-card-contract-sync-design.md",
+  "docs/superpowers/plans/2026-08-25-url-source-manuscript-evidence-relaxation.md",
+  "docs/superpowers/specs/2026-08-25-url-source-manuscript-evidence-relaxation-design.md",
 ]);
 
 const CARD_MANUSCRIPT_TOOLING_PATHS = new Set([
@@ -209,6 +218,7 @@ const CARD_MANUSCRIPT_REEL_PATHS = new Set([
   "workers/brand-pilot-reel-worker/src/promptBuilder.test.ts",
   "workers/brand-pilot-reel-worker/src/promptBuilder.ts",
   "workers/brand-pilot-reel-worker/src/worker.test.ts",
+  "workers/brand-pilot-reel-worker/src/worker.ts",
 ]);
 
 const FAQ_UTTERANCE_DEPLOY_PATHS = new Set([
@@ -424,6 +434,12 @@ function classifyStructuredSocialRenderPath(path, components) {
 
 function classifyCardManuscriptVisualSessionPath(path, components) {
   if (CARD_MANUSCRIPT_DOC_PATHS.has(path)) return { known: true, documentation: true };
+  if (MANUSCRIPT_EVIDENCE_RELAXATION_CONTRACT_PATHS.has(path)) {
+    for (const component of ["api", "cardNewsWorker", "reelWorker"]) {
+      components[component] = true;
+    }
+    return { known: true };
+  }
   if (CARD_MANUSCRIPT_CONTRACT_PATHS.has(path) || RETIRED_CARD_DECK_CONTRACT_PATHS.has(path)) {
     for (const component of ["api", "contentProposalWorker", "cardNewsWorker", "imageWorker"]) {
       components[component] = true;

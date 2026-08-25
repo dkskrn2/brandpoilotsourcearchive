@@ -22,6 +22,14 @@ export interface CodexRunner {
   }>;
 }
 
+export function allowsPlannerBrowser(job: AiContentJob): boolean {
+  const contentGenerationInput = job.payload?.contentGenerationInput;
+  if (!contentGenerationInput || typeof contentGenerationInput !== "object") return false;
+  const subject = (contentGenerationInput as { subject?: unknown }).subject;
+  return Boolean(subject && typeof subject === "object"
+    && (subject as { kind?: unknown }).kind === "topic_url");
+}
+
 async function sessionDirectories(directory: string): Promise<Set<string>> {
   try {
     return new Set((await readdir(directory, { withFileTypes: true }))
@@ -65,7 +73,11 @@ export function createCommandRunner(
       let cleanupHandedOff = false;
       try {
         const jobFile = path.join(workDir, "job.json");
-        await writeFile(jobFile, JSON.stringify({ job, prompt }, null, 2), "utf8");
+        await writeFile(jobFile, JSON.stringify({
+          job,
+          prompt,
+          allowBrowserUse: allowsPlannerBrowser(job),
+        }, null, 2), "utf8");
         const prepareAttempt = async (outputDir: string) => {
           const stagedSkill = path.join(outputDir, ".agents", "skills", "card-news-creator", "SKILL.md");
           await mkdir(path.dirname(stagedSkill), { recursive: true });

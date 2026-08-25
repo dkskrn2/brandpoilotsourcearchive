@@ -190,18 +190,17 @@ describe("Card Manuscript Plan v1", () => {
     }), input)).toThrow("card_manuscript_evidence_partition_invalid");
   });
 
-  it("requires factual informational scenes to carry evidence but permits transition and cta", () => {
+  it("allows original-source informational facts without Evidence IDs", () => {
     const input = frozenInput();
     const noEvidence = manuscript({
       evidenceSelection: { selectedEvidenceIds: [], excludedEvidenceIds: [evidenceA, evidenceB] },
       scenes: [{ ...manuscript().scenes[0], editorialRole: "analysis", evidenceIds: [] }],
     });
-    expect(() => parseCardManuscriptPlanV1(noEvidence, input))
-      .toThrow("card_manuscript_scene_evidence_required");
-    expect(parseCardManuscriptPlanV1({
+    expect(parseCardManuscriptPlanV1(noEvidence, input).scenes[0]!.evidenceIds).toEqual([]);
+    expect(() => parseCardManuscriptPlanV1({
       ...noEvidence,
-      scenes: [{ ...noEvidence.scenes[0], editorialRole: "transition" }],
-    }, input).scenes[0]!.evidenceIds).toEqual([]);
+      evidenceSelection: { selectedEvidenceIds: [evidenceA], excludedEvidenceIds: [evidenceB] },
+    }, input)).toThrow("card_manuscript_evidence_partition_invalid");
   });
 
   it("requires a grounded non-CTA marketing scene and allows at most one CTA", () => {

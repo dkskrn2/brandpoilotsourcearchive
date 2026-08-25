@@ -4,7 +4,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ContentWorkerApiError } from "@brand-pilot/worker-runtime";
 import type { AiContentJob, WorkerClient } from "./contracts.js";
-import { runOnce } from "./worker.js";
+import { allowsPlannerBrowser, runOnce } from "./worker.js";
 
 function client(item: AiContentJob) { return { claim: vi.fn(async () => item), heartbeat: vi.fn(async () => undefined), complete: vi.fn(async () => undefined), fail: vi.fn(async () => undefined), acquire: vi.fn(async () => ({ id: "resource-1", leaseToken: "resource-token" })), heartbeatResource: vi.fn(async () => undefined), releaseResource: vi.fn(async () => undefined) } as unknown as WorkerClient; }
 
@@ -84,6 +84,21 @@ function v3Job(purpose: "informational" | "marketing") {
 }
 
 describe("card-news worker", () => {
+  it("derives browser permission only from the validated topic_url subject kind", () => {
+    const textJob = v3Job("informational");
+    const urlJob = structuredClone(textJob);
+    urlJob.payload.contentGenerationInput.subject = {
+      kind: "topic_url",
+      requestedUrl: "https://source.example/article",
+      canonicalUrl: null,
+      title: "Article",
+      text: "Frozen article body",
+    } as never;
+
+    expect(allowsPlannerBrowser(textJob)).toBe(false);
+    expect(allowsPlannerBrowser(urlJob)).toBe(true);
+  });
+
   it("cancels planning and publishes no terminal result after the job lease is lost", async () => {
     vi.useFakeTimers();
     const item = v3Job("informational");
@@ -115,7 +130,7 @@ describe("card-news worker", () => {
     expect(planner.run).toHaveBeenCalledOnce();
     expect(api.complete).toHaveBeenCalledWith(item.id, {
       workerId: "worker-1", leaseToken: "lease-v3", jobType: "generate",
-      skillVersion: "card-manuscript-plan-skill.v5", planDraft: compiledV1(v3Input(purpose)),
+      skillVersion: "card-manuscript-plan-skill.v6", planDraft: compiledV1(v3Input(purpose)),
       cardManuscriptContract: expect.objectContaining({
         contractVersion: "card-manuscript-plan.v1",
         manuscriptSha256: expect.stringMatching(/^[0-9a-f]{64}$/),

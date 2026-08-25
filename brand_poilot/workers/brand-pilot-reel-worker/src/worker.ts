@@ -17,6 +17,14 @@ export interface ReelPlanner {
   run(job: ReelJob, prompt: string, signal?: AbortSignal): Promise<{ outputDir: string; cleanup(): Promise<void> }>;
 }
 
+export function allowsPlannerBrowser(job: ReelJob): boolean {
+  const contentGenerationInput = job.payload?.contentGenerationInput;
+  if (!contentGenerationInput || typeof contentGenerationInput !== "object") return false;
+  const subject = (contentGenerationInput as { subject?: unknown }).subject;
+  return Boolean(subject && typeof subject === "object"
+    && (subject as { kind?: unknown }).kind === "topic_url");
+}
+
 export function createCommandRunner(
   commandTemplate: string,
   timeoutMs: number,
@@ -28,7 +36,11 @@ export function createCommandRunner(
       const outputDir = path.join(workDir, "output");
       await mkdir(outputDir, { recursive: true });
       const jobFile = path.join(workDir, "job.json");
-      await writeFile(jobFile, JSON.stringify({ job, prompt }, null, 2), "utf8");
+      await writeFile(jobFile, JSON.stringify({
+        job,
+        prompt,
+        allowBrowserUse: allowsPlannerBrowser(job),
+      }, null, 2), "utf8");
       let selectedOutputDir = outputDir;
       if (accountPool) {
         const result = await runShellCommandWithAccountFailover({

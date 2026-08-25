@@ -22,15 +22,20 @@ describe("card-news V3 production runtime", () => {
     expect(skill).not.toContain("content-generation-input.v2");
   });
 
-  it("uses the pinned network-disabled Sol planner with high reasoning", async () => {
+  it("uses the pinned Sol planner and enables browser/network only for topic URLs", async () => {
     const runner = await import(new URL("../scripts/run-codex-card-manuscript-plan.mjs", import.meta.url).href) as {
-      buildCodexArgs(outputDir: string): string[];
-      buildCodexPrompt(prompt: string): string;
+      buildCodexArgs(outputDir: string, allowBrowserUse?: boolean): string[];
+      buildCodexPrompt(prompt: string, allowBrowserUse?: boolean): string;
     };
-    const args = runner.buildCodexArgs(path.resolve("plan-output"));
+    const args = runner.buildCodexArgs(path.resolve("plan-output"), false);
+    const urlArgs = runner.buildCodexArgs(path.resolve("plan-output"), true);
     expect(args.slice(0, 3)).toEqual(["--model", "gpt-5.6-sol", "--strict-config"]);
     expect(args).toEqual(expect.arrayContaining(["-c", 'model_reasoning_effort="high"']));
     expect(args.join(" ")).toContain("permissions.planner.network.enabled=false");
+    expect(args.some((value, index) => value === "--disable" && args[index + 1] === "browser_use")).toBe(true);
+    expect(urlArgs.join(" ")).toContain("permissions.planner.network.enabled=true");
+    expect(urlArgs.some((value, index) => value === "--enable" && urlArgs[index + 1] === "browser_use")).toBe(true);
+    expect(urlArgs.some((value, index) => value === "--disable" && urlArgs[index + 1] === "browser_use")).toBe(false);
     const schemaPath = args[args.indexOf("--output-schema") + 1];
     expect(schemaPath).toMatch(/card-manuscript-plan-v1\.schema\.json$/);
     const schema = await readFile(schemaPath!, "utf8");
@@ -58,7 +63,8 @@ describe("card-news V3 production runtime", () => {
     expect(schema).not.toContain("imagePackage");
     expect(schema).not.toContain("attachmentIds");
     expect(args).toEqual(expect.arrayContaining(["--disable", "shell_tool", "--disable", "image_generation"]));
-    expect(runner.buildCodexPrompt("fixed input")).toContain("fixed input");
+    expect(runner.buildCodexPrompt("fixed input", false)).toContain("파일이나 웹을 조회하지 마세요");
+    expect(runner.buildCodexPrompt("fixed input", true)).toContain("prompt에 지정된 topic_url 원문만 브라우저로 직접 확인");
   });
 
   it("cleans its workspace after a command failure", async () => {

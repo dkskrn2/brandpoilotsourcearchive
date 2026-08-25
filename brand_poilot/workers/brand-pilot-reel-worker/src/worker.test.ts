@@ -4,7 +4,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ContentWorkerApiError } from "@brand-pilot/worker-runtime";
 import { parseReelStoryboardSubmissionForInput, type ReelClient, type ReelJob } from "./contracts.js";
-import { runOnce } from "./worker.js";
+import { allowsPlannerBrowser, runOnce } from "./worker.js";
 
 const uid = (value: number) => `00000000-0000-4000-8000-${String(value).padStart(12, "0")}`;
 const frozenManualVisualSelection = {
@@ -76,6 +76,21 @@ afterEach(async () => {
 });
 
 describe("reel worker", () => {
+  it("derives browser permission only from the validated topic_url subject kind", () => {
+    const textJob = job();
+    const urlJob = structuredClone(textJob);
+    urlJob.payload.contentGenerationInput.subject = {
+      kind: "topic_url",
+      requestedUrl: "https://source.example/article",
+      canonicalUrl: null,
+      title: "Article",
+      text: "Frozen article body",
+    } as never;
+
+    expect(allowsPlannerBrowser(textJob)).toBe(false);
+    expect(allowsPlannerBrowser(urlJob)).toBe(true);
+  });
+
   it("completes the exact reel plan body, cleans output, and stops heartbeat", async () => {
     vi.useFakeTimers();
     const item = job();
@@ -90,7 +105,7 @@ describe("reel worker", () => {
     expect(client.complete).toHaveBeenCalledWith(item.id, {
       workerId: "worker",
       leaseToken: "lease",
-      skillVersion: "reel-storyboard-skill.v6",
+      skillVersion: "reel-storyboard-skill.v7",
       jobType: "generate",
       planDraft: compiledDraft().planDraft,
       reelStoryboardContract: compiledDraft().reelStoryboardContract,

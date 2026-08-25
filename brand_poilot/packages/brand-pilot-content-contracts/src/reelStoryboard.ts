@@ -235,12 +235,6 @@ export function parseReelStoryboardV2(
     || !equalSets(selected, sceneUnion) || [...sceneUnion].some((id) => !pool.has(id))) {
     throw new Error("reel_storyboard_evidence_partition_invalid");
   }
-  if (frozenInput.outputSettings.purpose === "informational"
-    && scenes.some((scene) => scene.evidenceIds.length === 0
-      && scene.editorialRole.toLowerCase() !== "transition"
-      && scene.editorialRole.toLowerCase() !== "cta")) {
-    throw new Error("reel_storyboard_scene_evidence_required");
-  }
   if (frozenInput.outputSettings.purpose === "marketing") {
     const ctaCount = scenes.filter(({ editorialRole }) => editorialRole.toLowerCase() === "cta").length;
     const hasGroundedEditorialScene = scenes.some((scene) => {

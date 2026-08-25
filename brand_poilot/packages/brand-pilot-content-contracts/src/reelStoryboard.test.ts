@@ -210,11 +210,14 @@ describe("reel-storyboard.v2", () => {
     expect(() => parseReelStoryboardV2({ ...v2Storyboard(), scenes: [{ ...v2Storyboard().scenes[0], evidenceIds: [] }] }, input)).toThrow("reel_storyboard_evidence_partition_invalid");
   });
 
-  it("requires Evidence for informational factual scenes and validates Card-equivalent relations", () => {
+  it("allows original-source informational facts without Evidence IDs and validates Card-equivalent relations", () => {
     const input = v2Input();
     const empty = { ...v2Storyboard(), evidenceSelection: { selectedEvidenceIds: [], excludedEvidenceIds: [uuid(1), uuid(2)] }, scenes: [{ ...v2Storyboard().scenes[0], editorialRole: "analysis", evidenceIds: [] }] };
-    expect(() => parseReelStoryboardV2(empty, input)).toThrow("reel_storyboard_scene_evidence_required");
-    expect(parseReelStoryboardV2({ ...empty, scenes: [{ ...empty.scenes[0], editorialRole: "cta" }] }, input).scenes[0]?.evidenceIds).toEqual([]);
+    expect(parseReelStoryboardV2(empty, input).scenes[0]?.evidenceIds).toEqual([]);
+    expect(() => parseReelStoryboardV2({
+      ...empty,
+      evidenceSelection: { selectedEvidenceIds: [uuid(1)], excludedEvidenceIds: [uuid(2)] },
+    }, input)).toThrow("reel_storyboard_evidence_partition_invalid");
     expect(() => parseReelStoryboardV2({ ...v2Storyboard(), scenes: [{ ...v2Storyboard().scenes[0], informationRelation: { type: "before_after", entries: [{ role: "left", label: null, value: "80%" }, { role: "right", label: null, value: "83%" }] } }] }, input)).toThrow("card_manuscript_information_relation_invalid");
   });
 
