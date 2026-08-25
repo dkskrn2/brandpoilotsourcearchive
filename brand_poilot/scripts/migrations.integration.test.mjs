@@ -97,7 +97,7 @@ test("092 weekly schedule storage is the checksum-pinned migration after prompt 
   );
   assert.equal(
     post075SchemaMigrationChecksums["092_publish_calendar_weekly_schedule.sql"],
-    "139600314c4f819b7ea05262a4260221f0996b3b19fea8bf3652693d3109b9fe",
+    "c1bf905666ce4dabac137c0522fa0dc0300f574eda6d1e9648283f00b2af4d2b",
   );
 });
 

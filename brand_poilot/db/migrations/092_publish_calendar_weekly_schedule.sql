@@ -68,7 +68,7 @@ begin
       ) scrub
      order by scrub.grantee_role_name collate "C"
   loop
-    if acl_grantee.grantee_role_name='PUBLIC' then
+    if acl_grantee.grantee=0 then
       execute 'revoke all on table public.publish_calendar_weekly_schedule_entries from public';
     elsif acl_grantee.grantee_role_name is null then
       raise exception 'publish_calendar_weekly_schedule_acl_grantee_invalid';

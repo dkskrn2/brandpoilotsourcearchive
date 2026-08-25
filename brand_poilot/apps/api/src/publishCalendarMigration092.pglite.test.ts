@@ -180,4 +180,12 @@ describe("migration 092 publish calendar weekly schedule", () => {
       /before insert or delete or update.*enforce_ai_content_write_fence\(\)/i,
     );
   });
+
+  it("distinguishes pseudo PUBLIC from a quoted role named PUBLIC by grantee OID", async () => {
+    const migration = await readFile(migration091Path, "utf8");
+    expect(migration).toMatch(
+      /if\s+acl_grantee\.grantee\s*=\s*0\s+then[\s\S]*revoke all on table public\.publish_calendar_weekly_schedule_entries from public/i,
+    );
+    expect(migration).not.toMatch(/acl_grantee\.grantee_role_name\s*=\s*'PUBLIC'/i);
+  });
 });

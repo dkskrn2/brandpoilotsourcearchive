@@ -8,6 +8,7 @@ const applicationPassword = "publish-calendar-weekly-application-test";
 const schemaOwnerRole = "publish_calendar_weekly_schema_owner";
 const applicationRole = "publish_calendar_weekly_application";
 const leakyRole = "publish_calendar_weekly_acl_leak";
+const quotedPublicRole = "PUBLIC";
 const workspaceId = "10000000-0000-4000-8000-000000000091";
 const brandId = "20000000-0000-4000-8000-000000000091";
 
@@ -109,6 +110,7 @@ it("runs the exact weekly schedule replacement transaction as the application ro
     administrator = new Pool({ connectionString: container.getConnectionUri() });
     await administrator.query(`create role ${schemaOwnerRole} noinherit`);
     await administrator.query(`create role ${leakyRole} noinherit`);
+    await administrator.query(`create role "${quotedPublicRole}" noinherit`);
     await administrator.query(
       `create role ${applicationRole} login noinherit nosuperuser nobypassrls
          nocreatedb nocreaterole noreplication password '${applicationPassword}'`,
@@ -139,12 +141,49 @@ it("runs the exact weekly schedule replacement transaction as the application ro
       await owner.query(
         `alter default privileges in schema public grant select,update on tables to ${leakyRole}`,
       );
+      await owner.query(
+        `alter default privileges in schema public grant insert on tables to public`,
+      );
+      await owner.query(
+        `alter default privileges in schema public grant delete on tables to "${quotedPublicRole}"`,
+      );
+      const defaultAclGrantees = await owner.query<{
+        grantee_oid: string;
+        grantee_role_name: string | null;
+        privilege_type: string;
+      }>(
+        `select acl.grantee::text grantee_oid,grantee.rolname::text grantee_role_name,
+                acl.privilege_type::text privilege_type
+           from pg_default_acl defaults
+           cross join lateral aclexplode(defaults.defaclacl) acl
+           left join pg_roles grantee on grantee.oid=acl.grantee
+          where defaults.defaclrole=(select oid from pg_roles where rolname=current_user)
+            and defaults.defaclnamespace='public'::regnamespace
+            and defaults.defaclobjtype='r'
+            and (acl.grantee=0 or grantee.rolname=$1)
+          order by acl.grantee,acl.privilege_type`,
+        [quotedPublicRole],
+      );
+      expect(defaultAclGrantees.rows).toEqual([
+        { grantee_oid: "0", grantee_role_name: null, privilege_type: "INSERT" },
+        expect.objectContaining({
+          grantee_role_name: quotedPublicRole,
+          privilege_type: "DELETE",
+        }),
+      ]);
+      expect(defaultAclGrantees.rows[1]?.grantee_oid).not.toBe("0");
       await owner.query(await readFile(
         resolve(process.cwd(), "../../db/migrations/092_publish_calendar_weekly_schedule.sql"),
         "utf8",
       ));
       await owner.query(
         `alter default privileges in schema public revoke select,update on tables from ${leakyRole}`,
+      );
+      await owner.query(
+        `alter default privileges in schema public revoke insert on tables from public`,
+      );
+      await owner.query(
+        `alter default privileges in schema public revoke delete on tables from "${quotedPublicRole}"`,
       );
       await owner.query(
         `insert into publish_calendar_weekly_schedule_entries(
@@ -231,7 +270,7 @@ it("runs the exact weekly schedule replacement transaction as the application ro
         grantable: false,
       }]);
       expect(directAcl.rows.some(({ grantee_role_name }) => (
-        ["PUBLIC", leakyRole].includes(grantee_role_name)
+        [quotedPublicRole, leakyRole].includes(grantee_role_name)
       ))).toBe(false);
 
       const ownedSequences = await client.query<{ sequence_name: string }>(

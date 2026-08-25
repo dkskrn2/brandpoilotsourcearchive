@@ -194,9 +194,9 @@ test("deployment applies the ordered post-075 schemas through weekly schedule st
   assert.match(runner, /091_ai_content_prompt_lineage_v4\.sql/);
   assert.match(runner, /05696c55ee959cd80ef7cdf30fcb07e93e0579da515042ebd8e8aafb9cde5e10/);
   assert.match(runner, /092_publish_calendar_weekly_schedule\.sql/);
-  assert.match(runner, /139600314c4f819b7ea05262a4260221f0996b3b19fea8bf3652693d3109b9fe/);
+  assert.match(runner, /c1bf905666ce4dabac137c0522fa0dc0300f574eda6d1e9648283f00b2af4d2b/);
   assert.match(deploy, /POST_075_SCHEMA_MIGRATION_ID="092_publish_calendar_weekly_schedule\.sql"/);
-  assert.match(deploy, /POST_075_SCHEMA_MIGRATION_SHA256="139600314c4f819b7ea05262a4260221f0996b3b19fea8bf3652693d3109b9fe"/);
+  assert.match(deploy, /POST_075_SCHEMA_MIGRATION_SHA256="c1bf905666ce4dabac137c0522fa0dc0300f574eda6d1e9648283f00b2af4d2b"/);
   assert.match(deploy, /scripts\/migrate\.mjs --post-075-schema/);
   assert.match(deploy, /post-075-schema-migration-evidence\.v1/);
   const dataGate = deploy.lastIndexOf("run_post_075_data_migration_gate");
@@ -312,7 +312,8 @@ test("weekly schedule migration scrubs provider default ACLs before granting exa
   const migration = read("db/migrations/092_publish_calendar_weekly_schedule.sql");
   const runner = read("scripts/migrationRunner.mjs");
   assert.match(migration, /aclexplode\s*\(\s*coalesce\s*\(\s*relation\.relacl\s*,\s*acldefault\s*\(\s*'r'\s*,\s*relation\.relowner\s*\)\s*\)\s*\)/i);
-  assert.match(migration, /if\s+acl_grantee\.grantee_role_name\s*=\s*'PUBLIC'\s+then[\s\S]*revoke all on table public\.publish_calendar_weekly_schedule_entries from public/i);
+  assert.match(migration, /if\s+acl_grantee\.grantee\s*=\s*0\s+then[\s\S]*revoke all on table public\.publish_calendar_weekly_schedule_entries from public/i);
+  assert.doesNotMatch(migration, /acl_grantee\.grantee_role_name\s*=\s*'PUBLIC'/i);
   assert.match(migration, /format\(\s*'revoke all on table public\.publish_calendar_weekly_schedule_entries from %I'/i);
   assert.match(migration, /grant select,insert,update,delete on public\.publish_calendar_weekly_schedule_entries to %I/i);
   assert.doesNotMatch(migration, /publish_calendar_weekly_(?:schema_owner|application|acl_leak)/i);

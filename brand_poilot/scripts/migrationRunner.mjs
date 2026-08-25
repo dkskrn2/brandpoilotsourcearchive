@@ -155,7 +155,7 @@ export const post075SchemaMigrationChecksums = Object.freeze({
   "089_free_subscription_plan.sql": "fd58a829eb658b0ac650e033a5edd085ec452a6eb0420251c60abcd51231267a",
   "090_existing_brand_free_subscriptions.sql": "8134f35d21f72f7418b5502bb5cfb10c8f296f147788bcd8b539d6d930588552",
   "091_ai_content_prompt_lineage_v4.sql": "05696c55ee959cd80ef7cdf30fcb07e93e0579da515042ebd8e8aafb9cde5e10",
-  "092_publish_calendar_weekly_schedule.sql": "139600314c4f819b7ea05262a4260221f0996b3b19fea8bf3652693d3109b9fe",
+  "092_publish_calendar_weekly_schedule.sql": "c1bf905666ce4dabac137c0522fa0dc0300f574eda6d1e9648283f00b2af4d2b",
 });
 const post075DeferredMigrationIds = Object.freeze([
   ...post075DataMigrationIds,
