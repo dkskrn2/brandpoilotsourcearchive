@@ -976,6 +976,7 @@ export function PublishQueuePage({ generationGateway = aiContentApiGateway }: Pu
         optionsError={calendarManualOptionsError}
         optionsLoading={calendarManualOptionsLoading}
         initialDateKey={scheduleTarget.dateKey}
+        preferredTimes={calendarSettings?.slotTimes}
         onSubmit={scheduleTarget.mode === "edit" ? submitRescheduledItem : submitScheduledItem}
         onSaved={({ refreshFailed }) => setNotice(scheduleTarget.mode === "edit"
           ? refreshFailed

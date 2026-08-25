@@ -22,12 +22,12 @@ export function unreservedItems(items: readonly PublishItem[]) {
   return items.filter((item) => item.calendarPlacement === "unreserved");
 }
 
-export function canReschedulePublishItem(item: PublishItem, now = Date.now()) {
+export function canReschedulePublishItem(item: PublishItem) {
   return Boolean(item.sourceRefs.calendarSlotId)
-    && Boolean(item.scheduledFor && Date.parse(item.scheduledFor) > now)
-    && ["reserved", "publish_queued", "scheduled"].includes(item.status)
+    && Boolean(item.scheduledFor)
     && item.publicationProgress === "none"
-    && item.targets.every((target) => target.status === "queued" || target.status === "scheduled");
+    && item.targets.every((target) => target.status === "queued" || target.status === "scheduled")
+    && (item.operationalStatus === "upcoming" || item.operationalStatus === "delayed_today");
 }
 
 export function entryFromPublishItem(item: PublishItem): CalendarEntry {

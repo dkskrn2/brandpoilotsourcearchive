@@ -1,6 +1,7 @@
 import { X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import type { PublishCalendarManualOptions, PublishCalendarManualSlotInput, PublishCalendarManualSlotSource, PublishItem } from "../../types";
+import { defaultScheduleTime, formatPublishDateTime } from "../../features/publishing/publishCalendar";
 import { FocusTrap } from "../ui/FocusTrap";
 
 type SubmitResult =
@@ -14,6 +15,7 @@ type Props = {
   optionsError: string | null;
   optionsLoading: boolean;
   initialDateKey: string;
+  preferredTimes?: readonly string[];
   onSubmit(input: PublishCalendarManualSlotInput | { scheduledFor: string }): Promise<SubmitResult>;
   onSaved(result: { refreshFailed: boolean }): void;
   onOpenExistingReservation(itemKey: string, calendarDate: string | null): void;
@@ -78,10 +80,16 @@ function seoulTime(value: string | null) {
   return `${parts.find((part) => part.type === "hour")?.value}:${parts.find((part) => part.type === "minute")?.value}`;
 }
 
-export function PublishSchedulePanel({ mode = "create", item, options, optionsError, optionsLoading, initialDateKey, onSubmit, onSaved, onOpenExistingReservation, onRetryOptions, onClose }: Props) {
+function initialScheduleTime(editing: boolean, item: PublishItem, initialDateKey: string, preferredTimes: readonly string[]) {
+  return editing && item.operationalStatus !== "delayed_today"
+    ? seoulTime(item.scheduledFor)
+    : defaultScheduleTime(initialDateKey, new Date(), preferredTimes);
+}
+
+export function PublishSchedulePanel({ mode = "create", item, options, optionsError, optionsLoading, initialDateKey, preferredTimes = [], onSubmit, onSaved, onOpenExistingReservation, onRetryOptions, onClose }: Props) {
   const editing = mode === "edit";
   const [date, setDate] = useState(initialDateKey);
-  const [time, setTime] = useState(() => editing ? seoulTime(item.scheduledFor) : "11:30");
+  const [time, setTime] = useState(() => initialScheduleTime(editing, item, initialDateKey, preferredTimes));
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const idempotencyKeyRef = useRef(crypto.randomUUID());
@@ -95,7 +103,7 @@ export function PublishSchedulePanel({ mode = "create", item, options, optionsEr
 
   useEffect(() => {
     setDate(initialDateKey);
-    setTime(editing ? seoulTime(item.scheduledFor) : "11:30");
+    setTime(initialScheduleTime(editing, item, initialDateKey, preferredTimes));
     setError(null);
     setSubmitting(false);
     idempotencyKeyRef.current = crypto.randomUUID();
@@ -144,6 +152,8 @@ export function PublishSchedulePanel({ mode = "create", item, options, optionsEr
         <div><dt>콘텐츠 상태</dt><dd>{sourceLabel(source)}</dd></div>
         <div><dt>콘텐츠 형식</dt><dd>{item.contentFormat ? contentFormatLabel[item.contentFormat] : "설정 전"}</dd></div>
         <div><dt>게시 채널</dt><dd>{editing ? item.channels.map((channel) => channel === "instagram" ? "Instagram" : channel).join(", ") || "Instagram" : options ? (connected ? "Instagram 연결됨" : "Instagram 연결 필요") : "Instagram"}</dd></div>
+        {editing && item.scheduledFor ? <div><dt>원래 예약 시각</dt><dd>{formatPublishDateTime(item.scheduledFor)}</dd></div> : null}
+        {editing && item.effectiveScheduledFor && item.effectiveScheduledFor !== item.scheduledFor ? <div><dt>현재 게시 예정 시각</dt><dd>{formatPublishDateTime(item.effectiveScheduledFor)}</dd></div> : null}
       </dl>
       {!editing && optionsLoading ? <p role="status">게시 설정을 불러오는 중입니다.</p> : null}
       {!editing && optionsError ? <div><p role="alert">{optionsError}</p><button className="button" type="button" onClick={onRetryOptions}>게시 설정 다시 불러오기</button></div> : null}
@@ -152,9 +162,10 @@ export function PublishSchedulePanel({ mode = "create", item, options, optionsEr
       {!editing && options?.usage.publishing ? <p>이번 주 추가 예약 가능 {options.usage.publishing.additionalAvailable}건 · 게시 한도 {options.usage.publishing.limit}건</p> : null}
       {!editing && options && !quotaAvailable ? <p role="alert">{scheduleErrorMessage("publish_weekly_quota_exceeded", options)}</p> : null}
       <div className="publish-calendar-manual-form">
-        <label>게시 날짜<input aria-label="게시 날짜" type="date" value={date} onChange={(event) => { setDate(event.target.value); setError(null); }} /></label>
+        <label>게시 날짜<input aria-label="게시 날짜" type="date" value={date} onChange={(event) => { const nextDate = event.target.value; setDate(nextDate); setTime(defaultScheduleTime(nextDate, new Date(), preferredTimes)); setError(null); }} /></label>
         <label>게시 시간<input aria-label="게시 시간" type="time" value={time} onChange={(event) => { setTime(event.target.value); setError(null); }} /></label>
       </div>
+      <p><strong>선택한 게시 시각</strong> {scheduledFor ? formatPublishDateTime(scheduledFor) : "날짜와 시간을 선택해 주세요."}</p>
       {past ? <p role="alert">선택한 게시 시각이 지났습니다. 미래 시각을 선택해 주세요.</p> : null}
       {error ? <p role="alert">{error}</p> : null}
     </div>

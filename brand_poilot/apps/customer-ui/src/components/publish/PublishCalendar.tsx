@@ -1,7 +1,7 @@
 import { CalendarDays, ChevronLeft, ChevronRight, Clock3, Settings2, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { ChannelType, PublishCalendarManualOptions, PublishCalendarNewContentSetup, PublishCalendarSettings, PublishItem, PublishOperationalReason, PublishOperationalStatus } from "../../types";
-import { dateKey, monthCells, timeLabel, type CalendarEntry } from "../../features/publishing/publishCalendar";
+import { dateKey, formatPublishDateTime, monthCells, timeLabel, type CalendarEntry } from "../../features/publishing/publishCalendar";
 import { publishContentStatusPresentation, publishErrorPresentation, publishStatusPresentation } from "../../features/publishing/publishPresentation";
 import { ChannelLogo } from "../channels/ChannelLogo";
 import { Badge } from "../ui/Badge";
@@ -47,7 +47,6 @@ type Props = {
 };
 
 const channelLabel: Record<ChannelType, string> = { instagram: "Instagram", threads: "Threads", tiktok: "TikTok", youtube: "YouTube", linkedin: "LinkedIn", x: "X" };
-const detailTimeFormatter = new Intl.DateTimeFormat("ko-KR", { timeZone: "Asia/Seoul", hour: "2-digit", minute: "2-digit", hourCycle: "h23" });
 const unreservedPageSize = 6;
 
 function shiftMonth(value: string, amount: number) {
@@ -165,7 +164,7 @@ export function PublishCalendar({ monthKey, entries, connectedChannels, settings
     <aside className="publish-calendar-detail" aria-label={selected ? `${selected.title} 슬롯 상세` : `${fullDate(selectedDate)} 게시 일정`}>
       <header className="publish-calendar-detail__header"><div><span>{selected ? "슬롯 상세" : "선택한 날짜"}</span><h2 ref={detailHeadingRef} tabIndex={-1}>{selected ? selected.title : fullDate(selectedDate)}</h2></div><Badge variant={selectedPresentation?.variant ?? "neutral"}>{selectedPresentation?.label ?? `${dateEntries.length}개 일정`}</Badge></header>
       {slotsLoading ? <p role="status" aria-label="캘린더 슬롯을 불러오는 중입니다.">캘린더 슬롯을 불러오는 중입니다.</p> : slotsError ? <p role="alert">{slotsError}</p> : selected ? <div className="publish-calendar-slot-detail">
-        <div className="publish-calendar-slot-detail__time"><Clock3 size={18} /><span>{detailTimes(selected).map((time) => <span key={time.label}><small>{time.label}</small><strong>{detailTimeFormatter.format(new Date(time.value))}</strong></span>)}</span></div>
+        <div className="publish-calendar-slot-detail__time"><Clock3 size={18} /><span>{detailTimes(selected).map((time) => <span key={time.label}><small>{time.label}</small><strong>{formatPublishDateTime(time.value)}</strong></span>)}</span></div>
         <dl><div><dt>게시 방식</dt><dd>{selected.mode === "automatic" ? "자동" : "수동"} 게시</dd></div>{selected.recommendationKind ? <div><dt>추천 종류</dt><dd>{selected.recommendationKind === "trend" ? "트렌드성 추천" : "정보성 추천"}</dd></div> : null}<div><dt>콘텐츠 형식</dt><dd>{selected.contentFormat === "reel" ? "릴스" : selected.contentFormat === "card_news" ? "카드뉴스" : "설정 전"}</dd></div><div><dt>게시 채널</dt><dd>{selected.channels.map((channel) => channelLabel[channel]).join(", ") || "채널 설정 전"}</dd></div>{selected.lastError ? <div><dt>상태·오류</dt><dd>{publishErrorPresentation(selected.lastError).message}</dd></div> : null}</dl>
         {selected.status === "open" ? <div className="publish-calendar-manual-form"><label>배정할 콘텐츠<select aria-label="배정할 콘텐츠" value={assignedContentId} onChange={(event) => setAssignedContentId(event.target.value)}><option value="">콘텐츠 선택</option>{assignableContents.map((content) => <option value={content.id} key={content.id}>{content.title}</option>)}</select></label><button className="button primary" type="button" disabled={!assignedContentId} onClick={() => { const content = assignableContents.find((item) => item.id === assignedContentId); if (content) void onAssign(selected.id, content).then((assigned) => { if (assigned) setAssignedContentId(""); }); }}>선택 콘텐츠 배정</button></div> : null}
         {selected.reschedulable ? <button className="button primary" type="button" onClick={(event) => onRescheduleItem(selected.id, event.currentTarget)}>예약 변경</button> : null}
