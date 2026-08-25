@@ -1101,7 +1101,8 @@ export function createPublishCalendarRepository(
             await client.query(
               `insert into publish_calendar_weekly_schedule_entries(
                  workspace_id,brand_id,day_of_week,slot_time,sort_order
-               ) values($1::uuid,$2::uuid,$3,$4::time,$5)`,
+               ) values($1::uuid,$2::uuid,$3,$4::time,$5)
+               returning id,day_of_week,slot_time,sort_order`,
               [input.workspaceId, input.brandId, row.dayOfWeek, row.time, row.sortOrder],
             );
           } else {

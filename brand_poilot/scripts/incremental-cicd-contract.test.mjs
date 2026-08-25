@@ -135,6 +135,23 @@ test("migration changes run both publish-calendar PostgreSQL contracts without a
     "utf8",
   );
   assert.doesNotMatch(migration091Test, /\b(?:describe|it|test)\.skip\s*\(|\bskip\s*:/);
+  assert.match(
+    migration091Test,
+    /import\s*\{\s*createPublishCalendarRepository\s*\}\s*from\s*"\.\/publishCalendarRepository\.js"/,
+  );
+  assert.match(
+    migration091Test,
+    /createPublishCalendarRepository\(application\)/,
+  );
+  assert.match(migration091Test, /repository\.saveWeeklySettings\s*\(/);
+  assert.match(migration091Test, /repository\.getWeeklySettings\s*\(/);
+  assert.match(migration091Test, /from pg_auth_members[\s\S]*where member\.rolname=current_user/);
+
+  const weeklyRepository = readFileSync("apps/api/src/publishCalendarRepository.ts", "utf8");
+  assert.match(
+    weeklyRepository,
+    /insert into publish_calendar_weekly_schedule_entries\([\s\S]*?returning id,day_of_week,slot_time,sort_order/,
+  );
 });
 
 test("bash parser accepts schema 3 and returns each component source revision", (t) => {

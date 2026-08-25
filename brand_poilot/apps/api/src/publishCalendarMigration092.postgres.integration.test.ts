@@ -3,6 +3,7 @@ import { resolve } from "node:path";
 import { PostgreSqlContainer, type StartedPostgreSqlContainer } from "@testcontainers/postgresql";
 import { Pool, type PoolClient } from "pg";
 import { expect, it } from "vitest";
+import { createPublishCalendarRepository } from "./publishCalendarRepository.js";
 
 const applicationPassword = "publish-calendar-weekly-application-test";
 const schemaOwnerRole = "publish_calendar_weekly_schema_owner";
@@ -11,6 +12,7 @@ const leakyRole = "publish_calendar_weekly_acl_leak";
 const quotedPublicRole = "PUBLIC";
 const workspaceId = "10000000-0000-4000-8000-000000000091";
 const brandId = "20000000-0000-4000-8000-000000000091";
+const foreignBrandId = "20000000-0000-4000-8000-000000000092";
 
 function connectionStringForRole(connectionString: string, roleName: string, password: string) {
   const value = new URL(connectionString);
@@ -81,7 +83,12 @@ async function bootstrapCalendarDependencies(client: PoolClient) {
     create table workspaces(id uuid primary key default gen_random_uuid());
     create table brands(
       id uuid primary key default gen_random_uuid(),
-      workspace_id uuid not null references workspaces(id) on delete cascade
+      workspace_id uuid not null references workspaces(id) on delete cascade,
+      deleted_at timestamptz
+    );
+    create table brand_channels(
+      id uuid primary key default gen_random_uuid(),workspace_id uuid not null,brand_id uuid not null,
+      channel text not null,enabled boolean not null,status text not null,deleted_at timestamptz
     );
     create table app_users(id uuid primary key default gen_random_uuid());
     create table ai_content_proposals(
@@ -101,7 +108,7 @@ async function bootstrapCalendarDependencies(client: PoolClient) {
   `);
 }
 
-it("runs the exact weekly schedule replacement transaction as the application role", async () => {
+it("runs the actual weekly settings repository transaction as the application role", async () => {
   let container: StartedPostgreSqlContainer | null = null;
   let administrator: Pool | null = null;
   let application: Pool | null = null;
@@ -130,11 +137,21 @@ it("runs the exact weekly schedule replacement transaction as the application ro
       await bootstrapControlPlane(owner);
       await bootstrapCalendarDependencies(owner);
       await owner.query("insert into workspaces(id) values($1)", [workspaceId]);
-      await owner.query("insert into brands(id,workspace_id) values($1,$2)", [brandId, workspaceId]);
+      await owner.query(
+        "insert into brands(id,workspace_id) values($1,$2),($3,$2)",
+        [brandId, workspaceId, foreignBrandId],
+      );
+      await owner.query(
+        `insert into brand_channels(workspace_id,brand_id,channel,enabled,status)
+         values($1,$2,'instagram',true,'connected')`,
+        [workspaceId, brandId],
+      );
       for (const migration of [
         "079_publish_calendar_runtime.sql",
         "085_publish_calendar_idempotency_expand.sql",
         "086_publish_calendar_same_time_contract.sql",
+        "089_free_subscription_plan.sql",
+        "090_existing_brand_free_subscriptions.sql",
       ]) {
         await owner.query(await readFile(resolve(process.cwd(), `../../db/migrations/${migration}`), "utf8"));
       }
@@ -191,9 +208,16 @@ it("runs the exact weekly schedule replacement transaction as the application ro
          ) values($1,$2,1,'09:00',0)`,
         [workspaceId, brandId],
       );
+      await owner.query(
+        `insert into publish_calendar_weekly_schedule_entries(
+           workspace_id,brand_id,day_of_week,slot_time,sort_order
+         ) values($1,$2,3,'20:00',0)`,
+        [workspaceId, foreignBrandId],
+      );
       await owner.query(`revoke create on schema public from ${schemaOwnerRole}`);
       await owner.query(`grant usage on schema public to ${applicationRole}`);
-      await owner.query(`grant select on brands to ${applicationRole}`);
+      await owner.query(`grant select on brands,brand_channels to ${applicationRole}`);
+      await owner.query(`grant execute on function assert_ai_content_writable() to ${applicationRole}`);
     } finally {
       await owner.query("reset role").catch(() => undefined);
       owner.release();
@@ -208,6 +232,7 @@ it("runs the exact weekly schedule replacement transaction as the application ro
     });
     const client = await application.connect();
     try {
+      const repository = createPublishCalendarRepository(application);
       const identity = await client.query<{
         current_user: string;
         table_owner: string;
@@ -248,6 +273,15 @@ it("runs the exact weekly schedule replacement transaction as the application ro
         can_update: true,
         can_delete: true,
       });
+      const memberships = await client.query<{ granted_role: string }>(
+        `select granted.rolname::text granted_role
+           from pg_auth_members membership
+           join pg_roles member on member.oid=membership.member
+           join pg_roles granted on granted.oid=membership.roleid
+          where member.rolname=current_user
+          order by granted.rolname`,
+      );
+      expect(memberships.rows).toEqual([]);
 
       const directAcl = await client.query<{
         grantee_role_name: string;
@@ -282,45 +316,83 @@ it("runs the exact weekly schedule replacement transaction as the application ro
       );
       expect(ownedSequences.rows).toEqual([]);
 
-      await client.query("begin");
-      try {
-        const deleted = await client.query(
-          "delete from publish_calendar_weekly_schedule_entries where workspace_id=$1 and brand_id=$2",
-          [workspaceId, brandId],
-        );
-        expect(deleted.rowCount).toBe(1);
-        await client.query(
-          `insert into publish_calendar_weekly_schedule_entries(
-             workspace_id,brand_id,day_of_week,slot_time,sort_order
-           ) values($1,$2,1,'11:30',0),($1,$2,1,'11:30',1)`,
-          [workspaceId, brandId],
-        );
-        const selected = await client.query<{ day_of_week: number; slot_time: string; sort_order: number }>(
-          `select day_of_week,slot_time::text,sort_order
-             from publish_calendar_weekly_schedule_entries
-            where workspace_id=$1 and brand_id=$2 order by day_of_week,sort_order`,
-          [workspaceId, brandId],
-        );
-        expect(selected.rows).toEqual([
-          { day_of_week: 1, slot_time: "11:30:00", sort_order: 0 },
-          { day_of_week: 1, slot_time: "11:30:00", sort_order: 1 },
-        ]);
-        await client.query("commit");
-      } catch (error) {
-        await client.query("rollback");
-        throw error;
-      }
+      const created = await repository.saveWeeklySettings({
+        workspaceId,
+        brandId,
+        enabled: true,
+        channels: ["instagram"],
+        informationalFormat: "card_news",
+        trendFormat: "reel",
+        weeklySchedule: [
+          { id: null, dayOfWeek: 1, time: "11:30", sortOrder: 0 },
+          { id: null, dayOfWeek: 1, time: "11:30", sortOrder: 1 },
+          { id: null, dayOfWeek: 7, time: "09:05", sortOrder: 0 },
+        ],
+      });
+      expect(created.weeklySchedule).toHaveLength(3);
+      expect(new Set(created.weeklySchedule.map(({ id }) => id)).size).toBe(3);
+      const retainedId = created.weeklySchedule[1]!.id;
+
+      const updated = await repository.saveWeeklySettings({
+        workspaceId,
+        brandId,
+        enabled: true,
+        channels: ["instagram"],
+        informationalFormat: "reel",
+        trendFormat: "card_news",
+        weeklySchedule: [
+          { id: null, dayOfWeek: 1, time: "11:30", sortOrder: 1 },
+          { id: retainedId, dayOfWeek: 1, time: "11:30", sortOrder: 0 },
+        ],
+      });
+      const newId = updated.weeklySchedule.find(({ id }) => id !== retainedId)!.id;
+      const expectedSchedule = [
+        { id: retainedId, dayOfWeek: 1 as const, time: "11:30", sortOrder: 0 },
+        { id: newId, dayOfWeek: 1 as const, time: "11:30", sortOrder: 1 },
+      ];
+      expect(updated.weeklySchedule).toEqual(expectedSchedule);
+
+      const read = await repository.getWeeklySettings({ workspaceId, brandId });
+      expect(read).toEqual({
+        brandId,
+        enabled: true,
+        channels: ["instagram"],
+        informationalFormat: "reel",
+        trendFormat: "card_news",
+        weeklySchedule: expectedSchedule,
+        updatedAt: updated.updatedAt,
+      });
+
+      const foreign = await administrator.query<{ id: string }>(
+        `select id from publish_calendar_weekly_schedule_entries
+          where workspace_id=$1 and brand_id=$2`,
+        [workspaceId, foreignBrandId],
+      );
+      await expect(repository.saveWeeklySettings({
+        workspaceId,
+        brandId,
+        enabled: false,
+        channels: ["instagram"],
+        informationalFormat: "card_news",
+        trendFormat: "reel",
+        weeklySchedule: [
+          { id: retainedId, dayOfWeek: 2, time: "12:30", sortOrder: 0 },
+          { id: foreign.rows[0]!.id, dayOfWeek: 2, time: "12:30", sortOrder: 1 },
+        ],
+      })).rejects.toThrow("publish_calendar_weekly_schedule_id_invalid");
+      await expect(repository.getWeeklySettings({ workspaceId, brandId })).resolves.toEqual(read);
 
       await administrator.query("update ai_content_maintenance_state set enabled=true where singleton");
-      await expect(client.query(
-        "delete from publish_calendar_weekly_schedule_entries where workspace_id=$1 and brand_id=$2",
-        [workspaceId, brandId],
-      )).rejects.toThrow("ai_content_maintenance");
-      const unchanged = await client.query<{ count: number }>(
-        "select count(*)::integer count from publish_calendar_weekly_schedule_entries where brand_id=$1",
-        [brandId],
-      );
-      expect(unchanged.rows[0]?.count).toBe(2);
+      await expect(repository.saveWeeklySettings({
+        workspaceId,
+        brandId,
+        enabled: false,
+        channels: ["instagram"],
+        informationalFormat: "card_news",
+        trendFormat: "reel",
+        weeklySchedule: expectedSchedule,
+      })).rejects.toThrow("ai_content_maintenance");
+      await expect(repository.getWeeklySettings({ workspaceId, brandId })).resolves.toEqual(read);
     } finally {
       client.release();
     }
