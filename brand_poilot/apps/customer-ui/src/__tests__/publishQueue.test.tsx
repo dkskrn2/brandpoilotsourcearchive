@@ -71,7 +71,13 @@ afterEach(() => {
 async function renderPage(
   overrides: Record<string, ReturnType<typeof vi.fn>> = {},
   generationGateway: Pick<AiContentGateway, "listGenerations"> = { listGenerations: vi.fn(async () => []) },
+  useUrlDefault = false,
 ) {
+  if (!useUrlDefault && !new URLSearchParams(window.location.search).has("status")) {
+    const query = new URLSearchParams(window.location.search);
+    query.set("status", "all");
+    window.history.replaceState({}, "", `${window.location.pathname}?${query}`);
+  }
   const api = {
     listPublishItems: vi.fn(async () => [] as PublishItem[]),
     listChannels: vi.fn(async () => []),
@@ -106,6 +112,17 @@ async function renderPage(
 }
 
 describe("PublishQueuePage canonical collection", () => {
+  it("defaults a URL without status to required work", async () => {
+    const required = item({ itemKey: "required", title: "처리할 게시", operationalStatus: "action_required", operationalReason: "stale_reservation" });
+    const upcoming = item({ itemKey: "upcoming", title: "나중 게시", operationalStatus: "upcoming", operationalReason: "future_reservation" });
+
+    await renderPage({ listPublishItems: vi.fn(async () => [required, upcoming]) }, undefined, true);
+
+    expect(await screen.findByRole("article", { name: "처리할 게시" })).toBeVisible();
+    expect(screen.queryByRole("article", { name: "나중 게시" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /처리 필요/ })).toHaveAttribute("aria-pressed", "true");
+  });
+
   it("uses one collection for both views and never calls retired base reads", async () => {
     const items = [
       item(),
@@ -772,6 +789,10 @@ describe("PublishQueuePage canonical collection", () => {
   it("refreshes same collection after scheduling and publishing", async () => {
     const listPublishItems = vi.fn(async () => [item()]);
     const api = await renderPage({ listPublishItems });
+    expect(screen.queryByRole("button", { name: "정책 큐 배정" })).not.toBeInTheDocument();
+    await userEvent.click(await screen.findByText("운영 도구"));
+    expect(screen.getByText("정책 큐 배정 대상: 게시 대기 0개")).toBeVisible();
+    expect(screen.getByText("다음 게시 실행 대상: 예약된 SNS 마케팅")).toBeVisible();
     await userEvent.click(await screen.findByRole("button", { name: "정책 큐 배정" }));
     await waitFor(() => expect(api.schedulePublishQueue).toHaveBeenCalledWith("brand-1"));
     await userEvent.click(screen.getByRole("button", { name: "다음 게시 실행" }));

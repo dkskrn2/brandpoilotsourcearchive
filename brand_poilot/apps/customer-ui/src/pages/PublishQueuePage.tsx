@@ -4,28 +4,25 @@ import { PageHeader } from "../components/layout/PageHeader";
 import { PublishArtifactPreview } from "../components/publish/PublishArtifactPreview";
 import { ContentArtifactDialog } from "../components/publish/ContentArtifactDialog";
 import { ChannelLogo } from "../components/channels/ChannelLogo";
-import { PublishManagementPreview, resolvePublishPreview, type PublishCardPreview } from "../components/publish/PublishManagementPreview";
+import type { PublishCardPreview } from "../components/publish/PublishManagementPreview";
+import { PublishManagementList } from "../components/publish/PublishManagementList";
 import { CardSkeleton, InlineSpinner, ListSkeleton } from "../components/ui/LoadingState";
 import { Alert } from "../components/ui/Alert";
 import { Badge } from "../components/ui/Badge";
-import { EmptyState } from "../components/ui/EmptyState";
 import { PublishCalendar } from "../components/publish/PublishCalendar";
-import { canSchedulePublishItem, PublishSchedulePanel, scheduleErrorMessage } from "../components/publish/PublishSchedulePanel";
+import { PublishSchedulePanel, scheduleErrorMessage } from "../components/publish/PublishSchedulePanel";
 import {
-  countPublishManagementFilters,
-  matchesPublishManagementFilter,
   publishManagementFilters,
   type PublishManagementFilterId,
-  type PublishManagementStatus
 } from "../components/publish/publishManagementFilters";
 import { api, DEMO_BRAND_ID } from "../lib/apiClient";
 import { dateKey, formatPublishDateTime as formatDateTime, PUBLISH_CALENDAR_USAGE_CHANGED_EVENT } from "../features/publishing/publishCalendar";
-import { canReschedulePublishItem, datedItems, entryFromPublishItem, listItems, unreservedItems } from "../features/publishing/publishItems";
+import { canReschedulePublishItem, datedItems, entryFromPublishItem, unreservedItems } from "../features/publishing/publishItems";
 import { clearPublishCalendarBulkDraft, loadPublishCalendarBulkDraft, savePublishCalendarBulkDraft, type PublishCalendarBulkDraft, type PublishCalendarBulkDraftRow } from "../features/publishing/publishCalendarBulkDraft";
 import { aiContentApiGateway } from "../features/ai-content/aiContentApiGateway";
 import type { AiContentGateway, AiGenerationOutput } from "../features/ai-content/types";
-import { publishErrorPresentation, publishStatusPresentation } from "../features/publishing/publishPresentation";
-import type { BadgeVariant, ChannelType, ContentOutput, PublishArtifact, PublishCalendarManualOptions, PublishCalendarManualSlotInput, PublishCalendarNewContentSetup, PublishCalendarSettings, PublishItem, PublishItemReviewTarget, PublishItemTarget, PublishResult, PublishResultChannel, ReviewStatus } from "../types";
+import { publishErrorPresentation } from "../features/publishing/publishPresentation";
+import type { BadgeVariant, ChannelType, ContentOutput, PublishArtifact, PublishCalendarManualOptions, PublishCalendarManualSlotInput, PublishCalendarNewContentSetup, PublishCalendarSettings, PublishItem, PublishItemReviewTarget, PublishItemTarget, PublishResult, PublishResultChannel } from "../types";
 
 const channelLabels: Record<ChannelType, string> = {
   instagram: "Instagram",
@@ -52,15 +49,7 @@ const resultStatusMeta: Record<PublishResultChannel["status"], { label: string; 
   cancelled: { label: "취소", variant: "neutral", clickable: false }
 };
 
-const reviewStatusMeta: Record<ReviewStatus, { label: string; variant: BadgeVariant }> = {
-  generating: { label: "생성 중", variant: "info" }, generation_failed: { label: "생성 실패", variant: "bad" },
-  pending_review: { label: "검토 필요", variant: "warn" }, auto_approval_blocked: { label: "수동 승인 필요", variant: "bad" },
-  approved: { label: "승인됨", variant: "ok" }, auto_approved: { label: "자동 승인", variant: "ok" },
-  rejected: { label: "거절됨", variant: "neutral" }, regenerating: { label: "재생성 중", variant: "info" }
-};
-
 type ManagementFilterId = PublishManagementFilterId;
-type ManagementStatus = PublishManagementStatus;
 type PublishView = "list" | "calendar";
 
 type PublishQueuePageProps = {
@@ -77,18 +66,6 @@ function generationOutputPreview(output: AiGenerationOutput): PublishCardPreview
   const video = artifact.assets.find((asset) => asset.mimeType?.startsWith("video/"))
     ?? (artifact.kind === "video" ? artifact.assets[0] : null);
   return video?.url ? { kind: "video", url: video.url, posterUrl: artifact.posterUrl } : null;
-}
-
-function filterStatusForPublishItem(item: PublishItem): ManagementStatus {
-  const reviewTargets = item.reviewTargets ?? [];
-  if (reviewTargets.some((target) => target.status === "pending_review" || target.status === "auto_approval_blocked" || target.status === "generation_failed")) return "needs_review";
-  if (reviewTargets.length > 0 && reviewTargets.every((target) => target.status === "rejected")) return "rejected";
-  if (item.status === "generating" || item.status === "pre_generation") return "generating";
-  if (item.status === "completed_unpublished" || item.status === "reserved") return "queued";
-  if (item.status === "published") return "completed";
-  if (item.status === "partially_published" || item.status === "deferred") return "scheduled";
-  if (item.status === "cancelled") return "failed";
-  return item.status;
 }
 
 function resultFromPublishItem(item: PublishItem): PublishResult {
@@ -137,103 +114,6 @@ function contentOutputFromReviewTarget(item: PublishItem, target: PublishItemRev
     outputJson: target.outputJson,
     blockReasons: target.blockReasons,
   };
-}
-
-function PublishItemCardGrid({
-  items,
-  activeFilter,
-  onFilterChange,
-  highlightedQueueId,
-  onSelectResult,
-  onSelectReviewTarget,
-  onReviewTargets,
-  reviewingOutputIds,
-  onRetryPublish,
-  onVerifyPublish,
-  onCancelPublish,
-  onSchedule,
-  onReschedule,
-}: {
-  items: PublishItem[];
-  activeFilter: ManagementFilterId;
-  onFilterChange: (filter: ManagementFilterId) => void;
-  highlightedQueueId: string | null;
-  onSelectResult: (item: PublishItem, target: PublishItemTarget) => void;
-  onSelectReviewTarget: (item: PublishItem, target: PublishItemReviewTarget) => void;
-  onReviewTargets: (targets: PublishItemReviewTarget[], action: "approve" | "reject" | "regenerate", message: string) => void;
-  reviewingOutputIds: ReadonlySet<string>;
-  onRetryPublish: (queueId: string) => void;
-  onVerifyPublish: (queueId: string) => void;
-  onCancelPublish: (item: PublishItem, target: PublishItemTarget) => void;
-  onSchedule: (item: PublishItem, trigger: HTMLButtonElement) => void;
-  onReschedule: (item: PublishItem, trigger: HTMLButtonElement) => void;
-}) {
-  const rows = listItems(items);
-  const statuses = rows.map(filterStatusForPublishItem);
-  const counts = countPublishManagementFilters(statuses);
-  const filtered = rows.filter((item) => {
-    const deepLinked = highlightedQueueId ? item.targets.some((target) => target.queueId === highlightedQueueId) : false;
-    return matchesPublishManagementFilter(filterStatusForPublishItem(item), activeFilter) || deepLinked;
-  });
-
-  return <section className="panel">
-    <div className="panel-head"><h2>게시 목록</h2><div className="actions queue-filters">
-      {publishManagementFilters.map((filter) => <button key={filter.id} type="button" className={activeFilter === filter.id ? "button primary" : "button"} aria-pressed={activeFilter === filter.id} onClick={() => onFilterChange(filter.id)}>{filter.label} <span>{counts[filter.id]}</span></button>)}
-    </div></div>
-    <div className="panel-body"><div className="publish-management-grid" role="region" aria-label="게시 관리 통합 목록">
-      {filtered.length === 0 ? <EmptyState title="게시 관리 목록이 비어 있습니다" description="생성, 예약, 게시 결과가 생기면 이 목록에 표시됩니다." /> : filtered.map((item) => {
-        const meta = publishStatusPresentation(item.operationalStatus);
-        const deepLinked = highlightedQueueId ? item.targets.some((target) => target.queueId === highlightedQueueId) : false;
-        const previewTarget = item.targets.find((target) => target.artifactPublicUrl || target.previewBody || target.previewTitle) ?? item.targets[0];
-        const reviewTargets = item.reviewTargets ?? [];
-        const previewReviewTarget = reviewTargets.find((target) => target.previewBody || target.previewTitle) ?? reviewTargets[0];
-        const approvable = reviewTargets.filter((target) => target.status === "pending_review" || target.status === "auto_approval_blocked");
-        const rejectable = reviewTargets.filter((target) => target.status === "pending_review" || target.status === "auto_approval_blocked" || target.status === "generation_failed");
-        const regeneratable = rejectable.filter((target) => target.channel === "instagram" || target.channel === "threads");
-        const reviewPending = reviewTargets.some((target) => reviewingOutputIds.has(target.channelOutputId));
-        return <article className={`publish-management-card${deepLinked ? " is-highlighted" : ""}`} aria-label={item.title} data-item-key={item.itemKey} data-publish-focus-key={item.itemKey} data-publish-deep-link={deepLinked ? "true" : undefined} tabIndex={-1} key={item.itemKey}>
-          <div className="publish-management-card__preview"><PublishManagementPreview title={item.title} preview={resolvePublishPreview({ title: item.title, artifactPublicUrl: previewTarget?.artifactPublicUrl ?? undefined, outputJson: previewTarget?.outputJson ?? previewReviewTarget?.outputJson, previewBody: previewTarget?.previewBody ?? previewReviewTarget?.previewBody ?? undefined, contentStatus: item.contentStatus })} /></div>
-          <div className="publish-management-card__body">
-            <div className="publish-management-card__heading"><strong className="publish-management-card__title">{item.title}</strong><Badge variant={meta.variant}>{meta.label}</Badge></div>
-            <div className="row-meta">{formatDateTime(item.calendarDate ?? item.createdAt)}</div>
-            <div className="publish-management-card__channels">{sortChannels(item.targets).map((target) => {
-              const targetMeta = resultStatusMeta[target.status];
-              return <button type="button" className={`button ${targetMeta.clickable ? "" : "is-disabled"}`} disabled={!targetMeta.clickable} onClick={() => onSelectResult(item, target)} key={target.queueId}><span className="channel-identity"><ChannelLogo channel={target.channel} decorative size={16} /><span>{channelLabels[target.channel]} {targetMeta.label}</span></span></button>;
-            })}</div>
-            {reviewTargets.length > 0 ? <div className="publish-management-card__channels">{sortChannels(reviewTargets).map((target) => <Badge variant={reviewStatusMeta[target.status].variant} key={target.channelOutputId}><span className="channel-identity"><ChannelLogo channel={target.channel} decorative size={16} /><span>{channelLabels[target.channel]} {reviewStatusMeta[target.status].label}</span></span></Badge>)}</div> : null}
-            {reviewTargets.length > 0 ? <div className="publish-management-card__actions">
-              {reviewTargets.filter((target) => !["generating", "generation_failed", "regenerating"].includes(target.status)).map((target) => <button className="button" type="button" key={`review-preview-${target.channelOutputId}`} onClick={() => onSelectReviewTarget(item, target)}>콘텐츠 보기</button>)}
-              {approvable.length > 0 ? <button className="button primary" type="button" disabled={reviewPending} onClick={() => onReviewTargets(approvable, "approve", "게시 관리 목록에 등록했습니다.")}>{approvable.some((target) => target.status === "auto_approval_blocked") ? "수동 승인" : "승인"}</button> : null}
-              {regeneratable.length > 0 ? <button className="button" type="button" disabled={reviewPending} onClick={() => onReviewTargets(regeneratable, "regenerate", "재생성 요청을 접수했습니다.")}>재생성</button> : null}
-              {rejectable.length > 0 ? <button className="button danger" type="button" disabled={reviewPending} onClick={() => onReviewTargets(rejectable, "reject", "콘텐츠를 거절했습니다.")}>거절</button> : null}
-            </div> : null}
-            {canSchedulePublishItem(item) ? <div className="publish-management-card__actions"><button className="button primary" type="button" onClick={(event) => onSchedule(item, event.currentTarget)}>게시 설정</button></div> : null}
-            {canReschedulePublishItem(item) ? <div className="publish-management-card__actions"><button className="button primary" type="button" onClick={(event) => onReschedule(item, event.currentTarget)}>예약 변경</button></div> : null}
-            {item.scheduledFor ? <div className="row-meta">원래 예약 {formatDateTime(item.scheduledFor)}</div> : null}
-            {item.effectiveScheduledFor && item.effectiveScheduledFor !== item.scheduledFor ? <div className="row-meta">실제 실행 예정 {formatDateTime(item.effectiveScheduledFor)}</div> : null}
-            {item.publishedAt ? <div className="row-meta">게시 완료 {formatDateTime(item.publishedAt)}</div> : null}
-            {item.lastError ? <div className="row-meta is-error">{publishErrorPresentation(item.lastError).message}</div> : null}
-            {item.targets.map((target) => {
-              const resultUnknown = target.status === "failed" && target.lastError === "publish_delivery_unknown";
-              const errorPresentation = publishErrorPresentation(target.lastError);
-              const retryAllowed = target.status === "failed" && errorPresentation.action === "retry_publish";
-              const reconnectAllowed = target.status === "failed" && errorPresentation.action === "reconnect_channel";
-              const cancellable = item.publicationProgress === "none"
-                && !item.targets.some((candidate) => candidate.status === "publishing")
-                && (target.status === "queued" || target.status === "scheduled" || target.status === "deferred");
-              if (!resultUnknown && !retryAllowed && !reconnectAllowed && !cancellable) return null;
-              return <div className="publish-management-card__actions" key={`actions-${target.queueId}`}>
-                {resultUnknown ? <button className="button" type="button" onClick={() => onVerifyPublish(target.queueId)}>게시 결과 확인</button> : null}
-                {retryAllowed ? <button className="button" type="button" onClick={() => onRetryPublish(target.queueId)}>재시도</button> : null}
-                {reconnectAllowed ? <a className="button" href="/channels">채널 다시 연결</a> : null}
-                {cancellable ? <button className="button" type="button" onClick={() => onCancelPublish(item, target)}>예약 취소</button> : null}
-              </div>;
-            })}
-          </div>
-        </article>;
-      })}
-    </div></div>
-  </section>;
 }
 
 function PublishResultDialog({
@@ -461,10 +341,11 @@ export function PublishQueuePage({ generationGateway = aiContentApiGateway }: Pu
   const [calendarSettingsError, setCalendarSettingsError] = useState<string | null>(null);
   const [publishItems, setPublishItems] = useState<PublishItem[]>([]);
   const [generationPreviews, setGenerationPreviews] = useState<ReadonlyMap<string, PublishCardPreview>>(() => new Map());
-  const [activeFilter, setActiveFilter] = useState<ManagementFilterId>(() => {
+  const [operationsOpen, setOperationsOpen] = useState(false);
+  const initialFilter = useMemo<ManagementFilterId>(() => {
     const requested = new URLSearchParams(window.location.search).get("status");
-    return publishManagementFilters.some((filter) => filter.id === requested) ? requested as ManagementFilterId : "all";
-  });
+    return publishManagementFilters.some((filter) => filter.id === requested) ? requested as ManagementFilterId : "action_required";
+  }, []);
   const [notice, setNotice] = useState<string | null>(null);
   const [selectedResult, setSelectedResult] = useState<{ result: PublishResult; channel: PublishResultChannel } | null>(null);
   const [selectedReviewOutput, setSelectedReviewOutput] = useState<ContentOutput | null>(null);
@@ -487,6 +368,14 @@ export function PublishQueuePage({ generationGateway = aiContentApiGateway }: Pu
   const assignableCalendarContents = useMemo(() => publishItems.flatMap((item) => item.sourceRefs.topicPublishGroupId && (item.status === "completed_unpublished" || item.status === "publish_queued")
     ? [{ id: item.sourceRefs.topicPublishGroupId, title: item.title }]
     : []), [publishItems]);
+  const nextPublishItem = useMemo(
+    () => publishItems.find((item) => item.targets.some((target) => target.status === "scheduled")) ?? null,
+    [publishItems],
+  );
+  const policyQueueTargetCount = useMemo(
+    () => publishItems.reduce((count, item) => count + item.targets.filter((target) => target.status === "queued").length, 0),
+    [publishItems],
+  );
 
   useEffect(() => {
     if (initialLoading || view !== "list" || !highlightedQueueId) return;
@@ -810,7 +699,7 @@ export function PublishQueuePage({ generationGateway = aiContentApiGateway }: Pu
   }
 
   async function publishNext() {
-    const target = publishItems.flatMap((item) => item.targets).find((row) => row.status === "scheduled");
+    const target = nextPublishItem?.targets.find((row) => row.status === "scheduled");
     if (!target) {
       setNotice("게시할 예약 콘텐츠가 없습니다.");
       return;
@@ -874,8 +763,15 @@ export function PublishQueuePage({ generationGateway = aiContentApiGateway }: Pu
         actions={(
           <>
             <button className="button" type="button" onClick={generateNextContent}>콘텐츠 생성</button>
-            <button className="button" type="button" onClick={scheduleQueue}>정책 큐 배정</button>
-            <button className="button primary" type="button" onClick={publishNext}>다음 게시 실행</button>
+            <details open={operationsOpen}>
+              <summary onClick={(event) => { event.preventDefault(); setOperationsOpen((current) => !current); }}>운영 도구</summary>
+              {operationsOpen ? <div className="panel-body">
+                <p className="row-meta">정책 큐 배정 대상: 게시 대기 {policyQueueTargetCount}개</p>
+                <button className="button" type="button" onClick={scheduleQueue}>정책 큐 배정</button>
+                <p className="row-meta">다음 게시 실행 대상: {nextPublishItem?.title ?? "예약 콘텐츠 없음"}</p>
+                <button className="button primary" type="button" onClick={publishNext}>다음 게시 실행</button>
+              </div> : null}
+            </details>
           </>
         )}
       />
@@ -934,10 +830,9 @@ export function PublishQueuePage({ generationGateway = aiContentApiGateway }: Pu
           onSaveSettings={saveCalendarSettings}
         />
       ) : (
-        <PublishItemCardGrid
+        <PublishManagementList
           items={publishItems}
-          activeFilter={activeFilter}
-          onFilterChange={setActiveFilter}
+          initialFilter={initialFilter}
           onSelectResult={(item, target) => setSelectedResult({ result: resultFromPublishItem(item), channel: resultFromPublishItem(item).channels.find((channel) => channel.queueId === target.queueId)! })}
           onSelectReviewTarget={(item, target) => setSelectedReviewOutput(contentOutputFromReviewTarget(item, target))}
           onReviewTargets={(targets, action, message) => void reviewTargets(targets, action, message)}
