@@ -2555,10 +2555,15 @@ test("CI publishing verifies release tooling plus only affected workspaces", () 
     "node --test scripts/ai-content-three-format-cutover.postgres.integration.test.mjs",
     "AI_CONTENT_074_ENFORCE_BENCHMARK=false node --test scripts/ai-content-074.postgres.integration.test.mjs",
     "npm exec --workspace @brand-pilot/api -- vitest run src/publishCalendarMigration086.postgres.integration.test.ts",
+    "npm exec --workspace @brand-pilot/api -- vitest run src/publishCalendarMigration091.postgres.integration.test.ts",
   ]) {
     assert.ok(verifyJob.includes(command), `migration verify job missing ${command}`);
   }
   assert.doesNotMatch(verifyJob, /ai-content-074\.postgres\.integration\.test\.mjs[^\n]*--test-name-pattern/);
+  assert.doesNotMatch(
+    verifyJob,
+    /publishCalendarMigration091\.postgres\.integration\.test\.ts[^\n]*(?:\|\|\s*true|--passWithNoTests)/,
+  );
 });
 
 test("CI publishing uses an affected linux-amd64 matrix with immutable metadata and cache", () => {

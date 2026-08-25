@@ -112,6 +112,31 @@ test("workflow does not apply database migrations automatically", () => {
   assert.doesNotMatch(workflow, /npm run db:migrate|node scripts\/migrate\.mjs|\bpsql\b/);
 });
 
+test("migration changes run both publish-calendar PostgreSQL contracts without a silent skip", () => {
+  const migrationGate = workflow.match(
+    /- name: Verify migrations\n([\s\S]*?)(?=\n {6}- name:)/,
+  )?.[1] ?? "";
+  assert.match(migrationGate, /if: needs\.impact\.outputs\.migration_changed == 'true'/);
+  for (const migration of ["086", "091"]) {
+    assert.match(
+      migrationGate,
+      new RegExp(
+        `npm exec --workspace @brand-pilot/api -- vitest run src/publishCalendarMigration${migration}\\.postgres\\.integration\\.test\\.ts`,
+      ),
+    );
+  }
+  assert.doesNotMatch(
+    migrationGate,
+    /publishCalendarMigration(?:086|091)\.postgres\.integration\.test\.ts[^\n]*(?:\|\|\s*true|--passWithNoTests)/,
+  );
+
+  const migration091Test = readFileSync(
+    "apps/api/src/publishCalendarMigration091.postgres.integration.test.ts",
+    "utf8",
+  );
+  assert.doesNotMatch(migration091Test, /\b(?:describe|it|test)\.skip\s*\(|\bskip\s*:/);
+});
+
 test("bash parser accepts schema 3 and returns each component source revision", (t) => {
   const bash = process.platform === "win32"
     ? ["C:\\Program Files\\Git\\bin\\bash.exe", "C:\\Program Files\\Git\\usr\\bin\\bash.exe"].find(existsSync)
