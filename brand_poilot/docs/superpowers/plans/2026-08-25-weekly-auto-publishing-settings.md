@@ -4,7 +4,7 @@
 
 **Goal:** Add weekly recurring schedules, channel toggles, quota-aware slot materialization, and the approved settings UI while automatic posting remains disabled in production.
 
-**Architecture:** Store one stable row per weekday/time occurrence in an additive table and replace the runtime `slotTimes` fallback with a normalized weekly schedule. Save settings and schedule rows in one brand-scoped transaction, materialize dated slots idempotently, and expose a dedicated master-toggle endpoint so the header cannot overwrite the full settings object.
+**Architecture:** After explicit migration approval, store one stable row per weekday/time occurrence in an additive table and replace the allocator's runtime `slotTimes` fallback with a normalized weekly schedule. Save settings and schedule rows in one brand-scoped transaction, materialize dated slots idempotently, and expose a versioned weekly settings contract plus a dedicated master-toggle endpoint so the header cannot overwrite the full settings object. Keep the old settings endpoint isolated only for the old production UI during the non-atomic Vercel/API cutover.
 
 **Tech Stack:** PostgreSQL, PGlite, TypeScript, Fastify, React 18, Vitest, Testing Library.
 
@@ -12,13 +12,15 @@
 
 ### Task 1: Add migration 091 and application-role permissions
 
+**Stop gate:** An earlier requirement said to continue without another migration. The current `time[]` column cannot represent weekdays, so Task 1 requires explicit approval. If approval is denied, stop this workstream and remove weekday-specific schedules from the release instead of inventing an encoded fallback.
+
 **Files:**
 - Create: `db/migrations/091_publish_calendar_weekly_schedule.sql`
 - Create: `apps/api/src/publishCalendarMigration091.pglite.test.ts`
 - Create: `apps/api/src/publishCalendarMigration091.postgres.integration.test.ts`
 - Modify: `scripts/migrations.integration.test.mjs`
 
-- [ ] **Step 1: Write failing migration tests** for table shape, tenant FK, day check, sort-order uniqueness, duplicate times, and application-role CRUD.
+- [ ] **Step 1: Write failing migration tests** for table shape, brand/workspace scope enforcement, day check, sort-order uniqueness, duplicate times, write-fence coverage, and application-role CRUD.
 
 ```sql
 insert into publish_calendar_weekly_schedule_entries
@@ -34,7 +36,7 @@ Run: `npm test --workspace @brand-pilot/api -- publishCalendarMigration091.pglit
 
 Expected: FAIL because migration 091/table does not exist.
 
-- [ ] **Step 3: Implement the additive migration.** Create `publish_calendar_weekly_schedule_entries` with UUID PK, `(workspace_id, brand_id)` tenant FK, `day_of_week between 1 and 7`, `slot_time time`, `sort_order >= 0`, timestamps, and unique `(brand_id, day_of_week, sort_order)`. Do not create `(brand_id, day_of_week, slot_time)` uniqueness and do not drop `slot_times`.
+- [ ] **Step 3: Implement the additive migration.** Create `publish_calendar_weekly_schedule_entries` with UUID PK, separate workspace/brand FKs, `day_of_week between 1 and 7`, `slot_time time`, `sort_order >= 0`, timestamps, and unique `(brand_id, day_of_week, sort_order)`. Reuse the existing `enforce_publish_calendar_brand_scope()` trigger because `brands` has no `(workspace_id, id)` unique key for a composite FK. Register the table in the existing AI-content write-fence catalog and add the same write-fence trigger pattern. Do not create `(brand_id, day_of_week, slot_time)` uniqueness and do not drop `slot_times`.
 
 - [ ] **Step 4: Grant exact CRUD** to the same application role used by existing publish-calendar tables. Test the complete `DELETE + INSERT + SELECT` settings transaction as that role, not as owner.
 
@@ -99,7 +101,7 @@ git add apps/api/src/types.ts apps/api/src/publishCalendarRepository.ts apps/api
 git commit -m "feat(publish): persist weekly automatic settings"
 ```
 
-### Task 3: Add strict settings and master-toggle HTTP contracts
+### Task 3: Add strict versioned settings and master-toggle HTTP contracts
 
 **Files:**
 - Modify: `apps/api/src/httpServer.ts`
@@ -108,7 +110,7 @@ git commit -m "feat(publish): persist weekly automatic settings"
 - Modify: `apps/customer-ui/src/lib/apiClient.ts`
 - Modify: `apps/customer-ui/src/lib/apiClient.test.ts`
 
-- [ ] **Step 1: Write failing HTTP tests** for GET, strict PUT, and dedicated PATCH `/brands/:brandId/publish-calendar/settings/enabled`.
+- [ ] **Step 1: Write failing HTTP tests** for versioned GET/PUT `/brands/:brandId/publish-calendar/settings/weekly`, dedicated PATCH `/brands/:brandId/publish-calendar/settings/enabled`, and the unchanged legacy `/brands/:brandId/publish-calendar/settings` contract.
 
 ```json
 {
@@ -126,11 +128,13 @@ git commit -m "feat(publish): persist weekly automatic settings"
 
 Run: `npm test --workspace @brand-pilot/api -- server.test.ts`
 
-- [ ] **Step 3: Implement strict DTO parsing.** PUT saves channels/formats/schedule without implicitly changing `enabled`; PATCH accepts exactly `{ enabled: boolean }`. OFF is always allowed; ON requires at least one connected supported channel and one schedule row.
+- [ ] **Step 3: Implement strict DTO parsing.** Weekly PUT saves channels/formats/schedule without implicitly changing `enabled`; PATCH accepts exactly `{ enabled: boolean }`. OFF is always allowed; ON requires at least one connected supported channel and one schedule row. The legacy endpoint may read/write only `slot_times`; it must never create weekly rows or feed the allocator.
 
-- [ ] **Step 4: Update customer types/client.** Remove `slotTimes` from the new UI contract and add `setPublishCalendarEnabled`.
+- [ ] **Step 4: Update customer types/client.** Add the weekly client and `setPublishCalendarEnabled`. Preserve a capability-gated legacy client branch so the staged UI still works against the old primary API; do not map legacy `slotTimes` into weekly rows.
 
-- [ ] **Step 5: Run API/client tests and commit.**
+- [ ] **Step 5: Add cutover contract tests.** Assert new UI + old API uses the legacy screen without a weekly write, old UI + new API still accepts the exact old DTO, and new UI + new API uses only the versioned weekly endpoint.
+
+- [ ] **Step 6: Run API/client tests and commit.**
 
 ```bash
 git add apps/api/src/httpServer.ts apps/api/src/server.test.ts apps/customer-ui/src/types.ts apps/customer-ui/src/lib/apiClient.ts apps/customer-ui/src/lib/apiClient.test.ts
@@ -158,7 +162,7 @@ const idempotencyKey = sha256(JSON.stringify(idempotencyPayload));
 
 - [ ] **Step 3: Materialize only when enabled.** Snapshot the currently enabled connected channels into each new slot. Never alter existing future slots after schedule/channel/OFF changes.
 
-- [ ] **Step 4: Assign existing daily informational/trend recommendations** to the first open automatic slots for that KST date. Use informational/trend format preferences; leave additional slots open and never synthesize an extra topic.
+- [ ] **Step 4: Assign existing daily informational/trend recommendations** to the first open automatic slots for that KST date. Use informational/trend format preferences; leave additional slots open and never synthesize an extra topic. A recommendation created after the first allocation attempt must be attachable on a later idempotent allocation run.
 
 - [ ] **Step 5: Count quota by publication unit.** Manual and automatic reservations share subscription-start-week availability; multiple channel targets on one slot count once; duplicate same-time rows count separately.
 
@@ -201,7 +205,7 @@ git add apps/customer-ui/src/components/publish/AutoPublishHeaderControl.tsx app
 git commit -m "feat(publish): add weekly automatic settings UI"
 ```
 
-### Task 6: Remove transition fallback and verify Workstream 2
+### Task 6: Verify the bounded transition and Workstream 2
 
 **Files:**
 - Modify: `apps/api/src/types.ts`
@@ -211,11 +215,11 @@ git commit -m "feat(publish): add weekly automatic settings UI"
 - Modify: `apps/customer-ui/src/lib/apiClient.ts`
 - Modify: `docs/operations/UBUNTU_DEPLOYMENT.md`
 
-- [ ] **Step 1: Search for runtime `slotTimes`/`slot_times` reads and writes.** The DB column may remain for rollback, but no new API, repository, allocator, or UI path may consume it.
+- [ ] **Step 1: Search for runtime `slotTimes`/`slot_times` reads and writes.** The DB column may remain for rollback and the isolated legacy endpoint/client may consume it during cutover. The weekly repository, weekly endpoint, allocator, and new settings UI must not consume it.
 
 Run: `rg -n "slotTimes|slot_times" apps/api/src apps/customer-ui/src`
 
-Expected: only explicitly documented transition tests or migration definitions remain; no production runtime match.
+Expected: matches are limited to the legacy endpoint/client, their transition tests, and migration definitions. No allocator or weekly contract match.
 
 - [ ] **Step 2: Run impacted API suites.**
 
@@ -233,7 +237,7 @@ Run: `npm test --workspace @brand-pilot/customer-ui -- AutoPublishHeaderControl.
 
 Run: `npm run build --workspace @brand-pilot/customer-ui`
 
-- [ ] **Step 5: Review the cumulative diff.** At this checkpoint it may contain Workstream 1 plus migration 091, API, customer UI, and directly related docs. Scheduler/Compose changes start only in Workstream 3; Caddy/provider/unrelated-worker changes remain forbidden.
+- [ ] **Step 5: Review the cumulative diff.** At this checkpoint it may contain Workstream 1 plus approved migration 091, API, customer UI, and directly related docs. Scheduler/Compose changes start only in Workstream 3; Caddy/provider/unrelated-worker changes remain forbidden. Because the repository release policy reports `productionDeployAllowed=false` when a migration changes, the release must follow the explicit migration-approval path rather than the ordinary automatic production path.
 
 - [ ] **Step 6: Run a local migration/API/UI rehearsal.** Apply migration 091 only to the disposable test PostgreSQL, start the candidate API/UI locally, keep master OFF, and verify weekly settings read/write and allocator idempotency. Do not apply the migration or deploy any service to production at this checkpoint.
 

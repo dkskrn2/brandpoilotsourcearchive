@@ -4,6 +4,8 @@
 
 기준 소스: 운영 release 및 `state/current` `b953c49f0d39bb00a84c18af874dced7a6a2124c`
 
+기준 리모트: `codex-deploy/main` (`https://github.com/dkskrn2/main.git`). 이 worktree의 `origin/main`은 별도 source archive history이므로 운영 기준선 비교에 사용하지 않는다.
+
 상태: 사용자 제품 결정 완료, 2026-08-25 운영 UX 점검 반영, 구현 계획 작성 대상
 
 ## 1. 배경과 확인된 운영 상태
@@ -36,7 +38,7 @@
 - 390px 화면에서 월간 캘린더는 약 4개 요일만 보이고 가로 탐색 안내가 없으며, 목록 상태 필터도 우측 항목이 잘렸다.
 - 목록과 캘린더가 같은 예약 항목을 표시하는 공통 데이터 연결, 캘린더의 grid/button 접근성 이름, 사이드바의 예약과 게시 성공 차감 구분은 유지할 가치가 있는 정상 동작이었다.
 
-이 점검 결과를 하나의 PR과 하나의 운영 릴리스에 함께 반영한다. 구현과 검증은 현재 운영 상태·조작 동선, 주간 설정·자동 배정, singleton scheduler·23:59 만료 순서로 진행하지만 중간 PR이나 중간 운영 배포는 만들지 않는다. 같은 배포 안에서도 실제 게시 실행은 DB migration, API, UI 검증이 끝난 뒤 마지막에 활성화한다.
+이 점검 결과를 하나의 PR과 하나의 운영 릴리스에 함께 반영한다. 구현과 검증은 현재 운영 상태·조작 동선, 주간 설정·자동 배정, singleton scheduler·23:59 만료 순서로 진행하지만 중간 PR이나 중간 운영 배포는 만들지 않는다. 같은 배포 안에서도 실제 게시 실행은 승인된 DB migration, API, staged UI 검증이 끝난 뒤 마지막에 활성화한다. 단, 이전에 확정한 `마이그레이션 없이 진행` 조건과 주간 요일 저장 요구가 충돌하므로 migration 091은 구현 전 명시적 승인 게이트다.
 
 ## 2. 확정된 제품 결정
 
@@ -108,7 +110,7 @@
 
 마스터를 꺼도 `channels`를 비우지 않는다. 다시 켰을 때 사용자의 채널 선택을 복원한다. 설정 팝업에서 채널을 저장해도 마스터 상태를 암묵적으로 바꾸지 않는다.
 
-구형 `slot_times`는 새 런타임의 fallback으로 사용하지 않는다. 단계적 배포 중 구 UI 호환에 필요한 기간만 API 계약을 유지한 뒤 코드 경로를 제거한다. DB 컬럼 삭제는 별도 승인된 contract migration 전까지 rollback 보존 목적으로만 남기며, 새 코드가 읽거나 쓰지 않는다.
+구형 `slot_times`는 새 allocator의 fallback으로 사용하지 않는다. 비원자적인 UI/API 전환 중 현재 운영 UI가 사용하는 기존 endpoint만 `slot_times`를 독립적으로 읽고 쓸 수 있다. 새 weekly endpoint와 allocator는 이를 읽거나 weekly rows로 dual-write하지 않는다. DB 컬럼 삭제는 별도 승인된 contract migration 전까지 rollback 보존 목적으로 남긴다.
 
 ### 5.2 새 주간 일정 테이블
 
@@ -121,10 +123,10 @@ additive migration으로 `publish_calendar_weekly_schedule_entries`를 추가한
 - `slot_time time not null`: 한국시간의 벽시계 시각
 - `sort_order integer not null`: 같은 요일 안의 UI 표시 순서
 - `created_at`, `updated_at`
-- `(brand_id, workspace_id)` tenant FK
+- separate brand/workspace FKs plus the existing `enforce_publish_calendar_brand_scope()` trigger
 - `(brand_id, day_of_week, sort_order)` unique
 
-`(brand_id, day_of_week, slot_time)` unique는 만들지 않는다. 동일한 요일·시각의 여러 publication unit을 허용하기 때문이다. 일정 행 ID는 편집 후에도 유지하며 단순 재정렬은 이미 materialize된 슬롯의 identity를 바꾸지 않는다.
+`brands`에는 `(workspace_id, id)` unique key가 없으므로 새 composite FK를 가장해 추가하지 않는다. 기존 publish-calendar 테이블과 같은 scope trigger와 write-fence catalog/trigger를 재사용한다. `(brand_id, day_of_week, slot_time)` unique는 만들지 않는다. 동일한 요일·시각의 여러 publication unit을 허용하기 때문이다. 일정 행 ID는 편집 후에도 유지하며 단순 재정렬은 이미 materialize된 슬롯의 identity를 바꾸지 않는다.
 
 새 테이블의 SELECT·INSERT·UPDATE·DELETE와 sequence가 있다면 해당 사용 권한을 운영 application role에 명시한다. 전체 transaction을 owner가 아닌 운영 동등 application role의 실제 PostgreSQL에서 검증한다.
 
@@ -144,7 +146,7 @@ additive migration으로 `publish_calendar_weekly_schedule_entries`를 추가한
 
 ### 6.1 설정 조회
 
-`GET /brands/:brandId/publish-calendar/settings`는 다음을 반환한다.
+`GET /brands/:brandId/publish-calendar/settings/weekly`는 다음을 반환한다.
 
 - `enabled`
 - `channels`
@@ -153,7 +155,7 @@ additive migration으로 `publish_calendar_weekly_schedule_entries`를 추가한
 - `weeklySchedule: [{ id, dayOfWeek, time, sortOrder }]`
 - `updatedAt`
 
-지원 채널 목록과 연결 상태는 기존 channel catalog/상태 API를 사용한다. 미연결 또는 아직 provider가 지원되지 않는 채널은 UI에서 비활성 상태로 보이고 저장 대상이 될 수 없다.
+지원 채널 목록과 연결 상태는 기존 channel catalog/상태 API를 사용한다. 미연결 또는 아직 provider가 지원되지 않는 채널은 UI에서 비활성 상태로 보이며 새로 선택할 수 없다. 연결이 끊기기 전에 저장된 선택은 설정에서 보존하되 allocator의 활성 target 교집합에서는 제외한다.
 
 ### 6.2 마스터 토글
 
@@ -168,7 +170,7 @@ OFF는 항상 허용한다. ON은 연결된 지원 채널이 하나 이상 켜�
 
 ### 6.3 설정 저장
 
-설정 팝업은 채널 배열, 정보성·트렌드성 형식과 주간 일정 행 전체를 하나의 brand advisory transaction에서 저장한다. 기존 일정 행은 ID를 유지하고, 삭제된 ID는 해당 브랜드 범위에서만 삭제하며, 클라이언트가 임의의 다른 브랜드 ID를 참조하면 tenant 오류로 거부한다.
+설정 팝업은 `PUT /brands/:brandId/publish-calendar/settings/weekly`로 채널 배열, 정보성·트렌드성 형식과 주간 일정 행 전체를 하나의 brand advisory transaction에서 저장한다. 기존 일정 행은 ID를 유지하고, 삭제된 ID는 해당 브랜드 범위에서만 삭제하며, 클라이언트가 임의의 다른 브랜드 ID를 참조하면 tenant 오류로 거부한다.
 
 검증 규칙은 다음과 같다.
 
@@ -177,17 +179,18 @@ OFF는 항상 허용한다. ON은 연결된 지원 채널이 하나 이상 켜�
 - 하루 슬롯 수와 주간 전체 슬롯 수는 서버 상한 이내
 - 동일 시각 중복과 임의 간격은 허용
 - 마스터 ON 상태에서 활성 채널 0개 또는 일정 0개 저장은 거부
-- 지원되지 않거나 미연결인 채널 저장은 거부
+- 지원되지 않는 채널과 새 미연결 선택은 거부하되, 연결 해제로 비활성화된 기존 선택은 보존
 - 템플릿의 주간 전체 횟수는 현재 플랜의 `weekly_publish_limit`를 초과할 수 없음
 
 저장 성공은 기존 materialize 슬롯을 바꾸지 않고 다음 미생성 발생에만 적용된다. UI는 이 사실을 저장 전에 안내한다.
 
 ### 6.4 단계적 호환성
 
-API 선배포와 UI 선배포 사이의 짧은 전환 구간만 구형 `slotTimes` 응답·입력을 지원한다. 운영에 기존 자동 설정과 미래 자동 슬롯이 0건임을 배포 직전에 다시 확인한다.
+Vercel UI와 Ubuntu API는 원자적으로 전환되지 않으므로 짧은 전환 구간만 구형 `slotTimes` 응답·입력을 지원한다. 운영에 기존 자동 설정과 미래 자동 슬롯이 0건임을 배포 직전에 다시 확인한다.
 
-- 전환 중 구 UI write는 새 weekly schedule을 만들지 않고 구형 설정으로만 격리한다.
-- 새 UI가 운영 승격되고 이전 UI revision으로 유입되는 write가 없음을 확인한 뒤 구형 DTO, 검증, repository write와 allocator fallback을 제거한다.
+- 기존 endpoint는 구형 설정으로만 격리하고 새 versioned weekly endpoint는 `weeklySchedule`만 다룬다.
+- 새 UI는 weekly capability가 없는 구 API에서 구형 화면을 유지하며 weekly write를 보내지 않는다.
+- 새 UI가 운영 승격되고 이전 UI revision으로 유입되는 write가 없음을 확인한 뒤 별도 cleanup PR에서 구형 DTO, 검증과 repository write를 제거한다.
 - 장기 dual-write, 암묵적 월~일 복제 또는 숨은 fallback은 남기지 않는다.
 
 ## 7. 설정 UI
@@ -234,8 +237,9 @@ API 선배포와 UI 선배포 사이의 짧은 전환 구간만 구형 `slotTime
 - `action_required`: 검토 필요, 게시 실패, 결과 확인 필요 또는 연결 복구 필요
 - `upcoming`: 미래 예약이며 target 게시가 시작되지 않음
 - `delayed_today`: 예약 시각은 지났지만 같은 한국 날짜 23:59 전이고 target 게시가 시작되지 않음
-- `expired`: 예약일 23:59가 지났고 미시작 target이 만료 처리됨
 - `publishing`, `partially_published`, `published`, `cancelled`
+
+만료는 별도 lifecycle status를 만들지 않고 `cancelled`와 안정적인 reason `reservation_expired_at_2359_kst`의 조합으로 표현한다. 저장 상태와 UI 상태 어휘가 달라지는 것을 막는다.
 
 목록과 캘린더는 이 필드를 같은 status presentation 함수로 렌더링한다. `게시 예정` 필터에 지난 날짜의 미완료 항목을 넣지 않는다. Workstream 1에서는 과거에 남아 있는 active reservation을 `처리 필요`로 드러내고 자동 취소는 하지 않는다. Workstream 3의 만료 transaction이 적용된 뒤에만 `cancelled`로 전환한다.
 
@@ -321,13 +325,13 @@ allocator는 한국시간 오늘부터 7일 horizon을 계산하고 각 날짜�
 
 운영 API의 `LOCAL_SCHEDULER_ENABLED=false`는 유지한다. primary와 canary API 프로세스 안에서 각각 scheduler를 켜지 않는다.
 
-대신 release bundle에 게시 전용 singleton scheduler 서비스를 추가한다. 이 서비스는 DB·Meta·Blob 자격 증명을 갖지 않고 Docker 내부 네트워크에서 primary API의 `GET /internal/cron/publish-due`를 1분마다 호출한다. `CRON_SECRET`은 기존 root-owned secret을 읽기 전용 mount로 받으며 로그에 출력하지 않는다.
+대신 release bundle에 dependency-free 게시 전용 singleton scheduler 서비스를 추가한다. 이 서비스는 DB·Meta·Blob 자격 증명을 갖지 않고 Docker 내부 네트워크에서 primary API의 `POST /internal/cron/publish-due`를 1분마다 호출한다. 기존 `POST /internal/cron/publish-calendar-allocate`도 추천 생성 이후의 명시된 KST cadence와 missed-window catch-up에서 호출한다. 현재 `CRON_SECRET`은 API env에만 있으므로 scheduler 전용 root-owned 0600 secret file을 별도로 provision해 읽기 전용 mount하며 로그에 출력하지 않는다.
 
 - scheduler replica는 정확히 1개
 - 이전 호출이 끝나지 않았으면 다음 tick을 중첩 실행하지 않음
-- API에도 전역 advisory lock을 추가해 오배치된 중복 caller를 방어
+- API는 expiry·due claim의 짧은 transaction에만 advisory lock을 사용하고 provider HTTP 호출 전 commit
 - 응답 status와 처리 건수만 구조화 로그로 기록
-- healthcheck는 프로세스 생존뿐 아니라 최근 성공 tick 시각을 검증
+- healthcheck는 프로세스 생존, 최근 성공 tick, 정상 in-flight allowance를 구분
 - 배포·롤백 시 scheduler만 해당 release의 immutable 정의로 교체 가능
 
 기존 추천 생성 예약 기능은 주제 추천을 만들 뿐 게시 큐를 실행하지 않는다. 두 실행 주체를 같은 기능으로 간주하지 않는다.
@@ -433,9 +437,9 @@ DM, FAQ, crawl, wiki와 무관 worker는 변경하지 않고 영향 테스트 �
 
 1. 배포 직전 원격 main, Ubuntu `state/current`, GitHub `PRODUCTION_RELEASE_SHA`, 실행 digest와 별도 hotfix를 다시 확인한다.
 2. 운영의 자동 설정·미래 자동 슬롯 0건 전제를 다시 확인한다. 달라졌으면 자동 변환하지 않고 중단한다.
-3. additive migration과 backward-compatible API를 먼저 canary 후 primary에 승격한다.
-4. UI를 승격하고 새 weekly settings read/write를 운영 브라우저에서 확인한다.
-5. 구형 UI write가 없음을 확인한 뒤 구형 DTO/repository/allocator fallback을 제거한다.
+3. Vercel의 production-domain 자동 할당을 중지하고 같은 SHA의 UI를 staged 상태로 만든다.
+4. 승인된 additive migration과 backward-compatible API를 canary에 배포하고 staged UI를 canary와 검증한 뒤 primary에 승격한다.
+5. staged UI를 재빌드 없이 운영 domain으로 승격하고 새 weekly settings read/write를 운영 브라우저에서 확인한다.
 6. scheduler는 API와 UI 검증 후 마지막에 활성화한다. 첫 tick 전에 due·expired dry-run 목록과 현재 게시 한도를 확인한다.
 7. scheduler 활성화 후 최근 성공 tick, publish attempt, provider 오류, API health/ready와 restart count를 확인한다.
 8. Caddy, DB 이외 worker, DM, Wiki와 자동응답 설정은 변경하지 않는다.
@@ -446,15 +450,16 @@ rollback은 변경한 구성요소만 대상으로 한다. scheduler를 먼저 �
 
 이번 변경은 하나의 기능 브랜치, 하나의 PR, 한 번의 CI/CD와 하나의 운영 release SHA로 배포한다. 다만 실제 적용은 다음 순서를 고정한다.
 
-1. migration 091을 운영 application role 검증 결과와 함께 적용한다.
-2. weekly schema를 읽을 수 있는 API를 canary에서 검증하고 primary로 승격한다.
-3. 고객 UI를 배포하고 목록·캘린더·예약 변경·주간 설정을 운영 브라우저에서 확인한다.
-4. 새 scheduler 이미지를 같은 release SHA의 immutable digest로 배치하되 정지 상태로 둔다.
-5. `publish-due/preview`로 due·expired 대상, 주간 한도와 provider 호출 예정 건을 확인한다.
-6. 이상이 없을 때 scheduler 한 개만 시작하고 연속 세 tick과 heartbeat를 확인한다.
-7. 전체 확인 후 `state/current`와 `PRODUCTION_RELEASE_SHA`를 같은 새 SHA로 갱신한다.
+1. migration 091의 명시적 승인과 운영 application role 검증 결과를 확인하고 적용한다.
+2. weekly schema와 legacy endpoint를 함께 읽을 수 있는 API를 canary에서 검증하고 staged 고객 UI를 canary와 확인한다.
+3. API를 primary로 승격한다. 기존 `promote.sh`가 이 시점에 `state/current`를 새 SHA로 바꾸는 것을 확인한다.
+4. staged 고객 UI를 production domain으로 승격하고 목록·캘린더·예약 변경·주간 설정을 운영 브라우저에서 확인한다.
+5. 새 scheduler 이미지를 같은 release SHA의 immutable digest로 배치하되 정지 상태로 둔다.
+6. allocation/due preview로 생성·만료·게시 대상, 주간 한도와 provider 호출 예정 건을 확인한다.
+7. 이상이 없을 때 scheduler 한 개만 시작하고 연속 세 tick과 heartbeat를 확인한다.
+8. 전체 확인 후 GitHub `PRODUCTION_RELEASE_SHA`를 같은 새 SHA로 갱신한다.
 
-이 순서는 CI/CD를 여러 번 실행하기 위한 분리가 아니다. 한 번의 배포 안에서 실제 게시 mutation만 마지막까지 닫아 두기 위한 activation gate다. 실패하면 scheduler를 먼저 정지하고, API와 UI는 같은 직전 운영 SHA로 되돌린다. migration 091은 additive이므로 DROP하지 않는다.
+이 순서는 CI/CD를 여러 번 실행하기 위한 분리가 아니다. 한 번의 배포 안에서 실제 게시 mutation만 마지막까지 닫아 두기 위한 activation gate다. API primary 승격 후 실패하면 scheduler를 먼저 정지하고, UI alias와 API를 같은 직전 운영 SHA로 되돌려 `state/current`를 복구한다. migration 091은 additive이므로 DROP하지 않는다.
 
 ## 14. 완료 조건
 

@@ -39,7 +39,7 @@ Expected: FAIL because `derivePublishOperationalState` and `operationalStatus` d
 
 ```ts
 export type PublishOperationalStatus =
-  | "action_required" | "upcoming" | "delayed_today" | "expired"
+  | "action_required" | "upcoming" | "delayed_today"
   | "publishing" | "partially_published" | "published" | "cancelled";
 
 export interface PublishOperationalState {
