@@ -1116,6 +1116,52 @@ test("publication preflight accepts one exact true and rejects unsafe variants",
   }
 });
 
+test("Proposal prompt cutover mode admits only the coordinated kill-switch state", () => {
+  const bash = findBash();
+  assert.ok(bash, "Bash is required for the Proposal cutover flag contract");
+  const preflight = read("deploy/scripts/preflight.sh");
+  const caseBlock = preflight.match(
+    /case "\$\{AI_CONTENT_PROPOSAL_PROMPT_CUTOVER_MODE:-false\}" in[\s\S]*?^esac$/m,
+  )?.[0];
+  assert.ok(caseBlock, "preflight must define the Proposal prompt cutover mode branch");
+
+  const fixture = mkdtempSync(join(tmpdir(), "brand-pilot-proposal-cutover-"));
+  const apiEnv = join(fixture, "api.env");
+  const harness = join(fixture, "proposal-cutover.sh");
+  writeFileSync(harness, [
+    "#!/usr/bin/env bash",
+    "set -Eeuo pipefail",
+    'source "$1"',
+    'API_ENV_FILE="$2"',
+    caseBlock,
+    "",
+  ].join("\n"), { mode: 0o700 });
+
+  const run = ({ mode, enabled: proposalEnabled }) => {
+    writeFileSync(apiEnv, `CONTENT_PROPOSALS_ENABLED=${proposalEnabled}\n`, { mode: 0o600 });
+    const env = { ...process.env };
+    delete env.AI_CONTENT_PROPOSAL_PROMPT_CUTOVER_MODE;
+    if (mode !== undefined) env.AI_CONTENT_PROPOSAL_PROMPT_CUTOVER_MODE = mode;
+    return spawnSync(bash, [bashPath(harness), bashPath("deploy/scripts/lib.sh"), bashPath(apiEnv)], {
+      cwd: process.cwd(),
+      encoding: "utf8",
+      env,
+    });
+  };
+
+  try {
+    assert.equal(run({ enabled: "true" }).status, 0);
+    assert.notEqual(run({ enabled: "false" }).status, 0);
+    assert.equal(run({ mode: "true", enabled: "false" }).status, 0);
+    assert.notEqual(run({ mode: "true", enabled: "true" }).status, 0);
+    const invalidMode = run({ mode: "other", enabled: "false" });
+    assert.notEqual(invalidMode.status, 0);
+    assert.match(invalidMode.stderr, /error=proposal_prompt_cutover_mode_invalid/);
+  } finally {
+    rmSync(fixture, { recursive: true, force: true });
+  }
+});
+
 test("optional workers use dedicated profiles, identities, env files, and hardened containers", () => {
   const compose = read("deploy/compose.production.yml");
   const services = assertComposeTopology(compose);

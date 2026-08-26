@@ -18,6 +18,7 @@ const COMPONENTS = Object.freeze(["customerUi", ...SERVER_COMPONENTS]);
 export const AI_CONTENT_THREE_FORMAT_CUTOVER_PROFILE = "ai-content-three-format-cutover";
 export const STRUCTURED_SOCIAL_RENDER_SEMANTICS_PROFILE = "structured-social-render-semantics";
 export const CARD_MANUSCRIPT_VISUAL_SESSION_PROFILE = "card-manuscript-visual-session";
+export const CARD_REEL_EDITORIAL_PROMPT_QUALITY_PROFILE = "card-reel-editorial-prompt-quality";
 export const FAQ_UTTERANCE_MATCHING_PROFILE = "faq-utterance-matching";
 export const MANUAL_BRAND_VISUAL_ASSETS_PROFILE = "manual-brand-visual-assets";
 const AI_CONTENT_CUTOVER_SERVER_COMPONENTS = Object.freeze([
@@ -47,6 +48,12 @@ const AI_CONTENT_PLANNER_DRAFT_CONTRACT_PATHS = new Set([
   "packages/brand-pilot-content-contracts/src/generatedArtifacts.test.ts",
   "packages/brand-pilot-content-contracts/src/plannerDrafts.test.ts",
   "packages/brand-pilot-content-contracts/src/plannerDrafts.ts",
+]);
+
+const CARD_REEL_EDITORIAL_PROPOSAL_LINEAGE_PATHS = new Set([
+  "packages/brand-pilot-content-contracts/src/catalog.ts",
+  "packages/brand-pilot-content-contracts/generated/content-catalog.json",
+  "packages/brand-pilot-content-contracts/generated/content-prompt-binding-v1.schema.json",
 ]);
 
 const ACTIVE_REEL_MANIFEST_CONTRACT_PATHS = new Set([
@@ -573,7 +580,8 @@ function classifyManualBrandVisualAssetsPath(path, components) {
 export function classifyChangedPaths(values, options = {}) {
   const profile = options.profile ?? "default";
   if (!["default", AI_CONTENT_THREE_FORMAT_CUTOVER_PROFILE, STRUCTURED_SOCIAL_RENDER_SEMANTICS_PROFILE,
-    CARD_MANUSCRIPT_VISUAL_SESSION_PROFILE, FAQ_UTTERANCE_MATCHING_PROFILE,
+    CARD_MANUSCRIPT_VISUAL_SESSION_PROFILE, CARD_REEL_EDITORIAL_PROMPT_QUALITY_PROFILE,
+    FAQ_UTTERANCE_MATCHING_PROFILE,
     MANUAL_BRAND_VISUAL_ASSETS_PROFILE].includes(profile)) {
     throw new Error("release_impact_profile_invalid");
   }
@@ -653,6 +661,12 @@ export function classifyChangedPaths(values, options = {}) {
     }
     if (path.startsWith("deploy/")) {
       deployBundleChanged = true;
+      continue;
+    }
+    if (profile === CARD_REEL_EDITORIAL_PROMPT_QUALITY_PROFILE
+      && CARD_REEL_EDITORIAL_PROPOSAL_LINEAGE_PATHS.has(path)) {
+      components.api = true;
+      components.contentProposalWorker = true;
       continue;
     }
     if (AI_CONTENT_ACCOUNT_POOL_RUNTIME_PATHS.has(path)) {

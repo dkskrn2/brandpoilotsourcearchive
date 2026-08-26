@@ -165,7 +165,11 @@ require_exact_boolean "LOCAL_SCHEDULER_ENABLED" "false" "$API_ENV_FILE"
 require_exact_boolean "INSTAGRAM_PUBLISH_ENABLED" "true" "$API_ENV_FILE"
 require_exact_boolean "AI_CONTENT_ATTACHMENT_UPLOAD_SESSIONS_ENABLED" "true" "$API_ENV_FILE"
 require_exact_boolean "AUTOMATED_CONTENT_ENABLED" "false" "$API_ENV_FILE"
-require_exact_boolean "CONTENT_PROPOSALS_ENABLED" "true" "$API_ENV_FILE"
+case "${AI_CONTENT_PROPOSAL_PROMPT_CUTOVER_MODE:-false}" in
+  false) require_exact_boolean "CONTENT_PROPOSALS_ENABLED" "true" "$API_ENV_FILE" ;;
+  true) require_exact_boolean "CONTENT_PROPOSALS_ENABLED" "false" "$API_ENV_FILE" ;;
+  *) fail "proposal_prompt_cutover_mode_invalid" ;;
+esac
 require_exact_boolean "DM_WORKERS_ENABLED" "false" "$API_ENV_FILE"
 for oauth_key in \
   CONTENT_SUGGESTION_OAUTH_ISSUER \

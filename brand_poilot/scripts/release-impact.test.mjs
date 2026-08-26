@@ -6,6 +6,7 @@ import { join, resolve } from "node:path";
 import test from "node:test";
 
 import {
+  CARD_REEL_EDITORIAL_PROMPT_QUALITY_PROFILE,
   CARD_MANUSCRIPT_VISUAL_SESSION_PROFILE,
   FAQ_UTTERANCE_MATCHING_PROFILE,
   MANUAL_BRAND_VISUAL_ASSETS_PROFILE,
@@ -274,6 +275,50 @@ test("three-format cutover maps every production cutover artifact without wideni
   assert.equal(impact.deployBundleChanged, true);
   assert.equal(impact.verifiedScope, true);
   assert.deepEqual(impact.unknownPaths, []);
+});
+
+test("card and reel editorial prompt profile limits Proposal lineage artifacts to API and Proposal worker", () => {
+  const impact = classifyChangedPaths([
+    "brand_poilot/packages/brand-pilot-content-contracts/src/catalog.ts",
+    "brand_poilot/packages/brand-pilot-content-contracts/generated/content-catalog.json",
+    "brand_poilot/packages/brand-pilot-content-contracts/generated/content-prompt-binding-v1.schema.json",
+  ], { profile: CARD_REEL_EDITORIAL_PROMPT_QUALITY_PROFILE });
+
+  assert.deepEqual(enabled(impact), ["api", "contentProposalWorker"]);
+  assert.equal(impact.buildAllServer, false);
+  assert.equal(impact.verifiedScope, true);
+  assert.deepEqual(impact.unknownPaths, []);
+});
+
+test("card and reel editorial prompt profile rebuilds exactly its four final prompt consumers", () => {
+  const impact = classifyChangedPaths([
+    "brand_poilot/packages/brand-pilot-content-contracts/src/catalog.ts",
+    "brand_poilot/packages/brand-pilot-content-contracts/generated/content-catalog.json",
+    "brand_poilot/packages/brand-pilot-content-contracts/generated/content-prompt-binding-v1.schema.json",
+    "brand_poilot/workers/brand-pilot-content-proposal-worker/src/promptBuilder.ts",
+    "brand_poilot/workers/brand-pilot-card-news-worker/src/promptBuilder.ts",
+    "brand_poilot/workers/brand-pilot-reel-worker/src/promptBuilder.ts",
+  ], { profile: CARD_REEL_EDITORIAL_PROMPT_QUALITY_PROFILE });
+
+  assert.deepEqual(enabled(impact), ["api", "cardNewsWorker", "contentProposalWorker", "reelWorker"]);
+  assert.equal(impact.components.blogWorker, false);
+  assert.equal(impact.components.imageWorker, false);
+  assert.equal(impact.buildAllServer, false);
+  assert.equal(impact.verifiedScope, true);
+  assert.deepEqual(impact.unknownPaths, []);
+});
+
+test("default profile keeps catalog source changes on the broad fail-safe path", () => {
+  const impact = classifyChangedPaths([
+    "brand_poilot/packages/brand-pilot-content-contracts/src/catalog.ts",
+  ]);
+
+  assert.deepEqual(enabled(impact), [...SERVER_COMPONENTS].sort());
+  assert.equal(impact.buildAllServer, true);
+  assert.equal(impact.verifiedScope, false);
+  assert.deepEqual(impact.unknownPaths, [
+    "brand_poilot/packages/brand-pilot-content-contracts/src/catalog.ts",
+  ]);
 });
 
 test("structured social render profile selects only its four coordinated consumers", () => {
