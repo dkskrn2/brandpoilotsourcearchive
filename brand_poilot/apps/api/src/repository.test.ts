@@ -29,6 +29,11 @@ function task3CredentialExpiry(daysFromNow: number) {
   return new Date(task3TestNow.getTime() + daysFromNow * oneDayMs);
 }
 
+function usePerformanceDashboardTestClock(now = "2026-07-16T12:00:00.000Z") {
+  vi.useFakeTimers();
+  vi.setSystemTime(new Date(now));
+}
+
 afterEach(() => {
   vi.useRealTimers();
   vi.unstubAllEnvs();
@@ -4282,6 +4287,7 @@ describe("content performance repository", () => {
   });
 
   it("uses latest snapshots for totals and excludes each content's first daily sample", async () => {
+    usePerformanceDashboardTestClock();
     const query = vi.fn(async (sql: string) => {
       if (sql.includes("dashboard_workflow")) {
         return { rowCount: 1, rows: [{ queued_topics: "3", generating: "2", pending_review: "4", scheduled_or_published: "5", pending_review_count: "4", failed_publish_count: "1" }] };
@@ -4327,6 +4333,7 @@ describe("content performance repository", () => {
   });
 
   it("uses each content's true predecessor at the 30-day boundary without emitting its date", async () => {
+    usePerformanceDashboardTestClock("2026-08-14T12:00:00.000Z");
     let snapshotsSql = "";
     const query = vi.fn(async (sql: string) => {
       if (sql.includes("dashboard_workflow")) {
@@ -4367,6 +4374,7 @@ describe("content performance repository", () => {
   });
 
   it("excludes unmeasured content from rankings while retaining measured zero", async () => {
+    usePerformanceDashboardTestClock();
     const query = vi.fn(async (sql: string) => {
       if (sql.includes("dashboard_workflow")) {
         return { rowCount: 1, rows: [{ queued_topics: "0", generating: "0", pending_review: "0", scheduled_or_published: "2", pending_review_count: "0", failed_publish_count: "0" }] };

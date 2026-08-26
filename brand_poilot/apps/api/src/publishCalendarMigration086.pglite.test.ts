@@ -10,6 +10,7 @@ import { createPublishCalendarRepository } from "./publishCalendarRepository.js"
 const migration079Path = resolve(process.cwd(), "../../db/migrations/079_publish_calendar_runtime.sql");
 const migration085Path = resolve(process.cwd(), "../../db/migrations/085_publish_calendar_idempotency_expand.sql");
 const migration086Path = resolve(process.cwd(), "../../db/migrations/086_publish_calendar_same_time_contract.sql");
+const migration092Path = resolve(process.cwd(), "../../db/migrations/092_publish_calendar_weekly_schedule.sql");
 
 function pool(database: PGlite): Pool {
   const query = async (sql: string, values: unknown[] = []) => {
@@ -72,19 +73,20 @@ async function bootstrap(database: PGlite) {
   `);
 }
 
-async function loadThrough086(database: PGlite) {
+async function loadPublishCalendarContracts(database: PGlite) {
   await database.exec(await readFile(migration079Path, "utf8"));
   await database.exec(await readFile(migration085Path, "utf8"));
   await database.exec(await readFile(migration086Path, "utf8"));
+  await database.exec(await readFile(migration092Path, "utf8"));
 }
 
-describe("migration 086 publish calendar same-time contract", () => {
+describe("publish calendar same-time and weekly persistence contracts", () => {
   let database: PGlite;
 
   beforeAll(async () => {
     database = await PGlite.create({ extensions: { pgcrypto } });
     await bootstrap(database);
-    await loadThrough086(database);
+    await loadPublishCalendarContracts(database);
   }, 30_000);
 
   afterAll(async () => database?.close());
@@ -196,6 +198,21 @@ describe("migration 086 publish calendar same-time contract", () => {
          brand_id,plan_code,status,started_at,current_period_start,current_period_end
        ) values($1,'rollback_fixture','active','2026-01-01','2026-01-01','2100-01-01')`,
       [brandId],
+    );
+    await database.query(
+      `insert into publish_calendar_settings(
+         brand_id,workspace_id,enabled,channels,informational_format,trend_format
+       ) values($1,$2,true,array['instagram'],'card_news','reel')`,
+      [brandId, workspaceId],
+    );
+    await database.query(
+      `insert into publish_calendar_weekly_schedule_entries(
+         id,workspace_id,brand_id,day_of_week,slot_time,sort_order
+       ) values
+         ('30000000-0000-4000-8000-000000000086',$1,$2,4,'11:30',0),
+         ('30000000-0000-4000-8000-000000000087',$1,$2,4,'11:30',1),
+         ('30000000-0000-4000-8000-000000000088',$1,$2,4,'11:31',2)`,
+      [workspaceId, brandId],
     );
 
     const repository = createPublishCalendarRepository(pool(database));
