@@ -40,8 +40,8 @@ const promptBinding = {
   proposalBaseInputVersion: "proposal-base-input.v2",
   proposalComposedInputVersion: "proposal-input.v2",
   proposalOutputVersion: "content-proposal.v2",
-  proposalPromptVersion: "proposal.writer.v3",
-  proposalSchemaSha256: "1".repeat(64),
+  proposalPromptVersion: "proposal.writer.v4",
+  proposalSchemaSha256: "54bf063cf32926874af6b098272df08d41a9e7d7f578ee6560debe44428cf5f3",
   generationInputVersion: "content-generation-input.v3",
   generationSchemaSha256: "2".repeat(64),
   planContractVersion: "reel-plan.v2",
@@ -50,7 +50,7 @@ const promptBinding = {
   imagePackageVersion: "image-generation-package.v1",
   imagePromptVersion: "image.reel.informational.v1",
   manifestVersion: "ai-content.v3",
-  contractSourceHash: "4".repeat(64),
+  contractSourceHash: "e607bbb891af3723dc4620a0319382e83ee29006ed547aae620086b9809f248d",
   model: "gpt-5.6-terra",
 } as const;
 

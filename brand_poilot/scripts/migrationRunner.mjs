@@ -107,6 +107,7 @@ export const fullSourceMigrationIds = Object.freeze([
   "088_onboarding_product_image_imports.sql",
   "089_free_subscription_plan.sql",
   "090_existing_brand_free_subscriptions.sql",
+  "091_ai_content_prompt_lineage_v4.sql",
 ]);
 const legacyTriggerSearchPathMigrationId = "073a_legacy_trigger_function_search_path.sql";
 export const legacyTriggerSearchPathMigrationChecksum =
@@ -134,6 +135,7 @@ const post075SchemaMigrationIds = Object.freeze([
   "088_onboarding_product_image_imports.sql",
   "089_free_subscription_plan.sql",
   "090_existing_brand_free_subscriptions.sql",
+  "091_ai_content_prompt_lineage_v4.sql",
 ]);
 export const post075SchemaMigrationChecksums = Object.freeze({
   "077_content_suggestion_batches.sql": "3b178464c5ae5c4e220428e0752ab3e79a2ca06b5b2b23f1e89c34e983e63f76",
@@ -150,6 +152,7 @@ export const post075SchemaMigrationChecksums = Object.freeze({
   "088_onboarding_product_image_imports.sql": "a83e1adecd9df47980051328c2a6bde13a3c0c58a6636f21462d77800299374c",
   "089_free_subscription_plan.sql": "fd58a829eb658b0ac650e033a5edd085ec452a6eb0420251c60abcd51231267a",
   "090_existing_brand_free_subscriptions.sql": "8134f35d21f72f7418b5502bb5cfb10c8f296f147788bcd8b539d6d930588552",
+  "091_ai_content_prompt_lineage_v4.sql": "05696c55ee959cd80ef7cdf30fcb07e93e0579da515042ebd8e8aafb9cde5e10",
 });
 const post075DeferredMigrationIds = Object.freeze([
   ...post075DataMigrationIds,

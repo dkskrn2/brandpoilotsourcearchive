@@ -724,7 +724,7 @@ function rebindStoredPlanToGeneration(
   return parseContentPlanResultV2(rebound, finalInput, supplementalResearch);
 }
 
-const EXPECTED_PROPOSAL_CATALOG_SHA256 = "415ca40b3dc3616affab6642b437ecd6b148bf70f017638640e2a4f858aaf808";
+const EXPECTED_PROPOSAL_CATALOG_SHA256 = "6d983b25c51debb7588650165494f6cceffd1b2a921301e8cb79afb38543c9a9";
 const PROPOSAL_MODEL_ID = "gpt-5.6-terra";
 
 function loadProposalCatalog(): VerifiedGeneratedContentCatalog {
@@ -736,11 +736,11 @@ function loadProposalCatalog(): VerifiedGeneratedContentCatalog {
   }
   const catalog = JSON.parse(bytes.toString("utf8")) as VerifiedGeneratedContentCatalog;
   if (
-    catalog.contractSourceHash !== "ecada3861313486b50e0a1475d89284f13fe4a74018207d11f205613deefb550"
+    catalog.contractSourceHash !== "e607bbb891af3723dc4620a0319382e83ee29006ed547aae620086b9809f248d"
     || catalog.proposalContracts.requestVersion !== "content-proposal-request.v2"
     || catalog.proposalContracts.baseInputVersion !== "proposal-base-input.v2"
     || catalog.proposalContracts.outputVersion !== "content-proposal.v2"
-    || catalog.proposalContracts.promptVersion !== "proposal.writer.v3"
+    || catalog.proposalContracts.promptVersion !== "proposal.writer.v4"
     || catalog.proposalContracts.outputSchemaSha256 !== "54bf063cf32926874af6b098272df08d41a9e7d7f578ee6560debe44428cf5f3"
     || catalog.researchEvidence.version !== "research-evidence.v1"
   ) {

@@ -6,7 +6,7 @@ import { Pool } from "pg";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import type { ContentOrchestrationV2 } from "@brand-pilot/content-contracts";
 import { createAiContentProposalV2Repository } from "./aiContentRepository.js";
-import { createAiContentProposalV2Service } from "./aiContentProposalV2Service.js";
+import { createAiContentProposalV2Service, proposalSha256 } from "./aiContentProposalV2Service.js";
 import { parseProposalInputSnapshotV2 } from "./aiContentGenerationInputV3.js";
 import {
   createContentProposalJobsRepository,
@@ -22,6 +22,10 @@ const ids = {
   topic: "50000000-0000-4000-8000-000000000005",
   snapshot: "60000000-0000-4000-8000-000000000006",
 };
+const proposalV3SourceHash = "ecada3861313486b50e0a1475d89284f13fe4a74018207d11f205613deefb550";
+const proposalV3CatalogHash = "415ca40b3dc3616affab6642b437ecd6b148bf70f017638640e2a4f858aaf808";
+const proposalV4SourceHash = "e607bbb891af3723dc4620a0319382e83ee29006ed547aae620086b9809f248d";
+const proposalV4CatalogHash = "6d983b25c51debb7588650165494f6cceffd1b2a921301e8cb79afb38543c9a9";
 
 async function applyMigrationsThrough075(pool: Pool) {
   const directory = resolve(process.cwd(), "../../db/migrations");
@@ -64,10 +68,23 @@ function request(contentInstruction: string | null = null): ContentOrchestration
   };
 }
 
-function resolved(requestValue: ContentOrchestrationV2 = request()) {
+function resolved(
+  requestValue: ContentOrchestrationV2 = request(),
+  withResearchSourceAcquisition = false,
+) {
   return {
     request: requestValue,
     sourceSnapshots: [],
+    ...(withResearchSourceAcquisition ? {
+      researchSourceAcquisition: {
+        contractVersion: "research-source-acquisition.v1" as const,
+        status: "not_applicable" as const,
+        requestedUrl: null,
+        canonicalUrl: null,
+        contentHash: null,
+        capturedAt: "2026-08-05T00:00:00.000Z",
+      },
+    } : {}),
     baseInput: {
       contractVersion: "proposal-base-input.v2" as const,
       brandCore: {
@@ -173,6 +190,15 @@ describe.skipIf(process.env.RUN_POSTGRES_INTEGRATION !== "true")(
       });
       await pool.query("create extension if not exists pgcrypto");
       await applyMigrationsThrough075(pool);
+      for (const migration of [
+        "087_ai_content_prompt_lineage_v3.sql",
+        "091_ai_content_prompt_lineage_v4.sql",
+      ]) {
+        await pool.query(await readFile(
+          resolve(process.cwd(), `../../db/migrations/${migration}`),
+          "utf8",
+        ));
+      }
       await pool.query(
         "insert into app_users(id,email) values($1,'proposal-v2@example.com')",
         [ids.actor],
@@ -214,7 +240,10 @@ describe.skipIf(process.env.RUN_POSTGRES_INTEGRATION !== "true")(
       const service = createAiContentProposalV2Service({
         ...repository,
         assertReady: async () => undefined,
-        resolve: async (command) => resolved(command.source === "performance_experiment" ? request() : command.request),
+        resolve: async (command) => resolved(
+          command.source === "performance_experiment" ? request() : command.request,
+          command.source !== "performance_experiment",
+        ),
       });
       const command = {
         source: "manual" as const,
@@ -357,7 +386,7 @@ describe.skipIf(process.env.RUN_POSTGRES_INTEGRATION !== "true")(
       const service = createAiContentProposalV2Service({
         ...creationRepository,
         assertReady: async () => undefined,
-        resolve: async () => resolved(),
+        resolve: async () => resolved(request(), true),
       });
       return service.create({
         source: "manual",
@@ -391,6 +420,124 @@ describe.skipIf(process.env.RUN_POSTGRES_INTEGRATION !== "true")(
       expect(model.stage).toBe("composition_ready");
       return { created, jobs, research, seal, model };
     }
+
+    it("drains a stored v3 proposal through current claim and completion while new jobs use v4", async () => {
+      const created = await enqueueManualProposal("proposal-v3-drain");
+      const stored = await pool.query<{
+        job_id: string;
+        batch_id: string;
+        command_descriptor_sha256: string;
+        request_sha256: string;
+        base_input_sha256: string;
+      }>(
+        `select job_id,batch_id,command_descriptor_sha256,request_sha256,base_input_sha256
+           from ai_content_proposal_job_contracts where batch_id=$1`,
+        [created.proposalBatchId],
+      );
+      const contract = stored.rows[0];
+      const enqueueContractSha256 = proposalSha256({
+        jobId: contract.job_id,
+        batchId: contract.batch_id,
+        workspaceId: ids.workspace,
+        brandId: ids.brand,
+        requestSha256: contract.request_sha256,
+        baseInputSha256: contract.base_input_sha256,
+        commandDescriptorSha256: contract.command_descriptor_sha256,
+        contractSourceSha256: proposalV3SourceHash,
+        catalogSha256: proposalV3CatalogHash,
+      });
+      const fixtureClient = await pool.connect();
+      try {
+        await fixtureClient.query("begin");
+        await fixtureClient.query("set local session_replication_role=replica");
+        await fixtureClient.query(
+          `update ai_content_proposal_job_contracts
+              set proposal_prompt_version='proposal.writer.v3',
+                  contract_source_sha256=$2,catalog_sha256=$3,enqueue_contract_sha256=$4
+            where batch_id=$1`,
+          [created.proposalBatchId, proposalV3SourceHash, proposalV3CatalogHash, enqueueContractSha256],
+        );
+        await fixtureClient.query("commit");
+      } catch (error) {
+        await fixtureClient.query("rollback");
+        throw error;
+      } finally {
+        fixtureClient.release();
+      }
+
+      const jobs = createContentProposalJobsRepository(pool);
+      const research = await jobs.claimContentProposalJob({
+        workerId: "proposal-v3-drain-research", leaseSeconds: 180,
+      }) as ContentProposalResearchClaim;
+      expect(research.contract).toMatchObject({
+        proposalPromptVersion: "proposal.writer.v3",
+        contractSourceSha256: proposalV3SourceHash,
+        catalogSha256: proposalV3CatalogHash,
+        enqueueContractSha256,
+      });
+      await jobs.completeContentProposalResearch({
+        jobId: research.id,
+        workerId: research.workerId,
+        leaseToken: research.leaseToken,
+        researchAttemptId: research.researchAttemptId,
+        evidence: proposalResearchEvidence(),
+      });
+      const model = await jobs.claimContentProposalJob({
+        workerId: "proposal-v3-drain-model", leaseSeconds: 180,
+      }) as ContentProposalModelClaim;
+      expect(model.contract).toMatchObject({
+        proposalPromptVersion: "proposal.writer.v3",
+        contractSourceSha256: proposalV3SourceHash,
+        catalogSha256: proposalV3CatalogHash,
+        enqueueContractSha256,
+      });
+      await jobs.startContentProposalInvocation({
+        jobId: model.id,
+        workerId: model.workerId,
+        leaseToken: model.leaseToken,
+        modelAttemptId: model.modelAttemptId,
+        invocationOrdinal: 1,
+      });
+      await jobs.completeContentProposalJob({
+        jobId: model.id,
+        workerId: model.workerId,
+        leaseToken: model.leaseToken,
+        modelAttemptId: model.modelAttemptId,
+        invocationOrdinal: 1,
+        transcriptSha256: "7".repeat(64),
+        outputSha256: "8".repeat(64),
+        parserSha256: "9".repeat(64),
+        proposalSet: proposalSet(),
+      });
+
+      const drained = await pool.query(
+        `select job.status,contract.proposal_prompt_version,contract.contract_source_sha256,
+                contract.catalog_sha256,contract.enqueue_contract_sha256
+           from ai_content_proposal_jobs job
+           join ai_content_proposal_job_contracts contract on contract.job_id=job.id
+          where job.id=$1`,
+        [model.id],
+      );
+      expect(drained.rows[0]).toEqual({
+        status: "completed",
+        proposal_prompt_version: "proposal.writer.v3",
+        contract_source_sha256: proposalV3SourceHash,
+        catalog_sha256: proposalV3CatalogHash,
+        enqueue_contract_sha256: enqueueContractSha256,
+      });
+
+      const next = await enqueueManualProposal("proposal-v4-enqueue");
+      const nextContract = await pool.query(
+        `select proposal_prompt_version,contract_source_sha256,catalog_sha256
+           from ai_content_proposal_job_contracts where batch_id=$1`,
+        [next.proposalBatchId],
+      );
+      expect(nextContract.rows[0]).toEqual({
+        proposal_prompt_version: "proposal.writer.v4",
+        contract_source_sha256: proposalV4SourceHash,
+        catalog_sha256: proposalV4CatalogHash,
+      });
+    }, 30_000);
 
     async function raceBehindModelAttemptLock(
       modelAttemptId: string,

@@ -604,6 +604,10 @@ describe.skipIf(process.env.RUN_POSTGRES_INTEGRATION !== "true")(
         resolve(process.cwd(), "../../db/migrations/087_ai_content_prompt_lineage_v3.sql"),
         "utf8",
       ));
+      await pool.query(await readFile(
+        resolve(process.cwd(), "../../db/migrations/091_ai_content_prompt_lineage_v4.sql"),
+        "utf8",
+      ));
       await pool.query(
         `insert into billing_plan_catalog(code,weekly_generation_limit,active)
          values('free',30,true)`,

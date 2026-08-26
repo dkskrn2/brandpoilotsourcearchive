@@ -85,6 +85,36 @@ GitHub `Production` 환경의 `BRAND_PILOT_CD_ENABLED=true`와 전용 SSH·authe
 
 worker 배포 시 `rollout-workers.sh`는 schema-2 manifest에서 `*_CHANGED=true`이면서 현재 실제로 실행 중인 worker service만 digest로 pull하고 `--no-deps`로 재생성합니다. 변경되지 않은 worker는 재기동하지 않고, 비활성 profile을 새로 시작하지도 않습니다. 실행 직전 각 container의 실제 immutable image digest를 서비스별로 기록하고 로컬에 확보하며 운영 lock을 획득합니다. 별도 heartbeat 검증 실행 파일이 없거나 실제 image가 digest로 고정되지 않았으면 mutation 전에 실패합니다. 실행 후 service 상태나 heartbeat 검증이 실패하면 영향받은 worker만 기록한 실제 digest로 서비스별 복원합니다. 특정 릴리스에서 Wiki worker 등을 제외할 때만 `WORKER_ROLLOUT_EXCLUDED_SERVICES`를 명시하며 기본값은 제외 없음입니다. API/Caddy와 다른 worker를 함께 내리는 `docker compose down`은 사용하지 않습니다.
 
+### Proposal prompt v3/v4 전환 순서
+
+Proposal prompt v4 릴리스의 영향 계산은 반드시 전용 profile을 명시합니다. 이 profile에서 Proposal lineage 전용 catalog/generated 세 파일은 API와 Content Proposal Worker에만 영향을 주며, 최종 prompt 변경을 합치면 API, Content Proposal Worker, Card News Worker, Reel Worker만 새 image 대상입니다. Image Worker와 Blog Worker는 현재 검증된 digest를 재사용합니다.
+
+```powershell
+node scripts/release-impact.mjs --base <CURRENT_PRODUCTION_SHA> --head <RELEASE_SHA> --profile card-reel-editorial-prompt-quality
+```
+
+운영자는 다음 순서를 바꾸지 않습니다.
+
+1. 원격 `main`, 릴리스 SHA, 현재 운영 SHA와 실제 API/Proposal/Card/Reel image digest, dirty worktree/hotfix, restart count, `/health`, `/ready`를 기록하고 서비스별 rollback digest를 보존합니다. 예상 운영 identity와 다르면 mutation 전에 중단합니다.
+2. 정확한 릴리스 SHA에서 API, Content Proposal Worker, Card News Worker, Reel Worker image만 build/publish하고 digest와 embedded source revision을 검증합니다. Image/Blog digest는 재사용합니다.
+3. 공유 API env의 유일한 `CONTENT_PROPOSALS_ENABLED` 행을 owner와 mode `0600`을 보존하며 `false`로 원자적으로 바꾸고, `AI_CONTENT_PROPOSAL_PROMPT_CUTOVER_MODE=true`로 preflight를 실행합니다. 실행 중인 v3 primary는 아직 재기동하지 않습니다.
+4. migration 091의 정확한 ID/checksum 근거를 확인하고 v4 API canary를 배포합니다. canary의 Proposal 기능이 disabled인지 read-only로 확인하며 v3 worker가 실행 중일 때 v4 Proposal을 enqueue하지 않습니다.
+5. 같은 cutover mode로 v4 API를 primary로 승격하고 health, ready, candidate digest, Proposal-disabled 응답을 확인합니다.
+6. 기존 v3 Proposal worker로 `queued`와 `processing` job 및 만료되지 않은 lease가 모두 0이 될 때까지 drain합니다. job을 취소·재작성·재라벨링·마이그레이션하지 않습니다.
+7. v3 queue와 lease가 0인 뒤 old Proposal worker를 중지하고 Content Proposal, Card News, Reel worker만 교체합니다. 세 서비스의 digest, running 상태, fresh heartbeat, restart count를 확인하며 Proposal 생성은 계속 disabled로 둡니다.
+8. v4 API/Proposal-worker pair의 호환성이 검증된 뒤에만 `CONTENT_PROPOSALS_ENABLED=true`를 원자적으로 복원하고 cutover mode 없이 일반 preflight를 실행합니다. 모든 일반 API instance를 재생성한 후 `/health`, `/ready`, `features.contentProposals=enabled`, fresh v4 Proposal-worker heartbeat를 확인합니다.
+
+Drain 상태 count는 read-only query로 확인합니다.
+
+```sql
+select status,count(*)::integer
+from public.ai_content_proposal_jobs
+where status in ('queued','processing')
+group by status order by status;
+```
+
+어느 단계에서든 migration, API 승격, drain, worker rollout, heartbeat 또는 재활성화 검증이 실패하거나 작업이 중단되면 `CONTENT_PROPOSALS_ENABLED=false`를 유지합니다. v4 API+v4 Proposal worker 또는 모든 v4-bound job을 drain한 뒤의 v3 API+v3 Proposal worker처럼 호환되는 pair를 복구하고 검증하기 전에는 다시 활성화하지 않습니다. 스크립트가 종료됐다는 이유만으로 이 flag를 `true`로 되돌리지 않습니다. migration 091은 append-only이므로 설치된 상태로 유지합니다.
+
 ### Ubuntu와 Tailscale
 
 Ubuntu에서는 Tailscale을 통한 `bpdeploy` SSH로 검증된 manifest를 받고, deploy script가 manifest의 digest를 pull합니다. `/opt/brand-pilot/shared/env/api.env`는 release directory 밖의 mode `600` 파일이며 Git checkout, manifest 교체, Docker image pull의 영향을 받지 않습니다.

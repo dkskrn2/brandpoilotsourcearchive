@@ -119,6 +119,12 @@ describe("Proposal V2 claim contract", () => {
     }
   });
 
+  it("rejects a v3 Proposal claim instead of accepting two prompt versions", () => {
+    const input = compositionJob();
+    input.contract.proposalPromptVersion = "proposal.writer.v3";
+    expect(() => parseContentProposalJob(input)).toThrow("content_proposal_claim_contract_mismatch");
+  });
+
   it("rejects request, base, command, enqueue, model, and aggregate hash drift", () => {
     const cases = [
       { ...researchJob(), contract: { ...researchJob().contract, requestSha256: "0".repeat(64) } },
