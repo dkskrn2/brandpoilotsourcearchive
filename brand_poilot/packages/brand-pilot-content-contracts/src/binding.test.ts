@@ -13,8 +13,10 @@ import { generateArtifactSet } from "./generateArtifacts.js";
 
 const HASH = "a".repeat(64);
 
-it("uses the revised marketing-evidence proposal prompt version", () => {
-  expect(CONTENT_PROPOSAL_PROMPT_VERSION).toBe("proposal.writer.v3");
+it("uses the revised editorial-quality proposal prompt version", async () => {
+  const artifacts = await generateArtifactSet();
+  const catalog = JSON.parse(artifacts.get("content-catalog.json")!);
+  expect(catalog.proposalContracts.promptVersion).toBe("proposal.writer.v4");
 });
 
 function bindingFor(

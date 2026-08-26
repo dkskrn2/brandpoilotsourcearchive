@@ -5,7 +5,7 @@
     "card_news": "card_news",
     "reel": "reel"
   },
-  "contractSourceHash": "ecada3861313486b50e0a1475d89284f13fe4a74018207d11f205613deefb550",
+  "contractSourceHash": "e607bbb891af3723dc4620a0319382e83ee29006ed547aae620086b9809f248d",
   "formats": [
     "card_news",
     "blog",
@@ -28,7 +28,7 @@
     "reel": "gpt-5.6-terra"
   },
   "promptBinding": {
-    "schemaSha256": "11ed8b2870a5176675225d8b09cb6c8552217f1e487abae1bd34ff219082dc02",
+    "schemaSha256": "a7cbd91bd8dfb59072387b6def293f0e31626dfcc1df0c6b88b902df3a42a0c8",
     "version": "content-prompt-binding.v1"
   },
   "proposalContracts": {
@@ -38,7 +38,7 @@
     "composedInputVersion": "proposal-input.v2",
     "outputSchemaSha256": "54bf063cf32926874af6b098272df08d41a9e7d7f578ee6560debe44428cf5f3",
     "outputVersion": "content-proposal.v2",
-    "promptVersion": "proposal.writer.v3",
+    "promptVersion": "proposal.writer.v4",
     "requestSchemaSha256": "a061a9290fc852f7f2200bdd6efb28ebe542afce78f3489b78678a4f45052bd2",
     "requestVersion": "content-proposal-request.v2"
   },
@@ -70,7 +70,7 @@
     },
     "contentPromptBindingV1": {
       "filename": "content-prompt-binding-v1.schema.json",
-      "sha256": "11ed8b2870a5176675225d8b09cb6c8552217f1e487abae1bd34ff219082dc02"
+      "sha256": "a7cbd91bd8dfb59072387b6def293f0e31626dfcc1df0c6b88b902df3a42a0c8"
     },
     "contentProposalRequestV2": {
       "filename": "content-proposal-request-v2.schema.json",
