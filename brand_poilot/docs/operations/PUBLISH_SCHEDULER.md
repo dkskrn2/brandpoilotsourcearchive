@@ -41,6 +41,7 @@ test -f "$migration_evidence" && test ! -L "$migration_evidence"
 test "$(stat -c '%a' -- "$migration_evidence")" = 600
 test "$(stat -c '%U' -- "$migration_evidence")" = bpdeploy
 jq -e '
+  .post075SchemaMigration |
   .contractVersion == "post-075-schema-migration-evidence.v1" and
   .providerRoleName == "postgres" and
   .migrationId == "091_publish_calendar_weekly_schedule.sql" and

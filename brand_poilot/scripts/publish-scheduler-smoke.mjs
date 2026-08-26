@@ -60,6 +60,13 @@ function validateIdList(value) {
     && new Set(value).size === value.length;
 }
 
+function sameIdSet(actual, expected) {
+  return validateIdList(actual)
+    && validateIdList(expected)
+    && actual.length === expected.length
+    && actual.every((id) => new Set(expected).has(id));
+}
+
 function canonicalPreview(value, { requireObservedAt }) {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw smokeError("publish_scheduler_preview_invalid");
@@ -84,15 +91,15 @@ function canonicalPreview(value, { requireObservedAt }) {
   return {
     counts,
     recovery: {
-      publishedQueueIds: [...value.recovery.publishedQueueIds],
-      resultUnknownQueueIds: [...value.recovery.resultUnknownQueueIds],
+      publishedQueueIds: [...value.recovery.publishedQueueIds].sort(),
+      resultUnknownQueueIds: [...value.recovery.resultUnknownQueueIds].sort(),
     },
     expiry: {
-      targetQueueIds: [...value.expiry.targetQueueIds],
-      slotIds: [...value.expiry.slotIds],
+      targetQueueIds: [...value.expiry.targetQueueIds].sort(),
+      slotIds: [...value.expiry.slotIds].sort(),
     },
-    delayedQueueIds: [...value.delayedQueueIds],
-    providerCandidateQueueIds: [...value.providerCandidateQueueIds],
+    delayedQueueIds: [...value.delayedQueueIds].sort(),
+    providerCandidateQueueIds: [...value.providerCandidateQueueIds].sort(),
   };
 }
 
@@ -126,11 +133,8 @@ function validateDueResult(value, expectedProviderCandidateQueueIds) {
   }
   const selected = value.selectedProviderCandidateQueueIds;
   const processed = value.processedProviderCandidateQueueIds;
-  if (!Array.isArray(selected) || !Array.isArray(processed)
-    || selected.some((id) => typeof id !== "string" || id.length === 0)
-    || processed.some((id) => typeof id !== "string" || id.length === 0)
-    || JSON.stringify(selected) !== JSON.stringify(expectedProviderCandidateQueueIds)
-    || JSON.stringify(processed) !== JSON.stringify(expectedProviderCandidateQueueIds)) {
+  if (!sameIdSet(selected, expectedProviderCandidateQueueIds)
+    || !sameIdSet(processed, expectedProviderCandidateQueueIds)) {
     throw smokeError("publish_scheduler_execute_mismatch");
   }
   return {

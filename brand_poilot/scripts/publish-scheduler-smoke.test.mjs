@@ -163,6 +163,71 @@ test("execution smoke rejects an execution response containing unapproved queue 
   });
 });
 
+test("execution smoke compares approved, selected, and processed IDs as exact sets", async () => {
+  const twoCandidates = {
+    ...preview,
+    counts: { ...preview.counts, providerCandidates: 2 },
+    providerCandidateQueueIds: ["queue-approved-1", "queue-approved-2"],
+  };
+  let executions = 0;
+  await withFakePrimary((request) => {
+    if (request.method === "GET") {
+      return { body: executions === 0 ? {
+        ...twoCandidates,
+        providerCandidateQueueIds: ["queue-approved-2", "queue-approved-1"],
+      } : {
+        ...twoCandidates,
+        counts: { ...twoCandidates.counts, providerCandidates: 0 },
+        providerCandidateQueueIds: [],
+      } };
+    }
+    executions += 1;
+    return { body: executions === 1 ? {
+      ...dueResult,
+      dueQueued: 2,
+      published: 2,
+      selectedProviderCandidateQueueIds: ["queue-approved-2", "queue-approved-1"],
+      processedProviderCandidateQueueIds: ["queue-approved-2", "queue-approved-1"],
+    } : {
+      ...dueResult,
+      dueQueued: 0,
+      published: 0,
+      selectedProviderCandidateQueueIds: [],
+      processedProviderCandidateQueueIds: [],
+    } };
+  }, async ({ primaryUrl }) => {
+    await assert.doesNotReject(runExecutionSmoke({
+      primaryUrl,
+      cronSecret: "cron-secret",
+      approvedPreview: twoCandidates,
+      allowLoopback: true,
+      logger: () => undefined,
+    }));
+  });
+});
+
+for (const [label, selected, processed] of [
+  ["duplicate", ["queue-approved-1", "queue-approved-1"], ["queue-approved-1"]],
+  ["missing", [], ["queue-approved-1"]],
+  ["extra", ["queue-approved-1", "queue-extra"], ["queue-approved-1"]],
+]) {
+  test(`execution smoke rejects ${label} selected or processed IDs`, async () => {
+    await withFakePrimary((request) => ({ body: request.method === "GET" ? preview : {
+      ...dueResult,
+      selectedProviderCandidateQueueIds: selected,
+      processedProviderCandidateQueueIds: processed,
+    } }), async ({ primaryUrl }) => {
+      await assert.rejects(runExecutionSmoke({
+        primaryUrl,
+        cronSecret: "cron-secret",
+        approvedPreview: preview,
+        allowLoopback: true,
+        logger: () => undefined,
+      }), /publish_scheduler_execute_mismatch/);
+    });
+  });
+}
+
 test("execution smoke rejects canary URLs and sanitizes HTTP response content", async () => {
   await assert.rejects(
     runExecutionSmoke({
@@ -375,4 +440,10 @@ test("Docker heartbeat reader uses argv with an explicit timeout and sanitizes c
 test("package exposes the smoke command without adding a dependency", async () => {
   const packageJson = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8"));
   assert.equal(packageJson.scripts["smoke:publish-scheduler"], "node scripts/publish-scheduler-smoke.mjs");
+});
+
+test("scheduler runbook validates the wrapped post-075 schema migration evidence", async () => {
+  const runbook = await readFile(new URL("../docs/operations/PUBLISH_SCHEDULER.md", import.meta.url), "utf8");
+  assert.match(runbook, /\.post075SchemaMigration\s*\|/);
+  assert.match(runbook, /providerRoleName == "postgres"/);
 });
