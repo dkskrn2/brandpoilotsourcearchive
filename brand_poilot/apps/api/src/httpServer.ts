@@ -65,6 +65,7 @@ import {
   type AiContentTokenOptions,
 } from "./aiContentUpload.js";
 import { kstDateKey } from "./publishSchedule.js";
+import { PublishDueCandidateMismatchError } from "./publishDueRun.js";
 import {
   parseCreateSubjectAnalysisInput,
   parseCreateSubjectPipelineInput,
@@ -1701,16 +1702,39 @@ export function createServer(
     return true;
   };
 
+  const parsePublishDueGuard = (value: unknown) => {
+    if (value === undefined) return undefined;
+    if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+    const record = value as Record<string, unknown>;
+    if (Object.keys(record).length !== 1
+      || !Object.prototype.hasOwnProperty.call(record, "expectedProviderCandidateQueueIds")) return null;
+    const ids = record.expectedProviderCandidateQueueIds;
+    if (!Array.isArray(ids)
+      || ids.length > 500
+      || ids.some((id) => typeof id !== "string" || id.length === 0)
+      || new Set(ids).size !== ids.length) return null;
+    return { expectedProviderCandidateQueueIds: ids as string[] };
+  };
+
   app.get("/internal/cron/publish-due/preview", async (request, reply) => {
     if (!authenticateScheduler(request.headers.authorization, reply)) return reply;
     if (!repository.previewDuePublishing) throw new Error("publish_due_preview_not_configured");
     return repository.previewDuePublishing(new Date());
   });
 
-  app.post("/internal/cron/publish-due", async (request, reply) => {
+  app.post<{ Body?: unknown }>("/internal/cron/publish-due", async (request, reply) => {
     if (!authenticateScheduler(request.headers.authorization, reply)) return reply;
     if (!allowSchedulerMutation(reply)) return reply;
-    return repository.runDuePublishing(new Date());
+    const guard = parsePublishDueGuard(request.body);
+    if (guard === null) return reply.code(400).send({ error: "publish_due_guard_invalid" });
+    try {
+      return await repository.runDuePublishing(new Date(), guard);
+    } catch (error) {
+      if (error instanceof PublishDueCandidateMismatchError) {
+        return reply.code(409).send({ error: error.code });
+      }
+      throw error;
+    }
   });
 
   app.get("/internal/cron/publish-calendar-allocate/preview", async (request, reply) => {

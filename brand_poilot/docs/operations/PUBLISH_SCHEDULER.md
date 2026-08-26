@@ -33,10 +33,18 @@ Ubuntu의 migration 증거는 파일을 출력하지 않고 다음 조건으로 
 
 ```bash
 migration_evidence=/opt/brand-pilot/state/post-075-schema-migrations/091_publish_calendar_weekly_schedule.sql.json
+state_directory=/opt/brand-pilot/state/post-075-schema-migrations
+test -d "$state_directory" && test ! -L "$state_directory"
+test "$(stat -c '%a' -- "$state_directory")" = 700
+test "$(stat -c '%U' -- "$state_directory")" = bpdeploy
 test -f "$migration_evidence" && test ! -L "$migration_evidence"
+test "$(stat -c '%a' -- "$migration_evidence")" = 600
+test "$(stat -c '%U' -- "$migration_evidence")" = bpdeploy
 jq -e '
   .contractVersion == "post-075-schema-migration-evidence.v1" and
+  .providerRoleName == "postgres" and
   .migrationId == "091_publish_calendar_weekly_schedule.sql" and
+  .migrationSha256 == "c1bf905666ce4dabac137c0522fa0dc0300f574eda6d1e9648283f00b2af4d2b" and
   (.status == "applied" or .status == "already_applied")
 ' "$migration_evidence" >/dev/null
 ```
@@ -85,10 +93,10 @@ npm run smoke:publish-scheduler -- --phase=execution
 이 단계는 다음을 순서대로 강제한다.
 
 1. 같은 preview를 두 번 읽고 count/ID가 승인 파일과 정확히 같은지 확인한다. 두 번째 preview가 같아야 preview의 무변경 계약을 충족한다.
-2. authenticated primary에 1회 POST한다.
-3. 실행 결과가 승인 ID 수와 정확히 같고 `failed=0`, `resultUnknown=0`인지 확인한다.
+2. 승인 preview의 `providerCandidateQueueIds`를 `expectedProviderCandidateQueueIds` allowlist로 authenticated primary에 1회 POST한다. API는 advisory lock/transaction 안에서 현재 후보 집합이 이 allowlist와 다르면 409로 원자적으로 거부하며 아무 queue도 claim하지 않는다.
+3. 응답의 selected/processed queue ID가 승인 ID와 정확히 같고, 실행 count도 승인 ID 수와 같으며 `failed=0`, `resultUnknown=0`인지 확인한다.
 4. 다음 preview에서 후보가 0인지 확인한다.
-5. 같은 POST를 한 번 더 실행해 모든 변경 count가 0인지 확인한다.
+5. 빈 `expectedProviderCandidateQueueIds` allowlist로 한 번 더 POST해 selected/processed ID와 모든 변경 count가 0인지 확인한다. 그 사이 새 후보가 생기면 409로 중지하며 새 후보를 게시하지 않는다.
 6. 마지막 preview도 후보 0인지 확인한다.
 
 성공 출력은 이벤트명, 승인 preview의 정확한 count/ID, 최종 게시 count만 포함한다. HTTP 오류는 상태 코드만 남기며 응답 body는 출력하지 않는다. 이 단계가 실패하면 스케줄러를 시작하지 않는다.
@@ -120,7 +128,7 @@ export PUBLISH_SCHEDULER_HEARTBEAT_TICKS=3
 npm run smoke:publish-scheduler -- --phase=heartbeat
 ```
 
-heartbeat 검사는 PID나 고객 데이터를 로그에 복사하지 않고 서로 다른 `lastSuccessAt` 갱신 3회를 요구한다. timeout, malformed heartbeat, in-flight 고착은 실패다.
+heartbeat 검사는 PID나 고객 데이터를 로그에 복사하지 않고 서로 다른 `lastSuccessAt` 갱신 3회와 그 세 번째 성공의 `inFlightSince=null` 정착 상태까지 요구한다. 각 파일 읽기와 `docker exec`도 전체 남은 deadline으로 제한한다. timeout, malformed heartbeat, in-flight 고착은 실패다.
 
 ## 5. 활성화 후 확인
 

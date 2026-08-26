@@ -36,6 +36,8 @@ const dueResult = {
   published: 1,
   failed: 0,
   resultUnknown: 0,
+  selectedProviderCandidateQueueIds: ["queue-approved-1"],
+  processedProviderCandidateQueueIds: ["queue-approved-1"],
 };
 
 async function withFakePrimary(handler, callback) {
@@ -79,6 +81,8 @@ test("execution smoke proves preview is read-only, advances only the approved du
         ...dueResult,
         dueQueued: 0,
         published: 0,
+        selectedProviderCandidateQueueIds: [],
+        processedProviderCandidateQueueIds: [],
       } };
     }
     return { status: 404, body: { error: "not_found" } };
@@ -100,6 +104,13 @@ test("execution smoke proves preview is read-only, advances only the approved du
     "GET /internal/cron/publish-due/preview",
   ]);
   assert.equal(result.requests.some(({ url }) => /canary/i.test(url)), false);
+  assert.deepEqual(
+    result.requests.filter(({ method }) => method === "POST").map(({ body }) => JSON.parse(body)),
+    [
+      { expectedProviderCandidateQueueIds: ["queue-approved-1"] },
+      { expectedProviderCandidateQueueIds: [] },
+    ],
+  );
   const { observedAt: _observedAt, ...approvedPreview } = preview;
   assert.deepEqual(logs[0], {
     event: "publish_scheduler_preview_approved",
@@ -130,6 +141,25 @@ test("execution smoke stops before mutation for unexpected candidates or count m
       /publish_scheduler_preview_mismatch/,
     );
     assert.equal(requests.some(({ method }) => method === "POST"), false);
+  });
+});
+
+test("execution smoke rejects an execution response containing unapproved queue IDs", async () => {
+  await withFakePrimary((request) => {
+    if (request.method === "GET") return { body: preview };
+    return { body: {
+      ...dueResult,
+      selectedProviderCandidateQueueIds: ["queue-unexpected"],
+      processedProviderCandidateQueueIds: ["queue-unexpected"],
+    } };
+  }, async ({ primaryUrl }) => {
+    await assert.rejects(runExecutionSmoke({
+      primaryUrl,
+      cronSecret: "cron-secret",
+      approvedPreview: preview,
+      allowLoopback: true,
+      logger: () => undefined,
+    }), /publish_scheduler_execute_mismatch/);
   });
 });
 
@@ -242,6 +272,7 @@ test("heartbeat smoke observes three distinct successful tick updates", async ()
     { schemaVersion: 1, pid: 10, lastSuccessAt: "2026-08-26T03:01:00.000Z", inFlightSince: "2026-08-26T03:01:59.000Z", lastAllocationBucket: null },
     { schemaVersion: 1, pid: 10, lastSuccessAt: "2026-08-26T03:01:00.000Z", inFlightSince: null, lastAllocationBucket: null },
     { schemaVersion: 1, pid: 10, lastSuccessAt: "2026-08-26T03:02:00.000Z", inFlightSince: null, lastAllocationBucket: null },
+    { schemaVersion: 1, pid: 10, lastSuccessAt: "2026-08-26T03:03:00.000Z", inFlightSince: "2026-08-26T03:03:30.000Z", lastAllocationBucket: null },
     { schemaVersion: 1, pid: 10, lastSuccessAt: "2026-08-26T03:03:00.000Z", inFlightSince: null, lastAllocationBucket: null },
   ];
   let readIndex = 0;
@@ -258,6 +289,7 @@ test("heartbeat smoke observes three distinct successful tick updates", async ()
   });
   assert.equal(result.ticksObserved, 3);
   assert.equal(result.lastSuccessAt, "2026-08-26T03:03:00.000Z");
+  assert.equal(readIndex, 6);
   assert.deepEqual(logs.at(-1), {
     event: "publish_scheduler_heartbeat_smoke_passed",
     ticksObserved: 3,
@@ -286,7 +318,38 @@ test("heartbeat smoke fails closed for stale or malformed heartbeat content with
   assert.doesNotMatch(message, /private caption/);
 });
 
-test("Docker heartbeat reader uses argv without a shell and sanitizes command failures", async () => {
+test("heartbeat smoke bounds the initial heartbeat read by the remaining deadline", async () => {
+  await assert.rejects(waitForHeartbeatTicks({
+    heartbeatPath: "/tmp/heartbeat.json",
+    ticks: 1,
+    timeoutMs: 10,
+    pollMs: 1,
+    readHeartbeat: async () => new Promise(() => undefined),
+    logger: () => undefined,
+  }), /publish_scheduler_heartbeat_stale/);
+});
+
+test("heartbeat smoke fails if the final successful tick never settles", async () => {
+  let timestamp = 0;
+  await assert.rejects(waitForHeartbeatTicks({
+    heartbeatPath: "/tmp/heartbeat.json",
+    ticks: 1,
+    timeoutMs: 50,
+    pollMs: 1,
+    readHeartbeat: async () => JSON.stringify({
+      schemaVersion: 1,
+      pid: 10,
+      lastSuccessAt: timestamp++ === 0 ? null : "2026-08-26T03:01:00.000Z",
+      inFlightSince: "2026-08-26T03:01:30.000Z",
+      lastAllocationBucket: null,
+    }),
+    sleep: async () => undefined,
+    nowMs: (() => { let value = 0; return () => value += 10; })(),
+    logger: () => undefined,
+  }), /publish_scheduler_heartbeat_stale/);
+});
+
+test("Docker heartbeat reader uses argv with an explicit timeout and sanitizes command failures", async () => {
   const calls = [];
   const readHeartbeat = createDockerHeartbeatReader({
     containerId: "0123456789abcdef",
@@ -295,11 +358,11 @@ test("Docker heartbeat reader uses argv without a shell and sanitizes command fa
       return { stdout: '{"schemaVersion":1}' };
     },
   });
-  assert.equal(await readHeartbeat("/tmp/heartbeat.json"), '{"schemaVersion":1}');
+  assert.equal(await readHeartbeat("/tmp/heartbeat.json", 2_000), '{"schemaVersion":1}');
   assert.deepEqual(calls, [[
     "docker",
     ["exec", "0123456789abcdef", "node", "-e", "process.stdout.write(require('node:fs').readFileSync(process.argv[1], 'utf8'))", "/tmp/heartbeat.json"],
-    { encoding: "utf8", windowsHide: true },
+    { encoding: "utf8", windowsHide: true, timeout: 2_000, killSignal: "SIGKILL" },
   ]]);
 
   const failingReader = createDockerHeartbeatReader({

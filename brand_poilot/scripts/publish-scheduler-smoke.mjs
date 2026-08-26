@@ -115,7 +115,7 @@ function validateApprovedPreview(value) {
   return canonical;
 }
 
-function validateDueResult(value) {
+function validateDueResult(value, expectedProviderCandidateQueueIds) {
   if (!value || typeof value !== "object" || Array.isArray(value) || typeof value.acquired !== "boolean") {
     throw smokeError("publish_scheduler_execute_invalid");
   }
@@ -124,10 +124,23 @@ function validateDueResult(value) {
       throw smokeError("publish_scheduler_execute_invalid");
     }
   }
-  return Object.fromEntries(["acquired", ...DUE_COUNT_FIELDS].map((field) => [field, value[field]]));
+  const selected = value.selectedProviderCandidateQueueIds;
+  const processed = value.processedProviderCandidateQueueIds;
+  if (!Array.isArray(selected) || !Array.isArray(processed)
+    || selected.some((id) => typeof id !== "string" || id.length === 0)
+    || processed.some((id) => typeof id !== "string" || id.length === 0)
+    || JSON.stringify(selected) !== JSON.stringify(expectedProviderCandidateQueueIds)
+    || JSON.stringify(processed) !== JSON.stringify(expectedProviderCandidateQueueIds)) {
+    throw smokeError("publish_scheduler_execute_mismatch");
+  }
+  return {
+    ...Object.fromEntries(["acquired", ...DUE_COUNT_FIELDS].map((field) => [field, value[field]])),
+    selectedProviderCandidateQueueIds: selected,
+    processedProviderCandidateQueueIds: processed,
+  };
 }
 
-async function requestJson({ url, method, cronSecret, fetchImpl, requestTimeoutMs }) {
+async function requestJson({ url, method, body, cronSecret, fetchImpl, requestTimeoutMs }) {
   const controller = new AbortController();
   let timedOut = false;
   const timeout = setTimeout(() => {
@@ -137,7 +150,11 @@ async function requestJson({ url, method, cronSecret, fetchImpl, requestTimeoutM
   try {
     const response = await fetchImpl(url, {
       method,
-      headers: { authorization: `Bearer ${cronSecret}` },
+      headers: {
+        authorization: `Bearer ${cronSecret}`,
+        ...(body === undefined ? {} : { "content-type": "application/json" }),
+      },
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
       redirect: "error",
       signal: controller.signal,
     });
@@ -166,12 +183,13 @@ async function getPreview(input) {
   }), { requireObservedAt: true });
 }
 
-async function executeDue(input) {
+async function executeDue(input, expectedProviderCandidateQueueIds) {
   return validateDueResult(await requestJson({
     ...input,
     method: "POST",
     url: `${input.primaryUrl}${EXECUTE_PATH}`,
-  }));
+    body: { expectedProviderCandidateQueueIds },
+  }), expectedProviderCandidateQueueIds);
 }
 
 export async function loadApprovedPreview(path) {
@@ -214,7 +232,7 @@ export async function runExecutionSmoke({
   logger({ event: "publish_scheduler_preview_approved", preview: approved });
 
   const expectedCount = approved.providerCandidateQueueIds.length;
-  const firstRun = await executeDue(requestInput);
+  const firstRun = await executeDue(requestInput, approved.providerCandidateQueueIds);
   if (!firstRun.acquired
     || firstRun.expiredTargets !== 0
     || firstRun.expiredSlots !== 0
@@ -228,7 +246,7 @@ export async function runExecutionSmoke({
   const afterFirst = await getPreview(requestInput);
   if (!emptyPreview(afterFirst)) throw smokeError("publish_scheduler_post_execute_candidates_remain");
 
-  const secondRun = await executeDue(requestInput);
+  const secondRun = await executeDue(requestInput, []);
   if (!secondRun.acquired || DUE_COUNT_FIELDS.some((field) => secondRun[field] !== 0)) {
     throw smokeError("publish_scheduler_second_execute_not_idempotent");
   }
@@ -282,14 +300,30 @@ export async function waitForHeartbeatTicks({
   if (!Number.isSafeInteger(ticks) || ticks <= 0 || !Number.isSafeInteger(timeoutMs) || timeoutMs <= 0) {
     throw smokeError("publish_scheduler_heartbeat_options_invalid");
   }
-  const baseline = parseHeartbeat(await readHeartbeat(heartbeatPath));
+  const deadline = nowMs() + timeoutMs;
+  const boundedRead = async () => {
+    const remainingMs = deadline - nowMs();
+    if (remainingMs <= 0) throw smokeError("publish_scheduler_heartbeat_stale");
+    let timeout;
+    try {
+      return await Promise.race([
+        readHeartbeat(heartbeatPath, remainingMs),
+        new Promise((_, reject) => {
+          timeout = setTimeout(() => reject(smokeError("publish_scheduler_heartbeat_stale")), remainingMs);
+        }),
+      ]);
+    } finally {
+      clearTimeout(timeout);
+    }
+  };
+  const baseline = parseHeartbeat(await boundedRead());
   let lastTimestamp = baseline.lastSuccessAt === null ? Number.NEGATIVE_INFINITY : Date.parse(baseline.lastSuccessAt);
   let ticksObserved = 0;
   let lastSuccessAt = baseline.lastSuccessAt;
-  const deadline = nowMs() + timeoutMs;
-  while (ticksObserved < ticks && nowMs() <= deadline) {
+  let settled = false;
+  while ((!settled || ticksObserved < ticks) && nowMs() <= deadline) {
     await sleep(pollMs);
-    const heartbeat = parseHeartbeat(await readHeartbeat(heartbeatPath));
+    const heartbeat = parseHeartbeat(await boundedRead());
     if (heartbeat.lastSuccessAt === null) continue;
     const timestamp = Date.parse(heartbeat.lastSuccessAt);
     if (timestamp > lastTimestamp) {
@@ -297,8 +331,9 @@ export async function waitForHeartbeatTicks({
       lastTimestamp = timestamp;
       lastSuccessAt = heartbeat.lastSuccessAt;
     }
+    settled = ticksObserved >= ticks && timestamp >= lastTimestamp && heartbeat.inFlightSince === null;
   }
-  if (ticksObserved !== ticks) throw smokeError("publish_scheduler_heartbeat_stale");
+  if (ticksObserved !== ticks || !settled) throw smokeError("publish_scheduler_heartbeat_stale");
   const result = { event: "publish_scheduler_heartbeat_smoke_passed", ticksObserved, lastSuccessAt };
   logger(result);
   return result;
@@ -308,7 +343,7 @@ export function createDockerHeartbeatReader({ containerId, execFileImpl = execFi
   if (typeof containerId !== "string" || !/^[0-9a-f]{12,64}$/.test(containerId)) {
     throw smokeError("publish_scheduler_heartbeat_container_invalid");
   }
-  return async (heartbeatPath) => {
+  return async (heartbeatPath, remainingMs = 5_000) => {
     try {
       const { stdout } = await execFileImpl("docker", [
         "exec",
@@ -317,7 +352,7 @@ export function createDockerHeartbeatReader({ containerId, execFileImpl = execFi
         "-e",
         "process.stdout.write(require('node:fs').readFileSync(process.argv[1], 'utf8'))",
         heartbeatPath,
-      ], { encoding: "utf8", windowsHide: true });
+      ], { encoding: "utf8", windowsHide: true, timeout: remainingMs, killSignal: "SIGKILL" });
       return stdout;
     } catch {
       throw smokeError("publish_scheduler_heartbeat_read_failed");

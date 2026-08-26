@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   canAutoRetryCalendarPublish,
   hasReachedKstReservationExpiry,
+  PublishDueCandidateMismatchError,
   previewPublishDue,
   runPublishDue,
   type PublishDueClaim,
@@ -177,6 +178,90 @@ describe("publish due run", () => {
     expect(commitIndex).toBeGreaterThan(dueIndex);
     expect(fixture.claimQueueItem).toHaveBeenCalledTimes(2);
     expect(dispatch).toHaveBeenCalledTimes(2);
+  });
+
+  it("fails closed under the singleton transaction when guarded candidates differ", async () => {
+    const fixture = dueHarness({
+      candidates: [
+        { id: "queue-approved", brand_id: "brand-a" },
+        { id: "queue-unexpected", brand_id: "brand-b" },
+      ],
+    });
+    const dispatch = vi.fn();
+
+    await expect(runPublishDue({
+      pool: fixture.pool as any,
+      expectedProviderCandidateQueueIds: ["queue-approved"],
+      claimQueueItem: fixture.claimQueueItem,
+      dispatchClaim: dispatch,
+    })).rejects.toBeInstanceOf(PublishDueCandidateMismatchError);
+
+    expect(fixture.events[0]).toBe("begin");
+    expect(fixture.events.find((sql) => sql.includes("publish_due_candidates"))).toBeTruthy();
+    expect(fixture.events.at(-1)).toBe("rollback");
+    expect(fixture.claimQueueItem).not.toHaveBeenCalled();
+    expect(dispatch).not.toHaveBeenCalled();
+  });
+
+  it("claims and reports exactly the guarded provider candidate IDs", async () => {
+    const fixture = dueHarness({
+      candidates: [
+        { id: "queue-b", brand_id: "brand-b" },
+        { id: "queue-a", brand_id: "brand-a" },
+      ],
+    });
+    const dispatch = vi.fn(async (_claim: { queueId: string }) => ({ status: "published" }));
+
+    await expect(runPublishDue({
+      pool: fixture.pool as any,
+      expectedProviderCandidateQueueIds: ["queue-a", "queue-b"],
+      claimQueueItem: fixture.claimQueueItem,
+      dispatchClaim: dispatch,
+    })).resolves.toMatchObject({
+      acquired: true,
+      dueQueued: 2,
+      published: 2,
+      selectedProviderCandidateQueueIds: ["queue-b", "queue-a"],
+      processedProviderCandidateQueueIds: ["queue-b", "queue-a"],
+    });
+    expect(fixture.claimQueueItem.mock.calls.map((call) => call[1])).toEqual(["queue-b", "queue-a"]);
+    expect(dispatch.mock.calls.map((call) => call[0].queueId)).toEqual(["queue-b", "queue-a"]);
+  });
+
+  it("uses an empty guard as a mutation-free provider idempotency check", async () => {
+    const fixture = dueHarness({ candidates: [] });
+    const dispatch = vi.fn();
+
+    await expect(runPublishDue({
+      pool: fixture.pool as any,
+      expectedProviderCandidateQueueIds: [],
+      claimQueueItem: fixture.claimQueueItem,
+      dispatchClaim: dispatch,
+    })).resolves.toMatchObject({
+      acquired: true,
+      dueQueued: 0,
+      selectedProviderCandidateQueueIds: [],
+      processedProviderCandidateQueueIds: [],
+    });
+    expect(fixture.claimQueueItem).not.toHaveBeenCalled();
+    expect(dispatch).not.toHaveBeenCalled();
+  });
+
+  it("rolls back guarded claims when any selected candidate cannot be claimed", async () => {
+    const fixture = dueHarness({
+      candidates: [{ id: "queue-approved", brand_id: "brand-a" }],
+      claim: () => null,
+    });
+    const dispatch = vi.fn();
+
+    await expect(runPublishDue({
+      pool: fixture.pool as any,
+      expectedProviderCandidateQueueIds: ["queue-approved"],
+      claimQueueItem: fixture.claimQueueItem,
+      dispatchClaim: dispatch,
+    })).rejects.toBeInstanceOf(PublishDueCandidateMismatchError);
+    expect(fixture.events.at(-1)).toBe("rollback");
+    expect(dispatch).not.toHaveBeenCalled();
   });
 
   it("preserves started, completed, failed-after-start, and result-unknown targets in the expiry SQL", async () => {

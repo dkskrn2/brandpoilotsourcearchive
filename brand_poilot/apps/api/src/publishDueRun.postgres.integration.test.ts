@@ -276,6 +276,90 @@ it("uses the production claim and recovery lifecycle as the PostgreSQL applicati
     });
     expect(storedSuccess.rows[0].published_at).toBeInstanceOf(Date);
 
+    const guardedApproved = await insertPublishTarget({
+      sequence: 6,
+      status: "scheduled",
+      scheduledFor: new Date("2026-08-26T11:31:00+09:00"),
+    });
+    const guardedProviderInputs: InstagramPublishInput[] = [];
+    const guardedRepository = createRepository(application, {
+      instagramPublish: { enabled: true },
+      fetchInstagramImageManifest: async () => ({ video: { url: "https://cdn.example.com/reel.mp4" } }),
+      publishInstagramOutput: async (input: InstagramPublishInput) => {
+        guardedProviderInputs.push(input);
+        return {
+          externalPostId: `guarded-post-${guardedProviderInputs.length}`,
+          publishedUrl: `https://instagram.example/guarded-${guardedProviderInputs.length}`,
+        };
+      },
+    } as any);
+    const guardedPreview = await guardedRepository.previewDuePublishing!(
+      new Date("2026-08-26T12:00:00+09:00"),
+    );
+    expect(guardedPreview.providerCandidateQueueIds).toEqual([guardedApproved.queueId]);
+
+    const guardedUnexpected = await insertPublishTarget({
+      sequence: 7,
+      status: "scheduled",
+      scheduledFor: new Date("2026-08-26T11:32:00+09:00"),
+    });
+    await expect(guardedRepository.runDuePublishing(
+      new Date("2026-08-26T12:00:00+09:00"),
+      { expectedProviderCandidateQueueIds: [guardedApproved.queueId] },
+    )).rejects.toThrow("publish_due_candidate_mismatch");
+    const guardedRejected = await application.query(
+      `select queue.id,queue.status,count(attempt.id)::integer as attempts
+         from publish_queue queue left join publish_attempts attempt on attempt.publish_queue_id=queue.id
+        where queue.id=any($1::uuid[]) group by queue.id,queue.status order by queue.id`,
+      [[guardedApproved.queueId, guardedUnexpected.queueId]],
+    );
+    expect(guardedRejected.rows).toEqual([
+      { id: guardedApproved.queueId, status: "scheduled", attempts: 0 },
+      { id: guardedUnexpected.queueId, status: "scheduled", attempts: 0 },
+    ]);
+    expect(guardedProviderInputs).toHaveLength(0);
+
+    await expect(guardedRepository.runDuePublishing(
+      new Date("2026-08-26T12:00:00+09:00"),
+      { expectedProviderCandidateQueueIds: [guardedApproved.queueId, guardedUnexpected.queueId] },
+    )).resolves.toMatchObject({
+      acquired: true,
+      dueQueued: 2,
+      published: 2,
+      selectedProviderCandidateQueueIds: [guardedApproved.queueId, guardedUnexpected.queueId],
+      processedProviderCandidateQueueIds: [guardedApproved.queueId, guardedUnexpected.queueId],
+    });
+    expect(guardedProviderInputs).toHaveLength(2);
+    await expect(guardedRepository.runDuePublishing(
+      new Date("2026-08-26T12:00:00+09:00"),
+      { expectedProviderCandidateQueueIds: [] },
+    )).resolves.toMatchObject({
+      acquired: true,
+      dueQueued: 0,
+      published: 0,
+      selectedProviderCandidateQueueIds: [],
+      processedProviderCandidateQueueIds: [],
+    });
+
+    const guardedLateArrival = await insertPublishTarget({
+      sequence: 8,
+      status: "scheduled",
+      scheduledFor: new Date("2026-08-26T11:33:00+09:00"),
+    });
+    await expect(guardedRepository.runDuePublishing(
+      new Date("2026-08-26T12:00:00+09:00"),
+      { expectedProviderCandidateQueueIds: [] },
+    )).rejects.toThrow("publish_due_candidate_mismatch");
+    const guardedLateState = await application.query(
+      `select queue.status,count(attempt.id)::integer as attempts
+         from publish_queue queue left join publish_attempts attempt on attempt.publish_queue_id=queue.id
+        where queue.id=$1 group by queue.id,queue.status`,
+      [guardedLateArrival.queueId],
+    );
+    expect(guardedLateState.rows[0]).toEqual({ status: "scheduled", attempts: 0 });
+    expect(guardedProviderInputs).toHaveLength(2);
+    await administrator.query("update publish_queue set status='failed' where id=$1", [guardedLateArrival.queueId]);
+
     const crossScoped = await insertPublishTarget({
       sequence: 2,
       ownerBrandId: brandId,

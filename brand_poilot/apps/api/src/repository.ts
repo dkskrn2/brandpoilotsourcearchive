@@ -5548,7 +5548,7 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
       }
     },
 
-    async runDuePublishing(now = new Date()) {
+    async runDuePublishing(now = new Date(), guard) {
       if (!instagramPublish.enabled) {
         return {
           acquired: false,
@@ -5558,6 +5558,10 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
           published: 0,
           failed: 0,
           resultUnknown: 0,
+          ...(guard === undefined ? {} : {
+            selectedProviderCandidateQueueIds: [],
+            processedProviderCandidateQueueIds: [],
+          }),
         };
       }
       return runPublishDue({
@@ -5565,6 +5569,7 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
         now,
         batchSize: options.publishDueBatchSize ?? Number(process.env.PUBLISH_DUE_BATCH_SIZE ?? "50"),
         concurrency: options.publishDueConcurrency ?? Number(process.env.PUBLISH_DUE_CONCURRENCY ?? "4"),
+        expectedProviderCandidateQueueIds: guard?.expectedProviderCandidateQueueIds,
         claimQueueItem: claimPublishQueueItemInternal,
         dispatchClaim: async (claim) => publishQueueItemInternal(claim.queueId, claim),
       });

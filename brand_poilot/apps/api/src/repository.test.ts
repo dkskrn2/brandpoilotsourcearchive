@@ -2698,6 +2698,33 @@ describe("repository", () => {
     expect(statements.at(-1)).toBe("commit");
   });
 
+  it("forwards the smoke candidate allowlist before the production claim query", async () => {
+    const statements: string[] = [];
+    const clientQuery = vi.fn(async (sql: string) => {
+      statements.push(sql);
+      if (sql.includes("pg_try_advisory_xact_lock")) return { rowCount: 1, rows: [{ acquired: true }] };
+      if (sql.includes("publish_due_expire")) {
+        return { rowCount: 1, rows: [{ expired_targets: 0, expired_slots: 0, recovered_published: 0, result_unknown: 0 }] };
+      }
+      if (sql.includes("publish_due_candidates")) {
+        return { rowCount: 1, rows: [{ id: "queue-unexpected", brand_id: "brand-1" }] };
+      }
+      return { rowCount: 0, rows: [] };
+    });
+    const repository = createRepository({
+      query: vi.fn(),
+      connect: vi.fn(async () => ({ query: clientQuery, release: vi.fn() })),
+    } as any, { instagramPublish: { enabled: true } });
+
+    await expect(repository.runDuePublishing(
+      new Date("2026-08-26T12:00:00+09:00"),
+      { expectedProviderCandidateQueueIds: ["queue-approved"] },
+    )).rejects.toThrow("publish_due_candidate_mismatch");
+
+    expect(statements.at(-1)).toBe("rollback");
+    expect(statements.some((sql) => sql.includes("with locked_queue as"))).toBe(false);
+  });
+
   it("keeps manual schedulePublishQueue available independently from the singleton due runner", async () => {
     const repository = createRepository({ query: vi.fn(), connect: vi.fn() } as any, {
       instagramPublish: { enabled: true },

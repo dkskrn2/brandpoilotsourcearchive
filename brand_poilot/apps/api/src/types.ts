@@ -1018,6 +1018,12 @@ export interface PublishDueRunResult {
   published: number;
   failed: number;
   resultUnknown: number;
+  selectedProviderCandidateQueueIds?: string[];
+  processedProviderCandidateQueueIds?: string[];
+}
+
+export interface PublishDueExecutionGuard {
+  expectedProviderCandidateQueueIds: string[];
 }
 
 export interface PublishDuePreviewResult {
@@ -1561,7 +1567,7 @@ export interface ApiRepository
   getDashboard(brandId: string): Promise<DashboardDto>;
   getPerformanceInsights?(brandId: string): Promise<PerformanceInsightsDto>;
   schedulePublishQueue(brandId: string, now?: Date): Promise<PipelineRunResult>;
-  runDuePublishing(now?: Date): Promise<PublishDueRunResult>;
+  runDuePublishing(now?: Date, guard?: PublishDueExecutionGuard): Promise<PublishDueRunResult>;
   previewDuePublishing?(now?: Date): Promise<PublishDuePreviewResult>;
   runDueAiContentPublishing?(): Promise<PipelineRunResult>;
   publishQueueItem(queueId: string): Promise<{ id: string; status: string; publishedUrl: string | null }>;

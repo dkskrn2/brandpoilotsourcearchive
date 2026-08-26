@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createServer } from "./httpServer";
 import { registerAdminRoutes } from "./adminServer";
 import { StoryCapabilityRequiredError } from "./repository";
+import { PublishDueCandidateMismatchError } from "./publishDueRun";
 import type { ApiRepository, InstagramFormatSettingsInput, InstagramTrendPageDto, PublishItemDto, PublishResultDto, SourceSnapshotDto } from "./types";
 
 const brandId = "11111111-1111-1111-1111-111111111111";
@@ -1072,6 +1073,76 @@ describe("API server", () => {
     expect(publish.statusCode).toBe(200);
     expect(repository.runDailyGeneration).toHaveBeenCalledTimes(1);
     expect(repository.runDuePublishing).toHaveBeenCalledTimes(1);
+  });
+
+  it("passes an exact smoke candidate allowlist to the primary due runner", async () => {
+    const repository = createRepository();
+    vi.mocked(repository.runDuePublishing).mockResolvedValue({
+      acquired: true,
+      expiredTargets: 0,
+      expiredSlots: 0,
+      dueQueued: 1,
+      published: 1,
+      failed: 0,
+      resultUnknown: 0,
+      selectedProviderCandidateQueueIds: ["queue-approved"],
+      processedProviderCandidateQueueIds: ["queue-approved"],
+    });
+    const app = createServer({ repository, cronSecret: "cron-secret", instanceRole: "primary", logger: false });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/internal/cron/publish-due",
+      headers: { authorization: "Bearer cron-secret", "content-type": "application/json" },
+      payload: { expectedProviderCandidateQueueIds: ["queue-approved"] },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      selectedProviderCandidateQueueIds: ["queue-approved"],
+      processedProviderCandidateQueueIds: ["queue-approved"],
+    });
+    expect(repository.runDuePublishing).toHaveBeenCalledWith(
+      expect.any(Date),
+      { expectedProviderCandidateQueueIds: ["queue-approved"] },
+    );
+  });
+
+  it("maps a guarded due candidate race to a mutation-free conflict", async () => {
+    const repository = createRepository();
+    vi.mocked(repository.runDuePublishing).mockRejectedValue(new PublishDueCandidateMismatchError());
+    const app = createServer({ repository, cronSecret: "cron-secret", instanceRole: "primary", logger: false });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/internal/cron/publish-due",
+      headers: { authorization: "Bearer cron-secret", "content-type": "application/json" },
+      payload: { expectedProviderCandidateQueueIds: [] },
+    });
+
+    expect(response.statusCode).toBe(409);
+    expect(response.json()).toEqual({ error: "publish_due_candidate_mismatch" });
+  });
+
+  it.each([
+    { expectedProviderCandidateQueueIds: ["duplicate", "duplicate"] },
+    { expectedProviderCandidateQueueIds: [""] },
+    { expectedProviderCandidateQueueIds: [], unexpected: true },
+    { expectedProviderCandidateQueueIds: "queue-1" },
+  ])("rejects an invalid guarded due body before repository mutation", async (payload) => {
+    const repository = createRepository();
+    const app = createServer({ repository, cronSecret: "cron-secret", instanceRole: "primary", logger: false });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/internal/cron/publish-due",
+      headers: { authorization: "Bearer cron-secret", "content-type": "application/json" },
+      payload,
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toEqual({ error: "publish_due_guard_invalid" });
+    expect(repository.runDuePublishing).not.toHaveBeenCalled();
   });
 
   it("removes mutation-by-GET and exposes authenticated read-only scheduler previews", async () => {

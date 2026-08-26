@@ -15,11 +15,21 @@ export interface RunPublishDueInput<TContext = unknown> {
   now?: Date;
   batchSize?: number;
   concurrency?: number;
+  expectedProviderCandidateQueueIds?: readonly string[];
   claimQueueItem: (
     client: Pick<PoolClient, "query">,
     queueId: string,
   ) => Promise<PublishDueClaim<TContext> | null>;
   dispatchClaim: (claim: PublishDueClaim<TContext>) => Promise<{ status?: string } | void>;
+}
+
+export class PublishDueCandidateMismatchError extends Error {
+  readonly code = "publish_due_candidate_mismatch";
+
+  constructor() {
+    super("publish_due_candidate_mismatch");
+    this.name = "PublishDueCandidateMismatchError";
+  }
 }
 
 export interface PreviewPublishDueInput {
@@ -43,6 +53,22 @@ function boundedPositiveInteger(value: number | undefined, fallback: number, max
     throw new Error("publish_due_run_bounds_invalid");
   }
   return value;
+}
+
+function guardedCandidateIds(value: readonly string[] | undefined): string[] | undefined {
+  if (value === undefined) return undefined;
+  if (value.length > 500
+    || value.some((id) => typeof id !== "string" || id.length === 0)
+    || new Set(value).size !== value.length) {
+    throw new Error("publish_due_expected_candidates_invalid");
+  }
+  return [...value];
+}
+
+function sameIdSet(actual: readonly string[], expected: readonly string[]): boolean {
+  if (actual.length !== expected.length) return false;
+  const expectedSet = new Set(expected);
+  return actual.every((id) => expectedSet.has(id));
 }
 
 export function hasReachedKstReservationExpiry(scheduledFor: Date, now: Date): boolean {
@@ -324,7 +350,12 @@ export async function runPublishDue<TContext = unknown>(
   const now = input.now ?? new Date();
   const batchSize = boundedPositiveInteger(input.batchSize, DEFAULT_BATCH_SIZE, 500);
   const concurrency = boundedPositiveInteger(input.concurrency, DEFAULT_CONCURRENCY, 100);
+  const expectedCandidateIds = guardedCandidateIds(input.expectedProviderCandidateQueueIds);
   const result: PublishDueRunResult = { acquired: true, ...zeroCounts() };
+  if (expectedCandidateIds !== undefined) {
+    result.selectedProviderCandidateQueueIds = [];
+    result.processedProviderCandidateQueueIds = [];
+  }
   const client = await input.pool.connect();
   const claims: PublishDueClaim<TContext>[] = [];
   try {
@@ -335,7 +366,14 @@ export async function runPublishDue<TContext = unknown>(
     );
     if (lock.rows[0]?.acquired !== true) {
       await client.query("commit");
-      return { acquired: false, ...zeroCounts() };
+      return {
+        acquired: false,
+        ...zeroCounts(),
+        ...(expectedCandidateIds === undefined ? {} : {
+          selectedProviderCandidateQueueIds: [],
+          processedProviderCandidateQueueIds: [],
+        }),
+      };
     }
 
     const expiry = await client.query(expirySql, [now]);
@@ -347,9 +385,20 @@ export async function runPublishDue<TContext = unknown>(
 
     await client.query(queueDelayedSql, [now]);
     const due = await client.query(dueCandidatesSql, [now, batchSize]);
+    const selectedCandidateIds = due.rows.map((row) => String(row.id));
+    if (expectedCandidateIds !== undefined) {
+      if (!sameIdSet(selectedCandidateIds, expectedCandidateIds)) {
+        throw new PublishDueCandidateMismatchError();
+      }
+      result.selectedProviderCandidateQueueIds = selectedCandidateIds;
+    }
     for (const row of due.rows) {
       const claim = await input.claimQueueItem(client, String(row.id));
       if (claim) claims.push(claim);
+    }
+    if (expectedCandidateIds !== undefined
+      && !sameIdSet(claims.map((claim) => claim.queueId), expectedCandidateIds)) {
+      throw new PublishDueCandidateMismatchError();
     }
     result.dueQueued = claims.length;
     await client.query("commit");
@@ -361,6 +410,9 @@ export async function runPublishDue<TContext = unknown>(
   }
 
   await dispatchBounded(claims, concurrency, input.dispatchClaim, result);
+  if (expectedCandidateIds !== undefined) {
+    result.processedProviderCandidateQueueIds = claims.map((claim) => claim.queueId);
+  }
   return result;
 }
 
