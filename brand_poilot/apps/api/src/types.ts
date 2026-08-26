@@ -1010,6 +1010,16 @@ export interface PipelineRunResult {
   reason?: "daily_topic_limit" | "no_producible_channel" | "no_usable_topic";
 }
 
+export interface PublishDueRunResult {
+  acquired: boolean;
+  expiredTargets: number;
+  expiredSlots: number;
+  dueQueued: number;
+  published: number;
+  failed: number;
+  resultUnknown: number;
+}
+
 export interface DailyGenerationRunResult extends PipelineRunResult {
   brandsSelected: number;
   runsStarted: number;
@@ -1504,7 +1514,7 @@ export interface ApiRepository
   getDashboard(brandId: string): Promise<DashboardDto>;
   getPerformanceInsights?(brandId: string): Promise<PerformanceInsightsDto>;
   schedulePublishQueue(brandId: string, now?: Date): Promise<PipelineRunResult>;
-  runDuePublishing(now?: Date): Promise<PipelineRunResult>;
+  runDuePublishing(now?: Date): Promise<PublishDueRunResult>;
   runDueAiContentPublishing?(): Promise<PipelineRunResult>;
   publishQueueItem(queueId: string): Promise<{ id: string; status: string; publishedUrl: string | null }>;
   retryPublishQueueItem(queueId: string): Promise<{ id: string; status: "queued" | "scheduled" }>;

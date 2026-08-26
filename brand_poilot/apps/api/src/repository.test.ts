@@ -18,6 +18,7 @@ function findSqlCall(calls: ReadonlyArray<readonly unknown[]>, predicate: (sql: 
 const task3TestNow = new Date("2026-07-13T00:00:00.000Z");
 const oneDayMs = 24 * 60 * 60 * 1000;
 const repositorySource = readFileSync(new URL("./repository.ts", import.meta.url), "utf8");
+const publishDueRunSource = readFileSync(new URL("./publishDueRun.ts", import.meta.url), "utf8");
 
 function useTask3TestClock() {
   vi.useFakeTimers();
@@ -2624,75 +2625,60 @@ describe("repository", () => {
     const repository = createRepository({ query } as any, { instagramPublish: { enabled: false } });
 
     await expect(repository.runDuePublishing()).resolves.toEqual({
-      processed: 0,
-      created: 0,
-      updated: 0,
-      failed: 0
+      acquired: false,
+      expiredTargets: 0,
+      expiredSlots: 0,
+      dueQueued: 0,
+      published: 0,
+      failed: 0,
+      resultUnknown: 0,
     });
     expect(query).not.toHaveBeenCalled();
   });
 
-  it("reconciles successful and abandoned publishing rows before claiming new work", async () => {
+  it("runs reconciliation, expiry, and due selection under one transaction lock", async () => {
     const statements: string[] = [];
-    const query = vi.fn(async (sql: string) => {
+    const clientQuery = vi.fn(async (sql: string) => {
       statements.push(sql);
-      if (sql.includes("select id from brands")) return { rowCount: 0, rows: [] };
-      if (sql.includes("select id from publish_queue")) return { rowCount: 0, rows: [] };
+      if (sql.includes("pg_try_advisory_xact_lock")) return { rowCount: 1, rows: [{ acquired: true }] };
+      if (sql.includes("publish_due_expire")) {
+        return { rowCount: 1, rows: [{ expired_targets: 0, expired_slots: 0, recovered_published: 0, result_unknown: 0 }] };
+      }
+      if (sql.includes("publish_due_candidates")) return { rowCount: 0, rows: [] };
       return { rowCount: 0, rows: [] };
     });
-    const repository = createRepository({ query } as any, { instagramPublish: { enabled: true } });
-    repository.applyDueSubscriptionRenewals = vi.fn(async () => []);
+    const repository = createRepository({
+      query: vi.fn(),
+      connect: vi.fn(async () => ({ query: clientQuery, release: vi.fn() })),
+    } as any, { instagramPublish: { enabled: true } });
 
-    await expect(repository.runDuePublishing()).resolves.toEqual({ processed: 0, created: 0, updated: 0, failed: 0 });
+    await expect(repository.runDuePublishing()).resolves.toEqual({
+      acquired: true,
+      expiredTargets: 0,
+      expiredSlots: 0,
+      dueQueued: 0,
+      published: 0,
+      failed: 0,
+      resultUnknown: 0,
+    });
 
-    expect(statements[0]).toContain("pa.status = 'succeeded'");
-    expect(statements[0]).toContain("publish_delivery_unknown");
-    expect(statements[0]).toContain("interval '30 minutes'");
-    expect(statements[0]).toContain("recovered_slots");
-    expect(statements[0]).toContain("abandoned_slots");
-    expect(statements[0]).toContain("pending.id not in (select recovered_queue.id from recovered recovered_queue)");
+    expect(statements[0]).toBe("begin");
+    expect(statements[1]).toContain("pg_try_advisory_xact_lock");
+    expect(statements[2]).toContain("publish_due_expire");
+    expect(statements[2]).toContain("publish_delivery_unknown");
+    expect(statements[2]).toContain("interval '30 minutes'");
+    expect(statements[3]).toContain("publish_due_queue_delayed");
+    expect(statements[4]).toContain("publish_due_candidates");
+    expect(statements.at(-1)).toBe("commit");
   });
 
-  it("renews subscriptions, isolates calendar scheduling failures, and still selects legacy direct queues", async () => {
-    const statements: Array<{ sql: string; values: unknown[] }> = [];
-    const query = vi.fn(async (sql: string, values?: unknown[]) => {
-      statements.push({ sql: sql.replace(/\s+/g, " "), values: values ?? [] });
-      if (sql.includes("select id from brands")) {
-        return { rowCount: 2, rows: [{ id: "brand-failed" }, { id: "brand-ready" }] };
-      }
-      if (sql.includes("row_number() over") && sql.includes("from publish_queue")) {
-        return { rowCount: 0, rows: [] };
-      }
-      return { rowCount: 0, rows: [] };
-    });
-    const repository = createRepository({ query } as any, { instagramPublish: { enabled: true } });
-    const events: string[] = [];
-    repository.applyDueSubscriptionRenewals = vi.fn(async () => {
-      events.push("renewed");
-      return [];
-    });
-    repository.schedulePublishQueue = vi.fn(async (candidate) => {
-      events.push(`scheduled:${candidate}`);
-      if (candidate === "brand-failed") throw new Error("subscription_unavailable");
-      return { processed: 0, created: 0, updated: 0, failed: 0 };
+  it("keeps manual schedulePublishQueue available independently from the singleton due runner", async () => {
+    const repository = createRepository({ query: vi.fn(), connect: vi.fn() } as any, {
+      instagramPublish: { enabled: true },
     });
 
-    await expect(repository.runDuePublishing(new Date("2026-08-14T00:00:00.000Z")))
-      .resolves.toEqual({ processed: 0, created: 0, updated: 0, failed: 1 });
-
-    expect(events).toEqual(["renewed", "scheduled:brand-failed", "scheduled:brand-ready"]);
-    const candidateBrands = statements.find(({ sql }) => sql.includes("select id from brands"));
-    expect(candidateBrands?.sql).toContain("from publish_calendar_settings settings");
-    expect(candidateBrands?.sql).toContain("settings.enabled");
-    expect(candidateBrands?.sql).toContain("from publish_calendar_slots slot");
-    expect(candidateBrands?.sql).toContain("slot.status in ('proposal_assigned','generation_pending','content_assigned','ready','publish_delayed','quota_blocked','scheduled')");
-    const due = statements.find(({ sql }) => sql.includes("row_number() over"));
-    expect(due?.sql).toContain("partition by queue.brand_id");
-    expect(due?.sql).toContain("order by brand_rank");
-    expect(due?.sql).toContain("limit 50");
-    expect(due?.sql).toContain("left join publish_calendar_slots linked_slot");
-    expect(due?.sql).toContain("linked_slot.id is null or queue.brand_id=any($2::uuid[])");
-    expect(due?.values[1]).toEqual(["brand-ready"]);
+    expect(typeof repository.schedulePublishQueue).toBe("function");
+    expect(typeof repository.runDuePublishing).toBe("function");
   });
 
   it("recovers only persisted AI content publish rows without scheduling unrelated content", async () => {
@@ -3042,9 +3028,10 @@ describe("repository", () => {
   });
 
   it("preserves non-reservation recovery, lease, and provider retry timing", () => {
-    expect(repositorySource).toContain("publishing_started_at < now() - interval '30 minutes'");
+    expect(publishDueRunSource).toContain("publishing_started_at < $1::timestamptz-interval '30 minutes'");
     expect(repositorySource).toContain("performance_sync_runs.started_at <= excluded.started_at - interval '30 minutes'");
     expect(repositorySource).toContain("now() + interval '5 minutes'");
+    expect(repositorySource).toContain("deferred_until = case when $4::boolean and $9::boolean");
     expect(repositorySource).not.toContain("earliestSafePublicationTime");
   });
 
@@ -3129,7 +3116,7 @@ describe("repository", () => {
 
     await expect(repository.publishQueueItem("queue-1")).resolves.toMatchObject({ id: "queue-1", status: "published", publishedUrl: null });
     expect(query.mock.calls[0]?.[0]).toContain("set status = 'publishing'");
-    expect(query.mock.calls[0]?.[0]).toContain("where pq.id = selected.id and pq.status = 'scheduled'");
+    expect(query.mock.calls[0]?.[0]).toContain("where pq.id = selected.id and pq.status in ('scheduled','deferred')");
     expect(events.indexOf("attempt-started")).toBeLessThan(events.indexOf("provider-called"));
     expect(publishAttempts.some((values) => values.includes("ig-post-1"))).toBe(true);
     expect(queueUpdates.length).toBe(1);

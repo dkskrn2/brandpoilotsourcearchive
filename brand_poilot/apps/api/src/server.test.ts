@@ -687,7 +687,7 @@ function createRepository(): ApiRepository {
     runDailyGeneration: vi.fn(async () => ({ brandsSelected: 1, runsStarted: 1, processed: 1, created: 3, updated: 1, failed: 0, status: "succeeded" as const })),
     runDailyPerformanceSync: vi.fn(async () => ({ status: "not_due" as const, runDate: "2026-07-13", channelsSelected: 0, runsStarted: 0, targetCount: 0, successCount: 0, failureCount: 0 })),
     schedulePublishQueue: vi.fn(async () => ({ processed: 3, created: 0, updated: 3, failed: 0 })),
-    runDuePublishing: vi.fn(async () => ({ processed: 1, created: 0, updated: 1, failed: 0 })),
+    runDuePublishing: vi.fn(async () => ({ acquired: true, expiredTargets: 0, expiredSlots: 0, dueQueued: 1, published: 1, failed: 0, resultUnknown: 0 })),
     getPublishArtifact: vi.fn(async (queueId) => ({
       queueId,
       kind: "image_gallery" as const,
@@ -1111,7 +1111,7 @@ describe("API server", () => {
     vi.mocked(repository.publishQueueItem).mockRejectedValue(new Error("publishing_disabled"));
     vi.mocked(repository.schedulePublishQueue).mockRejectedValue(new Error("publishing_disabled"));
     vi.mocked(repository.retryPublishQueueItem).mockRejectedValue(new Error("publishing_disabled"));
-    vi.mocked(repository.runDuePublishing).mockResolvedValue({ processed: 0, created: 0, updated: 0, failed: 0 });
+    vi.mocked(repository.runDuePublishing).mockResolvedValue({ acquired: false, expiredTargets: 0, expiredSlots: 0, dueQueued: 0, published: 0, failed: 0, resultUnknown: 0 });
     const app = createServer({ repository, cronSecret: "cron-secret", logger: false });
 
     const schedule = await app.inject({
@@ -1139,7 +1139,15 @@ describe("API server", () => {
     expect(retry.statusCode).toBe(503);
     expect(retry.json()).toEqual({ error: "publishing_disabled" });
     expect(duePublish.statusCode).toBe(200);
-    expect(duePublish.json()).toEqual({ processed: 0, created: 0, updated: 0, failed: 0 });
+    expect(duePublish.json()).toEqual({
+      acquired: false,
+      expiredTargets: 0,
+      expiredSlots: 0,
+      dueQueued: 0,
+      published: 0,
+      failed: 0,
+      resultUnknown: 0,
+    });
   });
 
   it("returns conflict instead of forcing a future scheduled queue to publish", async () => {
