@@ -31,10 +31,11 @@ test("workflow detects production impact and builds an affected image matrix", (
   assert.match(prImpactBranch, /--profile manual-brand-visual-assets/);
   assert.match(prImpactBranch, /--profile faq-utterance-matching/);
   assert.match(prImpactBranch, /--profile card-manuscript-visual-session/);
+  assert.match(prImpactBranch, /--profile card-reel-editorial-prompt-quality/);
   assert.ok(
-    prImpactBranch.indexOf("--profile card-manuscript-visual-session")
-      < prImpactBranch.indexOf("--profile manual-brand-visual-assets"),
-    "the narrow Card/Reel manuscript profile must run before the broader manual visual profile",
+    prImpactBranch.indexOf("--profile card-reel-editorial-prompt-quality")
+      < prImpactBranch.indexOf("--profile card-manuscript-visual-session"),
+    "the exact editorial prompt profile must run before broader visual profiles",
   );
   assert.match(prImpactBranch, /impact\.verifiedScope && impact\.productionDeployAllowed/);
   assert.match(prImpactBranch, /else[\s\S]*release-impact\.mjs --base "\$base_sha" --head "\$GITHUB_SHA"/);
@@ -44,10 +45,11 @@ test("workflow detects production impact and builds an affected image matrix", (
   assert.match(productionImpactBranch, /release-impact\.mjs --base "\$PRODUCTION_RELEASE_SHA" --head "\$GITHUB_SHA" --profile manual-brand-visual-assets/);
   assert.match(productionImpactBranch, /release-impact\.mjs --base "\$PRODUCTION_RELEASE_SHA" --head "\$GITHUB_SHA" --profile faq-utterance-matching/);
   assert.match(productionImpactBranch, /release-impact\.mjs --base "\$PRODUCTION_RELEASE_SHA" --head "\$GITHUB_SHA" --profile card-manuscript-visual-session/);
+  assert.match(productionImpactBranch, /release-impact\.mjs --base "\$PRODUCTION_RELEASE_SHA" --head "\$GITHUB_SHA" --profile card-reel-editorial-prompt-quality/);
   assert.ok(
-    productionImpactBranch.indexOf("--profile card-manuscript-visual-session")
-      < productionImpactBranch.indexOf("--profile manual-brand-visual-assets"),
-    "production impact must prefer the narrow Card/Reel manuscript profile",
+    productionImpactBranch.indexOf("--profile card-reel-editorial-prompt-quality")
+      < productionImpactBranch.indexOf("--profile card-manuscript-visual-session"),
+    "production impact must prefer the exact editorial prompt profile",
   );
   assert.match(productionImpactBranch, /impact\.verifiedScope && impact\.productionDeployAllowed/);
   assert.match(productionImpactBranch, /else[\s\S]*release-impact\.mjs --base "\$PRODUCTION_RELEASE_SHA" --head "\$GITHUB_SHA"/);

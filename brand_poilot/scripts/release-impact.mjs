@@ -56,6 +56,26 @@ const CARD_REEL_EDITORIAL_PROPOSAL_LINEAGE_PATHS = new Set([
   "packages/brand-pilot-content-contracts/generated/content-prompt-binding-v1.schema.json",
 ]);
 
+const CARD_REEL_EDITORIAL_TEST_ONLY_CONTRACT_PATHS = new Set([
+  "packages/brand-pilot-content-contracts/src/binding.test.ts",
+]);
+
+const CARD_REEL_EDITORIAL_DEPLOY_PATHS = new Set([
+  "deploy/scripts/deploy.sh",
+  "deploy/scripts/preflight.sh",
+]);
+
+const CARD_REEL_EDITORIAL_SCRIPT_PATHS = new Set([
+  "scripts/content-suggestion-schema-migration.test.mjs",
+  "scripts/deployment-contract.test.mjs",
+  "scripts/incremental-cicd-contract.test.mjs",
+  "scripts/migrationRunner.mjs",
+  "scripts/migrationRunner.test.mjs",
+  "scripts/release-impact.mjs",
+  "scripts/release-impact.test.mjs",
+  "scripts/repository-contract.test.mjs",
+]);
+
 const ACTIVE_REEL_MANIFEST_CONTRACT_PATHS = new Set([
   "packages/brand-pilot-content-contracts/src/manifest.ts",
 ]);
@@ -487,6 +507,53 @@ function classifyCardManuscriptVisualSessionPath(path, components) {
   return { known: false };
 }
 
+function classifyCardReelEditorialPromptQualityPath(path, components) {
+  if (path.startsWith("docs/") || path.endsWith(".md")) {
+    return { known: true, documentation: true };
+  }
+  if (path.startsWith("apps/api/")) {
+    components.api = true;
+    return { known: true };
+  }
+  if (path === "db/migrations/091_ai_content_prompt_lineage_v4.sql") {
+    components.api = true;
+    return { known: true, migration: true };
+  }
+  if (CARD_REEL_EDITORIAL_PROPOSAL_LINEAGE_PATHS.has(path)) {
+    components.api = true;
+    components.contentProposalWorker = true;
+    return { known: true };
+  }
+  if (CARD_REEL_EDITORIAL_TEST_ONLY_CONTRACT_PATHS.has(path)) return { known: true };
+  if (path.startsWith("workers/brand-pilot-content-proposal-worker/")) {
+    components.contentProposalWorker = true;
+    return { known: true };
+  }
+  if (path.startsWith("workers/brand-pilot-card-news-worker/")) {
+    components.cardNewsWorker = true;
+    return { known: true };
+  }
+  if (path.startsWith("workers/brand-pilot-reel-worker/")) {
+    components.reelWorker = true;
+    return { known: true };
+  }
+  if (CARD_REEL_EDITORIAL_DEPLOY_PATHS.has(path)) {
+    return { known: true, deployBundle: true };
+  }
+  if (CARD_REEL_EDITORIAL_SCRIPT_PATHS.has(path)) {
+    if (path === "scripts/migrationRunner.mjs") {
+      components.api = true;
+      return { known: true, migration: true, deployBundle: true };
+    }
+    return { known: true, deployBundle: path === "scripts/release-impact.mjs" };
+  }
+  if (path === ".github/workflows/publish-brand-pilot-server-images.yml"
+    || path === "../.github/workflows/publish-brand-pilot-server-images.yml") {
+    return { known: true, deployBundle: true };
+  }
+  return { known: false };
+}
+
 function classifyFaqUtteranceMatchingPath(path, components) {
   if (path.startsWith("docs/") || path.endsWith(".md")) {
     return { known: true, documentation: true };
@@ -605,6 +672,7 @@ export function classifyChangedPaths(values, options = {}) {
   if (profile === AI_CONTENT_THREE_FORMAT_CUTOVER_PROFILE
     || profile === STRUCTURED_SOCIAL_RENDER_SEMANTICS_PROFILE
     || profile === CARD_MANUSCRIPT_VISUAL_SESSION_PROFILE
+    || profile === CARD_REEL_EDITORIAL_PROMPT_QUALITY_PROFILE
     || profile === FAQ_UTTERANCE_MATCHING_PROFILE
     || profile === MANUAL_BRAND_VISUAL_ASSETS_PROFILE) {
     for (let index = 0; index < paths.length; index += 1) {
@@ -616,9 +684,11 @@ export function classifyChangedPaths(values, options = {}) {
           ? classifyStructuredSocialRenderPath(path, components)
           : profile === CARD_MANUSCRIPT_VISUAL_SESSION_PROFILE
             ? classifyCardManuscriptVisualSessionPath(path, components)
-            : profile === FAQ_UTTERANCE_MATCHING_PROFILE
-              ? classifyFaqUtteranceMatchingPath(path, components)
-              : classifyManualBrandVisualAssetsPath(path, components);
+            : profile === CARD_REEL_EDITORIAL_PROMPT_QUALITY_PROFILE
+              ? classifyCardReelEditorialPromptQualityPath(path, components)
+              : profile === FAQ_UTTERANCE_MATCHING_PROFILE
+                ? classifyFaqUtteranceMatchingPath(path, components)
+                : classifyManualBrandVisualAssetsPath(path, components);
       if (result.documentation) continue;
       nonDocumentationChange = true;
       if (result.migration) migrationChanged = true;

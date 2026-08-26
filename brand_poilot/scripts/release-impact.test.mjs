@@ -308,6 +308,39 @@ test("card and reel editorial prompt profile rebuilds exactly its four final pro
   assert.deepEqual(impact.unknownPaths, []);
 });
 
+test("card and reel editorial prompt release classifies the complete migration and cutover scope", () => {
+  const impact = classifyChangedPaths([
+    "brand_poilot/apps/api/src/aiContentRepository.ts",
+    "brand_poilot/db/migrations/091_ai_content_prompt_lineage_v4.sql",
+    "brand_poilot/deploy/scripts/deploy.sh",
+    "brand_poilot/deploy/scripts/preflight.sh",
+    "brand_poilot/packages/brand-pilot-content-contracts/src/catalog.ts",
+    "brand_poilot/packages/brand-pilot-content-contracts/src/binding.test.ts",
+    "brand_poilot/packages/brand-pilot-content-contracts/generated/content-catalog.json",
+    "brand_poilot/packages/brand-pilot-content-contracts/generated/content-prompt-binding-v1.schema.json",
+    "brand_poilot/scripts/content-suggestion-schema-migration.test.mjs",
+    "brand_poilot/scripts/deployment-contract.test.mjs",
+    "brand_poilot/scripts/incremental-cicd-contract.test.mjs",
+    "brand_poilot/scripts/migrationRunner.mjs",
+    "brand_poilot/scripts/migrationRunner.test.mjs",
+    "brand_poilot/scripts/release-impact.mjs",
+    "brand_poilot/scripts/release-impact.test.mjs",
+    "brand_poilot/scripts/repository-contract.test.mjs",
+    "brand_poilot/workers/brand-pilot-content-proposal-worker/src/promptBuilder.ts",
+    "brand_poilot/workers/brand-pilot-card-news-worker/src/promptBuilder.ts",
+    "brand_poilot/workers/brand-pilot-reel-worker/src/promptBuilder.ts",
+    "brand_poilot/docs/operations/DEVELOPMENT_AND_RELEASE_FLOW.md",
+  ], { profile: CARD_REEL_EDITORIAL_PROMPT_QUALITY_PROFILE });
+
+  assert.deepEqual(enabled(impact), ["api", "cardNewsWorker", "contentProposalWorker", "reelWorker"]);
+  assert.equal(impact.buildAllServer, false);
+  assert.equal(impact.migrationChanged, true);
+  assert.equal(impact.productionDeployAllowed, false, "migration keeps automatic production deployment disabled");
+  assert.equal(impact.deployBundleChanged, true);
+  assert.equal(impact.verifiedScope, true);
+  assert.deepEqual(impact.unknownPaths, []);
+});
+
 test("default profile keeps catalog source changes on the broad fail-safe path", () => {
   const impact = classifyChangedPaths([
     "brand_poilot/packages/brand-pilot-content-contracts/src/catalog.ts",

@@ -74,28 +74,36 @@ jobs:
             git fetch --no-tags origin "$GITHUB_BASE_REF"
             base_sha="$(git merge-base "origin/$GITHUB_BASE_REF" "$GITHUB_SHA")"
             policy_base_sha="$base_sha"
-            scoped_impact_json="$(node scripts/release-impact.mjs --base "$base_sha" --head "$GITHUB_SHA" --profile card-manuscript-visual-session)"
-            if IMPACT_JSON="$scoped_impact_json" node --input-type=module -e '
+            editorial_impact_json="$(node scripts/release-impact.mjs --base "$base_sha" --head "$GITHUB_SHA" --profile card-reel-editorial-prompt-quality)"
+            if IMPACT_JSON="$editorial_impact_json" node --input-type=module -e '
               const impact = JSON.parse(process.env.IMPACT_JSON);
-              process.exit(impact.verifiedScope && impact.productionDeployAllowed ? 0 : 1);
+              process.exit(impact.verifiedScope ? 0 : 1);
             '; then
-              impact_json="$scoped_impact_json"
+              impact_json="$editorial_impact_json"
             else
-              manual_impact_json="$(node scripts/release-impact.mjs --base "$base_sha" --head "$GITHUB_SHA" --profile manual-brand-visual-assets)"
-              if IMPACT_JSON="$manual_impact_json" node --input-type=module -e '
+              scoped_impact_json="$(node scripts/release-impact.mjs --base "$base_sha" --head "$GITHUB_SHA" --profile card-manuscript-visual-session)"
+              if IMPACT_JSON="$scoped_impact_json" node --input-type=module -e '
                 const impact = JSON.parse(process.env.IMPACT_JSON);
-                process.exit(impact.verifiedScope ? 0 : 1);
+                process.exit(impact.verifiedScope && impact.productionDeployAllowed ? 0 : 1);
               '; then
-                impact_json="$manual_impact_json"
+                impact_json="$scoped_impact_json"
               else
-                faq_impact_json="$(node scripts/release-impact.mjs --base "$base_sha" --head "$GITHUB_SHA" --profile faq-utterance-matching)"
-                if IMPACT_JSON="$faq_impact_json" node --input-type=module -e '
+                manual_impact_json="$(node scripts/release-impact.mjs --base "$base_sha" --head "$GITHUB_SHA" --profile manual-brand-visual-assets)"
+                if IMPACT_JSON="$manual_impact_json" node --input-type=module -e '
                   const impact = JSON.parse(process.env.IMPACT_JSON);
                   process.exit(impact.verifiedScope ? 0 : 1);
                 '; then
-                  impact_json="$faq_impact_json"
+                  impact_json="$manual_impact_json"
                 else
-                  impact_json="$(node scripts/release-impact.mjs --base "$base_sha" --head "$GITHUB_SHA")"
+                  faq_impact_json="$(node scripts/release-impact.mjs --base "$base_sha" --head "$GITHUB_SHA" --profile faq-utterance-matching)"
+                  if IMPACT_JSON="$faq_impact_json" node --input-type=module -e '
+                    const impact = JSON.parse(process.env.IMPACT_JSON);
+                    process.exit(impact.verifiedScope ? 0 : 1);
+                  '; then
+                    impact_json="$faq_impact_json"
+                  else
+                    impact_json="$(node scripts/release-impact.mjs --base "$base_sha" --head "$GITHUB_SHA")"
+                  fi
                 fi
               fi
             fi
@@ -105,31 +113,40 @@ jobs:
             bootstrap=true
           else
             policy_base_sha="$PRODUCTION_RELEASE_SHA"
-            scoped_impact_json="$(node scripts/release-impact.mjs --base "$PRODUCTION_RELEASE_SHA" --head "$GITHUB_SHA" --profile card-manuscript-visual-session)"
-            if IMPACT_JSON="$scoped_impact_json" node --input-type=module -e '
+            editorial_impact_json="$(node scripts/release-impact.mjs --base "$PRODUCTION_RELEASE_SHA" --head "$GITHUB_SHA" --profile card-reel-editorial-prompt-quality)"
+            if IMPACT_JSON="$editorial_impact_json" node --input-type=module -e '
                 const impact = JSON.parse(process.env.IMPACT_JSON);
-                process.exit(impact.verifiedScope && impact.productionDeployAllowed ? 0 : 1);
+                process.exit(impact.verifiedScope ? 0 : 1);
               '; then
-                impact_json="$scoped_impact_json"
+                impact_json="$editorial_impact_json"
               else
-                manual_impact_json="$(node scripts/release-impact.mjs --base "$PRODUCTION_RELEASE_SHA" --head "$GITHUB_SHA" --profile manual-brand-visual-assets)"
-                if IMPACT_JSON="$manual_impact_json" node --input-type=module -e '
+                scoped_impact_json="$(node scripts/release-impact.mjs --base "$PRODUCTION_RELEASE_SHA" --head "$GITHUB_SHA" --profile card-manuscript-visual-session)"
+                if IMPACT_JSON="$scoped_impact_json" node --input-type=module -e '
                   const impact = JSON.parse(process.env.IMPACT_JSON);
-                  process.exit(impact.verifiedScope ? 0 : 1);
+                  process.exit(impact.verifiedScope && impact.productionDeployAllowed ? 0 : 1);
                 '; then
-                  impact_json="$manual_impact_json"
+                  impact_json="$scoped_impact_json"
                 else
-                  faq_impact_json="$(node scripts/release-impact.mjs --base "$PRODUCTION_RELEASE_SHA" --head "$GITHUB_SHA" --profile faq-utterance-matching)"
-                  if IMPACT_JSON="$faq_impact_json" node --input-type=module -e '
+                  manual_impact_json="$(node scripts/release-impact.mjs --base "$PRODUCTION_RELEASE_SHA" --head "$GITHUB_SHA" --profile manual-brand-visual-assets)"
+                  if IMPACT_JSON="$manual_impact_json" node --input-type=module -e '
                     const impact = JSON.parse(process.env.IMPACT_JSON);
                     process.exit(impact.verifiedScope ? 0 : 1);
                   '; then
-                    impact_json="$faq_impact_json"
+                    impact_json="$manual_impact_json"
                   else
-                    impact_json="$(node scripts/release-impact.mjs --base "$PRODUCTION_RELEASE_SHA" --head "$GITHUB_SHA")"
+                    faq_impact_json="$(node scripts/release-impact.mjs --base "$PRODUCTION_RELEASE_SHA" --head "$GITHUB_SHA" --profile faq-utterance-matching)"
+                    if IMPACT_JSON="$faq_impact_json" node --input-type=module -e '
+                      const impact = JSON.parse(process.env.IMPACT_JSON);
+                      process.exit(impact.verifiedScope ? 0 : 1);
+                    '; then
+                      impact_json="$faq_impact_json"
+                    else
+                      impact_json="$(node scripts/release-impact.mjs --base "$PRODUCTION_RELEASE_SHA" --head "$GITHUB_SHA")"
+                    fi
                   fi
                 fi
               fi
+            fi
             bootstrap=false
           fi
           IMPACT_JSON="$impact_json" node --input-type=module <<'NODE' > impact.outputs
