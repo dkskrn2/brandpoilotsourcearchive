@@ -1,5 +1,7 @@
 # Card/Reel Editorial Prompt Quality Implementation Plan
 
+> **Execution gate (2026-08-26):** This is the post-validation production implementation plan. Do not execute it until the user reviews and approves the text ON/OFF result from `2026-08-26-card-reel-editorial-prompt-onoff.md`. The ON/OFF run must use ignored one-off prompt overlays and must not modify production source, API contracts, DB schema, prompt lineage, or deployed workers.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Improve informational and marketing Card News/Reel Proposal and final planner prompts, preserve the existing contracts, add audited `proposal.writer.v4` lineage, and run isolated plus end-to-end text ON/OFF comparisons.
