@@ -53,6 +53,7 @@
     "smoke:ai-content": "node scripts/ai-content-smoke.mjs",
     "smoke:ai-content-subject": "node scripts/ai-content-subject-smoke.mjs",
     "smoke:brand-intelligence": "node scripts/brand-intelligence-smoke.mjs",
+    "smoke:publish-scheduler": "node scripts/publish-scheduler-smoke.mjs",
     "test:migrations": "node --test scripts/migrations.integration.test.mjs",
     "test:topic-concurrency": "npm run test:topic-concurrency --workspace @brand-pilot/api",
     "test:e2e": "npm run e2e --workspace @brand-pilot/customer-ui",

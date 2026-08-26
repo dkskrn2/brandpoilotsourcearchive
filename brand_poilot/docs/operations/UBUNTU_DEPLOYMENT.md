@@ -1527,3 +1527,22 @@ The Ubuntu ChatGPT login is verified. All deployed SHA/digest, worker, job,
 duration, rollback, and product-verification fields remain `pending` until the
 incremental production rollout is actually performed. Do not call login success
 deployment success or onboarding QA.
+
+## 14. Publish scheduler activation boundary
+
+The publish scheduler is not part of the general API/worker activation sequence
+above. Use [게시 스케줄러 활성화·중지 런북](PUBLISH_SCHEDULER.md) only after the
+serving primary release is fixed, migration 091 evidence is already present,
+all external due callers are confirmed absent, and the exact preview queue IDs
+have been approved.
+
+The scheduler component path may start or replace only
+`publish-scheduler-1`. It must not run a DB migration or recreate API, Caddy,
+UI, or an unrelated worker. Observe three successful heartbeat updates and
+verify the approved target/attempt/provider result before recording activation.
+If any stop condition occurs, disable the scheduler component first and preserve
+the API/UI/DB, reservations, completed publications, and migration 091.
+
+Running the full deployment test suite, regardless of duration, is not evidence
+that these production activation gates passed. This section documents the gate;
+it does not authorize or perform activation.
