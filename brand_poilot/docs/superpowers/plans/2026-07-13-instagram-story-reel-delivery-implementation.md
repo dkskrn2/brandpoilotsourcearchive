@@ -973,8 +973,8 @@ git commit -m "feat: publish instagram stories and reels"
 
 ```ts
 it("assigns one slot to all ready outputs in a topic group", async () => {
-  const scheduled = await repository.schedulePublishQueue(brandId, now);
-  const rows = scheduled.items.filter((item) => item.topicPublishGroupId === groupId);
+  await repository.allocatePublishCalendar(now);
+  const rows = await repository.listSlots({ workspaceId, brandId, from, to });
   expect(new Set(rows.map((row) => row.scheduledFor)).size).toBe(1);
   expect(new Set(rows.map((row) => row.slotNumber)).size).toBe(1);
 });

@@ -922,12 +922,6 @@ describe("apiClient", () => {
       if (href.endsWith("/content-generation/run")) {
         return new Response(JSON.stringify({ processed: 1, created: 3, updated: 1, failed: 0 }), { status: 200 });
       }
-      if (href.endsWith("/publish-queue/schedule")) {
-        return new Response(JSON.stringify({ processed: 3, created: 0, updated: 3, failed: 0 }), { status: 200 });
-      }
-      if (href.endsWith("/publish-queue/queue-1/publish")) {
-        return new Response(JSON.stringify({ id: "queue-1", status: "published", publishedUrl: "mock://instagram/output-1" }), { status: 200 });
-      }
       return new Response(JSON.stringify({ error: "unexpected" }), { status: 500 });
     });
     const client = apiClient({ baseUrl: "http://api.test", fetcher: fetchMock as typeof fetch });
@@ -967,8 +961,6 @@ describe("apiClient", () => {
     expect(await client.listTopicRows("brand-1", "skipped")).toEqual([expect.objectContaining({ status: "skipped", topicTitle: "Jeju food" })]);
     expect(await client.crawlSources("brand-1")).toMatchObject({ processed: 2 });
     expect(await client.generateContent("brand-1")).toMatchObject({ created: 3 });
-    expect(await client.schedulePublishQueue("brand-1")).toMatchObject({ updated: 3 });
-    expect(await client.publishQueueItem("queue-1")).toMatchObject({ status: "published" });
   });
 
   it("sends raw channel secret under secretValue so the API owns encryption", async () => {

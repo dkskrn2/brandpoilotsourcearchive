@@ -869,12 +869,6 @@ export function apiClient(options: ApiClientOptions = {}) {
     generateContent(brandId: string) {
       return request<PipelineRunResult>(fetcher, `${baseUrl}/brands/${brandId}/content-generation/run`, { method: "POST" });
     },
-    schedulePublishQueue(brandId: string) {
-      return request<PipelineRunResult>(fetcher, `${baseUrl}/brands/${brandId}/publish-queue/schedule`, { method: "POST" });
-    },
-    publishQueueItem(queueId: string) {
-      return request<{ id: string; status: string; publishedUrl: string | null }>(fetcher, `${baseUrl}/publish-queue/${queueId}/publish`, { method: "POST" });
-    },
     retryPublishQueueItem(queueId: string) {
       return request<{ id: string; status: "queued" | "scheduled" }>(fetcher, `${baseUrl}/publish-queue/${queueId}/retry`, { method: "POST" });
     },

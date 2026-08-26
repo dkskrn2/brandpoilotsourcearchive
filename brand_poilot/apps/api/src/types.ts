@@ -1566,7 +1566,6 @@ export interface ApiRepository
   runDailyPerformanceSync(now?: Date): Promise<PerformanceSyncSummaryDto>;
   getDashboard(brandId: string): Promise<DashboardDto>;
   getPerformanceInsights?(brandId: string): Promise<PerformanceInsightsDto>;
-  schedulePublishQueue(brandId: string, now?: Date): Promise<PipelineRunResult>;
   runDuePublishing(now?: Date, guard?: PublishDueExecutionGuard): Promise<PublishDueRunResult>;
   previewDuePublishing?(now?: Date): Promise<PublishDuePreviewResult>;
   runDueAiContentPublishing?(): Promise<PipelineRunResult>;

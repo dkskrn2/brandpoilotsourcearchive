@@ -4411,14 +4411,6 @@ export function createServer(
     return reply.send(packageResult.buffer);
   });
 
-  app.post<{ Params: { brandId: string } }>("/brands/:brandId/publish-queue/schedule", async (request) => {
-    return repository.schedulePublishQueue(request.params.brandId);
-  });
-
-  app.post<{ Params: { queueId: string } }>("/publish-queue/:queueId/publish", async (request) => {
-    return repository.publishQueueItem(request.params.queueId);
-  });
-
   app.post<{ Params: { queueId: string } }>("/publish-queue/:queueId/retry", async (request, reply) => {
     try {
       return await repository.retryPublishQueueItem(request.params.queueId);

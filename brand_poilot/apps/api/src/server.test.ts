@@ -687,7 +687,6 @@ function createRepository(): ApiRepository {
     generateContent: vi.fn(async () => ({ processed: 1, created: 3, updated: 1, failed: 0 })),
     runDailyGeneration: vi.fn(async () => ({ brandsSelected: 1, runsStarted: 1, processed: 1, created: 3, updated: 1, failed: 0, status: "succeeded" as const })),
     runDailyPerformanceSync: vi.fn(async () => ({ status: "not_due" as const, runDate: "2026-07-13", channelsSelected: 0, runsStarted: 0, targetCount: 0, successCount: 0, failureCount: 0 })),
-    schedulePublishQueue: vi.fn(async () => ({ processed: 3, created: 0, updated: 3, failed: 0 })),
     runDuePublishing: vi.fn(async () => ({ acquired: true, expiredTargets: 0, expiredSlots: 0, dueQueued: 1, published: 1, failed: 0, resultUnknown: 0 })),
     getPublishArtifact: vi.fn(async (queueId) => ({
       queueId,
@@ -1263,20 +1262,10 @@ describe("API server", () => {
 
   it("maps disabled publication mutation endpoints to service unavailable while due publishing remains a zero-result no-op", async () => {
     const repository = createRepository();
-    vi.mocked(repository.publishQueueItem).mockRejectedValue(new Error("publishing_disabled"));
-    vi.mocked(repository.schedulePublishQueue).mockRejectedValue(new Error("publishing_disabled"));
     vi.mocked(repository.retryPublishQueueItem).mockRejectedValue(new Error("publishing_disabled"));
     vi.mocked(repository.runDuePublishing).mockResolvedValue({ acquired: false, expiredTargets: 0, expiredSlots: 0, dueQueued: 0, published: 0, failed: 0, resultUnknown: 0 });
     const app = createServer({ repository, cronSecret: "cron-secret", instanceRole: "primary", logger: false });
 
-    const schedule = await app.inject({
-      method: "POST",
-      url: `/brands/${brandId}/publish-queue/schedule`
-    });
-    const explicitPublish = await app.inject({
-      method: "POST",
-      url: "/publish-queue/queue-1/publish"
-    });
     const retry = await app.inject({
       method: "POST",
       url: "/publish-queue/queue-1/retry"
@@ -1287,10 +1276,14 @@ describe("API server", () => {
       headers: { authorization: "Bearer cron-secret" }
     });
 
-    expect(schedule.statusCode).toBe(503);
-    expect(schedule.json()).toEqual({ error: "publishing_disabled" });
-    expect(explicitPublish.statusCode).toBe(503);
-    expect(explicitPublish.json()).toEqual({ error: "publishing_disabled" });
+    expect((await app.inject({
+      method: "POST",
+      url: `/brands/${brandId}/publish-queue/schedule`
+    })).statusCode).toBe(404);
+    expect((await app.inject({
+      method: "POST",
+      url: "/publish-queue/queue-1/publish"
+    })).statusCode).toBe(404);
     expect(retry.statusCode).toBe(503);
     expect(retry.json()).toEqual({ error: "publishing_disabled" });
     expect(duePublish.statusCode).toBe(200);
@@ -1303,17 +1296,6 @@ describe("API server", () => {
       failed: 0,
       resultUnknown: 0,
     });
-  });
-
-  it("returns conflict instead of forcing a future scheduled queue to publish", async () => {
-    const repository = createRepository();
-    vi.mocked(repository.publishQueueItem).mockRejectedValue(new Error("publish_queue_not_publishable"));
-    const app = createServer({ repository, logger: false });
-
-    const response = await app.inject({ method: "POST", url: "/publish-queue/queue-future/publish" });
-
-    expect(response.statusCode).toBe(409);
-    expect(response.json()).toEqual({ error: "publish_queue_not_publishable" });
   });
 
   it("returns the durable scheduled result before disabled background publication settles", async () => {
@@ -3238,7 +3220,7 @@ describe("API server", () => {
     expect(repository.listTopicRows).toHaveBeenCalledWith(brandId, "skipped");
   });
 
-  it("runs crawl, generation, scheduling, and mock publishing actions", async () => {
+  it("runs crawl, generation, and mock publishing actions without the retired queue scheduler", async () => {
     const repository = createRepository();
     const app = createServer({ repository });
 
@@ -3252,15 +3234,9 @@ describe("API server", () => {
     expect(generation.json()).toMatchObject({ created: 3 });
     expect(repository.generateContent).toHaveBeenCalledWith(brandId);
 
-    const schedule = await app.inject({ method: "POST", url: `/brands/${brandId}/publish-queue/schedule` });
-    expect(schedule.statusCode).toBe(200);
-    expect(schedule.json()).toMatchObject({ updated: 3 });
-    expect(repository.schedulePublishQueue).toHaveBeenCalledWith(brandId);
+    expect((await app.inject({ method: "POST", url: `/brands/${brandId}/publish-queue/schedule` })).statusCode).toBe(404);
 
-    const publish = await app.inject({ method: "POST", url: "/publish-queue/queue-1/publish" });
-    expect(publish.statusCode).toBe(200);
-    expect(publish.json()).toMatchObject({ id: "queue-1", status: "published" });
-    expect(repository.publishQueueItem).toHaveBeenCalledWith("queue-1");
+    expect((await app.inject({ method: "POST", url: "/publish-queue/queue-1/publish" })).statusCode).toBe(404);
 
     const retry = await app.inject({ method: "POST", url: "/publish-queue/queue-1/retry" });
     expect(retry.statusCode).toBe(200);
@@ -4068,7 +4044,7 @@ describe("API server", () => {
     expect(repository.downloadPublishResult).not.toHaveBeenCalled();
   });
 
-  it("denies cross-workspace publish, retry, and cancel mutations before repository access", async () => {
+  it("denies cross-workspace retry and cancel mutations before repository access", async () => {
     const repository = createRepository();
     const kakaoAuth = {
       getSession: vi.fn(async () => ({ userId: "user-1" })),
@@ -4079,14 +4055,12 @@ describe("API server", () => {
     const request = { method: "POST" as const, headers: { cookie: "bp_session=session-token" } };
 
     const responses = await Promise.all([
-      app.inject({ ...request, url: "/publish-queue/queue-foreign/publish" }),
       app.inject({ ...request, url: "/publish-queue/queue-foreign/retry" }),
       app.inject({ ...request, url: "/publish-queue/queue-foreign/cancel" }),
     ]);
 
-    expect(responses.map(({ statusCode }) => statusCode)).toEqual([403, 403, 403]);
-    expect(kakaoAuth.canAccessResource).toHaveBeenCalledTimes(3);
-    expect(repository.publishQueueItem).not.toHaveBeenCalled();
+    expect(responses.map(({ statusCode }) => statusCode)).toEqual([403, 403]);
+    expect(kakaoAuth.canAccessResource).toHaveBeenCalledTimes(2);
     expect(repository.retryPublishQueueItem).not.toHaveBeenCalled();
     expect(repository.cancelPublishQueueItem).not.toHaveBeenCalled();
   });

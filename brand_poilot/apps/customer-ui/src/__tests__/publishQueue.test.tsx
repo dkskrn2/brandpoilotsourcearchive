@@ -127,8 +127,6 @@ async function renderPage(
     cancelPublishCalendarSlot: vi.fn(async () => ({ id: "slot-1", status: "cancelled" })),
     savePublishCalendarSettings: vi.fn(async (_brandId: string, payload: Record<string, unknown>) => ({ brandId: "brand-1", updatedAt: "2026-08-23T00:00:00.000Z", ...payload })),
     generateContent: vi.fn(async () => ({ processed: 1, created: 1, updated: 0, failed: 0 })),
-    schedulePublishQueue: vi.fn(async () => ({ processed: 1, created: 0, updated: 1, failed: 0 })),
-    publishQueueItem: vi.fn(async () => ({ id: "queue-1", status: "published", publishedUrl: "https://instagram.example/post" })),
     retryPublishQueueItem: vi.fn(async () => ({ id: "queue-1", status: "queued" })),
     cancelPublishQueueItem: vi.fn(async () => ({ id: "queue-1", status: "cancelled" })),
     reviewContentOutput: vi.fn(async (outputId: string, action: string) => ({ id: outputId, status: action === "approve" ? "approved" : action === "reject" ? "rejected" : "regenerating" })),
@@ -1259,17 +1257,11 @@ describe("PublishQueuePage canonical collection", () => {
     expect(card).toHaveAttribute("data-publish-deep-link", "true");
   });
 
-  it("refreshes same collection after scheduling and publishing", async () => {
-    const listPublishItems = vi.fn(async () => [item()]);
-    const api = await renderPage({ listPublishItems });
+  it("does not expose legacy queue scheduling or direct publish operations", async () => {
+    await renderPage({ listPublishItems: vi.fn(async () => [item()]) });
+    await screen.findByRole("article", { name: "예약된 SNS 마케팅" });
+    expect(screen.queryByText("운영 도구")).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "정책 큐 배정" })).not.toBeInTheDocument();
-    await userEvent.click(await screen.findByText("운영 도구"));
-    expect(screen.getByText("정책 큐 배정 대상: 게시 대기 0개")).toBeVisible();
-    expect(screen.getByText("다음 게시 실행 대상: 예약된 SNS 마케팅")).toBeVisible();
-    await userEvent.click(await screen.findByRole("button", { name: "정책 큐 배정" }));
-    await waitFor(() => expect(api.schedulePublishQueue).toHaveBeenCalledWith("brand-1"));
-    await userEvent.click(screen.getByRole("button", { name: "다음 게시 실행" }));
-    await waitFor(() => expect(api.publishQueueItem).toHaveBeenCalledWith("queue-1"));
-    expect(listPublishItems).toHaveBeenCalledTimes(3);
+    expect(screen.queryByRole("button", { name: "다음 게시 실행" })).not.toBeInTheDocument();
   });
 });

@@ -357,7 +357,6 @@ export function PublishQueuePage({ generationGateway = aiContentApiGateway }: Pu
   const [calendarSettingsError, setCalendarSettingsError] = useState<string | null>(null);
   const [publishItems, setPublishItems] = useState<PublishItem[]>([]);
   const [generationPreviews, setGenerationPreviews] = useState<ReadonlyMap<string, PublishCardPreview>>(() => new Map());
-  const [operationsOpen, setOperationsOpen] = useState(false);
   const [activeFilter, setActiveFilter] = useState<PublishManagementListFilterId>(() => {
     const requested = new URLSearchParams(window.location.search).get("status");
     if (publishManagementFilters.some((filter) => filter.id === requested)) {
@@ -393,14 +392,6 @@ export function PublishQueuePage({ generationGateway = aiContentApiGateway }: Pu
   const assignableCalendarContents = useMemo(() => publishItems.flatMap((item) => item.sourceRefs.topicPublishGroupId && (item.status === "completed_unpublished" || item.status === "publish_queued")
     ? [{ id: item.sourceRefs.topicPublishGroupId, title: item.title }]
     : []), [publishItems]);
-  const nextPublishItem = useMemo(
-    () => publishItems.find((item) => item.targets.some((target) => target.status === "scheduled")) ?? null,
-    [publishItems],
-  );
-  const policyQueueTargetCount = useMemo(
-    () => publishItems.reduce((count, item) => count + item.targets.filter((target) => target.status === "queued").length, 0),
-    [publishItems],
-  );
 
   useEffect(() => {
     if (initialLoading || view !== "list" || !highlightedQueueId) return;
@@ -846,34 +837,6 @@ export function PublishQueuePage({ generationGateway = aiContentApiGateway }: Pu
     }
   }
 
-  async function scheduleQueue() {
-    try {
-      const result = await api.schedulePublishQueue(DEMO_BRAND_ID);
-      await refreshPublishItems();
-      window.dispatchEvent(new Event(PUBLISH_CALENDAR_USAGE_CHANGED_EVENT));
-      setNotice(`큐 배정 완료: 처리 ${result.processed}개, 배정 ${result.updated}개`);
-    } catch {
-      setNotice("큐 배정에 실패했습니다. API 서버와 게시 관리 상태를 확인하세요.");
-    }
-  }
-
-  async function publishNext() {
-    const target = nextPublishItem?.targets.find((row) => row.status === "scheduled");
-    if (!target) {
-      setNotice("게시할 예약 콘텐츠가 없습니다.");
-      return;
-    }
-
-    try {
-      const result = await api.publishQueueItem(target.queueId);
-      await refreshPublishItems();
-      window.dispatchEvent(new Event(PUBLISH_CALENDAR_USAGE_CHANGED_EVENT));
-      setNotice(`게시 완료: ${result.publishedUrl ?? result.status}`);
-    } catch {
-      setNotice("게시 실행에 실패했습니다. 큐 항목 상태를 확인하세요.");
-    }
-  }
-
   async function generateNextContent() {
     try {
       const result = await api.generateContent(DEMO_BRAND_ID);
@@ -919,20 +882,7 @@ export function PublishQueuePage({ generationGateway = aiContentApiGateway }: Pu
       <PageHeader
         title="게시 관리"
         description="생성 검토, 예약, 발송 상태, 실패 사유, 완료 결과물을 하나의 운영 화면에서 관리합니다."
-        actions={(
-          <>
-            <button className="button" type="button" onClick={generateNextContent}>콘텐츠 생성</button>
-            <details open={operationsOpen}>
-              <summary onClick={(event) => { event.preventDefault(); setOperationsOpen((current) => !current); }}>운영 도구</summary>
-              {operationsOpen ? <div className="panel-body">
-                <p className="row-meta">정책 큐 배정 대상: 게시 대기 {policyQueueTargetCount}개</p>
-                <button className="button" type="button" onClick={scheduleQueue}>정책 큐 배정</button>
-                <p className="row-meta">다음 게시 실행 대상: {nextPublishItem?.title ?? "예약 콘텐츠 없음"}</p>
-                <button className="button primary" type="button" onClick={publishNext}>다음 게시 실행</button>
-              </div> : null}
-            </details>
-          </>
-        )}
+        actions={<button className="button" type="button" onClick={generateNextContent}>콘텐츠 생성</button>}
       />
 
       <div className="publish-view-toolbar">

@@ -82,6 +82,31 @@ function queueItem(id: string, status: string, lastError: string | null = null, 
   };
 }
 
+function publishItem(id: string, status: "scheduled" | "cancelled", title = id) {
+  const scheduledFor = "2099-07-29T03:00:00.000Z";
+  return {
+    itemKey: `queue:${id}`, workspaceId: "workspace-e2e", brandId, title, createdAt: now,
+    contentFormat: "card_news", channels: ["instagram"],
+    source: { type: "mixed", label: "운영 E2E", detail: "공통 게시 항목 fixture", urls: [] },
+    targets: [{
+      queueId: id, channelOutputId: `output-${id}`, channel: "instagram", status,
+      scheduledFor: status === "scheduled" ? scheduledFor : null, publishedAt: null, failedAt: null,
+      lastError: null, externalPostId: null, externalUrl: null, previewTitle: title,
+      previewBody: "예약 취소 검증", outputJson: {}, artifactPublicUrl: null, sourceSummary: "운영 E2E",
+    }],
+    reviewTargets: [], contentStatus: "completed", publishStatus: status,
+    status, operationalStatus: status === "scheduled" ? "upcoming" : "cancelled",
+    operationalReason: status === "scheduled" ? "future_reservation" : "cancelled_by_user",
+    groupStatus: "ready", publicationProgress: "none",
+    scheduledFor: status === "scheduled" ? scheduledFor : null,
+    effectiveScheduledFor: status === "scheduled" ? scheduledFor : null,
+    publishedAt: null, calendarDate: status === "scheduled" ? scheduledFor : null,
+    calendarPlacement: status === "scheduled" ? "dated" : "unreserved", assignmentMode: "manual",
+    sourceRefs: { contentTopicId: null, proposalId: null, generationId: null, generationOutputId: null, calendarSlotId: null, topicPublishGroupId: `group-${id}`, queueIds: [id] },
+    schedulable: false, scheduleBlockedReason: "already_reserved", lastError: null,
+  };
+}
+
 async function installShell(page: Page, handler?: (route: Route, url: URL) => Promise<boolean>) {
   await page.addInitScript((session) => {
     const originalFetch = window.fetch.bind(window);
@@ -104,6 +129,11 @@ async function installShell(page: Page, handler?: (route: Route, url: URL) => Pr
     if (url.pathname.endsWith("/ui-status")) return route.fulfill({ json: uiStatus });
     if (url.pathname.endsWith("/channels/capabilities")) return route.fulfill({ json: capabilities });
     if (url.pathname.endsWith("/channels")) return route.fulfill({ json: channels });
+    if (url.pathname.endsWith("/publish-calendar/usage")) return route.fulfill({ json: {
+      startsAt: "2026-07-27T00:00:00.000Z", endsAt: "2026-08-03T00:00:00.000Z",
+      generation: { limit: 10, succeeded: 1, reserved: 0, remaining: 9, additionalAvailable: 9 },
+      publishing: { limit: 30, succeeded: 1, reserved: 1, remaining: 29, additionalAvailable: 28 },
+    } });
     if (url.pathname.endsWith("/ai-content/usage")) return route.fulfill({ json: { generationUsed: 1, generationLimit: 10, newDownloadUsed: 1, newDownloadLimit: 20, resetsAt: now } });
     return route.fulfill({ json: [] });
   });
@@ -165,26 +195,21 @@ test.describe("D hybrid operations cycle", () => {
     ]);
   });
 
-  test("schedule assigns a slot and cancellation uses that same queue row", async ({ page }) => {
-    let rows = [queueItem("queue-schedule", "queued", null, "예약할 콘텐츠")];
+  test("cancellation uses the scheduled queue row", async ({ page }) => {
+    let rows = [publishItem("queue-schedule", "scheduled", "예약할 콘텐츠")];
     let cancelId = "";
     await installShell(page, async (route, url) => {
-      if (url.pathname.endsWith("/publish-queue/schedule") && route.request().method() === "POST") {
-        rows = [queueItem("queue-schedule", "scheduled", null, "예약할 콘텐츠")];
-        await route.fulfill({ json: { processed: 1, created: 0, updated: 1, failed: 0 } }); return true;
-      }
       if (url.pathname.endsWith("/publish-queue/queue-schedule/cancel")) {
         cancelId = "queue-schedule";
-        rows = [queueItem("queue-schedule", "cancelled", null, "예약할 콘텐츠")];
+        rows = [publishItem("queue-schedule", "cancelled", "예약할 콘텐츠")];
         await route.fulfill({ json: { id: cancelId, status: "cancelled" } }); return true;
       }
-      if (url.pathname.endsWith("/publish-queue")) { await route.fulfill({ json: rows }); return true; }
+      if (url.pathname.endsWith("/publish-items")) { await route.fulfill({ json: rows }); return true; }
       if (url.pathname.endsWith("/content-outputs") || url.pathname.endsWith("/publish-results")) { await route.fulfill({ json: [] }); return true; }
       return false;
     });
 
-    await page.goto("/publish-queue");
-    await page.getByRole("button", { name: "정책 큐 배정" }).click();
+    await page.goto("/publish-queue?status=all");
     const card = page.getByRole("article", { name: "예약할 콘텐츠" });
     await expect(card).toContainText("예약");
     await card.getByRole("button", { name: "예약 취소" }).click();

@@ -163,7 +163,7 @@ Run: `npm test --workspace @brand-pilot/customer-ui -- publishManagementFilters.
 
 - [ ] **Step 4: Extract `PublishManagementList`.** Preserve all existing review, retry, result, schedule, reschedule, and cancel callbacks. Default a URL without `status` to `action_required`; preserve explicit deep links and highlighted items even when outside the first 30.
 
-- [ ] **Step 5: Move `정책 큐 배정` and `다음 게시 실행`** into an `운영 도구` disclosure. Before execution, show the concrete target count/title; do not change their API calls in Workstream 1.
+- [x] **Step 5: Remove the legacy `정책 큐 배정` and `다음 게시 실행` customer actions.** The weekly allocator and singleton scheduler are the only automatic scheduling and publishing path; the retired fixed-policy scheduling route returns 404.
 
 - [ ] **Step 6: Re-run tests and commit.**
 
