@@ -47,7 +47,7 @@ DB 또는 중앙 API 큐에서 lease를 획득해 오래 걸리는 작업을 수
 React/Vite Customer UI
         |
         v
-Fastify Central API + Local Scheduler
+Fastify Central API
         |
         +----------------------+
         |                      |
@@ -64,13 +64,17 @@ DM Worker Process              Content Generation Worker
   - Wiki compilation             - reel and FFmpeg
   - lexical retrieval            - artifact upload
   - Wiki maintenance
+
+Standalone Publish Scheduler
+  - due publishing
+  - weekly calendar allocation
 ```
 
 현재 코드 패키지:
 
 | 코드 위치 | 현재 역할 | 현재 한계 |
 |---|---|---|
-| `apps/api` | 중앙 API와 로컬 스케줄러 | 예약 작업이 API 프로세스와 자원을 공유함 |
+| `apps/api` | 중앙 API와 선택적 로컬 스케줄러 | 운영 Compose에서는 로컬 스케줄러를 끄고, URL 크롤링·일일 생성·성과 수집은 별도 분리가 남아 있음 |
 | `apps/customer-ui` | 고객용 React UI | 운영에서는 정적 빌드로 배포해야 함 |
 | `workers/brand-pilot-dm-worker` | 동일 코드에서 `dm` 또는 `wiki` 전용 모드로 실행하며 embedding 없는 lexical 검색 사용 | Wiki 빌드와 DM 답변이 별도 프로세스로 분리됨 |
 | `workers/brand-pilot-brand-intelligence-worker` | 사용자 요청 URL·업로드 근거로 브랜드 분석 초안 생성 | 확인된 버전만 Brand Core와 후속 생성에 사용 |
@@ -80,8 +84,9 @@ DM Worker Process              Content Generation Worker
 | `workers/brand-pilot-blog-worker` | AI 콘텐츠 스튜디오 블로그 분석·HTML·대표 PNG 생성 | 외부 CMS 자동 게시는 지원하지 않음 |
 | `workers/brand-pilot-marketing-worker` | AI 콘텐츠 스튜디오 마케팅 이미지·카피 생성 | 생성 결과는 다운로드 중심이며 자동 게시하지 않음 |
 | `workers/brand-pilot-subject-analysis-worker` | 제품·서비스 URL 근거 정리, 공개 웹 리서치, 타깃·소구점 추천 | 사용자 요청이 있을 때만 실행하며 주기적 재분석하지 않음 |
+| `workers/brand-pilot-publish-scheduler` | primary API의 게시 실행·게시 캘린더 자동 배정 엔드포인트를 1분마다 호출 | DB·Meta·Blob 자격 증명을 직접 소유하지 않으며 별도 profile로 명시 활성화해야 함 |
 
-현재 로컬 스케줄러는 중앙 API 내부에서 1분마다 tick을 실행한다.
+개발 환경에서는 `LOCAL_SCHEDULER_ENABLED=true`일 때 중앙 API 내부 로컬 스케줄러가 1분마다 tick을 실행한다. 운영 Compose는 이를 끄며, 게시 예정 큐와 게시 캘린더 자동 배정만 독립 게시 스케줄러가 primary API를 통해 처리한다.
 
 | 작업 | 현재 실행 조건 | 실행 정책 |
 |---|---|---|
@@ -151,11 +156,13 @@ DM Worker Process              Content Generation Worker
 | PostgreSQL | 1 | 상시 | 중간 | 고객 데이터, 큐, lease, Wiki, 상태, 로그 |
 | 정적 프론트 | 1 배포 | 요청 시 낮음 | 낮음 | 빌드된 React 자산 제공; Vite 개발 서버는 운영에서 사용하지 않음 |
 
-Ubuntu Compose는 worker를 자동 시작하지 않는다. API/Caddy 안전 배포가 끝난 뒤 아래 profile을 정해진 순서로 하나씩 활성화한다. 스케줄러·일반 작업 워커는 아직 중앙 API에서 분리되지 않았으므로 이 표의 목표 프로세스다. PostgreSQL과 정적 프론트는 별도 서비스로 계산한다.
+Ubuntu Compose는 worker와 게시 스케줄러를 자동 시작하지 않는다. API/Caddy 안전 배포가 끝난 뒤 아래 profile을 정해진 순서로 하나씩 활성화한다. 게시 스케줄러는 분리됐지만 URL 크롤링·일일 생성·성과 수집은 아직 중앙 API에서 분리되지 않았다. PostgreSQL과 정적 프론트는 별도 서비스로 계산한다.
 
 ### 5.1 Ubuntu worker image와 service 계약
 
 릴리스 manifest는 API·Caddy 외에 아래 9개 worker image key를 모두 immutable digest로 고정한다. DM image를 서로 다른 ID로 두 번 실행하므로 Compose worker service는 10개다.
+
+게시 스케줄러는 Codex worker와 별개의 `PUBLISH_SCHEDULER_IMAGE` 및 `publish-scheduler-1` profile service로 고정한다. 일반 worker 활성화와 독립적으로 [게시 스케줄러 런북](operations/PUBLISH_SCHEDULER.md)의 사전 조건을 통과한 경우에만 시작한다.
 
 | Worker image key | Profile 전용 service | 역할 |
 |---|---|---|
@@ -288,22 +295,18 @@ subject analysis worker는 로컬과 실제 서버에서 동일한 환경 변수
 
 #### AI 콘텐츠 직접 게시
 
-AI 콘텐츠 상세 화면에서 사용자가 결과물별 채널과 게시 유형을 선택하면 중앙 API가 승인된 채널 출력과 게시 큐를 먼저 저장한 뒤, 선택된 큐를 순차적으로 1차 게시한다. 브라우저 요청이 중단되거나 일부 게시만 성공해도 저장된 `scheduled` 큐는 로컬 스케줄러의 `runDuePublishing`이 이어서 처리한다. 별도 게시 워커 프로세스는 두지 않는다.
+AI 콘텐츠 상세 화면에서 사용자가 결과물별 채널과 게시 유형을 선택하면 중앙 API가 승인된 채널 출력과 게시 큐를 먼저 저장한 뒤, 선택된 큐를 순차적으로 1차 게시한다. 브라우저 요청이 중단되거나 일부 게시만 성공해도 저장된 `scheduled` 큐는 운영의 독립 게시 스케줄러가 primary API의 `POST /internal/cron/publish-due`를 호출해 이어서 처리한다. 로컬 개발에서는 `LOCAL_SCHEDULER_ENABLED=true`인 API가 같은 처리를 수행할 수 있다.
 
 Instagram 카드뉴스는 이미지 한 장이면 단일 게시물, 두 장 이상이면 캐러셀로 게시하며 스토리는 첫 이미지를 사용한다. 크롭이나 리사이즈는 수행하지 않는다. 외부 OAuth 게시 어댑터가 준비되지 않은 채널은 UI에 표시하되 게시 대상으로 선택할 수 없다.
 
 ### 6.4 스케줄러·일반 작업 워커
 
-초기에는 다음 I/O 중심 작업을 하나로 묶는다.
+운영의 독립 게시 스케줄러는 다음 두 작업만 primary API에 요청한다.
 
-- 게시 슬롯과 이월 큐 계산
-- 외부 채널 게시 호출
-- URL 크롤링 작업 등록 또는 실행
-- 콘텐츠 생성 배치 등록
-- 매일 발행 콘텐츠 성과 지표 갱신
-- 실패 작업 재시도 가능 시간 관리
+- 게시 예정 큐 실행: `POST /internal/cron/publish-due`
+- 주간 게시 슬롯 자동 배정: `POST /internal/cron/publish-calendar-allocate`
 
-게시 또는 크롤링이 API 응답을 장시간 점유하지 않도록 중앙 API와 별도 프로세스로 운영하는 것이 목표다. 부하가 커지면 크롤링, 게시, 성과 수집 워커로 나눈다.
+스케줄러는 DB, Meta, Blob 자격 증명을 직접 읽지 않고 mode `0600` 파일의 cron secret으로 primary API만 호출한다. URL 크롤링, 일일 콘텐츠 생성, 성과 수집은 이 프로세스의 책임이 아니며 현재 로컬 스케줄러 또는 별도 외부 호출 경로에 남아 있다.
 
 Instagram 트렌드 데이터는 스케줄러가 자동 갱신하지 않는다. 사용자의 해시태그 검색 요청이 들어왔을 때 Meta API를 호출하고 저장된 인기 미디어와 지표를 갱신한다.
 
@@ -477,7 +480,7 @@ DM retrieval logs
 
 아래 항목은 목표 구조에 포함되지만 아직 구현이 완료되지 않았다.
 
-- 중앙 API에서 로컬 스케줄러 분리
+- URL 크롤링·일일 콘텐츠 생성·성과 수집을 중앙 API의 로컬 스케줄러에서 분리
 - 후보 Wiki 회귀 평가 후 자동 활성화
 - 성공했지만 부자연스럽거나 잘못된 답변의 비동기 품질 평가
 - 동일 destination URL 중복 제거
