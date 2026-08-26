@@ -1,5 +1,5 @@
 import { ChevronDown, ChevronUp, Plus, Trash2, X } from "lucide-react";
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type {
   ChannelConnection,
   ChannelType,
@@ -55,6 +55,7 @@ export function WeeklyAutoPublishDialog({
   settings,
   channels,
   publishableChannels,
+  settingsStatus = "ready",
   metadataStatus = "ready",
   usage,
   usageStatus = "ready",
@@ -62,12 +63,14 @@ export function WeeklyAutoPublishDialog({
   saving = false,
   onClose,
   onSave,
+  onRetrySettings,
   onRetryMetadata,
   onRetryUsage,
 }: {
   settings: PublishCalendarWeeklySettings;
   channels: ChannelConnection[];
   publishableChannels: ChannelType[];
+  settingsStatus?: AsyncLoadStatus;
   metadataStatus?: AsyncLoadStatus;
   usage: PublishCalendarWeeklyUsage | null;
   usageStatus?: AsyncLoadStatus;
@@ -75,6 +78,7 @@ export function WeeklyAutoPublishDialog({
   saving?: boolean;
   onClose(): void;
   onSave(input: PublishCalendarWeeklySettingsInput): Promise<SaveResult>;
+  onRetrySettings?(): void;
   onRetryMetadata?(): void;
   onRetryUsage?(): void;
 }) {
@@ -86,10 +90,21 @@ export function WeeklyAutoPublishDialog({
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const saveButtonRef = useRef<HTMLButtonElement>(null);
+  const titleRef = useRef<HTMLHeadingElement>(null);
+  const settingsRetryRef = useRef<HTMLButtonElement>(null);
+  const previousSettingsStatusRef = useRef(settingsStatus);
   const weekDates = useMemo(() => kstWeekDates(now), [now]);
   const metadataReady = metadataStatus === "ready";
   const usageReady = usageStatus === "ready" && usage !== null;
   const limit = usageReady ? usage.publishing.limit : null;
+
+  useEffect(() => {
+    const previous = previousSettingsStatusRef.current;
+    previousSettingsStatusRef.current = settingsStatus;
+    if (previous !== "loading") return;
+    if (settingsStatus === "ready") titleRef.current?.focus();
+    if (settingsStatus === "error") settingsRetryRef.current?.focus();
+  }, [settingsStatus]);
 
   const catalog = useMemo(() => {
     const byType = new Map((metadataReady ? channels : []).map((channel) => [channel.type, channel]));
@@ -116,6 +131,18 @@ export function WeeklyAutoPublishDialog({
       && channel.status === "connected"
       && channel.oauthState === "connected";
   }
+
+  const usableSelectedChannel = metadataReady && selectedChannels.some((type) => {
+    const channel = catalog.find((candidate) => candidate.type === type);
+    return Boolean(channel && channelUsable(channel));
+  });
+  const completenessError = settings.enabled && metadataReady && usageReady
+    ? rows.length === 0
+      ? "자동 게시가 켜져 있어 설정을 저장하려면 주간 일정을 한 개 이상 추가해 주세요."
+      : !usableSelectedChannel
+        ? "자동 게시가 켜져 있어 설정을 저장하려면 게시 가능한 연결 채널을 한 개 이상 선택해 주세요."
+        : null
+    : null;
 
   function toggleChannel(type: ChannelType) {
     setSelectedChannels((current) => current.includes(type)
@@ -152,7 +179,7 @@ export function WeeklyAutoPublishDialog({
   }
 
   async function save() {
-    if (!metadataReady || !usageReady) return;
+    if (!metadataReady || !usageReady || completenessError) return;
     const orderedRows = rows
       .slice()
       .sort((left, right) => left.dayOfWeek - right.dayOfWeek || left.sortOrder - right.sortOrder);
@@ -205,13 +232,14 @@ export function WeeklyAutoPublishDialog({
         <header className="weekly-auto-publish-dialog__header">
           <div>
             <span className="publish-calendar-eyebrow">자동 게시</span>
-            <h2 id="weekly-auto-publish-title" className="weekly-auto-publish-dialog__title" tabIndex={-1}>주간 자동 게시 설정</h2>
+            <h2 ref={titleRef} id="weekly-auto-publish-title" className="weekly-auto-publish-dialog__title" tabIndex={-1}>주간 자동 게시 설정</h2>
             <p>요일별 게시 시간과 추천 콘텐츠 형식을 설정합니다.</p>
           </div>
           <button className="button icon-button" type="button" aria-label="닫기" onClick={onClose} disabled={submitting || saving}><X size={18} aria-hidden="true" /></button>
         </header>
 
         <div className="weekly-auto-publish-dialog__body">
+          {settingsStatus !== "ready" ? <p role={settingsStatus === "error" ? "alert" : "status"}>{settingsStatus === "error" ? "주간 자동 게시 설정을 불러오지 못했습니다." : "주간 자동 게시 설정을 다시 확인하는 중입니다."} <button ref={settingsRetryRef} className="button" type="button" aria-label="주간 설정 다시 시도" disabled={settingsStatus !== "error"} onClick={onRetrySettings}>다시 시도</button></p> : null}
           <section className="weekly-auto-publish-dialog__section" aria-labelledby="weekly-auto-channel-title">
             <div className="weekly-auto-publish-dialog__section-heading">
               <div><h3 id="weekly-auto-channel-title">게시 채널</h3><p>게시 가능한 연결 채널만 새로 선택할 수 있습니다.</p></div>
@@ -282,12 +310,13 @@ export function WeeklyAutoPublishDialog({
           </section>
 
           <p className="weekly-auto-publish-dialog__notice">설정을 바꾸거나 자동 게시를 꺼도 기존 예약은 유지됩니다.</p>
+          {completenessError ? <p className="weekly-auto-publish-dialog__error" role="alert">{completenessError}</p> : null}
           {error ? <p className="weekly-auto-publish-dialog__error" role="alert">{error}</p> : null}
         </div>
 
         <footer className="weekly-auto-publish-dialog__footer">
           <button className="button" type="button" onClick={onClose} disabled={submitting || saving}>취소</button>
-          <button ref={saveButtonRef} className="button primary" type="button" aria-busy={submitting || saving} disabled={submitting || saving || !metadataReady || !usageReady} onClick={() => void save()}>설정 저장</button>
+          <button ref={saveButtonRef} className="button primary" type="button" aria-busy={submitting || saving} disabled={submitting || saving || !metadataReady || !usageReady || Boolean(completenessError)} onClick={() => void save()}>설정 저장</button>
         </footer>
       </FocusTrap>
     </div>

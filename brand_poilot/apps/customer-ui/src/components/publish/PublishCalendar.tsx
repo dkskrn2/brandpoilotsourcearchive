@@ -52,6 +52,7 @@ type Props = {
   onSaveWeeklySettings?(input: PublishCalendarWeeklySettingsInput): Promise<{ ok: boolean; message?: string }>;
   onToggleWeekly?(enabled: boolean): Promise<{ ok: boolean; message?: string }>;
   onRetryWeekly?(): void;
+  onRetryLegacySettings?(): void;
   onRetryWeeklyMetadata?(): void;
   onRetryWeeklyUsage?(): void;
   saving?: boolean;
@@ -108,11 +109,11 @@ function SettingsDialog({ settings, channels, onClose, onSave, saving }: { setti
   </FocusTrap></div>;
 }
 
-function SettingsUnavailableDialog({ message, onClose }: { message: string; onClose(): void }) {
-  return <div className="modal-backdrop"><FocusTrap active initialFocusSelector=".auto-publish-settings__close" className="modal-panel auto-publish-settings" role="dialog" aria-modal="true" aria-label="자동 게시 설정" onKeyDown={(event) => event.key === "Escape" && onClose()}><header className="auto-publish-settings__header"><div><h2>자동 게시 설정</h2><p>{message}</p></div><button className="button icon-button auto-publish-settings__close" type="button" aria-label="닫기" onClick={onClose}><X size={18} /></button></header><div className="auto-publish-settings__body"><p role="alert">설정을 불러온 뒤에만 변경할 수 있습니다.</p></div></FocusTrap></div>;
+function SettingsUnavailableDialog({ message, retryLabel, retrying = false, onRetry, onClose }: { message: string; retryLabel: string; retrying?: boolean; onRetry?(): void; onClose(): void }) {
+  return <div className="modal-backdrop"><FocusTrap active initialFocusSelector=".auto-publish-settings__close" className="modal-panel auto-publish-settings" role="dialog" aria-modal="true" aria-label="자동 게시 설정" onKeyDown={(event) => event.key === "Escape" && !retrying && onClose()}><header className="auto-publish-settings__header"><div><h2>자동 게시 설정</h2><p>{message}</p></div><button className="button icon-button auto-publish-settings__close" type="button" aria-label="닫기" disabled={retrying} onClick={onClose}><X size={18} /></button></header><div className="auto-publish-settings__body"><p role={retrying ? "status" : "alert"}>{retrying ? "설정을 다시 불러오는 중입니다." : "설정을 불러온 뒤에만 변경할 수 있습니다."}</p><button className="button" type="button" aria-label={retryLabel} disabled={retrying} onClick={onRetry}>다시 시도</button></div></FocusTrap></div>;
 }
 
-export function PublishCalendar({ monthKey, entries, connectedChannels, channelCatalog = [], publishableChannels = [], settings, weeklyCapability = false, weeklySettings = null, weeklyStatus = "ready", weeklyUsage = null, weeklyUsageStatus = "ready", channelsStatus = "ready", capabilitiesStatus = "ready", settingsError, slotsError, slotsLoading, unreservedItems = [], generatedPreviews = new Map(), focusedItemKey, onFocusedItemHandled, assignableContents, manualOptions, manualOptionsError, manualOptionsLoading, onMonthChange, onStartNew, initialBulkDraft, onStartBulk, onContinueBulk, onProvisionBatch, onAssign, onCancel, onScheduleItem, onRescheduleItem, onLoadManualOptions, onSaveSettings, onSaveWeeklySettings, onToggleWeekly, onRetryWeekly, onRetryWeeklyMetadata, onRetryWeeklyUsage, saving }: Props) {
+export function PublishCalendar({ monthKey, entries, connectedChannels, channelCatalog = [], publishableChannels = [], settings, weeklyCapability = false, weeklySettings = null, weeklyStatus = "ready", weeklyUsage = null, weeklyUsageStatus = "ready", channelsStatus = "ready", capabilitiesStatus = "ready", settingsError, slotsError, slotsLoading, unreservedItems = [], generatedPreviews = new Map(), focusedItemKey, onFocusedItemHandled, assignableContents, manualOptions, manualOptionsError, manualOptionsLoading, onMonthChange, onStartNew, initialBulkDraft, onStartBulk, onContinueBulk, onProvisionBatch, onAssign, onCancel, onScheduleItem, onRescheduleItem, onLoadManualOptions, onSaveSettings, onSaveWeeklySettings, onToggleWeekly, onRetryWeekly, onRetryLegacySettings, onRetryWeeklyMetadata, onRetryWeeklyUsage, saving }: Props) {
   const mobileAgenda = useMobileAgenda();
   const cells = useMemo(() => monthCells(monthKey), [monthKey]);
   const byDate = useMemo(() => entries.reduce((map, entry) => { const key = dateKey(entry.calendarDate); map.set(key, [...(map.get(key) ?? []), entry]); return map; }, new Map<string, PresentedCalendarEntry[]>()), [entries]);
@@ -190,11 +191,11 @@ export function PublishCalendar({ monthKey, entries, connectedChannels, channelC
     {contentPickerOpen ? <PublishContentPickerDialog dateKey={selectedDate} unreservedItems={unreservedItems} generatedPreviews={generatedPreviews} connected={connectedChannels.includes("instagram")} options={manualOptions} optionsError={manualOptionsError} optionsLoading={Boolean(manualOptionsLoading)} initialBulkDraft={initialBulkDraft} onScheduleItem={(item, key, trigger) => { const restoreTarget = contentPickerTriggerRef.current ?? trigger; contentPickerWasOpenRef.current = false; setContentPickerOpen(false); onScheduleItem(item, key, restoreTarget); }} onStartNew={onStartNew} onStartBulk={onStartBulk} onContinueBulk={onContinueBulk} onProvisionBatch={onProvisionBatch} onLoadOptions={onLoadManualOptions} onClose={() => setContentPickerOpen(false)} /> : null}
     {settingsOpen ? weeklyCapability === true
       ? weeklySettings
-        ? <WeeklyAutoPublishDialog settings={weeklySettings} channels={channelCatalog} publishableChannels={publishableChannels} metadataStatus={metadataStatus} usage={weeklyUsage} usageStatus={weeklyUsageStatus} saving={saving} onRetryMetadata={onRetryWeeklyMetadata} onRetryUsage={onRetryWeeklyUsage} onClose={() => setSettingsOpen(false)} onSave={onSaveWeeklySettings ?? (async () => ({ ok: false, message: "주간 자동 게시 설정을 저장할 수 없습니다." }))} />
-        : <SettingsUnavailableDialog message={settingsError ?? "주간 자동 게시 설정을 불러오는 중입니다."} onClose={() => setSettingsOpen(false)} />
+        ? <WeeklyAutoPublishDialog settings={weeklySettings} channels={channelCatalog} publishableChannels={publishableChannels} settingsStatus={weeklyStatus} metadataStatus={metadataStatus} usage={weeklyUsage} usageStatus={weeklyUsageStatus} saving={saving} onRetrySettings={onRetryWeekly} onRetryMetadata={onRetryWeeklyMetadata} onRetryUsage={onRetryWeeklyUsage} onClose={() => setSettingsOpen(false)} onSave={onSaveWeeklySettings ?? (async () => ({ ok: false, message: "주간 자동 게시 설정을 저장할 수 없습니다." }))} />
+        : <SettingsUnavailableDialog message={settingsError ?? "주간 자동 게시 설정을 불러오는 중입니다."} retryLabel="주간 설정 다시 시도" retrying={weeklyStatus === "loading"} onRetry={onRetryWeekly} onClose={() => setSettingsOpen(false)} />
       : settings
         ? <SettingsDialog settings={settings} channels={connectedChannels} saving={saving} onClose={() => setSettingsOpen(false)} onSave={onSaveSettings} />
-        : <SettingsUnavailableDialog message={settingsError ?? "자동 게시 설정을 불러오는 중입니다."} onClose={() => setSettingsOpen(false)} />
+        : <SettingsUnavailableDialog message={settingsError ?? "자동 게시 설정을 불러오는 중입니다."} retryLabel="자동 게시 설정 다시 시도" onRetry={onRetryLegacySettings} onClose={() => setSettingsOpen(false)} />
     : null}
   </section>;
 }

@@ -55,6 +55,14 @@ type PublishQueuePageProps = {
   generationGateway?: Pick<AiContentGateway, "listGenerations">;
 };
 
+const weeklySettingsIncompleteMessage = "자동 게시를 켠 상태로 저장하려면 주간 일정과 게시 가능한 연결 채널을 각각 한 개 이상 설정해 주세요.";
+
+function apiErrorCode(error: unknown) {
+  return error && typeof error === "object" && "errorCode" in error && typeof error.errorCode === "string"
+    ? error.errorCode
+    : null;
+}
+
 function generationOutputPreview(output: AiGenerationOutput): PublishCardPreview | null {
   const artifact = output.artifact;
   if (!artifact) return null;
@@ -367,6 +375,7 @@ export function PublishQueuePage({ generationGateway = aiContentApiGateway }: Pu
   const scheduleFocusItemKeyRef = useRef<string | null>(null);
   const manualOptionsRequestRef = useRef(0);
   const weeklySettingsRequestRef = useRef(0);
+  const legacySettingsRequestRef = useRef(0);
   const channelsRequestRef = useRef(0);
   const capabilitiesRequestRef = useRef(0);
   const weeklyUsageRequestRef = useRef(0);
@@ -517,6 +526,20 @@ export function PublishQueuePage({ generationGateway = aiContentApiGateway }: Pu
     }
   }, []);
 
+  const reloadLegacySettings = useCallback(async () => {
+    const requestId = ++legacySettingsRequestRef.current;
+    setCalendarSettingsError(null);
+    try {
+      const legacySettings = await api.getPublishCalendarSettings(DEMO_BRAND_ID);
+      if (legacySettingsRequestRef.current !== requestId) return;
+      setCalendarSettings(legacySettings);
+    } catch {
+      if (legacySettingsRequestRef.current !== requestId) return;
+      setCalendarSettings(null);
+      setCalendarSettingsError("자동 게시 설정을 불러오지 못했습니다.");
+    }
+  }, []);
+
   const reloadWeeklySettings = useCallback(async () => {
     const requestId = ++weeklySettingsRequestRef.current;
     setCalendarWeeklyStatus("loading");
@@ -525,6 +548,7 @@ export function PublishQueuePage({ generationGateway = aiContentApiGateway }: Pu
       const weeklySettings = await api.getPublishCalendarWeeklySettings(DEMO_BRAND_ID);
       if (weeklySettingsRequestRef.current !== requestId) return;
       if (weeklySettings) {
+        legacySettingsRequestRef.current += 1;
         setCalendarWeeklyCapability(true);
         setCalendarWeeklySettings(weeklySettings);
         setCalendarSettings(null);
@@ -537,22 +561,14 @@ export function PublishQueuePage({ generationGateway = aiContentApiGateway }: Pu
       setCalendarWeeklyUsage(null);
       setCalendarWeeklyUsageStatus("idle");
       setCalendarWeeklyStatus("ready");
-      try {
-        const legacySettings = await api.getPublishCalendarSettings(DEMO_BRAND_ID);
-        if (weeklySettingsRequestRef.current === requestId) setCalendarSettings(legacySettings);
-      } catch {
-        if (weeklySettingsRequestRef.current === requestId) {
-          setCalendarSettings(null);
-          setCalendarSettingsError("자동 게시 설정을 불러오지 못했습니다.");
-        }
-      }
+      await reloadLegacySettings();
     } catch {
       if (weeklySettingsRequestRef.current !== requestId) return;
       setCalendarWeeklyCapability(true);
       setCalendarWeeklyStatus("error");
       setCalendarSettingsError("주간 자동 게시 설정을 불러오지 못했습니다.");
     }
-  }, []);
+  }, [reloadLegacySettings]);
 
   const reloadWeeklySupport = useCallback(() => {
     void reloadWeeklySettings();
@@ -569,6 +585,7 @@ export function PublishQueuePage({ generationGateway = aiContentApiGateway }: Pu
 
   useEffect(() => () => {
     weeklySettingsRequestRef.current += 1;
+    legacySettingsRequestRef.current += 1;
     channelsRequestRef.current += 1;
     capabilitiesRequestRef.current += 1;
     weeklyUsageRequestRef.current += 1;
@@ -793,13 +810,16 @@ export function PublishQueuePage({ generationGateway = aiContentApiGateway }: Pu
     setCalendarSaving(true);
     try {
       const settings = await api.savePublishCalendarWeeklySettings(DEMO_BRAND_ID, input);
+      weeklySettingsRequestRef.current += 1;
       setCalendarWeeklySettings(settings);
       setCalendarWeeklyStatus("ready");
       setNotice("주간 자동 게시 설정을 저장했습니다. 기존 예약은 유지됩니다.");
       return { ok: true as const };
-    } catch {
+    } catch (error) {
       setCalendarWeeklyStatus("ready");
-      return { ok: false as const, message: "주간 자동 게시 설정을 저장하지 못했습니다." };
+      return { ok: false as const, message: apiErrorCode(error) === "publish_calendar_settings_incomplete"
+        ? weeklySettingsIncompleteMessage
+        : "주간 자동 게시 설정을 저장하지 못했습니다." };
     } finally {
       setCalendarSaving(false);
     }
@@ -811,13 +831,16 @@ export function PublishQueuePage({ generationGateway = aiContentApiGateway }: Pu
     setCalendarSaving(true);
     try {
       const settings = await api.setPublishCalendarEnabled(DEMO_BRAND_ID, enabled);
+      weeklySettingsRequestRef.current += 1;
       setCalendarWeeklySettings(settings);
       setCalendarWeeklyStatus("ready");
       setNotice(enabled ? "자동 게시를 켰습니다." : "자동 게시를 껐습니다. 기존 예약은 유지됩니다.");
       return { ok: true as const };
-    } catch {
+    } catch (error) {
       setCalendarWeeklyStatus("ready");
-      return { ok: false as const, message: "자동 게시 상태를 변경하지 못했습니다. 잠시 후 다시 시도하세요." };
+      return { ok: false as const, message: apiErrorCode(error) === "publish_calendar_settings_incomplete"
+        ? weeklySettingsIncompleteMessage
+        : "자동 게시 상태를 변경하지 못했습니다. 잠시 후 다시 시도하세요." };
     } finally {
       setCalendarSaving(false);
     }
@@ -976,6 +999,7 @@ export function PublishQueuePage({ generationGateway = aiContentApiGateway }: Pu
           onSaveWeeklySettings={saveCalendarWeeklySettings}
           onToggleWeekly={toggleCalendarWeekly}
           onRetryWeekly={() => void reloadWeeklySettings()}
+          onRetryLegacySettings={() => void reloadLegacySettings()}
           onRetryWeeklyMetadata={reloadWeeklySupport}
           onRetryWeeklyUsage={() => void reloadWeeklyUsage()}
         />

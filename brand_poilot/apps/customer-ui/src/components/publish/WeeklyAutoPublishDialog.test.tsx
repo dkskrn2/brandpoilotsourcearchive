@@ -41,8 +41,13 @@ function renderDialog(overrides: Partial<React.ComponentProps<typeof WeeklyAutoP
     onSave: vi.fn(async () => ({ ok: true as const })),
     ...overrides,
   };
-  render(<WeeklyAutoPublishDialog {...props} />);
-  return props;
+  const view = render(<WeeklyAutoPublishDialog {...props} />);
+  return {
+    props,
+    rerender(next: Partial<React.ComponentProps<typeof WeeklyAutoPublishDialog>>) {
+      view.rerender(<WeeklyAutoPublishDialog {...props} {...next} />);
+    },
+  };
 }
 
 describe("WeeklyAutoPublishDialog", () => {
@@ -112,6 +117,26 @@ describe("WeeklyAutoPublishDialog", () => {
     await userEvent.click(screen.getByRole("button", { name: "사용량 다시 시도" }));
     expect(onRetryUsage).toHaveBeenCalledTimes(1);
     expect(screen.getByRole("combobox", { name: "정보성 콘텐츠 형식" })).toHaveValue("reel");
+  });
+
+  it("keeps the edited draft and focus inside the dialog while retrying a failed settings read", async () => {
+    const onRetrySettings = vi.fn();
+    const view = renderDialog({ settingsStatus: "error", onRetrySettings } as never);
+
+    const format = screen.getByRole("combobox", { name: "정보성 콘텐츠 형식" });
+    await userEvent.selectOptions(format, "reel");
+    const retry = screen.getByRole("button", { name: "주간 설정 다시 시도" });
+    retry.focus();
+    await userEvent.click(retry);
+    view.rerender({ settingsStatus: "loading" });
+
+    expect(onRetrySettings).toHaveBeenCalledTimes(1);
+    expect(format).toHaveValue("reel");
+    expect(screen.getByRole("dialog", { name: "주간 자동 게시 설정" })).toContainElement(document.activeElement as HTMLElement);
+
+    view.rerender({ settingsStatus: "ready", settings: { ...settings, informationalFormat: "card_news" } });
+    expect(format).toHaveValue("reel");
+    expect(screen.getByRole("heading", { name: "주간 자동 게시 설정" })).toHaveFocus();
   });
 
   it("renders Monday through Sunday with the actual dates of the current KST week", () => {
@@ -198,5 +223,42 @@ describe("WeeklyAutoPublishDialog", () => {
       { id: "40000000-0000-4000-8000-000000000002", dayOfWeek: 1, time: "11:17", sortOrder: 1 },
     ]);
     expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("blocks an ON draft after removing all weekly rows and shows the actionable schedule message", async () => {
+    renderDialog({ settings: { ...settings, enabled: true } });
+
+    await userEvent.click(screen.getByRole("button", { name: "월요일 1번째 일정 삭제" }));
+    await userEvent.click(screen.getByRole("button", { name: "월요일 1번째 일정 삭제" }));
+
+    expect(screen.getByRole("alert")).toHaveTextContent("자동 게시가 켜져 있어 설정을 저장하려면 주간 일정을 한 개 이상 추가해 주세요.");
+    expect(screen.getByRole("button", { name: "설정 저장" })).toBeDisabled();
+  });
+
+  it("blocks an ON draft after removing its last usable channel", async () => {
+    renderDialog({ settings: { ...settings, enabled: true, channels: ["instagram"] } });
+
+    await userEvent.click(screen.getByRole("checkbox", { name: "Instagram 연결됨" }));
+
+    expect(screen.getByRole("alert")).toHaveTextContent("자동 게시가 켜져 있어 설정을 저장하려면 게시 가능한 연결 채널을 한 개 이상 선택해 주세요.");
+    expect(screen.getByRole("button", { name: "설정 저장" })).toBeDisabled();
+  });
+
+  it("does not count preserved unavailable selections as usable for an ON draft", () => {
+    renderDialog({ settings: { ...settings, enabled: true, channels: ["threads", "youtube"] } });
+
+    expect(screen.getByRole("checkbox", { name: "Threads 자동 게시 미지원 · 저장된 선택 유지" })).toBeChecked();
+    expect(screen.getByRole("checkbox", { name: "YouTube 미연결 · 저장된 선택 유지" })).toBeChecked();
+    expect(screen.getByRole("alert")).toHaveTextContent("자동 게시가 켜져 있어 설정을 저장하려면 게시 가능한 연결 채널을 한 개 이상 선택해 주세요.");
+    expect(screen.getByRole("button", { name: "설정 저장" })).toBeDisabled();
+  });
+
+  it("allows an OFF draft to save without rows or a usable selected channel", async () => {
+    const onSave = vi.fn(async () => ({ ok: true as const }));
+    renderDialog({ settings: { ...settings, enabled: false, channels: ["threads"], weeklySchedule: [] }, onSave });
+
+    await userEvent.click(screen.getByRole("button", { name: "설정 저장" }));
+
+    await waitFor(() => expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ channels: ["threads"], weeklySchedule: [] })));
   });
 });

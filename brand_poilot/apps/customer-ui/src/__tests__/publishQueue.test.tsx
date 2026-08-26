@@ -47,6 +47,16 @@ const connectedInstagram = {
   lastPublishedAt: "",
 };
 
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
+
 function target(overrides: Partial<PublishItemTarget> = {}): PublishItemTarget {
   return {
     queueId: "queue-1", channelOutputId: "channel-output-1", channel: "instagram", status: "scheduled",
@@ -463,6 +473,42 @@ describe("PublishQueuePage canonical collection", () => {
     expect(getPublishCalendarWeeklySettings).toHaveBeenCalledTimes(2);
   });
 
+  it("retries a non-404 weekly settings failure inside the edit surface", async () => {
+    const getPublishCalendarWeeklySettings = vi.fn()
+      .mockRejectedValueOnce(new Error("temporary read failure"))
+      .mockResolvedValueOnce(weeklySettings);
+    await renderPage({
+      listChannels: vi.fn(async () => [connectedInstagram]),
+      getPublishCalendarWeeklySettings,
+      getPublishCalendarUsage: vi.fn(async () => manualOptions.usage),
+    });
+
+    await userEvent.click(await screen.findByRole("tab", { name: "캘린더" }));
+    await userEvent.click(await screen.findByRole("button", { name: "수정" }));
+    const unavailable = await screen.findByRole("dialog", { name: "자동 게시 설정" });
+    await userEvent.click(within(unavailable).getByRole("button", { name: "주간 설정 다시 시도" }));
+
+    expect(getPublishCalendarWeeklySettings).toHaveBeenCalledTimes(2);
+    expect(await screen.findByRole("dialog", { name: "주간 자동 게시 설정" })).toBeVisible();
+  });
+
+  it("retries only the legacy endpoint inside the edit surface after weekly 404 and legacy read failure", async () => {
+    const getPublishCalendarWeeklySettings = vi.fn(async () => null);
+    const getPublishCalendarSettings = vi.fn()
+      .mockRejectedValueOnce(new Error("legacy read failure"))
+      .mockResolvedValueOnce({ brandId: "brand-1", enabled: false, channels: [], informationalFormat: "card_news", trendFormat: "reel", slotTimes: ["11:30"], updatedAt: null });
+    await renderPage({ getPublishCalendarWeeklySettings, getPublishCalendarSettings });
+
+    await userEvent.click(await screen.findByRole("tab", { name: "캘린더" }));
+    await userEvent.click(await screen.findByRole("button", { name: "자동 게시 설정" }));
+    const unavailable = await screen.findByRole("dialog", { name: "자동 게시 설정" });
+    await userEvent.click(within(unavailable).getByRole("button", { name: "자동 게시 설정 다시 시도" }));
+
+    expect(getPublishCalendarWeeklySettings).toHaveBeenCalledTimes(1);
+    expect(getPublishCalendarSettings).toHaveBeenCalledTimes(2);
+    expect(within(await screen.findByRole("dialog", { name: "자동 게시 설정" })).getByRole("button", { name: "설정 저장" })).toBeVisible();
+  });
+
   it("shows metadata checking and failure states without inventing disconnected or unsupported channels", async () => {
     let rejectChannels!: (reason: Error) => void;
     const channelsPending = new Promise<never>((_resolve, reject) => { rejectChannels = reject; });
@@ -562,6 +608,124 @@ describe("PublishQueuePage canonical collection", () => {
     await act(async () => { await staleRead; });
     await userEvent.click(screen.getByRole("button", { name: "자동 게시 수정" }));
     expect(within(await screen.findByRole("dialog", { name: "주간 자동 게시 설정" })).getByLabelText("월요일 1번째 게시 시간")).toHaveValue("12:34");
+  });
+
+  it.each(["mutation-first", "get-first"] as const)("keeps a confirmed toggle when a retry GET starts during PATCH and completes %s", async (order) => {
+    const mutation = deferred<typeof weeklySettings>();
+    const retryRead = deferred<typeof weeklySettings>();
+    const getPublishCalendarWeeklySettings = vi.fn()
+      .mockResolvedValueOnce({ ...weeklySettings, enabled: true })
+      .mockRejectedValueOnce(new Error("weekly refresh failed"))
+      .mockImplementationOnce(() => retryRead.promise);
+    const listChannels = vi.fn()
+      .mockRejectedValueOnce(new Error("channels down"))
+      .mockResolvedValue([connectedInstagram]);
+    const setPublishCalendarEnabled = vi.fn(() => mutation.promise);
+    await renderPage({
+      getPublishCalendarWeeklySettings,
+      listChannels,
+      getPublishCalendarUsage: vi.fn(async () => manualOptions.usage),
+      setPublishCalendarEnabled,
+    });
+
+    await userEvent.click(await screen.findByRole("tab", { name: "캘린더" }));
+    await userEvent.click(await screen.findByRole("button", { name: "자동 게시 정보 다시 시도" }));
+    expect(await screen.findByRole("button", { name: "자동 게시 다시 시도" })).toBeVisible();
+    await userEvent.click(screen.getByRole("switch", { name: "자동 게시 ON" }));
+    await waitFor(() => expect(setPublishCalendarEnabled).toHaveBeenCalledTimes(1));
+    await userEvent.click(screen.getByRole("button", { name: "자동 게시 다시 시도" }));
+    await waitFor(() => expect(getPublishCalendarWeeklySettings).toHaveBeenCalledTimes(3));
+
+    if (order === "mutation-first") {
+      mutation.resolve({ ...weeklySettings, enabled: false });
+      await waitFor(() => expect(screen.getByRole("switch", { name: "자동 게시 OFF" })).toBeVisible());
+      retryRead.resolve({ ...weeklySettings, enabled: true });
+      await act(async () => { await retryRead.promise; });
+    } else {
+      retryRead.resolve({ ...weeklySettings, enabled: true });
+      await act(async () => { await retryRead.promise; });
+      mutation.resolve({ ...weeklySettings, enabled: false });
+      await act(async () => { await mutation.promise; });
+    }
+
+    expect(screen.getByRole("switch", { name: "자동 게시 OFF" })).toBeVisible();
+  });
+
+  it.each(["mutation-first", "get-first"] as const)("keeps a confirmed configuration when a retry GET starts during PUT and completes %s", async (order) => {
+    const mutation = deferred<typeof weeklySettings>();
+    const retryRead = deferred<typeof weeklySettings>();
+    const getPublishCalendarWeeklySettings = vi.fn()
+      .mockResolvedValueOnce({ ...weeklySettings, enabled: true })
+      .mockRejectedValueOnce(new Error("weekly refresh failed"))
+      .mockImplementationOnce(() => retryRead.promise);
+    const listChannels = vi.fn()
+      .mockRejectedValueOnce(new Error("channels down"))
+      .mockResolvedValue([connectedInstagram]);
+    const savePublishCalendarWeeklySettings = vi.fn(() => mutation.promise);
+    await renderPage({
+      getPublishCalendarWeeklySettings,
+      listChannels,
+      getPublishCalendarUsage: vi.fn(async () => manualOptions.usage),
+      savePublishCalendarWeeklySettings,
+    });
+
+    await userEvent.click(await screen.findByRole("tab", { name: "캘린더" }));
+    await userEvent.click(await screen.findByRole("button", { name: "자동 게시 정보 다시 시도" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "자동 게시 다시 시도" })).toBeVisible());
+    await userEvent.click(screen.getByRole("button", { name: "자동 게시 수정" }));
+    const dialog = await screen.findByRole("dialog", { name: "주간 자동 게시 설정" });
+    await userEvent.clear(within(dialog).getByLabelText("월요일 1번째 게시 시간"));
+    await userEvent.type(within(dialog).getByLabelText("월요일 1번째 게시 시간"), "12:34");
+    await userEvent.click(within(dialog).getByRole("button", { name: "설정 저장" }));
+    await waitFor(() => expect(savePublishCalendarWeeklySettings).toHaveBeenCalledTimes(1));
+    await userEvent.click(within(dialog).getByRole("button", { name: "주간 설정 다시 시도" }));
+    await waitFor(() => expect(getPublishCalendarWeeklySettings).toHaveBeenCalledTimes(3));
+
+    const saved = { ...weeklySettings, enabled: true, weeklySchedule: [{ ...weeklySettings.weeklySchedule[0], time: "12:34" }] };
+    if (order === "mutation-first") {
+      mutation.resolve(saved);
+      await act(async () => { await mutation.promise; });
+      retryRead.resolve(weeklySettings);
+      await act(async () => { await retryRead.promise; });
+    } else {
+      retryRead.resolve(weeklySettings);
+      await act(async () => { await retryRead.promise; });
+      mutation.resolve(saved);
+      await act(async () => { await mutation.promise; });
+    }
+
+    await userEvent.click(await screen.findByRole("button", { name: "자동 게시 수정" }));
+    expect(within(await screen.findByRole("dialog", { name: "주간 자동 게시 설정" })).getByLabelText("월요일 1번째 게시 시간")).toHaveValue("12:34");
+  });
+
+  it("maps the stable incomplete settings error from PUT to an actionable Korean fallback", async () => {
+    await renderPage({
+      getPublishCalendarWeeklySettings: vi.fn(async () => ({ ...weeklySettings, enabled: true })),
+      listChannels: vi.fn(async () => [connectedInstagram]),
+      getPublishCalendarUsage: vi.fn(async () => manualOptions.usage),
+      savePublishCalendarWeeklySettings: vi.fn(async () => { throw { errorCode: "publish_calendar_settings_incomplete" }; }),
+    });
+
+    await userEvent.click(await screen.findByRole("tab", { name: "캘린더" }));
+    await userEvent.click(await screen.findByRole("button", { name: "자동 게시 수정" }));
+    const dialog = await screen.findByRole("dialog", { name: "주간 자동 게시 설정" });
+    await userEvent.click(within(dialog).getByRole("button", { name: "설정 저장" }));
+
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent("자동 게시를 켠 상태로 저장하려면 주간 일정과 게시 가능한 연결 채널을 각각 한 개 이상 설정해 주세요.");
+  });
+
+  it("maps the stable incomplete settings error from PATCH to an actionable Korean fallback", async () => {
+    await renderPage({
+      getPublishCalendarWeeklySettings: vi.fn(async () => weeklySettings),
+      listChannels: vi.fn(async () => [connectedInstagram]),
+      getPublishCalendarUsage: vi.fn(async () => manualOptions.usage),
+      setPublishCalendarEnabled: vi.fn(async () => { throw { errorCode: "publish_calendar_settings_incomplete" }; }),
+    });
+
+    await userEvent.click(await screen.findByRole("tab", { name: "캘린더" }));
+    await userEvent.click(await screen.findByRole("switch", { name: "자동 게시 OFF" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("자동 게시를 켠 상태로 저장하려면 주간 일정과 게시 가능한 연결 채널을 각각 한 개 이상 설정해 주세요.");
   });
 
   it("renders the legacy settings path after weekly 404 and never performs a weekly write", async () => {
