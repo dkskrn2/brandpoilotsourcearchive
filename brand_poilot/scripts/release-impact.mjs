@@ -793,6 +793,10 @@ export function classifyChangedPaths(values, options = {}) {
       deployBundleChanged = true;
       continue;
     }
+    if (path === "scripts/publish-scheduler-smoke.mjs") {
+      deployBundleChanged = true;
+      continue;
+    }
     if (path.startsWith("../.github/workflows/") || path.startsWith(".github/workflows/")) {
       deployBundleChanged = true;
       continue;

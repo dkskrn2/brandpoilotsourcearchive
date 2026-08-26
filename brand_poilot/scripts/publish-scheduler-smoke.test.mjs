@@ -437,9 +437,12 @@ test("Docker heartbeat reader uses argv with an explicit timeout and sanitizes c
   await assert.rejects(failingReader("/tmp/heartbeat.json"), /^Error: publish_scheduler_heartbeat_read_failed$/);
 });
 
-test("package exposes the smoke command without adding a dependency", async () => {
+test("package does not expose a smoke alias that widens release impact", async () => {
   const packageJson = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8"));
-  assert.equal(packageJson.scripts["smoke:publish-scheduler"], "node scripts/publish-scheduler-smoke.mjs");
+  assert.equal(packageJson.scripts["smoke:publish-scheduler"], undefined);
+  const runbook = await readFile(new URL("../docs/operations/PUBLISH_SCHEDULER.md", import.meta.url), "utf8");
+  assert.match(runbook, /node scripts\/publish-scheduler-smoke\.mjs --phase=execution/);
+  assert.match(runbook, /node scripts\/publish-scheduler-smoke\.mjs --phase=heartbeat/);
 });
 
 test("scheduler runbook validates the wrapped post-075 schema migration evidence", async () => {

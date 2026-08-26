@@ -11,7 +11,7 @@
 - `publish-scheduler-1`은 정확히 1개만 실행한다.
 - `PRIMARY_API_INTERNAL_URL=http://api-primary:4000`이며 canary URL은 사용하지 않는다.
 - `PUBLISH_SCHEDULER_IMAGE`와 API/다른 worker image는 모두 `@sha256:`로 고정한다. `latest`는 사용하지 않는다.
-- migration `091_publish_calendar_weekly_schedule.sql`의 승인된 `applied` 또는 `already_applied` 증거가 이미 있어야 한다. 이 활성화 절차에서는 migration을 실행하지 않는다.
+- migration `092_publish_calendar_weekly_schedule.sql`의 승인된 `applied` 또는 `already_applied` 증거가 이미 있어야 한다. 이 활성화 절차에서는 migration을 실행하지 않는다.
 - Wiki worker가 disabled/not_required이면 실제 운영 digest를 유지한다. manifest 불일치를 이유로 기동하거나 교체하지 않는다.
 - 고객 제목, 본문, 프롬프트, 쿠키, 토큰, DB URL, provider 응답 본문은 명령 출력이나 증거 파일에 남기지 않는다.
 
@@ -32,7 +32,7 @@
 Ubuntu의 migration 증거는 파일을 출력하지 않고 다음 조건으로 확인한다.
 
 ```bash
-migration_evidence=/opt/brand-pilot/state/post-075-schema-migrations/091_publish_calendar_weekly_schedule.sql.json
+migration_evidence=/opt/brand-pilot/state/post-075-schema-migrations/092_publish_calendar_weekly_schedule.sql.json
 state_directory=/opt/brand-pilot/state/post-075-schema-migrations
 test -d "$state_directory" && test ! -L "$state_directory"
 test "$(stat -c '%a' -- "$state_directory")" = 700
@@ -44,7 +44,7 @@ jq -e '
   .post075SchemaMigration |
   .contractVersion == "post-075-schema-migration-evidence.v1" and
   .providerRoleName == "postgres" and
-  .migrationId == "091_publish_calendar_weekly_schedule.sql" and
+  .migrationId == "092_publish_calendar_weekly_schedule.sql" and
   .migrationSha256 == "c1bf905666ce4dabac137c0522fa0dc0300f574eda6d1e9648283f00b2af4d2b" and
   (.status == "applied" or .status == "already_applied")
 ' "$migration_evidence" >/dev/null
@@ -88,7 +88,7 @@ jq -e '
 export PUBLISH_SCHEDULER_PRIMARY_URL=https://api.danbammsg.co.kr
 export PUBLISH_SCHEDULER_APPROVED_PREVIEW_FILE=/path/to/approved-publish-preview.json
 export CRON_SECRET_FILE=/opt/brand-pilot/shared/secrets/cron-secret
-npm run smoke:publish-scheduler -- --phase=execution
+node scripts/publish-scheduler-smoke.mjs --phase=execution
 ```
 
 이 단계는 다음을 순서대로 강제한다.
@@ -126,7 +126,7 @@ test "$scheduler_container" != "" && test "${scheduler_container#*$'\n'}" = "$sc
 
 export PUBLISH_SCHEDULER_CONTAINER_ID="$scheduler_container"
 export PUBLISH_SCHEDULER_HEARTBEAT_TICKS=3
-npm run smoke:publish-scheduler -- --phase=heartbeat
+node scripts/publish-scheduler-smoke.mjs --phase=heartbeat
 ```
 
 heartbeat 검사는 PID나 고객 데이터를 로그에 복사하지 않고 서로 다른 `lastSuccessAt` 갱신 3회와 그 세 번째 성공의 `inFlightSince=null` 정착 상태까지 요구한다. 각 파일 읽기와 `docker exec`도 전체 남은 deadline으로 제한한다. timeout, malformed heartbeat, in-flight 고착은 실패다.
@@ -172,4 +172,4 @@ release_dir="/opt/brand-pilot/releases/$release_sha"
 
 첫 활성화의 롤백 목표는 disabled profile이다. 기존 scheduler를 교체한 경우에는 변경 전에 기록한 실제 immutable digest가 들어 있는 서명된 release bundle로 scheduler 하나만 복원한다. manifest를 손으로 편집하거나 `latest`를 사용하지 않는다.
 
-롤백 중에도 API/UI/DB/Caddy/다른 worker는 그대로 유지한다. migration 091을 되돌리지 않고, 완료된 게시·예약·attempt를 삭제하거나 재작성하지 않는다. 중지 후 heartbeat, 마지막 attempt와 provider 결과, 승인 ID를 보존한 채 원인을 조사한다.
+롤백 중에도 API/UI/DB/Caddy/다른 worker는 그대로 유지한다. migration 092를 되돌리지 않고, 완료된 게시·예약·attempt를 삭제하거나 재작성하지 않는다. 중지 후 heartbeat, 마지막 attempt와 provider 결과, 승인 ID를 보존한 채 원인을 조사한다.

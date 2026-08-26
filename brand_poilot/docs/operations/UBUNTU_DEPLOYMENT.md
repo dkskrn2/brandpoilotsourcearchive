@@ -1532,7 +1532,7 @@ deployment success or onboarding QA.
 
 The publish scheduler is not part of the general API/worker activation sequence
 above. Use [게시 스케줄러 활성화·중지 런북](PUBLISH_SCHEDULER.md) only after the
-serving primary release is fixed, migration 091 evidence is already present,
+serving primary release is fixed, migration 092 evidence is already present,
 all external due callers are confirmed absent, and the exact preview queue IDs
 have been approved.
 
@@ -1541,7 +1541,7 @@ The scheduler component path may start or replace only
 UI, or an unrelated worker. Observe three successful heartbeat updates and
 verify the approved target/attempt/provider result before recording activation.
 If any stop condition occurs, disable the scheduler component first and preserve
-the API/UI/DB, reservations, completed publications, and migration 091.
+the API/UI/DB, reservations, completed publications, and migration 092.
 
 Running the full deployment test suite, regardless of duration, is not evidence
 that these production activation gates passed. This section documents the gate;

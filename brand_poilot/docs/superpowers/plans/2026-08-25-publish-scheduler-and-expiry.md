@@ -155,7 +155,7 @@ git commit -m "build(publish): deploy scheduler independently"
 Run: `node --test scripts/publish-scheduler-smoke.test.mjs`
 
 ```bash
-git add docs/operations/UBUNTU_DEPLOYMENT.md docs/operations/PUBLISH_SCHEDULER.md scripts/publish-scheduler-smoke.mjs scripts/publish-scheduler-smoke.test.mjs package.json
+git add docs/operations/UBUNTU_DEPLOYMENT.md docs/operations/PUBLISH_SCHEDULER.md scripts/publish-scheduler-smoke.mjs scripts/publish-scheduler-smoke.test.mjs scripts/release-impact.mjs scripts/release-impact.test.mjs
 git commit -m "docs(publish): add scheduler activation gates"
 ```
 
