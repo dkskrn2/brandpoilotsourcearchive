@@ -4617,6 +4617,7 @@ test("an installation applied through 064 has every later migration pending", as
       "088_onboarding_product_image_imports.sql",
       "089_free_subscription_plan.sql",
       "090_existing_brand_free_subscriptions.sql",
+      "091_ai_content_prompt_lineage_v4.sql",
     ],
   );
 });
@@ -4773,6 +4774,33 @@ test("existing active brands receive FREE subscriptions after the canonical plan
   );
 });
 
+test("AI content prompt lineage v4 follows migration 090 without changing historical checksums", async () => {
+  const loaded = await migrationRunner.loadMigrations();
+  const ids = loaded.map(({ id }) => id);
+  const migration091Index = ids.indexOf("091_ai_content_prompt_lineage_v4.sql");
+
+  assert.equal(
+    migration091Index,
+    ids.indexOf("090_existing_brand_free_subscriptions.sql") + 1,
+  );
+  assert.equal(
+    migrationRunner.post075SchemaMigrationChecksums["091_ai_content_prompt_lineage_v4.sql"],
+    "05696c55ee959cd80ef7cdf30fcb07e93e0579da515042ebd8e8aafb9cde5e10",
+  );
+  assert.equal(
+    loaded[migration091Index].checksum,
+    migrationRunner.post075SchemaMigrationChecksums["091_ai_content_prompt_lineage_v4.sql"],
+  );
+  assert.equal(
+    migrationRunner.post075SchemaMigrationChecksums["087_ai_content_prompt_lineage_v3.sql"],
+    "bb5c9cbc2b78654e7bbdd988af929b634671cc2e794cbd46b8cf5c9fd5d5b359",
+  );
+  assert.equal(
+    migrationRunner.post075SchemaMigrationChecksums["090_existing_brand_free_subscriptions.sql"],
+    "8134f35d21f72f7418b5502bb5cfb10c8f296f147788bcd8b539d6d930588552",
+  );
+});
+
 const post076SchemaMigrationIdsForTests = [
   "077_content_suggestion_batches.sql",
   "078_faq_utterance_matching.sql",
@@ -4788,6 +4816,7 @@ const post076SchemaMigrationIdsForTests = [
   "088_onboarding_product_image_imports.sql",
   "089_free_subscription_plan.sql",
   "090_existing_brand_free_subscriptions.sql",
+  "091_ai_content_prompt_lineage_v4.sql",
 ];
 
 test("post-075 data migrations are a closed DML-only contract", async () => {
