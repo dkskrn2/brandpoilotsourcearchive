@@ -166,6 +166,24 @@ describe("publish due run", () => {
     expect(expirySql).toContain("not exists");
   });
 
+  it("restores channel truth for recovered successes and delays slots for 30-minute unknown results", async () => {
+    const fixture = dueHarness({ expiry: { recovered_published: 1, result_unknown: 1 } });
+
+    await runPublishDue({
+      pool: fixture.pool as any,
+      now: new Date("2026-08-26T20:00:00+09:00"),
+      claimQueueItem: fixture.claimQueueItem,
+      dispatchClaim: vi.fn(),
+    });
+
+    const expirySql = fixture.events.find((sql) => sql.includes("publish_due_expire")) ?? "";
+    expect(expirySql).toContain("recovered_channels as");
+    expect(expirySql).toContain("update brand_channels");
+    expect(expirySql).toContain("last_published_at=$1::timestamptz");
+    expect(expirySql).toContain("result_unknown_slots as");
+    expect(expirySql).toContain("set status='publish_delayed',last_error='publish_delivery_unknown'");
+  });
+
   it("preserves original scheduled time and records delayed effective time separately", async () => {
     const fixture = dueHarness({ candidates: [] });
     const now = new Date("2026-08-26T23:58:59.999+09:00");

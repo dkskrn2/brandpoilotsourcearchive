@@ -232,6 +232,7 @@ jobs:
         working-directory: brand_poilot
         run: |
           npm run pretest --workspace @brand-pilot/api
+          npm exec --workspace @brand-pilot/api -- vitest run src/publishDueRun.postgres.integration.test.ts --maxWorkers=1
           npm exec --workspace @brand-pilot/api -- vitest run \
             src/aiContentFixedInputAssembler.test.ts \
             src/aiContentGenerationInput.test.ts \

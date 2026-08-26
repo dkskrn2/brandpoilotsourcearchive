@@ -167,6 +167,26 @@ test("migration changes run both publish-calendar PostgreSQL contracts without a
   );
 });
 
+test("API verification runs the real publish-due repository PostgreSQL path without a silent skip", () => {
+  const verifyJob = workflow;
+  assert.match(
+    verifyJob,
+    /npm exec --workspace @brand-pilot\/api -- vitest run src\/publishDueRun\.postgres\.integration\.test\.ts/,
+  );
+  assert.doesNotMatch(
+    verifyJob,
+    /publishDueRun\.postgres\.integration\.test\.ts[^\n]*(?:\|\|\s*true|--passWithNoTests)/,
+  );
+
+  const integration = readFileSync("apps/api/src/publishDueRun.postgres.integration.test.ts", "utf8");
+  assert.doesNotMatch(integration, /\b(?:describe|it|test)\.skip\s*\(|\bskip\s*:/);
+  assert.match(integration, /import\s*\{\s*createRepository\s*\}\s*from\s*"\.\/repository\.js"/);
+  assert.match(integration, /createRepository\(application,/);
+  assert.match(integration, /repository\.runDuePublishing\s*\(/);
+  assert.doesNotMatch(integration, /import\s*\{\s*runPublishDue\s*\}/);
+  assert.doesNotMatch(integration, /claimQueueItem\s*:/);
+});
+
 test("bash parser accepts schema 3 and returns each component source revision", (t) => {
   const bash = process.platform === "win32"
     ? ["C:\\Program Files\\Git\\bin\\bash.exe", "C:\\Program Files\\Git\\usr\\bin\\bash.exe"].find(existsSync)

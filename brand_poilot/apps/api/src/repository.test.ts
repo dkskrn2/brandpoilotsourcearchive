@@ -3030,7 +3030,9 @@ describe("repository", () => {
   it("preserves non-reservation recovery, lease, and provider retry timing", () => {
     expect(publishDueRunSource).toContain("publishing_started_at < $1::timestamptz-interval '30 minutes'");
     expect(repositorySource).toContain("performance_sync_runs.started_at <= excluded.started_at - interval '30 minutes'");
-    expect(repositorySource).toContain("now() + interval '5 minutes'");
+    expect(repositorySource).toContain("const retryAt = new Date(failedAt.getTime() + 5 * 60 * 1000)");
+    expect(repositorySource).toContain("then $10::timestamptz");
+    expect(repositorySource).not.toContain("now() + interval '5 minutes'");
     expect(repositorySource).toContain("deferred_until = case when $4::boolean and $9::boolean");
     expect(repositorySource).not.toContain("earliestSafePublicationTime");
   });

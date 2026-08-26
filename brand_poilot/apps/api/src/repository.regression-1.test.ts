@@ -655,6 +655,50 @@ describe("repository regressions", () => {
     expect(failureUpdates[0]?.values).toEqual(expect.arrayContaining(["meta_rate_limited", true]));
   });
 
+  it("does not defer a 23:58:59 KST calendar failure when its five-minute retry crosses the 23:59 cutoff", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-08-26T23:58:59.000+09:00"));
+    const failureUpdates: Array<{ sql: string; values?: unknown[] }> = [];
+    const query = vi.fn(async (sql: string, values?: unknown[]) => {
+      if (sql.includes("from publish_queue pq") && sql.includes("join channel_outputs")) {
+        return { rowCount: 1, rows: [{
+          id: "queue-1",
+          workspace_id: "workspace-1",
+          brand_id: "brand-1",
+          channel: "instagram",
+          channel_output_id: "output-1",
+          delivery_format: "instagram_reel",
+          output_json: {},
+          rendered_manifest_url: "https://cdn.example.com/manifest.json",
+          ...readyInstagramPublishContext(),
+          external_account_id: "account-1",
+          encrypted_payload: encryptCredential("meta-token"),
+          credential_id: "credential-1",
+          attempt_id: "attempt-1",
+          attempt_number: 1,
+          calendar_slot_id: "slot-1",
+          calendar_scheduled_for: new Date("2026-08-26T11:30:00.000+09:00"),
+        }] };
+      }
+      if (sql.includes("failed_attempt")) failureUpdates.push({ sql, values });
+      return { rowCount: 1, rows: [] };
+    });
+    const repository = createRepository({ query } as any, {
+      instagramPublish: { enabled: true },
+      fetchInstagramImageManifest: async () => ({ video: { url: "https://cdn.example.com/reel.mp4" } }),
+      publishInstagramOutput: async () => { throw new MetaGraphRequestError({ status: 429 }); },
+    } as any);
+
+    await expect(repository.publishQueueItem("queue-1")).rejects.toThrow("meta_graph_request_failed:429");
+
+    expect(failureUpdates).toHaveLength(1);
+    expect(failureUpdates[0]?.values?.[3]).toBe(false);
+    expect(failureUpdates[0]?.values?.[9]).toEqual(new Date("2026-08-27T00:03:59.000+09:00"));
+    expect(failureUpdates[0]?.sql).toContain("then $10::timestamptz");
+    expect(failureUpdates[0]?.sql).toContain("else 'failed'");
+    expect(failureUpdates[0]?.sql).toContain("else 'publish_delayed'");
+  });
+
   it("stops automatic transient retries after the fifth publish attempt", async () => {
     const failureUpdates: Array<{ sql: string; values?: unknown[] }> = [];
     const query = vi.fn(async (sql: string, values?: unknown[]) => {

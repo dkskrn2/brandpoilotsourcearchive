@@ -1723,6 +1723,7 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
          select pq.id
          from publish_queue pq
          join channel_outputs co on co.id=pq.channel_output_id
+          and co.workspace_id=pq.workspace_id and co.brand_id=pq.brand_id and co.channel=pq.channel
          join brands brand on brand.id=pq.brand_id and brand.workspace_id=pq.workspace_id
          join brand_channels policy_channel
            on policy_channel.brand_id=pq.brand_id and policy_channel.workspace_id=pq.workspace_id
@@ -1843,7 +1844,8 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
             on slot.topic_publish_group_id=pq.topic_publish_group_id
            and slot.workspace_id=pq.workspace_id and slot.brand_id=pq.brand_id
            and slot.status<>'cancelled'
-         left join brand_channels bc on bc.brand_id = pq.brand_id and bc.channel = pq.channel and bc.deleted_at is null
+         left join brand_channels bc on bc.workspace_id = pq.workspace_id
+          and bc.brand_id = pq.brand_id and bc.channel = pq.channel and bc.deleted_at is null
          left join lateral (
            select current_credential.*
            from channel_credentials current_credential
@@ -2157,11 +2159,13 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
               channelNeedsAttention: true,
             }
           : classifyMetaGraphPublishError(providerError);
+        const failedAt = new Date();
+        const retryAt = new Date(failedAt.getTime() + 5 * 60 * 1000);
         const effectiveRetryable = classification.retryable
           && Number(queue.attempt_number ?? 1) < 5
           && canAutoRetryCalendarPublish(
             queue.calendar_slot_id ? new Date(queue.calendar_scheduled_for) : null,
-            new Date(),
+            retryAt,
           );
         const responseMetadata = error instanceof InstagramPublishStageError
           ? {
@@ -2187,11 +2191,11 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
                    else 'failed'
                  end,
                  scheduled_for = case
-                   when $4::boolean and not $9::boolean then now() + interval '5 minutes'
+                   when $4::boolean and not $9::boolean then $10::timestamptz
                    else scheduled_for
                  end,
                  deferred_until = case when $4::boolean and $9::boolean
-                   then now() + interval '5 minutes' else deferred_until end,
+                   then $10::timestamptz else deferred_until end,
                  failed_at = case when $4::boolean then null else now() end,
                  last_error = $3, updated_at = now()
              where id = $2 and status = 'publishing' and exists (select 1 from failed_attempt)
@@ -2228,7 +2232,8 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
             queue.brand_id,
             queue.channel,
             JSON.stringify(responseMetadata),
-            Boolean(queue.calendar_slot_id)
+            Boolean(queue.calendar_slot_id),
+            retryAt,
           ]
         ).catch(() => undefined);
       }

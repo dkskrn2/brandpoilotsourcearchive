@@ -79,7 +79,15 @@ const expirySql = `/* publish_due_expire */
          select 1 from publish_attempts attempt
           where attempt.publish_queue_id=queue.id and attempt.status='succeeded'
        )
-    returning queue.id,queue.topic_publish_group_id
+    returning queue.id,queue.workspace_id,queue.brand_id,queue.channel,queue.topic_publish_group_id
+  ), recovered_channels as (
+    update brand_channels channel
+       set last_published_at=$1::timestamptz,status='connected',last_error=null
+      from recovered
+     where channel.workspace_id=recovered.workspace_id
+       and channel.brand_id=recovered.brand_id
+       and channel.channel=recovered.channel
+    returning channel.id
   ), recovered_groups as (
     update topic_publish_groups publish_group
        set status=case
@@ -121,6 +129,13 @@ const expirySql = `/* publish_due_expire */
      where attempt.status='running'
        and attempt.publish_queue_id in (select id from result_unknown_targets)
     returning attempt.id
+  ), result_unknown_slots as (
+    update publish_calendar_slots slot
+       set status='publish_delayed',last_error='publish_delivery_unknown',updated_at=$1::timestamptz
+      from result_unknown_targets
+     where slot.topic_publish_group_id=result_unknown_targets.topic_publish_group_id
+       and slot.status not in ('published','cancelled')
+    returning slot.id
   ), expired_slot_candidates as (
     select slot.id,slot.topic_publish_group_id
       from publish_calendar_slots slot
