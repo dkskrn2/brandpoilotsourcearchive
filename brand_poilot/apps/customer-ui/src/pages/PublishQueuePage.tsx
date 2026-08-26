@@ -387,7 +387,8 @@ export function PublishQueuePage({ generationGateway = aiContentApiGateway }: Pu
     ...entryFromPublishItem(item),
     operationalStatus: item.operationalStatus,
     operationalReason: item.operationalReason,
-  })), [publishItems]);
+    preview: item.sourceRefs.generationOutputId ? generationPreviews.get(item.sourceRefs.generationOutputId) : undefined,
+  })), [generationPreviews, publishItems]);
   const calendarUnreservedItems = useMemo(() => unreservedItems(publishItems), [publishItems]);
   const assignableCalendarContents = useMemo(() => publishItems.flatMap((item) => item.sourceRefs.topicPublishGroupId && (item.status === "completed_unpublished" || item.status === "publish_queued")
     ? [{ id: item.sourceRefs.topicPublishGroupId, title: item.title }]
@@ -584,7 +585,8 @@ export function PublishQueuePage({ generationGateway = aiContentApiGateway }: Pu
 
   useEffect(() => {
     if (view !== "calendar") return;
-    const outputIds = [...new Set(calendarUnreservedItems.flatMap((item) => item.contentStatus === "completed" && item.sourceRefs.generationOutputId
+    const calendarItems = publishItems.filter((item) => item.calendarPlacement === "dated" || item.calendarPlacement === "unreserved");
+    const outputIds = [...new Set(calendarItems.flatMap((item) => item.contentStatus === "completed" && item.sourceRefs.generationOutputId
       ? [item.sourceRefs.generationOutputId]
       : []))].sort();
     const signature = outputIds.join(",");
@@ -605,7 +607,7 @@ export function PublishQueuePage({ generationGateway = aiContentApiGateway }: Pu
       })
       .catch(() => { if (!ignore) setGenerationPreviews(new Map()); });
     return () => { ignore = true; };
-  }, [calendarUnreservedItems, generationGateway, view]);
+  }, [generationGateway, publishItems, view]);
 
   async function loadManualOptions() {
     setCalendarManualOptions(null);

@@ -122,6 +122,21 @@ describe("PublishDateDetail", () => {
     expect(screen.getByText("게시 예정", { selector: ".badge" })).toBeVisible();
   });
 
+  it("shows generated media in the selected slot detail", () => {
+    const generated = {
+      ...entry({ title: "생성 완료 카드뉴스" }),
+      preview: { kind: "image", url: "https://cdn.example.com/generated-card.webp" },
+    } as PresentedCalendarEntry;
+
+    render(<PublishDateDetail
+      dateKey="2099-08-24" entries={[generated]} selectedId={generated.id} slotsLoading={false} slotsError={null}
+      assignableContents={[]} onSelectEntry={vi.fn()} onAssign={vi.fn(async () => true)} onCancel={vi.fn()}
+      onRescheduleItem={vi.fn()} onOpenContentPicker={vi.fn()}
+    />);
+
+    expect(screen.getByRole("img", { name: "생성 완료 카드뉴스 미리보기" })).toHaveAttribute("src", "https://cdn.example.com/generated-card.webp");
+  });
+
   it("does not render a 220-item content library until the dialog opens and restores focus on Escape", async () => {
     const selectedDate = dateKey(new Date());
     const onLoadManualOptions = vi.fn();

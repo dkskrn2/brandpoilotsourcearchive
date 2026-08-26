@@ -2235,6 +2235,8 @@ details.panel > summary.panel-head::-webkit-details-marker {
 .publish-mobile-agenda__status { font-weight: 700; white-space: nowrap; }
 .publish-calendar-detail { position: sticky; top: 16px; min-height: 360px; }
 .publish-calendar-slot-detail, .publish-calendar-detail__list { display: grid; gap: 14px; padding: 18px; }
+.publish-calendar-slot-detail__preview { display: grid; width: 100%; aspect-ratio: 16 / 9; place-items: center; overflow: hidden; border: 1px solid var(--line); border-radius: 8px; background: var(--surface-alt); }
+.publish-calendar-slot-detail__preview .publish-card__media-object { display: block; width: 100%; height: 100%; object-fit: contain; }
 .publish-calendar-detail__actions { padding: 0 18px 18px; }
 .publish-calendar-detail__actions .button { width: 100%; }
 .publish-calendar-slot-detail__time { display: flex; align-items: center; gap: 10px; color: var(--primary); }

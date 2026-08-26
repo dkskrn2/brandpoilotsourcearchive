@@ -4,10 +4,12 @@ import type { PublishOperationalReason, PublishOperationalStatus } from "../../t
 import { formatPublishDateTime, timeLabel, type CalendarEntry } from "../../features/publishing/publishCalendar";
 import { publishErrorPresentation, publishStatusPresentation } from "../../features/publishing/publishPresentation";
 import { Badge } from "../ui/Badge";
+import { PublishManagementPreview, type PublishCardPreview } from "./PublishManagementPreview";
 
 export type PresentedCalendarEntry = CalendarEntry & {
   operationalStatus: PublishOperationalStatus;
   operationalReason: PublishOperationalReason;
+  preview?: PublishCardPreview;
 };
 
 type Props = {
@@ -57,6 +59,7 @@ export function PublishDateDetail({ dateKey, entries, selectedId, slotsLoading, 
   return <aside className="publish-calendar-detail" aria-label={selected ? `${selected.title} 슬롯 상세` : `${fullDate(dateKey)} 게시 일정`}>
     <header className="publish-calendar-detail__header"><div><span>{selected ? "슬롯 상세" : "선택한 날짜"}</span><h2 ref={detailHeadingRef} tabIndex={-1}>{selected ? selected.title : fullDate(dateKey)}</h2></div><Badge variant={selectedPresentation?.variant ?? "neutral"}>{selectedPresentation?.label ?? `${entries.length}개 일정`}</Badge></header>
     {slotsLoading ? <p role="status" aria-label="캘린더 슬롯을 불러오는 중입니다.">캘린더 슬롯을 불러오는 중입니다.</p> : slotsError ? <p role="alert">{slotsError}</p> : selected ? <div className="publish-calendar-slot-detail">
+      {selected.preview ? <div className="publish-calendar-slot-detail__preview"><PublishManagementPreview title={selected.title} preview={selected.preview} /></div> : null}
       <div className="publish-calendar-slot-detail__time"><Clock3 size={18} /><span>{detailTimes(selected).map((time) => <span key={time.label}><small>{time.label}</small><strong>{formatPublishDateTime(time.value)}</strong></span>)}</span></div>
       <dl><div><dt>게시 방식</dt><dd>{selected.mode === "automatic" ? "자동" : "수동"} 게시</dd></div>{selected.recommendationKind ? <div><dt>추천 종류</dt><dd>{selected.recommendationKind === "trend" ? "트렌드성 추천" : "정보성 추천"}</dd></div> : null}<div><dt>콘텐츠 형식</dt><dd>{selected.contentFormat === "reel" ? "릴스" : selected.contentFormat === "card_news" ? "카드뉴스" : "설정 전"}</dd></div><div><dt>게시 채널</dt><dd>{selected.channels.map((channel) => channelLabel[channel]).join(", ") || "채널 설정 전"}</dd></div>{selected.lastError ? <div><dt>상태·오류</dt><dd>{publishErrorPresentation(selected.lastError).message}</dd></div> : null}</dl>
       {selected.status === "open" ? <div className="publish-calendar-manual-form"><label>배정할 콘텐츠<select aria-label="배정할 콘텐츠" value={assignedContentId} onChange={(event) => setAssignedContentId(event.target.value)}><option value="">콘텐츠 선택</option>{assignableContents.map((content) => <option value={content.id} key={content.id}>{content.title}</option>)}</select></label><button className="button primary" type="button" disabled={!assignedContentId} onClick={() => { const content = assignableContents.find((item) => item.id === assignedContentId); if (content) void onAssign(selected.id, content).then((assigned) => { if (assigned) setAssignedContentId(""); }); }}>선택 콘텐츠 배정</button></div> : null}

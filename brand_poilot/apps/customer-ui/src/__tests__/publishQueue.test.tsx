@@ -372,6 +372,41 @@ describe("PublishQueuePage canonical collection", () => {
     expect(listGenerations).toHaveBeenCalledWith("brand-1");
   });
 
+  it("loads generated media for a reserved item and shows it in the selected calendar detail", async () => {
+    const reserved = item({
+      itemKey: "output:reserved-thumbnail",
+      title: "예약된 생성 카드뉴스",
+      scheduledFor: "2026-08-29T02:30:00.000Z",
+      effectiveScheduledFor: "2026-08-29T02:30:00.000Z",
+      calendarDate: "2026-08-29T02:30:00.000Z",
+      sourceRefs: { ...item().sourceRefs, generationId: "generation-reserved", generationOutputId: "output-reserved" },
+    });
+    const listGenerations = vi.fn(async () => [{
+      id: "generation-reserved",
+      outputs: [{
+        id: "output-reserved",
+        status: "completed",
+        artifact: {
+          queueId: "output-reserved",
+          kind: "image_gallery",
+          deliveryFormat: "instagram_feed_carousel",
+          assets: [{ url: "https://cdn.example.com/reserved-card.webp", fileName: "card.webp", mimeType: "image/webp", width: 1080, height: 1350 }],
+          posterUrl: null,
+          html: null,
+          text: null,
+        },
+      }],
+    }] as AiContentGeneration[]);
+    await renderPage({ listPublishItems: vi.fn(async () => [reserved]) }, { listGenerations });
+
+    await userEvent.click(await screen.findByRole("tab", { name: "캘린더" }));
+    await userEvent.click(await screen.findByRole("button", { name: "예약된 생성 카드뉴스 게시 예정 슬롯 상세 보기" }));
+
+    expect(await screen.findByRole("img", { name: "예약된 생성 카드뉴스 미리보기" })).toHaveAttribute("src", "https://cdn.example.com/reserved-card.webp");
+    expect(listGenerations).toHaveBeenCalledTimes(1);
+    expect(listGenerations).toHaveBeenCalledWith("brand-1");
+  });
+
   it("shows the common-list skeleton and fail-closed empty state", async () => {
     let reject!: (reason: Error) => void;
     const pending = new Promise<PublishItem[]>((_resolve, nextReject) => { reject = nextReject; });
