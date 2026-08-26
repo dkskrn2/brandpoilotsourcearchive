@@ -2,7 +2,7 @@
 
 Date: 2026-08-26
 
-Status: approved in conversation as a prompt-only addition; implementation pending written-spec review
+Status: approved in conversation as a prompt-only addition and included in the complete Production option 1A; implementation pending
 
 ## 1. Decision
 

@@ -2,7 +2,7 @@
 
 Date: 2026-08-26
 
-Status: approved in conversation for design documentation and ON/OFF validation; not implemented, merged, or deployed
+Status: corrected ON accepted and option 1A approved for Production implementation; not yet implemented, merged, or deployed
 
 ## 1. Goal
 
@@ -21,13 +21,16 @@ The main change is prompt behavior, not a new content architecture. Existing Res
 
 - The change is not limited to the first-scene hook.
 - The planner uses a `first scene -> middle scenes -> final scene` model. Scene 2 has no dedicated role or payoff rule.
-- The Proposal model does not make the final Evidence selection. It only identifies Evidence representative of each Proposal angle.
+- The Proposal model does not make the final Evidence partition. It identifies Evidence representative of each Proposal angle; each marketing Proposal must bind at least one directly relevant Evidence claim to visible Proposal meaning rather than attach an ID as a compliance marker.
 - The Card/Reel planner reviews the complete frozen Subject and Evidence Pool and makes the final selected/excluded partition.
 - Proposal fields keep their current meanings. The prompt only discourages near-identical repetition across `title`, `hook`, `oneLineIntent`, and `keyMessage`; it does not impose strict independent roles.
 - The planner internally chooses a suitable editorial progression before writing an outline or scenes, but does not emit a new mode field or follow a fixed slide formula.
 - Verification data and displayed copy are treated separately, while content-defining facts remain visible.
 - No new density limit is introduced. Existing contract limits and existing overload review remain unchanged.
 - A marketing CTA is an optional supporting scene/copy element, not a required final-scene center. The existing required `content.cta` field remains a candidate action string and is not automatically promoted into a Scene.
+- Marketing keeps Subject, Product, Brand Core, References, and Research Evidence as separate authorities, preserves exact marketing purpose/product identity, and never invents a relationship among them.
+- A directly relevant Evidence item used to justify the selected marketing Proposal remains visible in a non-CTA Scene even when approved product facts can otherwise complete the purchase explanation. It is not transferred into proof of product performance.
+- User-visible Card/Reel copy receives natural-Korean prompt guidance. Internal planning fields are excluded, factual names/numbers/conditions/source qualifiers remain intact, and no naturalness score or runtime validation stage is added.
 - No new model call, retry, schema field, scene-count rule, image call, or image policy is introduced.
 
 ## 3. AS-IS
@@ -121,6 +124,7 @@ The current marketing reasoning ingredients remain available: customer situation
 
 - Evidence IDs are representative of the Proposal angle.
 - They are not a final whitelist or final selection.
+- For marketing, every Proposal includes at least one directly relevant Evidence item and makes its actual claim meaning visible in the Proposal. An Evidence ID by itself does not satisfy this rule.
 - The complete frozen Evidence Pool continues downstream.
 
 ### Card/Reel planner stage
@@ -215,7 +219,10 @@ No First-glance, Simplicity, Scene-2 payoff, new word-count, new number-count, o
 - Use concrete customer situation and buying-barrier claims only when supported by Subject, Evidence, or approved product context.
 - Use the approved product snapshot as authority for product attributes.
 - Keep Subject facts and product facts separately attributed when they describe different entities.
+- Do not turn a product subject into an unrelated Brand Core product/service case or invent a relationship absent from the frozen inputs.
+- Preserve `purposeDetails.kind="marketing"` and the exact frozen product ID in every Proposal.
 - Do not use unrelated Research Evidence as proof of product performance.
+- Preserve directly relevant Evidence supporting the selected Proposal in an actual non-CTA Scene, even when product facts alone can explain the purchase decision.
 - Preserve meaningful conditions and limitations.
 - Complete the value/fit judgment before any optional CTA.
 - Keep `content.cta` as the existing required candidate action field, but do not force it into displayed Scene copy.
@@ -261,7 +268,7 @@ Card and Reel planner prompt changes advance their worker `skillVersion` values.
 
 ## 7. ON/OFF Validation Design
 
-The initial validation is planner-text-only. Image prompts and rendering are unchanged and would add visual-model variance before the Proposal and manuscript effects are understood. A downstream image observation can follow after the text results are accepted.
+The initial text ON/OFF and corrected marketing retest are complete. The corrected ON was then rendered through the running operating Image Worker: four decks, 18 Scenes, 18 audited image calls, and zero image retries. `.tmp/card-reel-editorial-prompt-onoff/IMAGE-REPORT.md` is the accepted source of truth; the earlier uncorrected ON draft is not an implementation target. This evidence used operating containers but intentionally bypassed API/DB queues, so it proves worker-path compatibility rather than a deployed Production-path run.
 
 ### 7.1 Test matrix
 
@@ -348,7 +355,7 @@ Stop after complete text results and a side-by-side report. Do not change Produc
 - shared content-contract catalog prompt version and regenerated catalog/hash artifacts;
 - DB prompt-lineage CHECK migration and PostgreSQL application-role integration test;
 - API/catalog lineage fixtures required by the v4 tuple;
-- release/deployment checks that enumerate the new migration and affected services.
+- scoped release-impact and preflight checks that enumerate the new migration, avoid unrelated Blog/Image Worker recreation, and fence the Proposal v3/v4 transition.
 
 Out of scope:
 
@@ -365,26 +372,28 @@ Out of scope:
 Before implementation is considered complete:
 
 1. Proposal prompt tests cover informational/marketing Card/Reel and verify Blog exclusion.
-2. Card/Reel prompt tests cover both purposes, first/middle/final progression, Evidence necessity, essential-information preservation, and optional CTA Scenes.
+2. Card/Reel prompt tests cover both purposes, first/middle/final progression, Evidence necessity, essential-information preservation, optional CTA Scenes, the corrected marketing Evidence rule, and natural user-visible copy guidance.
 3. Tests verify the absence of a new Scene 2 rule and new density gate.
 4. Existing Proposal, Card Manuscript, Reel Storyboard, Evidence, marketing, and entity-attribution validators pass unchanged unless a test expectation directly encodes the superseded Evidence-preservation prompt.
 5. Canonical generated catalog integrity passes with `proposal.writer.v4`.
 6. The DB migration is executed against real PostgreSQL using the production-equivalent application role.
 7. Existing v2/v3 prompt-lineage tuples remain valid, the exact v4 tuple succeeds, and invalid mixed tuples fail.
-8. The ON/OFF tracks complete without Production writes.
+8. Tracked Production builders reproduce every corrected ON rule and pass the four operating-equivalent text/image flows without adding a runtime quality gate.
 
-Deployment order after separate approval:
+The user approved option 1A. Deployment uses a short Proposal-only creation window because queued Proposal jobs are bound to an exact prompt version:
 
-1. append-only v4 DB lineage migration;
-2. API with v4 catalog;
-3. Content Proposal Worker;
-4. Card News Worker;
-5. Reel Worker.
+1. build digest-pinned API, Proposal, Card, and Reel images while preserving the current Blog/Image digests;
+2. deploy the v4 API canary and append-only migration with new Proposal creation disabled;
+3. promote the v4 API with Proposal creation still disabled;
+4. let the old v3 Proposal worker finish all queued/processing v3 jobs through the v4 API;
+5. after the v3 queue and leases reach zero, replace Proposal, Card, and Reel workers and verify fresh heartbeats;
+6. re-enable Proposal creation only after the v4 API/Proposal-worker pair is healthy;
+7. verify external health, actual container digests, restart counts, recent errors, and any explicitly authorized Production generation.
 
 Image Worker, UI, Research Worker, and Blog Worker are not deployment targets.
 
-Rollback restores the API and affected workers to their previous verified digests. The DB migration may remain because it only permits the additional exact v4 tuple and continues to preserve v2/v3.
+Rollback restores the API and affected workers to their previous verified digests. Before a v4-to-v3 Proposal rollback, disable new Proposal creation and drain all v4-bound jobs with the v4 worker. The DB migration remains because it only permits the additional exact v4 tuple and continues to preserve v2/v3.
 
 ## 10. Completion Boundary
 
-This design is complete when the written specification is reviewed, an implementation/test plan is approved, the prompt changes and lineage migration pass their verification, and the three text ON/OFF tracks are reported for all four purpose/format cells. Merge, Production deployment, image generation, and Production data writes remain separate approval boundaries.
+This design is complete when the corrected ON semantics, natural-copy guidance, prompt lineage, scoped deployment fence, tests, operating-equivalent four-cell retest, and option 1A Production verification are all evidenced. A synthetic Production write is never implied; only a user-authorized Production generation may be used for the final path sample.
