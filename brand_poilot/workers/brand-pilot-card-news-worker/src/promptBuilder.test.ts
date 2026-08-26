@@ -1,14 +1,154 @@
 import { describe, expect, it } from "vitest";
+import {
+  assertPurposeProductInvariant,
+  parseContentGenerationInputV3,
+} from "@brand-pilot/content-contracts";
 import { buildCardNewsPlanPrompt, cardNewsPlanSkillVersion } from "./promptBuilder.js";
 
-const job = { id: "job", generationId: "generation", outputId: "output", workspaceId: "workspace", brandId: "brand", jobType: "generate", outputFormat: "card_news", status: "processing", payload: {}, leaseToken: "lease" } as const;
+const uid = (value: number) => `00000000-0000-4000-8000-${String(value).padStart(12, "0")}`;
+const NOW = "2026-08-26T00:00:00Z";
+const HASH = "a".repeat(64);
+const job = { id: "job", generationId: uid(1), outputId: "output", workspaceId: "workspace", brandId: "brand", jobType: "generate", outputFormat: "card_news", status: "processing", payload: {}, leaseToken: "lease" } as const;
 const frozenManualVisualSelection = {
   contractVersion: "manual-visual-selection-frozen.v1", product: null, stylePreset: null, avatar: null,
 } as const;
 
+const marketingManualVisualSelection = {
+  contractVersion: "manual-visual-selection-frozen.v1",
+  product: {
+    productServiceId: uid(4),
+    versionId: uid(5),
+    kind: "service",
+    name: "Approved Service",
+    description: "Approved service description",
+    features: ["Approved feature"],
+    benefits: ["Approved benefit"],
+    cautions: ["Approved caution"],
+    evergreenPurchaseInfo: "Contact the official channel",
+    images: [],
+  },
+  stylePreset: null,
+  avatar: null,
+} as const;
+
+function promptInput(purpose: "informational" | "marketing") {
+  const input = parseContentGenerationInputV3({
+    contractVersion: "content-generation-input.v3",
+    generationId: job.generationId,
+    brandCore: {
+      versionId: uid(2),
+      companyOverview: "Brand overview for creators",
+      businessDescription: "Brand business facts",
+      primaryCategory: "Education",
+      detailedCategory: "Practical guides",
+      primaryTarget: "Busy operators",
+      differentiator: "Evidence-first guidance",
+      coreAppeal: "Clear action",
+    },
+    brandRules: {
+      versionId: uid(3),
+      version: 1,
+      content: {
+        contractVersion: "brand-rules.v1",
+        requiredPhrases: [],
+        forbiddenPhrases: [],
+        exaggerationRules: [],
+        ctaRules: { defaultCta: "Save this", allowed: ["Save"] },
+        channelRules: { instagram: ["Readable on mobile"] },
+        designRules: { colors: [], fonts: [], notes: [], referenceImages: [] },
+        autoApprovalRules: { enabled: false, conditions: [] },
+      },
+      contentSha256: HASH,
+    },
+    subject: { kind: "topic_text", title: "Practical source title" },
+    contentInstruction: "Use concise Korean explanations.",
+    product: purpose === "marketing" ? {
+      id: uid(4),
+      versionId: uid(5),
+      kind: "service",
+      name: "Approved Service",
+      description: "Approved service description",
+      features: ["Approved feature"],
+      benefits: ["Approved benefit"],
+      cautions: ["Approved caution"],
+      evergreenPurchaseInfo: "Contact the official channel",
+      images: [],
+    } : null,
+    researchEvidence: {
+      contractVersion: "research-evidence.v1",
+      decision: "searched",
+      reason: "Source grounding",
+      queries: ["source question"],
+      capturedAt: NOW,
+      items: [{
+        id: uid(6),
+        title: "Evidence title",
+        url: "https://evidence.example/article",
+        publisher: "Publisher",
+        publishedAt: null,
+        capturedAt: NOW,
+        claimSummary: "Evidence-backed claim for the scene.",
+        contentHash: HASH,
+      }],
+    },
+    references: { selected: [], brandStyleImages: [], avatarStyleImageId: null, attachments: [] },
+    selectedProposal: {
+      id: uid(7),
+      conceptKey: "guide",
+      title: "Selected card concept",
+      informationalType: purpose === "informational" ? "how_to" : null,
+      oneLineIntent: "Explain one useful idea",
+      differentiator: "Direct and grounded",
+      differentiationAxes: ["question"],
+      target: "Busy operators",
+      customerContext: "Needs a quick answer",
+      keyMessage: "Use the verified process",
+      hook: "Why does this keep happening?",
+      selectionReason: "Matches the source",
+      evidenceIds: [uid(6)],
+      referenceIds: [],
+      outputFormat: "card_news",
+      channelTargets: ["instagram"],
+      assetCount: 3,
+      outline: Array.from({ length: 3 }, (_, index) => ({
+        index: index + 1,
+        role: "slide",
+        headline: `Card ${index + 1}`,
+        purpose: `Purpose ${index + 1}`,
+      })),
+      purposeDetails: purpose === "informational"
+        ? { kind: "informational", question: "What changed?", value: "A verified answer", whyNow: "Now", learningPoints: ["One point"] }
+        : { kind: "marketing", campaignObjective: "Explain fit", situationAndNeed: "Needs a solution", productId: uid(4), targetSegment: "Operators", strengths: ["Approved feature"], limitations: ["Approved caution"], appeal: "Clear action", buyingBarriers: ["Uncertainty"], cta: "Contact us" },
+    },
+    userImageInstruction: null,
+    outputSettings: { outputFormat: "card_news", purpose, channelTargets: ["instagram"], aspectRatio: "1:1", outputCount: 1 },
+    capturedAt: NOW,
+  });
+  assertPurposeProductInvariant(input);
+  return input;
+}
+
+function promptRules(prompt: string): string {
+  const opening = "<untrusted_card_news_creative_context_json>\n";
+  const closing = "\n</untrusted_card_news_creative_context_json>";
+  const start = prompt.indexOf(opening);
+  const end = prompt.indexOf(closing, start + opening.length);
+  expect(start, "card-news creative-context opening delimiter").toBeGreaterThanOrEqual(0);
+  expect(end, "card-news creative-context closing delimiter").toBeGreaterThan(start);
+  return `${prompt.slice(0, start)}${prompt.slice(end + closing.length)}`;
+}
+
+function editorialPrompt(purpose: "informational" | "marketing"): string {
+  return promptRules(buildCardNewsPlanPrompt(
+    job,
+    promptInput(purpose),
+    purpose === "marketing" ? marketingManualVisualSelection : frozenManualVisualSelection,
+  ));
+}
+
 describe("card-news V3 prompt", () => {
   it("uses the revised marketing-evidence skill version", () => {
-    expect(cardNewsPlanSkillVersion).toBe("card-manuscript-plan-skill.v6");
+    expect(cardNewsPlanSkillVersion).toBe("card-manuscript-plan-skill.v7");
   });
 
   it.each(["informational", "marketing"] as const)("uses an explicit %s purpose branch", (purpose) => {
@@ -42,31 +182,75 @@ describe("card-news V3 prompt", () => {
 
     expect(prompt).toContain("콘텐츠 전체의 중심 결과를 먼저 결정");
     expect(prompt).toContain("bridge Evidence");
-    expect(prompt).toContain("Scene 1은 hook 또는 cover 기능");
-    expect(prompt).toContain("Scene 2부터는 바로 앞 Scene과의 의미 관계");
     expect(prompt).toContain("설명되지 않은 주제 전환은 허용하지 마세요");
     expect(prompt).toContain("headline을 전환 문장으로 소비하지 마세요");
     expect(prompt).toContain("Delete test");
     expect(prompt).toContain("Missing-link test");
     expect(prompt).toContain("Headline-only test");
     expect(prompt).toContain("Adjacent-scene test");
+    expect(prompt).toContain("Reader-payoff test");
+    expect(prompt).toContain("Topic-label test");
+    expect(prompt).toContain("Promise-payoff test");
+    expect(prompt).toContain("Scene-progression test");
+    expect(prompt).toContain("Evidence-necessity test");
+    expect(prompt).toContain("Essential-information test");
+  });
+
+  it.each(["informational", "marketing"] as const)("uses role-based scene progression for %s planning", (purpose) => {
+    const prompt = editorialPrompt(purpose);
+
+    expect(prompt).toContain("첫 Scene");
+    expect(prompt).toContain("중간 Scene");
+    expect(prompt).toContain("마지막 Scene");
+    expect(prompt).toContain("처음 제기한 관심이나 약속");
+    expect(prompt).not.toContain("Scene-2 payoff test");
+    expect(prompt).not.toContain("두 번째 Scene은");
+    expect(prompt).not.toContain("Scene 2부터");
+    expect(prompt).not.toContain("3초 안에");
+    expect(prompt).not.toContain("First-glance test");
+    expect(prompt).not.toContain("Simplicity test");
+  });
+
+  it.each(["informational", "marketing"] as const)("applies the essential-information test to %s planning", (purpose) => {
+    const prompt = editorialPrompt(purpose);
+
+    expect(prompt).toContain("Essential-information test");
+    expect(prompt).toContain("의미·신뢰성·범위·조건");
+    expect(prompt).toContain("검증·추적 정보");
+  });
+
+  it.each(["informational", "marketing"] as const)("requires natural Korean copy for %s planning", (purpose) => {
+    const prompt = editorialPrompt(purpose);
+
+    expect(prompt).toContain("headline, informationRelation의 label·value, supportingTexts, footnote, content.caption, content.cta");
+    expect(prompt).toContain("구체적인 주체와 행동");
+    expect(prompt).toContain("익숙하고 자연스러운 한국어 어순");
+    expect(prompt).toContain("절대 금칙어가 아니라 반복 습관의 예시");
+    expect(prompt).toContain("같은 어미·문장 길이·문장 구조를 기계적으로 반복하지 마세요");
+    expect(prompt).toContain("고유명사·수치·조건·출처 단서·법적 고지·제품 사실은 의미를 바꾸거나 누락하지 마세요");
+    expect(prompt).not.toContain("Natural-copy test");
+    expect(prompt).not.toContain("AI 말투 점수");
   });
 
   it("grounds marketing manuscripts in both approved product facts and Subject Evidence", () => {
-    const prompt = buildCardNewsPlanPrompt(job, {
-      generationId: job.generationId,
-      subject: { kind: "topic_text", title: "마케팅 주제" },
-      selectedProposal: { assetCount: 2, outline: [] },
-      outputSettings: { purpose: "marketing", outputFormat: "card_news" },
-      researchEvidence: { items: [{ id: "70000000-0000-4000-8000-000000000007" }] },
-      references: { selected: [], brandStyleImages: [], avatarStyleImageId: null, attachments: [] },
-    } as never, frozenManualVisualSelection);
+    const prompt = editorialPrompt("marketing");
 
     expect(prompt).toContain("승인된 선택 제품의 구체적인 사실 또는 가치");
     expect(prompt).toContain("Subject/Research Evidence에 근거한 Editorial Point");
     expect(prompt).toContain("동결된 subject, 승인된 제품 사실과 Research Evidence");
     expect(prompt).toContain("서로 다른 대상의 사실을 전이");
-    expect(prompt).toContain("CTA Scene은 최대 1개");
+    expect(prompt).toContain("CTA Scene은 필수가 아니며 최대 1개");
+    expect(prompt).toContain("payoff를 완성한 뒤 필요한 경우에만");
+    expect(prompt).toContain("content.cta는 기존 계약의 후보 행동 문구");
+  });
+
+  it("keeps Proposal-bound marketing Evidence editorial instead of transferring it to product efficacy", () => {
+    const prompt = editorialPrompt("marketing");
+
+    expect(prompt).toContain("선택한 Proposal의 target, customerContext, angle 또는 핵심 판단");
+    expect(prompt).toContain("직접 뒷받침하는 Research Evidence");
+    expect(prompt).toContain("비-CTA Scene에 보존");
+    expect(prompt).toContain("제품 성과나 효능의 근거로 전이하지 마세요");
   });
 
   it("keeps a generation-scoped product attachment out of registered product image bindings", () => {
@@ -268,15 +452,7 @@ describe("card-news V3 prompt", () => {
   });
 
   it("clusters evidence into editorial points before allocating scenes and self-checks overload", () => {
-    const prompt = buildCardNewsPlanPrompt(job, {
-      generationId: job.generationId,
-      product: null,
-      subject: { kind: "topic_text", title: "Evidence-rich guide" },
-      selectedProposal: { assetCount: 3, outline: [] },
-      outputSettings: { purpose: "informational", outputFormat: "card_news" },
-      researchEvidence: { items: [] },
-      references: { selected: [], brandStyleImages: [], avatarStyleImageId: null, attachments: [] },
-    } as never, frozenManualVisualSelection);
+    const prompt = editorialPrompt("informational");
 
     expect(prompt).toContain("최종 JSON을 제출하기 직전에");
     const editorialSequence = [
@@ -284,7 +460,6 @@ describe("card-news V3 prompt", () => {
       "Lens 관련성·정보 가치 평가",
       "의미상 Editorial Point 형성",
       "Point 간 중복·종속 관계 검토",
-      "Scene budget 안에서 모든 강한 Point를 보존할 그룹 구성",
       "Narrative order 결정",
       "Scene allocation",
       "Manuscript 작성",
@@ -300,17 +475,15 @@ describe("card-news V3 prompt", () => {
     expect(prompt).toContain("Editorial importance와 Narrative progression을 우선");
     expect(prompt).toContain("중요한 Scene이 더 높은 정보 밀도를 가지는 것은 허용");
     expect(prompt).toContain("비어 있는 Scene이 없더라도 하나의 Scene이 명백히 과적재");
-    expect(prompt).toContain("강한 원문 Evidence를 Scene 수에 맞추기 위해 제외하지 마세요");
-    expect(prompt).toContain("재그룹하고 재배분하는 방법을 먼저 사용하세요");
-    expect(prompt).toContain("excludedEvidenceIds에는 의미상 중복되거나 원문 주제 자체와 실질적으로 무관한 Evidence만");
-    expect(prompt).toContain("Proposal Lens에 직접 언급되지 않았다는 이유만으로 Evidence를 제외하지 마세요");
-    expect(prompt).toContain("원문 주제의 핵심 변화·범위·후속 확장·효과를 보완하는 Evidence도 관련 Evidence");
-    expect(prompt).toContain("Claim을 합치거나 ID를 버리지 말고 하나의 Editorial Point 아래 함께 연결");
+    expect(prompt).toContain("선택한 중심 질문·주장·payoff");
+    expect(prompt).toContain("필요한 Evidence를 사용");
+    expect(prompt).toContain("강한 Evidence라도 선택한 Narrative에 필요하지 않으면 excludedEvidenceIds");
+    expect(prompt).toContain("bridge Evidence");
+    expect(prompt).toContain("evidenceSelection.selectedEvidenceIds와 excludedEvidenceIds는 전체 Research Evidence Pool을 중복·누락 없이 정확히 분할");
+    expect(prompt).toContain("selectedEvidenceIds는 모든 Scene evidenceIds 합집합과 정확히 일치");
     expect(prompt).toContain("같은 coreMessage를 직접 뒷받침하는 Evidence만 한 Scene에 함께 묶으세요");
     expect(prompt).toContain("남은 Evidence라는 이유만으로 하나의 Scene에 모으지 마세요");
-    expect(prompt).toContain("배경·효과·맥락 Evidence는 그 의미를 가장 잘 설명하는 cover, hook, analysis 또는 closing Scene으로 재배분");
     expect(prompt).toContain("모든 복수-Evidence Scene의 각 Evidence가 같은 coreMessage를 직접 뒷받침하는지 다시 확인");
-    expect(prompt).not.toContain("선택 축소·재그룹·재배분");
     expect(prompt).toContain("원문 정보만 사용한 Scene은 []로 두세요");
     expect(prompt).toContain("추가 모델 호출이나 도구 호출 없이 현재 응답 안에서 한 번만");
     expect(prompt).toContain("검토 과정은 출력하지 말고 수정된 최종 JSON만 반환");
