@@ -90,7 +90,7 @@ test("configuration accepts only the exact primary URL and reads the bearer secr
     DATABASE_URL: "must-not-be-read",
   }, async (path) => {
     readPaths.push(path);
-    return " file-secret\n";
+    return "file-secret\n";
   });
 
   assert.deepEqual(config, {
@@ -100,6 +100,26 @@ test("configuration accepts only the exact primary URL and reads the bearer secr
     timeoutMs: 240_000,
   });
   assert.deepEqual(readPaths, ["/run/secrets/cron-secret"]);
+
+  for (const invalidSecret of [
+    "secret\nsecond-line",
+    "secret\n\n",
+    "secret\r\n",
+    "secret\0suffix",
+    "secret\tvalue",
+    "secret\u007fvalue",
+    "secret\u2028value",
+    "secret\u2029value",
+  ]) {
+    await assert.rejects(
+      loadConfig({
+        PRIMARY_API_INTERNAL_URL: "http://api-primary:4000",
+        CRON_SECRET_FILE: "/secret",
+        PUBLISH_TIMEOUT_MS: "1",
+      }, async () => invalidSecret),
+      /CRON_SECRET_FILE/,
+    );
+  }
 
   for (const url of [
     "https://api-primary:4000",
@@ -209,6 +229,35 @@ test("a second tick skips while the first due request is active", async () => {
   assert.equal(harness.requests.length, 2);
 });
 
+test("a slow allocation remains heartbeat-visible as in flight until it settles", async () => {
+  let resolveAllocation;
+  const allocationResponse = new Promise((resolve) => { resolveAllocation = resolve; });
+  const harness = createHarness({
+    now: "2026-08-25T20:20:00.000Z",
+    timeoutMs: 240_000,
+    fetchImpl: async (url) => url.endsWith("publish-due")
+      ? jsonResponse(dueResult)
+      : allocationResponse,
+  });
+
+  const ticking = harness.scheduler.tick();
+  while (harness.requests.length < 2) await new Promise((resolve) => setImmediate(resolve));
+
+  const activeHeartbeat = harness.heartbeats.at(-1);
+  resolveAllocation(jsonResponse(allocationResult));
+  await ticking;
+
+  assert.equal(activeHeartbeat.inFlightSince, "2026-08-25T20:20:00.000Z");
+  assert.deepEqual(evaluateHeartbeat(activeHeartbeat, {
+    now: new Date("2026-08-25T20:24:59.000Z"),
+    tickMs: 60_000,
+    timeoutMs: 240_000,
+    isPidAlive: () => true,
+  }), { healthy: true });
+
+  assert.equal(harness.heartbeats.at(-1).inFlightSince, null);
+});
+
 test("timeout aborts a request and the next tick recovers", async () => {
   let attempts = 0;
   const harness = createHarness({
@@ -299,6 +348,10 @@ test("heartbeat writes atomically with mode 0600 and health validates PID, futur
     isPidAlive: () => true,
   };
   assert.deepEqual(evaluateHeartbeat(parsed, base), { healthy: true });
+  assert.deepEqual(evaluateHeartbeat(parsed, {
+    ...base,
+    now: new Date("2026-08-26T00:02:30.000Z"),
+  }), { healthy: true });
   assert.equal(evaluateHeartbeat({ ...parsed, pid: -1 }, base).healthy, false);
   assert.equal(evaluateHeartbeat({ ...parsed, lastSuccessAt: "2026-08-26T00:02:00.000Z" }, base).healthy, false);
   assert.equal(evaluateHeartbeat({ ...parsed, lastSuccessAt: "2026-08-25T23:58:00.000Z" }, base).healthy, false);
@@ -322,22 +375,33 @@ test("heartbeat writes atomically with mode 0600 and health validates PID, futur
 
 test("graceful stop clears the timer, aborts the active request, and prevents new work", async () => {
   let aborted = false;
+  let rejectRequest;
   const harness = createHarness({
     fetchImpl: async (_url, init) => new Promise((_resolve, reject) => {
+      rejectRequest = reject;
       init.signal.addEventListener("abort", () => {
         aborted = true;
-        reject(Object.assign(new Error("aborted"), { name: "AbortError" }));
       });
     }),
   });
   const start = harness.scheduler.start();
   while (harness.requests.length === 0) await new Promise((resolve) => setImmediate(resolve));
-  harness.scheduler.stop();
-  await start;
+  const stopping = harness.scheduler.stop();
+  let stopSettled = false;
+  stopping.then(() => { stopSettled = true; });
+  await new Promise((resolve) => setImmediate(resolve));
 
   assert.equal(aborted, true);
-  assert.equal(harness.interval.cleared, true);
+  assert.equal(stopSettled, false);
   assert.deepEqual(await harness.scheduler.tick(), { stopped: true });
+  assert.equal(harness.requests.length, 1);
+
+  rejectRequest(Object.assign(new Error("aborted"), { name: "AbortError" }));
+  await stopping;
+  await start;
+
+  assert.equal(stopSettled, true);
+  assert.equal(harness.interval.cleared, true);
   assert.equal(harness.requests.length, 1);
 });
 
@@ -345,6 +409,7 @@ test("process entrypoint loads file-backed config and handles SIGTERM without ex
   let signalHandler;
   let started = 0;
   let stopped = 0;
+  let finishStop;
   const logs = [];
   const processLike = {
     env: {
@@ -365,16 +430,28 @@ test("process entrypoint loads file-backed config and handles SIGTERM without ex
       assert.equal(config.cronSecret, "entry-secret");
       return {
         async start() { started += 1; },
-        stop() { stopped += 1; },
+        async stop() {
+          stopped += 1;
+          await new Promise((resolve) => { finishStop = resolve; });
+        },
       };
     },
     logger: (entry) => logs.push(entry),
   });
-  signalHandler();
+  const signalCompletion = signalHandler();
+  let signalSettled = false;
+  signalCompletion.then(() => { signalSettled = true; });
+  await new Promise((resolve) => setImmediate(resolve));
 
   assert.equal(started, 1);
   assert.equal(stopped, 1);
-  assert.deepEqual(logs.at(-1), { event: "publish_scheduler_stopping" });
+  assert.equal(signalSettled, false);
+  assert.deepEqual(logs, [{ event: "publish_scheduler_stopping" }]);
+
+  finishStop();
+  await signalCompletion;
+  assert.equal(signalSettled, true);
+  assert.deepEqual(logs.at(-1), { event: "publish_scheduler_stopped" });
   assert.equal(JSON.stringify(logs).includes("entry-secret"), false);
 });
 

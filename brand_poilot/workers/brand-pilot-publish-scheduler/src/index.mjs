@@ -12,9 +12,10 @@ export async function startProcess({
 } = {}) {
   const config = await loadConfig(processLike.env, readSecretFile);
   const scheduler = schedulerFactory({ config, logger });
-  processLike.once("SIGTERM", () => {
+  processLike.once("SIGTERM", async () => {
     logger({ event: "publish_scheduler_stopping" });
-    scheduler.stop();
+    await scheduler.stop();
+    logger({ event: "publish_scheduler_stopped" });
   });
   await scheduler.start();
   return scheduler;

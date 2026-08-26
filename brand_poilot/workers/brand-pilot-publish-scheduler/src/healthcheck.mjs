@@ -55,7 +55,7 @@ export function evaluateHeartbeat(heartbeat, {
   if (lastSuccessAt === null) return invalid("schema");
   const age = nowMs - lastSuccessAt;
   if (age < 0) return invalid("future");
-  return age <= tickMs * 2 ? { healthy: true } : invalid("stale");
+  return age <= tickMs * 3 ? { healthy: true } : invalid("stale");
 }
 
 export async function runHealthcheck({

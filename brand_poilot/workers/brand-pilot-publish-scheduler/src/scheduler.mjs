@@ -37,8 +37,14 @@ export async function loadConfig(env = process.env, readSecretFile = readFile) {
   if (typeof env.CRON_SECRET_FILE !== "string" || env.CRON_SECRET_FILE.trim() === "") {
     throw new Error("CRON_SECRET_FILE_is_required");
   }
-  const cronSecret = String(await readSecretFile(env.CRON_SECRET_FILE, "utf8")).trim();
+  const secretFileContents = String(await readSecretFile(env.CRON_SECRET_FILE, "utf8"));
+  const cronSecret = secretFileContents.endsWith("\n")
+    ? secretFileContents.slice(0, -1)
+    : secretFileContents;
   if (cronSecret === "") throw new Error("CRON_SECRET_FILE_is_empty");
+  if (/[\p{Cc}\p{Zl}\p{Zp}]/u.test(cronSecret)) {
+    throw new Error("CRON_SECRET_FILE_contains_control_characters");
+  }
 
   return {
     primaryApiInternalUrl: rawUrl.replace(/\/$/, ""),
@@ -154,6 +160,7 @@ export function createScheduler({
   let interval = null;
   let activeTick = null;
   let stopped = false;
+  let stopPromise = null;
   let lastSuccessAt = null;
   let inFlightSince = null;
   let lastAllocationBucket = null;
@@ -215,6 +222,15 @@ export function createScheduler({
     if (stopped) return { stopped: true };
     const bucket = latestAllocationBucket(tickNow);
     if (bucket && bucket !== lastAllocationBucket) {
+      inFlightSince = now().toISOString();
+      await writeHeartbeat(heartbeat()).catch(() => {
+        logger({ event: "publish_heartbeat_failed" });
+      });
+      if (stopped) {
+        inFlightSince = null;
+        await writeHeartbeat(heartbeat()).catch(() => undefined);
+        return { stopped: true };
+      }
       try {
         const allocation = await runOperation(ALLOCATION_PATH, ALLOCATION_FIELDS, false);
         lastAllocationBucket = bucket;
@@ -228,6 +244,8 @@ export function createScheduler({
         if (Number.isInteger(error?.status)) entry.status = error.status;
         logger(entry);
       }
+      inFlightSince = null;
+      await writeHeartbeat(heartbeat()).catch(() => undefined);
     }
     return { stopped: false };
   }
@@ -253,11 +271,16 @@ export function createScheduler({
   }
 
   function stop() {
-    if (stopped) return;
+    if (stopPromise) return stopPromise;
     stopped = true;
     if (interval) clearIntervalFn(interval);
     interval = null;
+    const pendingTick = activeTick;
     for (const controller of activeControllers) controller.abort();
+    stopPromise = (async () => {
+      if (pendingTick) await pendingTick;
+    })();
+    return stopPromise;
   }
 
   return { start, stop, tick };
