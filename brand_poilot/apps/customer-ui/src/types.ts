@@ -861,6 +861,28 @@ export type PublishItemStatus =
   | "result_unknown"
   | "cancelled";
 
+export type PublishOperationalStatus =
+  | "action_required"
+  | "upcoming"
+  | "delayed_today"
+  | "publishing"
+  | "partially_published"
+  | "published"
+  | "cancelled";
+
+export type PublishOperationalReason =
+  | "review_required"
+  | "publish_failed"
+  | "result_unknown"
+  | "reserved_time_passed"
+  | "stale_reservation"
+  | "reservation_expired"
+  | "future_reservation"
+  | "publishing"
+  | "partially_published"
+  | "published"
+  | "cancelled";
+
 export interface PublishItemTarget {
   queueId: string;
   channelOutputId: string | null;
@@ -911,6 +933,8 @@ export interface PublishItem {
   contentStatus: "pre_generation" | "generating" | "completed" | "failed";
   publishStatus: "unreserved" | "reserved" | "publish_queued" | "scheduled" | "deferred" | "publishing" | "partially_published" | "published" | "failed" | "result_unknown" | "cancelled";
   status: PublishItemStatus;
+  operationalStatus: PublishOperationalStatus;
+  operationalReason: PublishOperationalReason;
   groupStatus: string | null;
   publicationProgress: "none" | "partial" | "complete";
   scheduledFor: string | null;
@@ -941,6 +965,30 @@ export interface PublishCalendarSettings {
   trendFormat: "card_news" | "reel";
   slotTimes: string[];
   updatedAt: string | null;
+}
+
+export interface PublishCalendarWeeklyScheduleEntry {
+  id: string;
+  dayOfWeek: 1 | 2 | 3 | 4 | 5 | 6 | 7;
+  time: string;
+  sortOrder: number;
+}
+
+export interface PublishCalendarWeeklySettings {
+  brandId: string;
+  enabled: boolean;
+  channels: ChannelType[];
+  informationalFormat: "card_news" | "reel";
+  trendFormat: "card_news" | "reel";
+  weeklySchedule: PublishCalendarWeeklyScheduleEntry[];
+  updatedAt: string | null;
+}
+
+export interface PublishCalendarWeeklySettingsInput {
+  channels: ChannelType[];
+  informationalFormat: "card_news" | "reel";
+  trendFormat: "card_news" | "reel";
+  weeklySchedule: Array<Omit<PublishCalendarWeeklyScheduleEntry, "id"> & { id: string | null }>;
 }
 
 export interface PublishCalendarSlot {

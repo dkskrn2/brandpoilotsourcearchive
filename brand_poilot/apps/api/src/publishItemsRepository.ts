@@ -1,6 +1,7 @@
 import type { Pool } from "pg";
 
 import { aggregatePublishState } from "./publishItemState.js";
+import { derivePublishOperationalState } from "./publishOperationalState.js";
 import type { Channel, PublishItemDto, PublishItemReviewTargetDto, PublishItemTargetDto } from "./types.js";
 
 type BrandScope = { workspaceId: string; brandId: string };
@@ -369,6 +370,7 @@ export function createPublishItemsRepository(pool: Queryable): PublishItemsRepos
   return {
     async listPublishItems(input) {
       const result = await pool.query(PUBLISH_ITEMS_SQL, [input.workspaceId, input.brandId]);
+      const now = new Date();
       const grouped = new Map<string, Record<string, unknown>[]>();
       for (const row of result.rows as Record<string, unknown>[]) {
         const key = String(row.item_key);
@@ -453,6 +455,14 @@ export function createPublishItemsRepository(pool: Queryable): PublishItemsRepos
         ])];
         const lastError = targets.find((target) => target.lastError)?.lastError
           ?? (slot?.slot_last_error ? String(slot.slot_last_error) : null);
+        const operationalState = derivePublishOperationalState({
+          status: state.status,
+          contentStatus,
+          scheduledFor: state.scheduledFor,
+          publicationProgress: state.publicationProgress,
+          targets,
+          lastError,
+        }, now);
         const sourceEvidence = rows.find((row) => row.queue_source_summary || row.review_source_summary || row.queue_reference_url
           || strings(row.queue_source_urls).length > 0) ?? null;
         const sourceUrls = strings([
@@ -486,6 +496,8 @@ export function createPublishItemsRepository(pool: Queryable): PublishItemsRepos
           contentStatus,
           publishStatus: state.publishStatus,
           status: state.status,
+          operationalStatus: operationalState.status,
+          operationalReason: operationalState.reason,
           groupStatus,
           publicationProgress: state.publicationProgress,
           scheduledFor: state.scheduledFor,

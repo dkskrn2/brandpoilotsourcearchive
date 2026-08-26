@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createServer } from "./httpServer";
 import { registerAdminRoutes } from "./adminServer";
 import { StoryCapabilityRequiredError } from "./repository";
+import { PublishDueCandidateMismatchError } from "./publishDueRun";
 import type { ApiRepository, InstagramFormatSettingsInput, InstagramTrendPageDto, PublishItemDto, PublishResultDto, SourceSnapshotDto } from "./types";
 
 const brandId = "11111111-1111-1111-1111-111111111111";
@@ -129,26 +130,85 @@ function createRepository(): ApiRepository {
       slotTimes: input.slotTimes,
       updatedAt: "2026-08-14T00:00:00.000Z",
     })),
+    getWeeklySettings: vi.fn(async (input) => ({
+      brandId: input.brandId,
+      enabled: false,
+      channels: ["instagram" as const],
+      informationalFormat: "card_news" as const,
+      trendFormat: "reel" as const,
+      weeklySchedule: [{
+        id: "40000000-0000-4000-8000-000000000001",
+        dayOfWeek: 1 as const,
+        time: "11:30",
+        sortOrder: 0,
+      }],
+      updatedAt: "2026-08-14T00:00:00.000Z",
+    })),
+    saveWeeklySettings: vi.fn(async (
+      input: Parameters<NonNullable<ApiRepository["saveWeeklySettings"]>>[0],
+    ) => ({
+      brandId: input.brandId,
+      enabled: input.enabled,
+      channels: input.channels,
+      informationalFormat: input.informationalFormat,
+      trendFormat: input.trendFormat,
+      weeklySchedule: input.weeklySchedule.map((row, index) => ({
+        ...row,
+        id: row.id ?? `40000000-0000-4000-8000-${String(index + 2).padStart(12, "0")}`,
+      })),
+      updatedAt: "2026-08-14T00:00:00.000Z",
+    })),
+    saveWeeklyConfiguration: vi.fn(async (
+      input: Parameters<NonNullable<ApiRepository["saveWeeklyConfiguration"]>>[0],
+    ) => ({
+      brandId: input.brandId,
+      enabled: false,
+      channels: input.channels,
+      informationalFormat: input.informationalFormat,
+      trendFormat: input.trendFormat,
+      weeklySchedule: input.weeklySchedule.map((row, index) => ({
+        ...row,
+        id: row.id ?? `40000000-0000-4000-8000-${String(index + 2).padStart(12, "0")}`,
+      })),
+      updatedAt: "2026-08-14T00:00:00.000Z",
+    })),
+    setWeeklyEnabled: vi.fn(async (input) => ({
+      brandId: input.brandId,
+      enabled: input.enabled,
+      channels: ["instagram" as const],
+      informationalFormat: "card_news" as const,
+      trendFormat: "reel" as const,
+      weeklySchedule: [{
+        id: "40000000-0000-4000-8000-000000000001",
+        dayOfWeek: 1 as const,
+        time: "11:30",
+        sortOrder: 0,
+      }],
+      updatedAt: "2026-08-14T00:00:00.000Z",
+    })),
     listSlots: vi.fn(async () => []),
     createSlot: vi.fn(async (input) => ({
-      id: "30000000-0000-4000-8000-000000000001",
-      workspaceId: input.workspaceId,
-      brandId: input.brandId,
-      scheduledFor: input.scheduledFor.toISOString(),
-      assignmentMode: input.assignmentMode,
-      status: "open" as const,
-      recommendationKind: input.recommendationKind,
-      contentFormat: input.contentFormat,
-      channels: input.channels,
-      contentSuggestionId: null,
-      proposalId: null,
-      generationId: null,
-      generationOutputId: null,
-      topicPublishGroupId: null,
-      idempotencyKey: null,
-      title: null,
-      lastError: null,
-      updatedAt: "2026-08-14T00:00:00.000Z",
+      status: "created" as const,
+      slot: {
+        id: "30000000-0000-4000-8000-000000000001",
+        workspaceId: input.workspaceId,
+        brandId: input.brandId,
+        scheduledFor: input.scheduledFor.toISOString(),
+        assignmentMode: input.assignmentMode,
+        status: "open" as const,
+        recommendationKind: input.recommendationKind,
+        contentFormat: input.contentFormat,
+        channels: input.channels,
+        contentSuggestionId: null,
+        proposalId: null,
+        generationId: null,
+        generationOutputId: null,
+        topicPublishGroupId: null,
+        idempotencyKey: null,
+        title: null,
+        lastError: null,
+        updatedAt: "2026-08-14T00:00:00.000Z",
+      },
     })),
     assignSlot: vi.fn(async () => { throw new Error("not_implemented"); }),
     cancelSlot: vi.fn(async () => { throw new Error("not_implemented"); }),
@@ -627,8 +687,7 @@ function createRepository(): ApiRepository {
     generateContent: vi.fn(async () => ({ processed: 1, created: 3, updated: 1, failed: 0 })),
     runDailyGeneration: vi.fn(async () => ({ brandsSelected: 1, runsStarted: 1, processed: 1, created: 3, updated: 1, failed: 0, status: "succeeded" as const })),
     runDailyPerformanceSync: vi.fn(async () => ({ status: "not_due" as const, runDate: "2026-07-13", channelsSelected: 0, runsStarted: 0, targetCount: 0, successCount: 0, failureCount: 0 })),
-    schedulePublishQueue: vi.fn(async () => ({ processed: 3, created: 0, updated: 3, failed: 0 })),
-    runDuePublishing: vi.fn(async () => ({ processed: 1, created: 0, updated: 1, failed: 0 })),
+    runDuePublishing: vi.fn(async () => ({ acquired: true, expiredTargets: 0, expiredSlots: 0, dueQueued: 1, published: 1, failed: 0, resultUnknown: 0 })),
     getPublishArtifact: vi.fn(async (queueId) => ({
       queueId,
       kind: "image_gallery" as const,
@@ -1001,18 +1060,172 @@ describe("API server", () => {
 
   it("runs daily generation and due publishing only with the cron secret", async () => {
     const repository = createRepository();
-    const app = createServer({ repository, cronSecret: "cron-secret", logger: false });
+    const app = createServer({ repository, cronSecret: "cron-secret", instanceRole: "primary", logger: false });
 
     expect((await app.inject({ method: "GET", url: "/internal/cron/daily-generation" })).statusCode).toBe(401);
-    expect((await app.inject({ method: "GET", url: "/internal/cron/publish-due" })).statusCode).toBe(401);
+    expect((await app.inject({ method: "POST", url: "/internal/cron/publish-due" })).statusCode).toBe(401);
 
     const daily = await app.inject({ method: "GET", url: "/internal/cron/daily-generation", headers: { authorization: "Bearer cron-secret" } });
-    const publish = await app.inject({ method: "GET", url: "/internal/cron/publish-due", headers: { authorization: "Bearer cron-secret" } });
+    const publish = await app.inject({ method: "POST", url: "/internal/cron/publish-due", headers: { authorization: "Bearer cron-secret" } });
 
     expect(daily.statusCode).toBe(200);
     expect(publish.statusCode).toBe(200);
     expect(repository.runDailyGeneration).toHaveBeenCalledTimes(1);
     expect(repository.runDuePublishing).toHaveBeenCalledTimes(1);
+  });
+
+  it("passes an exact smoke candidate allowlist to the primary due runner", async () => {
+    const repository = createRepository();
+    vi.mocked(repository.runDuePublishing).mockResolvedValue({
+      acquired: true,
+      expiredTargets: 0,
+      expiredSlots: 0,
+      dueQueued: 1,
+      published: 1,
+      failed: 0,
+      resultUnknown: 0,
+      selectedProviderCandidateQueueIds: ["queue-approved"],
+      processedProviderCandidateQueueIds: ["queue-approved"],
+    });
+    const app = createServer({ repository, cronSecret: "cron-secret", instanceRole: "primary", logger: false });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/internal/cron/publish-due",
+      headers: { authorization: "Bearer cron-secret", "content-type": "application/json" },
+      payload: { expectedProviderCandidateQueueIds: ["queue-approved"] },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      selectedProviderCandidateQueueIds: ["queue-approved"],
+      processedProviderCandidateQueueIds: ["queue-approved"],
+    });
+    expect(repository.runDuePublishing).toHaveBeenCalledWith(
+      expect.any(Date),
+      { expectedProviderCandidateQueueIds: ["queue-approved"] },
+    );
+  });
+
+  it("maps a guarded due candidate race to a mutation-free conflict", async () => {
+    const repository = createRepository();
+    vi.mocked(repository.runDuePublishing).mockRejectedValue(new PublishDueCandidateMismatchError());
+    const app = createServer({ repository, cronSecret: "cron-secret", instanceRole: "primary", logger: false });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/internal/cron/publish-due",
+      headers: { authorization: "Bearer cron-secret", "content-type": "application/json" },
+      payload: { expectedProviderCandidateQueueIds: [] },
+    });
+
+    expect(response.statusCode).toBe(409);
+    expect(response.json()).toEqual({ error: "publish_due_candidate_mismatch" });
+  });
+
+  it.each([
+    { expectedProviderCandidateQueueIds: ["duplicate", "duplicate"] },
+    { expectedProviderCandidateQueueIds: [""] },
+    { expectedProviderCandidateQueueIds: [], unexpected: true },
+    { expectedProviderCandidateQueueIds: "queue-1" },
+  ])("rejects an invalid guarded due body before repository mutation", async (payload) => {
+    const repository = createRepository();
+    const app = createServer({ repository, cronSecret: "cron-secret", instanceRole: "primary", logger: false });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/internal/cron/publish-due",
+      headers: { authorization: "Bearer cron-secret", "content-type": "application/json" },
+      payload,
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toEqual({ error: "publish_due_guard_invalid" });
+    expect(repository.runDuePublishing).not.toHaveBeenCalled();
+  });
+
+  it("removes mutation-by-GET and exposes authenticated read-only scheduler previews", async () => {
+    const repository = createRepository();
+    const previewDuePublishing = vi.fn(async () => ({
+      observedAt: "2026-08-26T03:00:00.000Z",
+      counts: { recoveredPublished: 1, resultUnknown: 1, expiredTargets: 1, expiredSlots: 1, delayedQueued: 1, providerCandidates: 1 },
+      recovery: { publishedQueueIds: ["recovered-1"], resultUnknownQueueIds: ["unknown-1"] },
+      expiry: { targetQueueIds: ["expired-1"], slotIds: ["slot-expired-1"] },
+      delayedQueueIds: ["delayed-1"],
+      providerCandidateQueueIds: ["due-1"],
+    }));
+    const previewPublishCalendarAllocation = vi.fn(async () => ({
+      observedAt: "2026-08-26T03:00:00.000Z",
+      renewalDueBrandIds: ["brand-renewal"],
+      brandsSelected: 1,
+      counts: { renewalsDue: 1, occurrences: 1, recommendations: 1, quotaBlockedBrands: 0 },
+      occurrences: [{ brandId: "brand-1", idempotencyKey: "key-1", status: "create" as const }],
+      recommendationAssignments: [{ brandId: "brand-1", recommendationId: "suggestion-1", slotId: null, idempotencyKey: "key-1" }],
+      quotaBlockedBrandIds: [],
+    }));
+    Object.assign(repository, { previewDuePublishing, previewPublishCalendarAllocation });
+    const app = createServer({ repository, cronSecret: "cron-secret", instanceRole: "canary", logger: false });
+
+    expect((await app.inject({
+      method: "GET", url: "/internal/cron/publish-due", headers: { authorization: "Bearer cron-secret" },
+    })).statusCode).toBe(404);
+    expect((await app.inject({ method: "GET", url: "/internal/cron/publish-due/preview" })).statusCode).toBe(401);
+    expect((await app.inject({ method: "GET", url: "/internal/cron/publish-calendar-allocate/preview" })).statusCode).toBe(401);
+
+    const due = await app.inject({
+      method: "GET", url: "/internal/cron/publish-due/preview", headers: { authorization: "Bearer cron-secret" },
+    });
+    const allocation = await app.inject({
+      method: "GET", url: "/internal/cron/publish-calendar-allocate/preview", headers: { authorization: "Bearer cron-secret" },
+    });
+    expect(due.statusCode).toBe(200);
+    expect(due.json()).toMatchObject({ observedAt: "2026-08-26T03:00:00.000Z", providerCandidateQueueIds: ["due-1"] });
+    expect(allocation.statusCode).toBe(200);
+    expect(allocation.json()).toMatchObject({ brandsSelected: 1, renewalDueBrandIds: ["brand-renewal"] });
+    expect(previewDuePublishing).toHaveBeenCalledTimes(1);
+    expect(previewPublishCalendarAllocation).toHaveBeenCalledTimes(1);
+    expect(repository.runDuePublishing).not.toHaveBeenCalled();
+  });
+
+  it.each(["canary", "unassigned"] as const)(
+    "authenticates before fencing %s scheduler mutations",
+    async (instanceRole) => {
+      const repository = createRepository();
+      const allocatePublishCalendar = vi.fn(async () => ({
+        brandsSelected: 0, openSlotsCreated: 0, proposalsAssigned: 0, quotaBlocked: 0, brandsFailed: 0,
+      }));
+      Object.assign(repository, { allocatePublishCalendar });
+      const app = createServer({ repository, cronSecret: "cron-secret", instanceRole, logger: false });
+
+      for (const url of ["/internal/cron/publish-due", "/internal/cron/publish-calendar-allocate"]) {
+        const unauthorized = await app.inject({ method: "POST", url });
+        expect(unauthorized.statusCode).toBe(401);
+        expect(unauthorized.json()).toEqual({ error: "cron_unauthorized" });
+        const fenced = await app.inject({ method: "POST", url, headers: { authorization: "Bearer cron-secret" } });
+        expect(fenced.statusCode).toBe(409);
+        expect(fenced.json()).toEqual({ error: "publish_scheduler_primary_only" });
+      }
+      expect(repository.runDuePublishing).not.toHaveBeenCalled();
+      expect(allocatePublishCalendar).not.toHaveBeenCalled();
+    },
+  );
+
+  it("rejects unauthenticated allocation before consulting maintenance or instance role state", async () => {
+    const repository = createRepository();
+    const assertAiContentWritable = vi.fn(async () => undefined);
+    Object.assign(repository, {
+      assertAiContentWritable,
+      allocatePublishCalendar: vi.fn(async () => ({
+        brandsSelected: 0, openSlotsCreated: 0, proposalsAssigned: 0, quotaBlocked: 0, brandsFailed: 0,
+      })),
+    });
+    const app = createServer({ repository, cronSecret: "cron-secret", instanceRole: "canary", logger: false });
+
+    const response = await app.inject({ method: "POST", url: "/internal/cron/publish-calendar-allocate" });
+
+    expect(response.statusCode).toBe(401);
+    expect(response.json()).toEqual({ error: "cron_unauthorized" });
+    expect(assertAiContentWritable).not.toHaveBeenCalled();
   });
 
   it("runs calendar allocation only through the authenticated POST cron route", async () => {
@@ -1026,7 +1239,7 @@ describe("API server", () => {
     }));
     (repository as ApiRepository & { allocatePublishCalendar: typeof allocatePublishCalendar })
       .allocatePublishCalendar = allocatePublishCalendar;
-    const app = createServer({ repository, cronSecret: "cron-secret", logger: false });
+    const app = createServer({ repository, cronSecret: "cron-secret", instanceRole: "primary", logger: false });
 
     expect((await app.inject({ method: "POST", url: "/internal/cron/publish-calendar-allocate" })).statusCode)
       .toBe(401);
@@ -1049,49 +1262,40 @@ describe("API server", () => {
 
   it("maps disabled publication mutation endpoints to service unavailable while due publishing remains a zero-result no-op", async () => {
     const repository = createRepository();
-    vi.mocked(repository.publishQueueItem).mockRejectedValue(new Error("publishing_disabled"));
-    vi.mocked(repository.schedulePublishQueue).mockRejectedValue(new Error("publishing_disabled"));
     vi.mocked(repository.retryPublishQueueItem).mockRejectedValue(new Error("publishing_disabled"));
-    vi.mocked(repository.runDuePublishing).mockResolvedValue({ processed: 0, created: 0, updated: 0, failed: 0 });
-    const app = createServer({ repository, cronSecret: "cron-secret", logger: false });
+    vi.mocked(repository.runDuePublishing).mockResolvedValue({ acquired: false, expiredTargets: 0, expiredSlots: 0, dueQueued: 0, published: 0, failed: 0, resultUnknown: 0 });
+    const app = createServer({ repository, cronSecret: "cron-secret", instanceRole: "primary", logger: false });
 
-    const schedule = await app.inject({
-      method: "POST",
-      url: `/brands/${brandId}/publish-queue/schedule`
-    });
-    const explicitPublish = await app.inject({
-      method: "POST",
-      url: "/publish-queue/queue-1/publish"
-    });
     const retry = await app.inject({
       method: "POST",
       url: "/publish-queue/queue-1/retry"
     });
     const duePublish = await app.inject({
-      method: "GET",
+      method: "POST",
       url: "/internal/cron/publish-due",
       headers: { authorization: "Bearer cron-secret" }
     });
 
-    expect(schedule.statusCode).toBe(503);
-    expect(schedule.json()).toEqual({ error: "publishing_disabled" });
-    expect(explicitPublish.statusCode).toBe(503);
-    expect(explicitPublish.json()).toEqual({ error: "publishing_disabled" });
+    expect((await app.inject({
+      method: "POST",
+      url: `/brands/${brandId}/publish-queue/schedule`
+    })).statusCode).toBe(404);
+    expect((await app.inject({
+      method: "POST",
+      url: "/publish-queue/queue-1/publish"
+    })).statusCode).toBe(404);
     expect(retry.statusCode).toBe(503);
     expect(retry.json()).toEqual({ error: "publishing_disabled" });
     expect(duePublish.statusCode).toBe(200);
-    expect(duePublish.json()).toEqual({ processed: 0, created: 0, updated: 0, failed: 0 });
-  });
-
-  it("returns conflict instead of forcing a future scheduled queue to publish", async () => {
-    const repository = createRepository();
-    vi.mocked(repository.publishQueueItem).mockRejectedValue(new Error("publish_queue_not_publishable"));
-    const app = createServer({ repository, logger: false });
-
-    const response = await app.inject({ method: "POST", url: "/publish-queue/queue-future/publish" });
-
-    expect(response.statusCode).toBe(409);
-    expect(response.json()).toEqual({ error: "publish_queue_not_publishable" });
+    expect(duePublish.json()).toEqual({
+      acquired: false,
+      expiredTargets: 0,
+      expiredSlots: 0,
+      dueQueued: 0,
+      published: 0,
+      failed: 0,
+      resultUnknown: 0,
+    });
   });
 
   it("returns the durable scheduled result before disabled background publication settles", async () => {
@@ -3016,7 +3220,7 @@ describe("API server", () => {
     expect(repository.listTopicRows).toHaveBeenCalledWith(brandId, "skipped");
   });
 
-  it("runs crawl, generation, scheduling, and mock publishing actions", async () => {
+  it("runs crawl, generation, and mock publishing actions without the retired queue scheduler", async () => {
     const repository = createRepository();
     const app = createServer({ repository });
 
@@ -3030,15 +3234,9 @@ describe("API server", () => {
     expect(generation.json()).toMatchObject({ created: 3 });
     expect(repository.generateContent).toHaveBeenCalledWith(brandId);
 
-    const schedule = await app.inject({ method: "POST", url: `/brands/${brandId}/publish-queue/schedule` });
-    expect(schedule.statusCode).toBe(200);
-    expect(schedule.json()).toMatchObject({ updated: 3 });
-    expect(repository.schedulePublishQueue).toHaveBeenCalledWith(brandId);
+    expect((await app.inject({ method: "POST", url: `/brands/${brandId}/publish-queue/schedule` })).statusCode).toBe(404);
 
-    const publish = await app.inject({ method: "POST", url: "/publish-queue/queue-1/publish" });
-    expect(publish.statusCode).toBe(200);
-    expect(publish.json()).toMatchObject({ id: "queue-1", status: "published" });
-    expect(repository.publishQueueItem).toHaveBeenCalledWith("queue-1");
+    expect((await app.inject({ method: "POST", url: "/publish-queue/queue-1/publish" })).statusCode).toBe(404);
 
     const retry = await app.inject({ method: "POST", url: "/publish-queue/queue-1/retry" });
     expect(retry.statusCode).toBe(200);
@@ -3102,6 +3300,236 @@ describe("API server", () => {
     expect(repository.createSlot).not.toHaveBeenCalled();
   });
 
+  it("keeps the legacy calendar settings contract isolated from weekly settings", async () => {
+    vi.stubEnv("BRAND_PILOT_DEV_WORKSPACE_ID", "22222222-2222-4222-8222-222222222222");
+    const repository = createRepository();
+    const app = createServer({ repository, logger: false });
+    const payload = {
+      enabled: true,
+      channels: ["instagram"],
+      informationalFormat: "card_news",
+      trendFormat: "reel",
+      slotTimes: ["11:30", "20:30"],
+    };
+
+    const read = await app.inject({ method: "GET", url: `/brands/${brandId}/publish-calendar/settings` });
+    const write = await app.inject({ method: "PUT", url: `/brands/${brandId}/publish-calendar/settings`, payload });
+
+    expect(read.statusCode).toBe(200);
+    expect(read.json()).toEqual({
+      brandId,
+      enabled: false,
+      channels: [],
+      informationalFormat: "card_news",
+      trendFormat: "reel",
+      slotTimes: ["11:30"],
+      updatedAt: null,
+    });
+    expect(write.statusCode).toBe(200);
+    expect(repository.saveSettings).toHaveBeenCalledWith(expect.objectContaining({
+      workspaceId: "22222222-2222-4222-8222-222222222222",
+      brandId,
+      ...payload,
+    }));
+    expect(repository.getWeeklySettings).not.toHaveBeenCalled();
+    expect(repository.saveWeeklySettings).not.toHaveBeenCalled();
+    expect(repository.saveWeeklyConfiguration).not.toHaveBeenCalled();
+    expect(repository.setWeeklyEnabled).not.toHaveBeenCalled();
+  });
+
+  it("reads and writes only the strict versioned weekly settings contract without changing enabled", async () => {
+    vi.stubEnv("BRAND_PILOT_DEV_WORKSPACE_ID", "22222222-2222-4222-8222-222222222222");
+    const repository = createRepository();
+    vi.mocked(repository.getWeeklySettings!).mockResolvedValue({
+      brandId,
+      enabled: true,
+      channels: ["instagram"],
+      informationalFormat: "card_news",
+      trendFormat: "reel",
+      weeklySchedule: [{
+        id: "40000000-0000-4000-8000-000000000001",
+        dayOfWeek: 1,
+        time: "11:30",
+        sortOrder: 0,
+      }],
+      updatedAt: "2026-08-14T00:00:00.000Z",
+    });
+    vi.mocked(repository.saveWeeklyConfiguration!).mockImplementation(async (input) => ({
+      brandId: input.brandId,
+      enabled: true,
+      channels: input.channels,
+      informationalFormat: input.informationalFormat,
+      trendFormat: input.trendFormat,
+      weeklySchedule: input.weeklySchedule.map((row, index) => ({
+        ...row,
+        id: row.id ?? `40000000-0000-4000-8000-${String(index + 2).padStart(12, "0")}`,
+      })),
+      updatedAt: "2026-08-14T00:00:00.000Z",
+    }));
+    const app = createServer({ repository, logger: false });
+    const payload = {
+      channels: ["instagram"],
+      informationalFormat: "reel",
+      trendFormat: "card_news",
+      weeklySchedule: [
+        { id: "40000000-0000-4000-8000-000000000001", dayOfWeek: 1, time: "12:30", sortOrder: 0 },
+        { id: null, dayOfWeek: 1, time: "12:30", sortOrder: 1 },
+      ],
+    };
+
+    const read = await app.inject({ method: "GET", url: `/brands/${brandId}/publish-calendar/settings/weekly` });
+    const write = await app.inject({ method: "PUT", url: `/brands/${brandId}/publish-calendar/settings/weekly`, payload });
+
+    expect(read.statusCode).toBe(200);
+    expect(read.json()).toEqual({
+      brandId,
+      enabled: true,
+      channels: ["instagram"],
+      informationalFormat: "card_news",
+      trendFormat: "reel",
+      weeklySchedule: [{
+        id: "40000000-0000-4000-8000-000000000001",
+        dayOfWeek: 1,
+        time: "11:30",
+        sortOrder: 0,
+      }],
+      updatedAt: "2026-08-14T00:00:00.000Z",
+    });
+    expect(write.statusCode).toBe(200);
+    expect(write.json()).toEqual({
+      brandId,
+      enabled: true,
+      ...payload,
+      weeklySchedule: [
+        payload.weeklySchedule[0],
+        { ...payload.weeklySchedule[1], id: "40000000-0000-4000-8000-000000000003" },
+      ],
+      updatedAt: "2026-08-14T00:00:00.000Z",
+    });
+    expect(repository.saveWeeklyConfiguration).toHaveBeenCalledWith({
+      workspaceId: "22222222-2222-4222-8222-222222222222",
+      brandId,
+      ...payload,
+    });
+    expect(repository.getWeeklySettings).toHaveBeenCalledTimes(1);
+    expect(repository.saveWeeklySettings).not.toHaveBeenCalled();
+    expect(repository.getSettings).not.toHaveBeenCalled();
+    expect(repository.saveSettings).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { label: "top-level unknown field", payload: { channels: ["instagram"], informationalFormat: "card_news", trendFormat: "reel", weeklySchedule: [], enabled: false } },
+    { label: "row unknown field", payload: { channels: ["instagram"], informationalFormat: "card_news", trendFormat: "reel", weeklySchedule: [{ id: null, dayOfWeek: 1, time: "11:30", sortOrder: 0, extra: true }] } },
+    { label: "missing row field", payload: { channels: ["instagram"], informationalFormat: "card_news", trendFormat: "reel", weeklySchedule: [{ id: null, dayOfWeek: 1, time: "11:30" }] } },
+    { label: "non-null non-UUID id", payload: { channels: ["instagram"], informationalFormat: "card_news", trendFormat: "reel", weeklySchedule: [{ id: "new", dayOfWeek: 1, time: "11:30", sortOrder: 0 }] } },
+    { label: "invalid weekday", payload: { channels: ["instagram"], informationalFormat: "card_news", trendFormat: "reel", weeklySchedule: [{ id: null, dayOfWeek: 0, time: "11:30", sortOrder: 0 }] } },
+    { label: "invalid time", payload: { channels: ["instagram"], informationalFormat: "card_news", trendFormat: "reel", weeklySchedule: [{ id: null, dayOfWeek: 1, time: "24:00", sortOrder: 0 }] } },
+    { label: "invalid sort order", payload: { channels: ["instagram"], informationalFormat: "card_news", trendFormat: "reel", weeklySchedule: [{ id: null, dayOfWeek: 1, time: "11:30", sortOrder: -1 }] } },
+  ])("rejects an invalid weekly settings body: $label", async ({ payload }) => {
+    vi.stubEnv("BRAND_PILOT_DEV_WORKSPACE_ID", "22222222-2222-4222-8222-222222222222");
+    const repository = createRepository();
+    const app = createServer({ repository, logger: false });
+
+    const response = await app.inject({
+      method: "PUT",
+      url: `/brands/${brandId}/publish-calendar/settings/weekly`,
+      payload,
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toEqual({ error: "publish_calendar_weekly_settings_invalid" });
+    expect(repository.getWeeklySettings).not.toHaveBeenCalled();
+    expect(repository.saveWeeklySettings).not.toHaveBeenCalled();
+    expect(repository.saveWeeklyConfiguration).not.toHaveBeenCalled();
+  });
+
+  it("patches only the master enabled flag while preserving saved weekly settings", async () => {
+    vi.stubEnv("BRAND_PILOT_DEV_WORKSPACE_ID", "22222222-2222-4222-8222-222222222222");
+    const repository = createRepository();
+    const app = createServer({ repository, logger: false });
+
+    const off = await app.inject({
+      method: "PATCH",
+      url: `/brands/${brandId}/publish-calendar/settings/enabled`,
+      payload: { enabled: false },
+    });
+    const on = await app.inject({
+      method: "PATCH",
+      url: `/brands/${brandId}/publish-calendar/settings/enabled`,
+      payload: { enabled: true },
+    });
+
+    expect(off.statusCode).toBe(200);
+    expect(on.statusCode).toBe(200);
+    expect(repository.setWeeklyEnabled).toHaveBeenNthCalledWith(1, {
+      workspaceId: "22222222-2222-4222-8222-222222222222",
+      brandId,
+      enabled: false,
+    });
+    expect(repository.setWeeklyEnabled).toHaveBeenNthCalledWith(2, {
+      workspaceId: "22222222-2222-4222-8222-222222222222",
+      brandId,
+      enabled: true,
+    });
+    expect(repository.getWeeklySettings).not.toHaveBeenCalled();
+    expect(repository.saveWeeklySettings).not.toHaveBeenCalled();
+    expect(repository.saveWeeklyConfiguration).not.toHaveBeenCalled();
+  });
+
+  it("allows disabling incomplete weekly settings but preserves the repository ON validation error", async () => {
+    vi.stubEnv("BRAND_PILOT_DEV_WORKSPACE_ID", "22222222-2222-4222-8222-222222222222");
+    const repository = createRepository();
+    vi.mocked(repository.setWeeklyEnabled!).mockImplementation(async (input) => {
+      if (input.enabled) throw new Error("publish_calendar_settings_incomplete");
+      return {
+        brandId: input.brandId,
+        enabled: false,
+        channels: [],
+        informationalFormat: "card_news",
+        trendFormat: "reel",
+        weeklySchedule: [],
+        updatedAt: null,
+      };
+    });
+    const app = createServer({ repository, logger: false });
+
+    const off = await app.inject({
+      method: "PATCH",
+      url: `/brands/${brandId}/publish-calendar/settings/enabled`,
+      payload: { enabled: false },
+    });
+    const on = await app.inject({
+      method: "PATCH",
+      url: `/brands/${brandId}/publish-calendar/settings/enabled`,
+      payload: { enabled: true },
+    });
+
+    expect(off.statusCode).toBe(200);
+    expect(on.statusCode).toBe(400);
+    expect(on.json()).toEqual({ error: "publish_calendar_settings_incomplete" });
+  });
+
+  it.each([
+    {},
+    { enabled: "true" },
+    { enabled: false, channels: [] },
+  ])("rejects a non-exact master toggle body %#", async (payload) => {
+    const repository = createRepository();
+    const app = createServer({ repository, logger: false });
+
+    const response = await app.inject({
+      method: "PATCH",
+      url: `/brands/${brandId}/publish-calendar/settings/enabled`,
+      payload,
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toEqual({ error: "publish_calendar_enabled_invalid" });
+    expect(repository.getWeeklySettings).not.toHaveBeenCalled();
+    expect(repository.saveWeeklySettings).not.toHaveBeenCalled();
+    expect(repository.setWeeklyEnabled).not.toHaveBeenCalled();
+  });
+
   it("returns canonical publish items with the authenticated workspace scope", async () => {
     vi.stubEnv("BRAND_PILOT_DEV_WORKSPACE_ID", "22222222-2222-4222-8222-222222222222");
     const repository = createRepository();
@@ -3110,6 +3538,7 @@ describe("API server", () => {
       title: "SNS 마케팅", createdAt: "2026-08-20T00:00:00.000Z", contentFormat: "card_news",
       channels: ["instagram"], source: { type: "topic_table", label: "SNS 운영", detail: null, urls: [] },
       targets: [], reviewTargets: [], contentStatus: "pre_generation", publishStatus: "unreserved", status: "pre_generation",
+      operationalStatus: "action_required", operationalReason: "review_required",
       groupStatus: null, publicationProgress: "none", scheduledFor: null, effectiveScheduledFor: null,
       publishedAt: null, calendarDate: null, calendarPlacement: "unreserved", assignmentMode: null,
       sourceRefs: { contentTopicId: "topic-1", proposalId: null, generationId: null, generationOutputId: null,
@@ -3615,7 +4044,7 @@ describe("API server", () => {
     expect(repository.downloadPublishResult).not.toHaveBeenCalled();
   });
 
-  it("denies cross-workspace publish, retry, and cancel mutations before repository access", async () => {
+  it("denies cross-workspace retry and cancel mutations before repository access", async () => {
     const repository = createRepository();
     const kakaoAuth = {
       getSession: vi.fn(async () => ({ userId: "user-1" })),
@@ -3626,14 +4055,12 @@ describe("API server", () => {
     const request = { method: "POST" as const, headers: { cookie: "bp_session=session-token" } };
 
     const responses = await Promise.all([
-      app.inject({ ...request, url: "/publish-queue/queue-foreign/publish" }),
       app.inject({ ...request, url: "/publish-queue/queue-foreign/retry" }),
       app.inject({ ...request, url: "/publish-queue/queue-foreign/cancel" }),
     ]);
 
-    expect(responses.map(({ statusCode }) => statusCode)).toEqual([403, 403, 403]);
-    expect(kakaoAuth.canAccessResource).toHaveBeenCalledTimes(3);
-    expect(repository.publishQueueItem).not.toHaveBeenCalled();
+    expect(responses.map(({ statusCode }) => statusCode)).toEqual([403, 403]);
+    expect(kakaoAuth.canAccessResource).toHaveBeenCalledTimes(2);
     expect(repository.retryPublishQueueItem).not.toHaveBeenCalled();
     expect(repository.cancelPublishQueueItem).not.toHaveBeenCalled();
   });

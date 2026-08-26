@@ -65,6 +65,7 @@ import {
   type AiContentTokenOptions,
 } from "./aiContentUpload.js";
 import { kstDateKey } from "./publishSchedule.js";
+import { PublishDueCandidateMismatchError } from "./publishDueRun.js";
 import {
   parseCreateSubjectAnalysisInput,
   parseCreateSubjectPipelineInput,
@@ -141,6 +142,41 @@ function publishCalendarDate(value: unknown): Date {
   const parsed = new Date(value);
   if (!Number.isFinite(parsed.getTime())) throw new Error("publish_calendar_date_invalid");
   return parsed;
+}
+
+function publishCalendarWeeklySettingsInput(value: unknown) {
+  if (!hasExactKeys(value, ["channels", "informationalFormat", "trendFormat", "weeklySchedule"])) {
+    throw new Error("publish_calendar_weekly_settings_invalid");
+  }
+  const { channels: selectedChannels, informationalFormat, trendFormat, weeklySchedule } = value;
+  if (!Array.isArray(selectedChannels)
+    || selectedChannels.some((channel) => typeof channel !== "string" || !publishCalendarChannels.has(channel))
+    || new Set(selectedChannels).size !== selectedChannels.length
+    || !publishCalendarFormats.has(String(informationalFormat))
+    || !publishCalendarFormats.has(String(trendFormat))
+    || !Array.isArray(weeklySchedule)) {
+    throw new Error("publish_calendar_weekly_settings_invalid");
+  }
+  for (const row of weeklySchedule) {
+    if (!hasExactKeys(row, ["id", "dayOfWeek", "time", "sortOrder"])
+      || !(row.id === null || typeof row.id === "string" && uuidPattern.test(row.id))
+      || !Number.isInteger(row.dayOfWeek) || Number(row.dayOfWeek) < 1 || Number(row.dayOfWeek) > 7
+      || typeof row.time !== "string" || !/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(row.time)
+      || !Number.isSafeInteger(row.sortOrder) || Number(row.sortOrder) < 0 || Number(row.sortOrder) > 2_147_483_647) {
+      throw new Error("publish_calendar_weekly_settings_invalid");
+    }
+  }
+  return {
+    channels: selectedChannels as Channel[],
+    informationalFormat: informationalFormat as "card_news" | "reel",
+    trendFormat: trendFormat as "card_news" | "reel",
+    weeklySchedule: weeklySchedule as Array<{
+      id: string | null;
+      dayOfWeek: 1 | 2 | 3 | 4 | 5 | 6 | 7;
+      time: string;
+      sortOrder: number;
+    }>,
+  };
 }
 
 function aiContentWorkerJob(job: AiContentJobRecord | null) {
@@ -225,6 +261,7 @@ interface CreateServerOptions {
   workerApiToken?: string;
   contentProposalWorkerApiToken?: string;
   cronSecret?: string;
+  instanceRole?: "primary" | "canary" | "unassigned";
   kakaoAuth?: ReturnType<typeof createKakaoAuthStore>;
   kakao?: { restApiKey: string; clientSecret?: string; redirectUri: string; frontendUrl: string };
   instagramLogin?: { appId: string; appSecret: string; redirectUri: string; frontendUrl: string };
@@ -905,7 +942,7 @@ export function createFastifyOptions(logger?: boolean | FastifyLoggerOptions) {
 }
 
 export function createServer(
-  { repository, contentSuggestions, aiContentProposalV2, onboardingContent, workerApiToken, contentProposalWorkerApiToken, cronSecret, kakaoAuth, kakao, instagramLogin, facebookLogin, metaWebhook, brandLogoService, aiContentUpload, aiContentAttachmentGc, assetLibraryUpload, aiContentLimits, subjectAnalysis, brandIntelligenceRepository, brandAnalysisUpload, runtimePolicy, readinessPolicy, logger }: CreateServerOptions,
+  { repository, contentSuggestions, aiContentProposalV2, onboardingContent, workerApiToken, contentProposalWorkerApiToken, cronSecret, instanceRole = "unassigned", kakaoAuth, kakao, instagramLogin, facebookLogin, metaWebhook, brandLogoService, aiContentUpload, aiContentAttachmentGc, assetLibraryUpload, aiContentLimits, subjectAnalysis, brandIntelligenceRepository, brandAnalysisUpload, runtimePolicy, readinessPolicy, logger }: CreateServerOptions,
   app: FastifyInstance = Fastify(createFastifyOptions(logger))
 ) {
   const aiContentAttachmentRepository = aiContentUpload
@@ -1497,8 +1534,8 @@ export function createServer(
       (["POST", "PUT", "PATCH", "DELETE"].includes(method) && route.includes("/ai-content"))
       || (method === "POST" && route === "/brands/:brandId/content-generation/run")
       || (method === "GET" && route === "/internal/cron/daily-generation")
-      || (method === "POST" && route === "/internal/cron/publish-calendar-allocate")
-      || (["POST", "PUT", "PATCH", "DELETE"].includes(method) && route.includes("/publish-calendar"))
+      || (["POST", "PUT", "PATCH", "DELETE"].includes(method)
+        && route.startsWith("/brands/") && route.includes("/publish-calendar"))
       || (method === "POST" && route === "/internal/cron/ai-content-attachment-gc")
       || (method === "GET" && (
         route === "/brands/:brandId/ai-content/outputs/:outputId/download"
@@ -1650,19 +1687,67 @@ export function createServer(
     return repository.runDailyGeneration(new Date());
   });
 
-  app.get("/internal/cron/publish-due", async (request, reply) => {
-    if (!matchesBearerSecret(request.headers.authorization, cronSecret)) {
-      reply.code(401);
-      return { error: "cron_unauthorized" };
+  const authenticateScheduler = (authorization: string | undefined, reply: FastifyReply) => {
+    if (!matchesBearerSecret(authorization, cronSecret)) {
+      reply.code(401).send({ error: "cron_unauthorized" });
+      return false;
     }
-    return repository.runDuePublishing(new Date());
+    return true;
+  };
+  const allowSchedulerMutation = (reply: FastifyReply) => {
+    if (instanceRole !== "primary") {
+      reply.code(409).send({ error: "publish_scheduler_primary_only" });
+      return false;
+    }
+    return true;
+  };
+
+  const parsePublishDueGuard = (value: unknown) => {
+    if (value === undefined) return undefined;
+    if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+    const record = value as Record<string, unknown>;
+    if (Object.keys(record).length !== 1
+      || !Object.prototype.hasOwnProperty.call(record, "expectedProviderCandidateQueueIds")) return null;
+    const ids = record.expectedProviderCandidateQueueIds;
+    if (!Array.isArray(ids)
+      || ids.length > 500
+      || ids.some((id) => typeof id !== "string" || id.length === 0)
+      || new Set(ids).size !== ids.length) return null;
+    return { expectedProviderCandidateQueueIds: ids as string[] };
+  };
+
+  app.get("/internal/cron/publish-due/preview", async (request, reply) => {
+    if (!authenticateScheduler(request.headers.authorization, reply)) return reply;
+    if (!repository.previewDuePublishing) throw new Error("publish_due_preview_not_configured");
+    return repository.previewDuePublishing(new Date());
+  });
+
+  app.post<{ Body?: unknown }>("/internal/cron/publish-due", async (request, reply) => {
+    if (!authenticateScheduler(request.headers.authorization, reply)) return reply;
+    if (!allowSchedulerMutation(reply)) return reply;
+    const guard = parsePublishDueGuard(request.body);
+    if (guard === null) return reply.code(400).send({ error: "publish_due_guard_invalid" });
+    try {
+      return await repository.runDuePublishing(new Date(), guard);
+    } catch (error) {
+      if (error instanceof PublishDueCandidateMismatchError) {
+        return reply.code(409).send({ error: error.code });
+      }
+      throw error;
+    }
+  });
+
+  app.get("/internal/cron/publish-calendar-allocate/preview", async (request, reply) => {
+    if (!authenticateScheduler(request.headers.authorization, reply)) return reply;
+    if (!repository.previewPublishCalendarAllocation) {
+      throw new Error("publish_calendar_preview_not_configured");
+    }
+    return repository.previewPublishCalendarAllocation(new Date());
   });
 
   app.post("/internal/cron/publish-calendar-allocate", async (request, reply) => {
-    if (!matchesBearerSecret(request.headers.authorization, cronSecret)) {
-      reply.code(401);
-      return { error: "cron_unauthorized" };
-    }
+    if (!authenticateScheduler(request.headers.authorization, reply)) return reply;
+    if (!allowSchedulerMutation(reply)) return reply;
     if (!repository.allocatePublishCalendar) throw new Error("publish_calendar_not_configured");
     return repository.allocatePublishCalendar(new Date());
   });
@@ -4170,6 +4255,11 @@ export function createServer(
     return repository.getSettings(aiContentScope(request, request.params.brandId));
   });
 
+  app.get<{ Params: { brandId: string } }>("/brands/:brandId/publish-calendar/settings/weekly", async (request) => {
+    if (!repository.getWeeklySettings) throw new Error("publish_calendar_not_configured");
+    return repository.getWeeklySettings(aiContentScope(request, request.params.brandId));
+  });
+
   app.get<{ Params: { brandId: string } }>("/brands/:brandId/publish-calendar/manual-options", async (request) => {
     if (!repository.getManualOptions) throw new Error("publish_calendar_not_configured");
     return repository.getManualOptions(aiContentScope(request, request.params.brandId));
@@ -4212,6 +4302,26 @@ export function createServer(
       trendFormat: trendFormat as "card_news" | "reel",
       slotTimes: slotTimes as string[],
     });
+  });
+
+  app.put<{ Params: { brandId: string }; Body: unknown }>("/brands/:brandId/publish-calendar/settings/weekly", async (request) => {
+    if (!repository.saveWeeklyConfiguration) {
+      throw new Error("publish_calendar_not_configured");
+    }
+    const scope = aiContentScope(request, request.params.brandId);
+    const input = publishCalendarWeeklySettingsInput(request.body);
+    return repository.saveWeeklyConfiguration({ ...scope, ...input });
+  });
+
+  app.patch<{ Params: { brandId: string }; Body: unknown }>("/brands/:brandId/publish-calendar/settings/enabled", async (request) => {
+    if (!hasExactKeys(request.body, ["enabled"]) || typeof request.body.enabled !== "boolean") {
+      throw new Error("publish_calendar_enabled_invalid");
+    }
+    if (!repository.setWeeklyEnabled) {
+      throw new Error("publish_calendar_not_configured");
+    }
+    const scope = aiContentScope(request, request.params.brandId);
+    return repository.setWeeklyEnabled({ ...scope, enabled: request.body.enabled });
   });
 
   app.get<{
@@ -4299,14 +4409,6 @@ export function createServer(
       .header("content-disposition", `attachment; filename="${packageResult.fileName}"`)
       .header("x-published-result-count", String(packageResult.itemCount));
     return reply.send(packageResult.buffer);
-  });
-
-  app.post<{ Params: { brandId: string } }>("/brands/:brandId/publish-queue/schedule", async (request) => {
-    return repository.schedulePublishQueue(request.params.brandId);
-  });
-
-  app.post<{ Params: { queueId: string } }>("/publish-queue/:queueId/publish", async (request) => {
-    return repository.publishQueueItem(request.params.queueId);
   });
 
   app.post<{ Params: { queueId: string } }>("/publish-queue/:queueId/retry", async (request, reply) => {

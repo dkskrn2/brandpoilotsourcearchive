@@ -27,6 +27,7 @@ fi
 reconcile_transition_or_fail "$ROOT" "${READY_TIMEOUT_SECONDS:-120}"
 validate_release_manifest "$MANIFEST"
 require_worker_image_manifest
+require_publish_scheduler_image_manifest
 
 require_command awk
 require_command df
@@ -34,6 +35,10 @@ require_command docker
 require_command dpkg
 require_command grep
 require_command id
+require_command install
+require_command mktemp
+require_command mv
+require_command chmod
 require_command realpath
 require_command sha256sum
 require_command sed
@@ -146,6 +151,7 @@ IMAGE_WORKER_1_ENV_FILE="$SHARED_ENV_DIR/image-worker-1.env"
 CARD_NEWS_WORKER_1_ENV_FILE="$SHARED_ENV_DIR/card-news-worker-1.env"
 BLOG_WORKER_1_ENV_FILE="$SHARED_ENV_DIR/blog-worker-1.env"
 REEL_WORKER_1_ENV_FILE="$SHARED_ENV_DIR/reel-worker-1.env"
+PUBLISH_SCHEDULER_ENV_FILE="$SHARED_ENV_DIR/publish-scheduler.env"
 [[ "${RELEASE_MANIFEST[API_ENV_FILE]}" == "$API_ENV_FILE" ]] ||
   fail "manifest_api_env_file_not_fixed"
 require_file_mode_600 "$API_ENV_FILE" "bpdeploy"
@@ -159,7 +165,11 @@ require_file_mode_600 "$IMAGE_WORKER_1_ENV_FILE" "bpdeploy"
 require_file_mode_600 "$CARD_NEWS_WORKER_1_ENV_FILE" "bpdeploy"
 require_file_mode_600 "$BLOG_WORKER_1_ENV_FILE" "bpdeploy"
 require_file_mode_600 "$REEL_WORKER_1_ENV_FILE" "bpdeploy"
+require_publish_scheduler_environment_file "$PUBLISH_SCHEDULER_ENV_FILE"
 status_ok "shared_env_files"
+PUBLISH_SCHEDULER_CRON_SECRET_FILE="$(require_publish_scheduler_secret "$ROOT" "$API_ENV_FILE")"
+require_file_mode_600 "$PUBLISH_SCHEDULER_CRON_SECRET_FILE" "bpdeploy"
+status_ok "publish_scheduler_secret"
 
 require_exact_boolean "LOCAL_SCHEDULER_ENABLED" "false" "$API_ENV_FILE"
 require_exact_boolean "INSTAGRAM_PUBLISH_ENABLED" "true" "$API_ENV_FILE"
@@ -245,12 +255,14 @@ export IMAGE_WORKER_IMAGE="${RELEASE_MANIFEST[IMAGE_WORKER_IMAGE]}"
 export CARD_NEWS_WORKER_IMAGE="${RELEASE_MANIFEST[CARD_NEWS_WORKER_IMAGE]}"
 export BLOG_WORKER_IMAGE="${RELEASE_MANIFEST[BLOG_WORKER_IMAGE]}"
 export REEL_WORKER_IMAGE="${RELEASE_MANIFEST[REEL_WORKER_IMAGE]}"
+export PUBLISH_SCHEDULER_IMAGE="${RELEASE_MANIFEST[PUBLISH_SCHEDULER_IMAGE]}"
+export PUBLISH_SCHEDULER_ENV_FILE PUBLISH_SCHEDULER_CRON_SECRET_FILE
 docker compose -p brand-pilot \
   -f "$RELEASE_DIR/compose.production.yml" \
   --env-file "$MANIFEST" config --quiet >/dev/null
 status_ok "compose_config"
 
-for release_image_key in API_IMAGE "${WORKER_IMAGE_KEYS[@]}"; do
+for release_image_key in API_IMAGE "${WORKER_IMAGE_KEYS[@]}" PUBLISH_SCHEDULER_IMAGE; do
   release_image="${RELEASE_MANIFEST[$release_image_key]}"
   docker pull --quiet "$release_image" >/dev/null ||
     fail "release_image_pull_failed"

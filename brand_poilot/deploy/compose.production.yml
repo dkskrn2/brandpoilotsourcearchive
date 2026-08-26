@@ -6,6 +6,7 @@ services:
     env_file:
       - ${API_ENV_FILE:-/opt/brand-pilot/shared/env/api.env}
     environment:
+      API_INSTANCE_ROLE: primary
       LOCAL_SCHEDULER_ENABLED: "false"
       AI_CONTENT_ATTACHMENT_UPLOAD_SESSIONS_ENABLED: "true"
       AI_CONTENT_DATABASE_URL_FILE: /run/secrets/ai_content_application_database_url
@@ -41,6 +42,7 @@ services:
     env_file:
       - ${API_ENV_FILE:-/opt/brand-pilot/shared/env/api.env}
     environment:
+      API_INSTANCE_ROLE: canary
       LOCAL_SCHEDULER_ENABLED: "false"
       AI_CONTENT_ATTACHMENT_UPLOAD_SESSIONS_ENABLED: "true"
       AI_CONTENT_DATABASE_URL_FILE: /run/secrets/ai_content_application_database_url
@@ -429,6 +431,42 @@ services:
       - seccomp=unconfined
       - systempaths=unconfined
     stop_grace_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "5"
+
+  publish-scheduler-1:
+    profiles:
+      - "publish-scheduler"
+    image: ${PUBLISH_SCHEDULER_IMAGE:?PUBLISH_SCHEDULER_IMAGE is required}
+    env_file:
+      - ${PUBLISH_SCHEDULER_ENV_FILE:-/opt/brand-pilot/shared/env/publish-scheduler.env}
+    environment:
+      PRIMARY_API_INTERNAL_URL: http://api-primary:4000
+      CRON_SECRET_FILE: /run/secrets/cron-secret
+      PUBLISH_TICK_MS: "60000"
+      PUBLISH_TIMEOUT_MS: "240000"
+    restart: unless-stopped
+    init: true
+    user: "${CODEX_RUNTIME_UID:?CODEX_RUNTIME_UID is required}:${CODEX_RUNTIME_GID:?CODEX_RUNTIME_GID is required}"
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    volumes:
+      - ${PUBLISH_SCHEDULER_CRON_SECRET_FILE:-/opt/brand-pilot/shared/secrets/cron-secret}:/run/secrets/cron-secret:ro
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    stop_grace_period: 30s
+    healthcheck:
+      test: ["CMD", "node", "src/healthcheck.mjs"]
+      interval: 30s
+      timeout: 5s
+      start_period: 15s
+      retries: 3
     logging:
       driver: json-file
       options:

@@ -18,6 +18,7 @@ function findSqlCall(calls: ReadonlyArray<readonly unknown[]>, predicate: (sql: 
 const task3TestNow = new Date("2026-07-13T00:00:00.000Z");
 const oneDayMs = 24 * 60 * 60 * 1000;
 const repositorySource = readFileSync(new URL("./repository.ts", import.meta.url), "utf8");
+const publishDueRunSource = readFileSync(new URL("./publishDueRun.ts", import.meta.url), "utf8");
 
 function useTask3TestClock() {
   vi.useFakeTimers();
@@ -26,6 +27,11 @@ function useTask3TestClock() {
 
 function task3CredentialExpiry(daysFromNow: number) {
   return new Date(task3TestNow.getTime() + daysFromNow * oneDayMs);
+}
+
+function usePerformanceDashboardTestClock(now = "2026-07-16T12:00:00.000Z") {
+  vi.useFakeTimers();
+  vi.setSystemTime(new Date(now));
 }
 
 afterEach(() => {
@@ -2384,47 +2390,6 @@ describe("repository", () => {
     expect(query).toHaveBeenCalledWith(expect.stringContaining("status <> 'regenerated'"), ["brand-1"]);
   });
 
-  it("schedules queued publish items", async () => {
-    const query = vi.fn(async (sql: string, values?: unknown[]) => {
-      if (sql.includes("from brand_subscriptions subscription")) {
-        return {
-          rowCount: 1,
-          rows: [{ started_at: new Date("2026-01-01T00:00:00.000Z"), weekly_publish_limit: 10 }],
-        };
-      }
-      if (sql.includes("allowed_group_ids")) {
-        return { rowCount: 1, rows: [{ allowed_group_ids: ["publish-group-1"] }] };
-      }
-      if (sql.includes("from topic_publish_groups") && sql.includes("status = 'ready'") && sql.includes("for update")) {
-        return { rowCount: 1, rows: [{ id: "publish-group-1" }] };
-      }
-      if (sql.includes("update topic_publish_groups") && sql.includes("status = 'scheduled'")) {
-        return { rowCount: 1, rows: [{ id: "publish-group-1" }] };
-      }
-      if (sql.includes("from publish_queue pq") && sql.includes("join channel_outputs")) {
-        return {
-          rowCount: 1,
-          rows: [{
-            id: "queue-1",
-            workspace_id: "workspace-1",
-            brand_id: "brand-1",
-            channel: "instagram",
-            channel_output_id: "output-1",
-            output_json: { caption: "hello" },
-            attempt_count: "0"
-          }]
-        };
-      }
-      if (sql.includes("update publish_queue") && sql.includes("returning id, status")) {
-        return { rowCount: 1, rows: [{ id: values?.[0] ?? "queue-1", status: "published" }] };
-      }
-      return { rowCount: 1, rows: [] };
-    });
-    const repository = createRepository(fakePoolWithClient(query) as any, { instagramPublish: { enabled: true } });
-
-    expect(await repository.schedulePublishQueue("brand-1")).toMatchObject({ processed: 1, updated: 1 });
-  });
-
   it("rejects AI content publication preparation without connecting or querying when publication is disabled", async () => {
     const query = vi.fn();
     const connect = vi.fn();
@@ -2437,16 +2402,6 @@ describe("repository", () => {
       idempotencyKey: "request-1",
       targets: [{ channel: "instagram", deliveryFormat: "instagram_feed_single" }]
     })).rejects.toThrow("publishing_disabled");
-    expect(connect).not.toHaveBeenCalled();
-    expect(query).not.toHaveBeenCalled();
-  });
-
-  it("rejects publication scheduling without connecting or querying when publication is disabled", async () => {
-    const query = vi.fn();
-    const connect = vi.fn();
-    const repository = createRepository({ query, connect } as any, { instagramPublish: { enabled: false } });
-
-    await expect(repository.schedulePublishQueue("brand-1")).rejects.toThrow("publishing_disabled");
     expect(connect).not.toHaveBeenCalled();
     expect(query).not.toHaveBeenCalled();
   });
@@ -2467,6 +2422,32 @@ describe("repository", () => {
     ]) {
       expect(repository[method as keyof typeof repository], method).toBeTypeOf("function");
     }
+  });
+
+  it("returns truthful zero allocation previews and executions without querying when publication is disabled", async () => {
+    const query = vi.fn();
+    const connect = vi.fn();
+    const repository = createRepository({ query, connect } as any, { instagramPublish: { enabled: false } });
+    const now = new Date("2026-08-26T12:34:56.000Z");
+
+    await expect(repository.previewPublishCalendarAllocation?.(now)).resolves.toEqual({
+      observedAt: now.toISOString(),
+      renewalDueBrandIds: [],
+      brandsSelected: 0,
+      counts: { renewalsDue: 0, occurrences: 0, recommendations: 0, quotaBlockedBrands: 0 },
+      occurrences: [],
+      recommendationAssignments: [],
+      quotaBlockedBrandIds: [],
+    });
+    await expect(repository.allocatePublishCalendar?.(now)).resolves.toEqual({
+      brandsSelected: 0,
+      openSlotsCreated: 0,
+      proposalsAssigned: 0,
+      quotaBlocked: 0,
+      brandsFailed: 0,
+    });
+    expect(connect).not.toHaveBeenCalled();
+    expect(query).not.toHaveBeenCalled();
   });
 
   it("rejects explicit publishing without querying when publication is disabled", async () => {
@@ -2624,75 +2605,78 @@ describe("repository", () => {
     const repository = createRepository({ query } as any, { instagramPublish: { enabled: false } });
 
     await expect(repository.runDuePublishing()).resolves.toEqual({
-      processed: 0,
-      created: 0,
-      updated: 0,
-      failed: 0
+      acquired: false,
+      expiredTargets: 0,
+      expiredSlots: 0,
+      dueQueued: 0,
+      published: 0,
+      failed: 0,
+      resultUnknown: 0,
     });
     expect(query).not.toHaveBeenCalled();
   });
 
-  it("reconciles successful and abandoned publishing rows before claiming new work", async () => {
+  it("runs reconciliation, expiry, and due selection under one transaction lock", async () => {
     const statements: string[] = [];
-    const query = vi.fn(async (sql: string) => {
+    const clientQuery = vi.fn(async (sql: string) => {
       statements.push(sql);
-      if (sql.includes("select id from brands")) return { rowCount: 0, rows: [] };
-      if (sql.includes("select id from publish_queue")) return { rowCount: 0, rows: [] };
+      if (sql.includes("pg_try_advisory_xact_lock")) return { rowCount: 1, rows: [{ acquired: true }] };
+      if (sql.includes("publish_due_expire")) {
+        return { rowCount: 1, rows: [{ expired_targets: 0, expired_slots: 0, recovered_published: 0, result_unknown: 0 }] };
+      }
+      if (sql.includes("publish_due_candidates")) return { rowCount: 0, rows: [] };
       return { rowCount: 0, rows: [] };
     });
-    const repository = createRepository({ query } as any, { instagramPublish: { enabled: true } });
-    repository.applyDueSubscriptionRenewals = vi.fn(async () => []);
+    const repository = createRepository({
+      query: vi.fn(),
+      connect: vi.fn(async () => ({ query: clientQuery, release: vi.fn() })),
+    } as any, { instagramPublish: { enabled: true } });
 
-    await expect(repository.runDuePublishing()).resolves.toEqual({ processed: 0, created: 0, updated: 0, failed: 0 });
+    await expect(repository.runDuePublishing()).resolves.toEqual({
+      acquired: true,
+      expiredTargets: 0,
+      expiredSlots: 0,
+      dueQueued: 0,
+      published: 0,
+      failed: 0,
+      resultUnknown: 0,
+    });
 
-    expect(statements[0]).toContain("pa.status = 'succeeded'");
-    expect(statements[0]).toContain("publish_delivery_unknown");
-    expect(statements[0]).toContain("interval '30 minutes'");
-    expect(statements[0]).toContain("recovered_slots");
-    expect(statements[0]).toContain("abandoned_slots");
-    expect(statements[0]).toContain("pending.id not in (select recovered_queue.id from recovered recovered_queue)");
+    expect(statements[0]).toBe("begin");
+    expect(statements[1]).toContain("pg_try_advisory_xact_lock");
+    expect(statements[2]).toContain("publish_due_expire");
+    expect(statements[2]).toContain("publish_delivery_unknown");
+    expect(statements[2]).toContain("interval '30 minutes'");
+    expect(statements[3]).toContain("publish_due_queue_delayed");
+    expect(statements[4]).toContain("publish_due_candidates");
+    expect(statements.at(-1)).toBe("commit");
   });
 
-  it("renews subscriptions, isolates calendar scheduling failures, and still selects legacy direct queues", async () => {
-    const statements: Array<{ sql: string; values: unknown[] }> = [];
-    const query = vi.fn(async (sql: string, values?: unknown[]) => {
-      statements.push({ sql: sql.replace(/\s+/g, " "), values: values ?? [] });
-      if (sql.includes("select id from brands")) {
-        return { rowCount: 2, rows: [{ id: "brand-failed" }, { id: "brand-ready" }] };
+  it("forwards the smoke candidate allowlist before the production claim query", async () => {
+    const statements: string[] = [];
+    const clientQuery = vi.fn(async (sql: string) => {
+      statements.push(sql);
+      if (sql.includes("pg_try_advisory_xact_lock")) return { rowCount: 1, rows: [{ acquired: true }] };
+      if (sql.includes("publish_due_expire")) {
+        return { rowCount: 1, rows: [{ expired_targets: 0, expired_slots: 0, recovered_published: 0, result_unknown: 0 }] };
       }
-      if (sql.includes("row_number() over") && sql.includes("from publish_queue")) {
-        return { rowCount: 0, rows: [] };
+      if (sql.includes("publish_due_candidates")) {
+        return { rowCount: 1, rows: [{ id: "queue-unexpected", brand_id: "brand-1" }] };
       }
       return { rowCount: 0, rows: [] };
     });
-    const repository = createRepository({ query } as any, { instagramPublish: { enabled: true } });
-    const events: string[] = [];
-    repository.applyDueSubscriptionRenewals = vi.fn(async () => {
-      events.push("renewed");
-      return [];
-    });
-    repository.schedulePublishQueue = vi.fn(async (candidate) => {
-      events.push(`scheduled:${candidate}`);
-      if (candidate === "brand-failed") throw new Error("subscription_unavailable");
-      return { processed: 0, created: 0, updated: 0, failed: 0 };
-    });
+    const repository = createRepository({
+      query: vi.fn(),
+      connect: vi.fn(async () => ({ query: clientQuery, release: vi.fn() })),
+    } as any, { instagramPublish: { enabled: true } });
 
-    await expect(repository.runDuePublishing(new Date("2026-08-14T00:00:00.000Z")))
-      .resolves.toEqual({ processed: 0, created: 0, updated: 0, failed: 1 });
+    await expect(repository.runDuePublishing(
+      new Date("2026-08-26T12:00:00+09:00"),
+      { expectedProviderCandidateQueueIds: ["queue-approved"] },
+    )).rejects.toThrow("publish_due_candidate_mismatch");
 
-    expect(events).toEqual(["renewed", "scheduled:brand-failed", "scheduled:brand-ready"]);
-    const candidateBrands = statements.find(({ sql }) => sql.includes("select id from brands"));
-    expect(candidateBrands?.sql).toContain("from publish_calendar_settings settings");
-    expect(candidateBrands?.sql).toContain("settings.enabled");
-    expect(candidateBrands?.sql).toContain("from publish_calendar_slots slot");
-    expect(candidateBrands?.sql).toContain("slot.status in ('proposal_assigned','generation_pending','content_assigned','ready','publish_delayed','quota_blocked','scheduled')");
-    const due = statements.find(({ sql }) => sql.includes("row_number() over"));
-    expect(due?.sql).toContain("partition by queue.brand_id");
-    expect(due?.sql).toContain("order by brand_rank");
-    expect(due?.sql).toContain("limit 50");
-    expect(due?.sql).toContain("left join publish_calendar_slots linked_slot");
-    expect(due?.sql).toContain("linked_slot.id is null or queue.brand_id=any($2::uuid[])");
-    expect(due?.values[1]).toEqual(["brand-ready"]);
+    expect(statements.at(-1)).toBe("rollback");
+    expect(statements.some((sql) => sql.includes("with locked_queue as"))).toBe(false);
   });
 
   it("recovers only persisted AI content publish rows without scheduling unrelated content", async () => {
@@ -2804,247 +2788,13 @@ describe("repository", () => {
     expect(checkSql).not.toContain("has_active_credentials then 'connected'");
   });
 
-  describe("Task 11 topic publish group scheduling", () => {
-    function schedulingFixture(groupIds: string[], occupied: Array<{ slot_date: string | Date; slot_number: number }> = []) {
-      const statements: Array<{ sql: string; values: unknown[] }> = [];
-      const query = vi.fn(async (sql: string, values?: unknown[]) => {
-        statements.push({ sql, values: values ?? [] });
-        if (["begin", "commit", "rollback"].includes(sql.trim())) return { rowCount: 0, rows: [] };
-        if (sql.includes("select id from brands") && sql.includes("for update")) {
-          return { rowCount: 1, rows: [{ id: "brand-1" }] };
-        }
-        if (sql.includes("pg_advisory_xact_lock")) return { rowCount: 0, rows: [] };
-        if (sql.includes("from brand_subscriptions subscription")) {
-          return {
-            rowCount: 1,
-            rows: [{ started_at: "2026-07-01T00:00:00.000Z", weekly_publish_limit: 100 }],
-          };
-        }
-        if (sql.includes("publication_units") && sql.includes("allowed_group_ids")) {
-          return { rowCount: 1, rows: [{ allowed_group_ids: groupIds }] };
-        }
-        if (sql.includes("from publish_calendar_slots slot") && sql.includes("for update of slot")) {
-          return { rowCount: 0, rows: [] };
-        }
-        if (sql.includes("from topic_publish_groups") && sql.includes("status = 'ready'") && sql.includes("for update")) {
-          return { rowCount: groupIds.length, rows: groupIds.map((id) => ({ id })) };
-        }
-        if (sql.includes("from topic_publish_groups") && sql.includes("slot_date >=")) {
-          return { rowCount: occupied.length, rows: occupied };
-        }
-        if (sql.includes("update topic_publish_groups") && sql.includes("status = 'scheduled'")) {
-          return { rowCount: 1, rows: [{ id: values?.[0] }] };
-        }
-        if (sql.includes("update publish_queue") && sql.includes("topic_publish_group_id")) {
-          return { rowCount: 2, rows: [] };
-        }
-        return { rowCount: 0, rows: [] };
-      });
-      return { query, statements };
-    }
-
-    it("assigns Instagram and Threads rows in one group the same timestamp and slot", async () => {
-      const fixture = schedulingFixture(["publish-group-1"]);
-      const repository = createRepository(fakePoolWithClient(fixture.query) as any, { instagramPublish: { enabled: true } });
-
-      await expect(repository.schedulePublishQueue("brand-1", new Date("2026-07-13T01:00:00.000Z")))
-        .resolves.toEqual({ processed: 1, created: 0, updated: 2, failed: 0 });
-
-      const groupUpdate = fixture.statements.find(({ sql }) => sql.includes("update topic_publish_groups") && sql.includes("status = 'scheduled'"));
-      const queueUpdate = fixture.statements.find(({ sql }) => sql.includes("update publish_queue") && sql.includes("topic_publish_group_id"));
-      expect(groupUpdate?.values.slice(1)).toEqual(queueUpdate?.values.slice(1));
-      expect(queueUpdate?.sql).toContain("where topic_publish_group_id = $1");
-      expect(queueUpdate?.sql).toContain("status = 'queued'");
-      expect(queueUpdate?.sql).not.toMatch(/delivery_format|output_json/);
-    });
-
-    it("schedules every slotless ready group at one fixed policy time with null slot numbers", async () => {
-      const fixture = schedulingFixture([
-        "publish-group-1", "publish-group-2", "publish-group-3", "publish-group-4", "publish-group-5"
-      ]);
-      const repository = createRepository(fakePoolWithClient(fixture.query) as any, { instagramPublish: { enabled: true } });
-
-      await repository.schedulePublishQueue("brand-1", new Date("2026-07-13T01:00:00.000Z"));
-
-      const groupUpdates = fixture.statements.filter(({ sql }) => sql.includes("update topic_publish_groups") && sql.includes("status = 'scheduled'"));
-      expect(groupUpdates.map(({ values }) => values.slice(1))).toEqual(Array.from({ length: 5 }, () => [
-        "2026-07-13", null, new Date("2026-07-13T02:30:00.000Z")
-      ]));
-      expect(fixture.statements.filter(({ sql }) => sql.includes("update publish_queue") && sql.includes("topic_publish_group_id"))).toHaveLength(5);
-    });
-
-    it("does not query occupied policy slots before assigning slotless groups", async () => {
-      const fixture = schedulingFixture(
-        ["publish-group-1"],
-        [{ slot_date: new Date("2026-07-13T15:00:00.000Z"), slot_number: 1 }]
-      );
-      const repository = createRepository(fakePoolWithClient(fixture.query) as any, { instagramPublish: { enabled: true } });
-
-      await repository.schedulePublishQueue("brand-1", new Date("2026-07-13T12:30:00.000Z"));
-
-      const groupUpdate = fixture.statements.find(({ sql }) => (
-        sql.includes("update topic_publish_groups") && sql.includes("status = 'scheduled'")
-      ));
-      expect(groupUpdate?.values.slice(1)).toEqual([
-        "2026-07-14", null, new Date("2026-07-14T02:30:00.000Z")
-      ]);
-      expect(fixture.statements.some(({ sql }) => sql.includes("slot_date >="))).toBe(false);
-    });
-
-    it("makes pending outputs wait while rejected and terminal failures do not block approved siblings", async () => {
-      const fixture = schedulingFixture([]);
-      const repository = createRepository(fakePoolWithClient(fixture.query) as any, { instagramPublish: { enabled: true } });
-
-      await repository.schedulePublishQueue("brand-1", new Date("2026-07-13T01:00:00.000Z"));
-
-      const readiness = fixture.statements.find(({ sql }) => sql.includes("latest_render_jobs") && sql.includes("update topic_publish_groups"));
-      expect(readiness?.sql).toContain("'pending_review', 'auto_approval_blocked', 'regenerating'");
-      expect(readiness?.sql).toContain("latest_render.status in ('queued', 'running')");
-      expect(readiness?.sql).toContain("co.status = 'rejected'");
-      expect(readiness?.sql).toContain("latest_render.status = 'failed'");
-      expect(readiness?.sql).toContain("pq.id is not null");
-      expect(readiness?.sql).toContain("tpg.status in ('waiting', 'ready')");
-      expect(readiness?.sql).toContain("count(pq.id) filter (where pq.status = 'queued') > 0");
-    });
-
-    it("serializes and conditionally claims group slots so concurrent calls are idempotent", async () => {
-      const fixture = schedulingFixture(["publish-group-1"]);
-      const repository = createRepository(fakePoolWithClient(fixture.query) as any, { instagramPublish: { enabled: true } });
-
-      await repository.schedulePublishQueue("brand-1", new Date("2026-07-13T01:00:00.000Z"));
-
-      const lockIndex = fixture.statements.findIndex(({ sql }) => sql.includes("select id from brands") && sql.includes("for update"));
-      const claimIndex = fixture.statements.findIndex(({ sql }) => sql.includes("update topic_publish_groups") && sql.includes("status = 'scheduled'"));
-      expect(fixture.statements[0]?.sql).toBe("begin");
-      expect(lockIndex).toBeGreaterThan(0);
-      expect(lockIndex).toBeLessThan(claimIndex);
-      expect(fixture.statements[claimIndex]?.sql).toContain("where id = $1 and status = 'ready'");
-      expect(fixture.statements.at(-1)?.sql).toBe("commit");
-    });
-
-    it("revalidates direct-inclusive weekly quota and schedules a calendar group at its exact reserved time", async () => {
-      const statements: Array<{ sql: string; values: unknown[] }> = [];
-      const scheduledFor = new Date("2026-07-15T11:30:00+09:00");
-      const query = vi.fn(async (sql: string, values?: unknown[]) => {
-        statements.push({ sql, values: values ?? [] });
-        if (["begin", "commit", "rollback"].includes(sql.trim()) || sql.includes("pg_advisory_xact_lock")) {
-          return { rowCount: 0, rows: [] };
-        }
-        if (sql.includes("select id from brands") && sql.includes("for update")) {
-          return { rowCount: 1, rows: [{ id: "brand-1" }] };
-        }
-        if (sql.includes("from brand_subscriptions subscription")) {
-          return { rowCount: 1, rows: [{ started_at: "2026-07-01T00:00:00.000Z", weekly_publish_limit: 2 }] };
-        }
-        if (sql.includes("publication_units") && sql.includes("allowed_group_ids")) {
-          return { rowCount: 1, rows: [{ allowed_group_ids: ["calendar-group-1"] }] };
-        }
-        if (sql.includes("from publish_calendar_slots slot") && sql.includes("for update of slot")) {
-          return {
-            rowCount: 1,
-            rows: [{ slot_id: "slot-1", group_id: "calendar-group-1", scheduled_for: scheduledFor }],
-          };
-        }
-        if (sql.includes("update topic_publish_groups") && sql.includes("slot_number=null")) {
-          return { rowCount: 1, rows: [{ id: "calendar-group-1" }] };
-        }
-        if (sql.includes("update publish_queue") && sql.includes("topic_publish_group_id=$1")) {
-          return { rowCount: 1, rows: [] };
-        }
-        if (sql.includes("update publish_calendar_slots") && sql.includes("status='scheduled'")) {
-          return { rowCount: 1, rows: [] };
-        }
-        if (sql.includes("from topic_publish_groups") && sql.includes("slot_date >=")) {
-          return { rowCount: 0, rows: [] };
-        }
-        if (sql.includes("from topic_publish_groups") && sql.includes("status = 'ready'") && sql.includes("for update")) {
-          return { rowCount: 0, rows: [] };
-        }
-        return { rowCount: 0, rows: [] };
-      });
-      const repository = createRepository(fakePoolWithClient(query) as any, { instagramPublish: { enabled: true } });
-
-      await expect(repository.schedulePublishQueue("brand-1", new Date("2026-07-14T00:00:00.000Z")))
-        .resolves.toEqual({ processed: 1, created: 0, updated: 1, failed: 0 });
-
-      const quotaSql = statements.find(({ sql }) => sql.includes("publication_units"))?.sql ?? "";
-      expect(quotaSql).toContain("direct_publish_groups");
-      expect(quotaSql).toContain("linked_slot.status<>'cancelled'");
-      const groupUpdate = statements.find(({ sql }) => sql.includes("slot_number=null"));
-      const queueUpdate = statements.find(({ sql }) => sql.includes("topic_publish_group_id=$1"));
-      expect(groupUpdate?.values).toEqual(["calendar-group-1", "2026-07-15", scheduledFor]);
-      expect(queueUpdate?.values).toEqual(["calendar-group-1", "2026-07-15", scheduledFor]);
-      expect(statements.some(({ sql }) => sql.includes("set status='scheduled',last_error=null"))).toBe(true);
-    });
-
-    it("moves every late-ready calendar group to the exact current tick without blocked-time lookup", async () => {
-      const statements: Array<{ sql: string; values: unknown[] }> = [];
-      const reservedFor = new Date("2026-07-15T08:00:00.000Z");
-      const now = new Date("2026-07-15T09:50:00.000Z");
-      const query = vi.fn(async (sql: string, values?: unknown[]) => {
-        statements.push({ sql, values: values ?? [] });
-        if (["begin", "commit", "rollback"].includes(sql.trim()) || sql.includes("pg_advisory_xact_lock")) {
-          return { rowCount: 0, rows: [] };
-        }
-        if (sql.includes("select id from brands") && sql.includes("for update")) {
-          return { rowCount: 1, rows: [{ id: "brand-1" }] };
-        }
-        if (sql.includes("from brand_subscriptions subscription")) {
-          return { rowCount: 1, rows: [{ started_at: "2026-07-01T00:00:00.000Z", weekly_publish_limit: 2 }] };
-        }
-        if (sql.includes("publication_units") && sql.includes("allowed_group_ids")) {
-          return { rowCount: 1, rows: [{ allowed_group_ids: ["late-group-1", "late-group-2"] }] };
-        }
-        if (sql.includes("from publish_calendar_slots slot") && sql.includes("for update of slot")) {
-          return {
-            rowCount: 2,
-            rows: [
-              { slot_id: "late-slot-1", group_id: "late-group-1", scheduled_for: reservedFor },
-              { slot_id: "late-slot-2", group_id: "late-group-2", scheduled_for: reservedFor },
-            ],
-          };
-        }
-        if (sql.includes("update topic_publish_groups") && sql.includes("slot_number=null")) {
-          return { rowCount: 1, rows: [{ id: values?.[0] }] };
-        }
-        if (sql.includes("update publish_queue") && sql.includes("topic_publish_group_id=$1")) {
-          return { rowCount: 1, rows: [] };
-        }
-        if (sql.includes("update publish_calendar_slots") && sql.includes("status='scheduled'")) {
-          return { rowCount: 1, rows: [] };
-        }
-        if (sql.includes("from topic_publish_groups") && sql.includes("slot_date >=")) return { rowCount: 0, rows: [] };
-        if (sql.includes("from topic_publish_groups") && sql.includes("status = 'ready'") && sql.includes("for update")) {
-          return { rowCount: 0, rows: [] };
-        }
-        return { rowCount: 0, rows: [] };
-      });
-      const repository = createRepository(fakePoolWithClient(query) as any, { instagramPublish: { enabled: true } });
-
-      await repository.schedulePublishQueue("brand-1", now);
-
-      const groupUpdates = statements.filter(({ sql }) => (
-        sql.includes("update topic_publish_groups") && sql.includes("slot_number=null")
-      ));
-      const queueUpdates = statements.filter(({ sql }) => (
-        sql.includes("update publish_queue") && sql.includes("topic_publish_group_id=$1")
-      ));
-      expect(groupUpdates.map(({ values }) => values)).toEqual([
-        ["late-group-1", "2026-07-15", now],
-        ["late-group-2", "2026-07-15", now],
-      ]);
-      expect(queueUpdates.map(({ values }) => values)).toEqual([
-        ["late-group-1", "2026-07-15", now],
-        ["late-group-2", "2026-07-15", now],
-      ]);
-      expect(statements.some(({ sql }) => sql.includes("as blocked_at"))).toBe(false);
-    });
-  });
-
   it("preserves non-reservation recovery, lease, and provider retry timing", () => {
-    expect(repositorySource).toContain("publishing_started_at < now() - interval '30 minutes'");
+    expect(publishDueRunSource).toContain("publishing_started_at < $1::timestamptz-interval '30 minutes'");
     expect(repositorySource).toContain("performance_sync_runs.started_at <= excluded.started_at - interval '30 minutes'");
-    expect(repositorySource).toContain("now() + interval '5 minutes'");
+    expect(repositorySource).toContain("const retryAt = new Date(failedAt.getTime() + 5 * 60 * 1000)");
+    expect(repositorySource).toContain("then $10::timestamptz");
+    expect(repositorySource).not.toContain("now() + interval '5 minutes'");
+    expect(repositorySource).toContain("deferred_until = case when $4::boolean and $9::boolean");
     expect(repositorySource).not.toContain("earliestSafePublicationTime");
   });
 
@@ -3129,7 +2879,7 @@ describe("repository", () => {
 
     await expect(repository.publishQueueItem("queue-1")).resolves.toMatchObject({ id: "queue-1", status: "published", publishedUrl: null });
     expect(query.mock.calls[0]?.[0]).toContain("set status = 'publishing'");
-    expect(query.mock.calls[0]?.[0]).toContain("where pq.id = selected.id and pq.status = 'scheduled'");
+    expect(query.mock.calls[0]?.[0]).toContain("where pq.id = selected.id and pq.status in ('scheduled','deferred')");
     expect(events.indexOf("attempt-started")).toBeLessThan(events.indexOf("provider-called"));
     expect(publishAttempts.some((values) => values.includes("ig-post-1"))).toBe(true);
     expect(queueUpdates.length).toBe(1);
@@ -4537,6 +4287,7 @@ describe("content performance repository", () => {
   });
 
   it("uses latest snapshots for totals and excludes each content's first daily sample", async () => {
+    usePerformanceDashboardTestClock();
     const query = vi.fn(async (sql: string) => {
       if (sql.includes("dashboard_workflow")) {
         return { rowCount: 1, rows: [{ queued_topics: "3", generating: "2", pending_review: "4", scheduled_or_published: "5", pending_review_count: "4", failed_publish_count: "1" }] };
@@ -4582,6 +4333,7 @@ describe("content performance repository", () => {
   });
 
   it("uses each content's true predecessor at the 30-day boundary without emitting its date", async () => {
+    usePerformanceDashboardTestClock("2026-08-14T12:00:00.000Z");
     let snapshotsSql = "";
     const query = vi.fn(async (sql: string) => {
       if (sql.includes("dashboard_workflow")) {
@@ -4622,6 +4374,7 @@ describe("content performance repository", () => {
   });
 
   it("excludes unmeasured content from rankings while retaining measured zero", async () => {
+    usePerformanceDashboardTestClock();
     const query = vi.fn(async (sql: string) => {
       if (sql.includes("dashboard_workflow")) {
         return { rowCount: 1, rows: [{ queued_topics: "0", generating: "0", pending_review: "0", scheduled_or_published: "2", pending_review_count: "0", failed_publish_count: "0" }] };

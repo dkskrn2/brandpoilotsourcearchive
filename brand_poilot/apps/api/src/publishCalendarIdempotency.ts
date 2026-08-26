@@ -65,6 +65,6 @@ export function batchSlotIdentity(
   );
 }
 
-export function automaticSlotKey(input: { kstDate: string; time: string; occurrence: number }) {
-  return digest("automatic", [input.kstDate, input.time, input.occurrence]);
+export function automaticSlotKey(input: { scheduleEntryId: string; kstDate: string }) {
+  return digestHex(["weekly-auto", input.scheduleEntryId, input.kstDate]);
 }

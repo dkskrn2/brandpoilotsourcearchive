@@ -1,44 +1,42 @@
 export type PublishManagementStatus =
-  | "generating"
-  | "needs_review"
-  | "queued"
-  | "publish_queued"
-  | "scheduled"
+  | "action_required"
+  | "preparing"
+  | "upcoming"
+  | "delayed_today"
   | "publishing"
-  | "completed"
-  | "result_unknown"
-  | "failed"
-  | "rejected";
+  | "partially_published"
+  | "published"
+  | "cancelled";
 
 export type PublishManagementFilterId =
-  | "all"
+  | "action_required"
   | "preparing"
-  | "needs_review"
   | "upcoming"
   | "completed"
-  | "issues";
+  | "cancelled"
+  | "all";
 
 export const publishManagementFilters: ReadonlyArray<{
   id: PublishManagementFilterId;
   label: string;
 }> = [
-  { id: "all", label: "전체" },
+  { id: "action_required", label: "처리 필요" },
   { id: "preparing", label: "준비 중" },
-  { id: "needs_review", label: "검토 필요" },
   { id: "upcoming", label: "게시 예정" },
   { id: "completed", label: "완료" },
-  { id: "issues", label: "문제" }
+  { id: "cancelled", label: "취소" },
+  { id: "all", label: "전체" }
 ];
 
 const groupedStatuses: Record<
   Exclude<PublishManagementFilterId, "all">,
   ReadonlySet<PublishManagementStatus>
 > = {
-  preparing: new Set(["generating", "queued"]),
-  needs_review: new Set(["needs_review"]),
-  upcoming: new Set(["publish_queued", "scheduled", "publishing"]),
-  completed: new Set(["completed"]),
-  issues: new Set(["failed", "result_unknown", "rejected"])
+  action_required: new Set(["action_required"]),
+  preparing: new Set(["preparing"]),
+  upcoming: new Set(["upcoming", "delayed_today", "publishing", "partially_published"]),
+  completed: new Set(["published"]),
+  cancelled: new Set(["cancelled"])
 };
 
 export function matchesPublishManagementFilter(

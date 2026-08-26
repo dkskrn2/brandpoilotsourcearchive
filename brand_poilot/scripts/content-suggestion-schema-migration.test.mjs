@@ -4,7 +4,7 @@ import test from "node:test";
 import { Client } from "pg";
 import * as migrationRunner from "./migrationRunner.mjs";
 
-test("post-cutover schemas 077 through 091 are an ordered sealed schema plan", async () => {
+test("post-cutover schemas 077 through 092 are an ordered sealed schema plan", async () => {
   const migrations = await migrationRunner.loadMigrations();
   const migration077 = migrations.find(({ id }) => id === "077_content_suggestion_batches.sql");
   const migration078 = migrations.find(({ id }) => id === "078_faq_utterance_matching.sql");
@@ -21,6 +21,7 @@ test("post-cutover schemas 077 through 091 are an ordered sealed schema plan", a
   const migration089 = migrations.find(({ id }) => id === "089_free_subscription_plan.sql");
   const migration090 = migrations.find(({ id }) => id === "090_existing_brand_free_subscriptions.sql");
   const migration091 = migrations.find(({ id }) => id === "091_ai_content_prompt_lineage_v4.sql");
+  const migration092 = migrations.find(({ id }) => id === "092_publish_calendar_weekly_schedule.sql");
   assert.ok(migration077);
   assert.ok(migration078);
   assert.ok(migration079);
@@ -36,6 +37,7 @@ test("post-cutover schemas 077 through 091 are an ordered sealed schema plan", a
   assert.ok(migration089);
   assert.ok(migration090);
   assert.ok(migration091);
+  assert.ok(migration092);
   assert.equal(migrationRunner.validatePost075SchemaMigration(migration077), true);
   assert.equal(migrationRunner.validatePost075SchemaMigration(migration078), true);
   assert.equal(migrationRunner.validatePost075SchemaMigration(migration079), true);
@@ -51,8 +53,9 @@ test("post-cutover schemas 077 through 091 are an ordered sealed schema plan", a
   assert.equal(migrationRunner.validatePost075SchemaMigration(migration089), true);
   assert.equal(migrationRunner.validatePost075SchemaMigration(migration090), true);
   assert.equal(migrationRunner.validatePost075SchemaMigration(migration091), true);
+  assert.equal(migrationRunner.validatePost075SchemaMigration(migration092), true);
 
-  const pendingMigrations = [migration077, migration078, migration079, migration080, migration081, migration082, migration083, migration084, migration085, migration086, migration087, migration088, migration089, migration090, migration091];
+  const pendingMigrations = [migration077, migration078, migration079, migration080, migration081, migration082, migration083, migration084, migration085, migration086, migration087, migration088, migration089, migration090, migration091, migration092];
 
   const history = migrations
     .filter(({ id }) => !pendingMigrations.some((migration) => migration.id === id))
@@ -159,6 +162,7 @@ test("content suggestion schema runner accepts the exact managed provider sessio
   const migration089 = migrations.find(({ id }) => id === "089_free_subscription_plan.sql");
   const migration090 = migrations.find(({ id }) => id === "090_existing_brand_free_subscriptions.sql");
   const migration091 = migrations.find(({ id }) => id === "091_ai_content_prompt_lineage_v4.sql");
+  const migration092 = migrations.find(({ id }) => id === "092_publish_calendar_weekly_schedule.sql");
   assert.ok(migration077);
   assert.ok(migration078);
   assert.ok(migration079);
@@ -174,7 +178,8 @@ test("content suggestion schema runner accepts the exact managed provider sessio
   assert.ok(migration089);
   assert.ok(migration090);
   assert.ok(migration091);
-  const pendingMigrations = [migration077, migration078, migration079, migration080, migration081, migration082, migration083, migration084, migration085, migration086, migration087, migration088, migration089, migration090, migration091];
+  assert.ok(migration092);
+  const pendingMigrations = [migration077, migration078, migration079, migration080, migration081, migration082, migration083, migration084, migration085, migration086, migration087, migration088, migration089, migration090, migration091, migration092];
   const history = migrations
     .filter(({ id }) => !pendingMigrations.some((migration) => migration.id === id))
     .map(({ id, checksum }) => ({ id, checksum }));
@@ -240,6 +245,7 @@ test("content suggestion schema runner accepts the exact managed provider sessio
           brand_subscription_owner: "content_schema_owner",
           calendar_settings_owner: "content_schema_owner",
           calendar_slot_owner: "content_schema_owner",
+          weekly_schedule_owner: "content_schema_owner",
           app_billing_plan_select: true,
           app_billing_plan_insert: true,
           app_billing_plan_update: true,
@@ -256,10 +262,18 @@ test("content suggestion schema runner accepts the exact managed provider sessio
           app_calendar_slot_insert: true,
           app_calendar_slot_update: true,
           app_calendar_slot_delete: false,
+          app_weekly_schedule_select: true,
+          app_weekly_schedule_insert: true,
+          app_weekly_schedule_update: true,
+          app_weekly_schedule_delete: true,
           public_billing_plan_privilege: false,
           public_brand_subscription_privilege: false,
           public_calendar_settings_privilege: false,
           public_calendar_slot_privilege: false,
+          public_weekly_schedule_privilege: false,
+          weekly_schedule_application_acl_count: 4,
+          weekly_schedule_unexpected_acl_count: 0,
+          weekly_schedule_column_acl_count: 0,
           runtime_columns_valid: true,
           idempotency_column_valid: true,
           enabled_default_false: true,
@@ -268,7 +282,7 @@ test("content suggestion schema runner accepts the exact managed provider sessio
           index_catalog_valid: true,
           idempotency_index_catalog_valid: true,
           trigger_catalog_valid: true,
-          write_fence_row_count: 4,
+          write_fence_row_count: 5,
           function_owner_count: 2,
           application_function_execute_count: 2,
           public_function_execute_count: 0,
@@ -424,6 +438,7 @@ test("publish calendar catalog verification rejects 085 idempotency schema drift
           brand_subscription_owner: "content_schema_owner",
           calendar_settings_owner: "content_schema_owner",
           calendar_slot_owner: "content_schema_owner",
+          weekly_schedule_owner: "content_schema_owner",
           app_billing_plan_select: true,
           app_billing_plan_insert: true,
           app_billing_plan_update: true,
@@ -440,10 +455,18 @@ test("publish calendar catalog verification rejects 085 idempotency schema drift
           app_calendar_slot_insert: true,
           app_calendar_slot_update: true,
           app_calendar_slot_delete: false,
+          app_weekly_schedule_select: true,
+          app_weekly_schedule_insert: true,
+          app_weekly_schedule_update: true,
+          app_weekly_schedule_delete: true,
           public_billing_plan_privilege: false,
           public_brand_subscription_privilege: false,
           public_calendar_settings_privilege: false,
           public_calendar_slot_privilege: false,
+          public_weekly_schedule_privilege: false,
+          weekly_schedule_application_acl_count: 4,
+          weekly_schedule_unexpected_acl_count: 0,
+          weekly_schedule_column_acl_count: 0,
           runtime_columns_valid: true,
           idempotency_column_valid: false,
           enabled_default_false: true,
@@ -452,7 +475,7 @@ test("publish calendar catalog verification rejects 085 idempotency schema drift
           index_catalog_valid: true,
           idempotency_index_catalog_valid: false,
           trigger_catalog_valid: true,
-          write_fence_row_count: 4,
+          write_fence_row_count: 5,
           function_owner_count: 2,
           application_function_execute_count: 2,
           public_function_execute_count: 0,
@@ -522,6 +545,7 @@ test("content suggestion schema runner rejects a non-normal DDL guard before mut
   const migration089 = migrations.find(({ id }) => id === "089_free_subscription_plan.sql");
   const migration090 = migrations.find(({ id }) => id === "090_existing_brand_free_subscriptions.sql");
   const migration091 = migrations.find(({ id }) => id === "091_ai_content_prompt_lineage_v4.sql");
+  const migration092 = migrations.find(({ id }) => id === "092_publish_calendar_weekly_schedule.sql");
   assert.ok(migration077);
   assert.ok(migration078);
   assert.ok(migration079);
@@ -537,7 +561,8 @@ test("content suggestion schema runner rejects a non-normal DDL guard before mut
   assert.ok(migration089);
   assert.ok(migration090);
   assert.ok(migration091);
-  const pendingMigrations = [migration077, migration078, migration079, migration080, migration081, migration082, migration083, migration084, migration085, migration086, migration087, migration088, migration089, migration090, migration091];
+  assert.ok(migration092);
+  const pendingMigrations = [migration077, migration078, migration079, migration080, migration081, migration082, migration083, migration084, migration085, migration086, migration087, migration088, migration089, migration090, migration091, migration092];
   const history = migrations
     .filter(({ id }) => !pendingMigrations.some((migration) => migration.id === id))
     .map(({ id, checksum }) => ({ id, checksum }));
@@ -576,7 +601,7 @@ test("content suggestion schema runner rejects a non-normal DDL guard before mut
   assert.equal(calls.includes("begin"), false);
 });
 
-test("ordered 077 through 091 schemas apply and replay against PostgreSQL 16", {
+test("ordered 077 through 092 schemas apply and replay against PostgreSQL 16", {
   skip: process.env.RUN_FAQ_SCHEMA_POSTGRES_INTEGRATION !== "1",
   timeout: 300_000,
 }, async () => {
@@ -655,6 +680,7 @@ test("ordered 077 through 091 schemas apply and replay against PostgreSQL 16", {
       "089_free_subscription_plan.sql",
       "090_existing_brand_free_subscriptions.sql",
       "091_ai_content_prompt_lineage_v4.sql",
+      "092_publish_calendar_weekly_schedule.sql",
     ]);
     const topicScope = await client.query(
       `select relation.relname as relation_name,constraint_row.conname,

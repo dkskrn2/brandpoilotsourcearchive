@@ -24,6 +24,10 @@ const scope = {
   brandId: "20000000-0000-4000-8000-000000000001",
 };
 
+function automaticKey(kstDate: string, scheduleEntryId = "30000000-0000-4000-8000-000000000091") {
+  return automaticSlotKey({ scheduleEntryId, kstDate });
+}
+
 const slotRow = (overrides: Record<string, unknown> = {}) => ({
   id: "30000000-0000-4000-8000-000000000001",
   workspace_id: scope.workspaceId,
@@ -59,6 +63,285 @@ function activeSubscription(sql: string): QueryResult | null {
 }
 
 describe("publish calendar repository settings and slot validation", () => {
+  it("reads normalized weekly settings under the brand lock in deterministic order without slot_times", async () => {
+    const run = harness((sql) => {
+      if (sql.startsWith("select enabled,channels,informational_format,trend_format,updated_at")) {
+        return {
+          rows: [{
+            enabled: true,
+            channels: ["instagram"],
+            informational_format: "card_news",
+            trend_format: "reel",
+            updated_at: "2026-08-26T00:00:00Z",
+          }],
+          rowCount: 1,
+        };
+      }
+      if (sql.startsWith("select id,day_of_week,slot_time,sort_order")) {
+        return {
+          rows: [
+            { id: "30000000-0000-4000-8000-000000000002", day_of_week: 1, slot_time: "11:30:00", sort_order: 0 },
+            { id: "30000000-0000-4000-8000-000000000001", day_of_week: 1, slot_time: "11:30:00", sort_order: 1 },
+            { id: "30000000-0000-4000-8000-000000000003", day_of_week: 7, slot_time: "09:05:00", sort_order: 0 },
+          ],
+          rowCount: 3,
+        };
+      }
+      return { rows: [], rowCount: 0 };
+    });
+
+    await expect(createPublishCalendarRepository(run.pool).getWeeklySettings(scope)).resolves.toEqual({
+      brandId: scope.brandId,
+      enabled: true,
+      channels: ["instagram"],
+      informationalFormat: "card_news",
+      trendFormat: "reel",
+      weeklySchedule: [
+        { id: "30000000-0000-4000-8000-000000000002", dayOfWeek: 1, time: "11:30", sortOrder: 0 },
+        { id: "30000000-0000-4000-8000-000000000001", dayOfWeek: 1, time: "11:30", sortOrder: 1 },
+        { id: "30000000-0000-4000-8000-000000000003", dayOfWeek: 7, time: "09:05", sortOrder: 0 },
+      ],
+      updatedAt: "2026-08-26T00:00:00.000Z",
+    });
+    expect(run.statements.map(({ sql }) => sql)).toEqual(expect.arrayContaining([
+      expect.stringContaining("pg_advisory_xact_lock"),
+      expect.stringContaining("order by day_of_week,sort_order,id"),
+    ]));
+    expect(run.statements.some(({ sql }) => sql.includes("slot_times"))).toBe(false);
+  });
+
+  it("validates weekly rows, ON prerequisites, server caps, and the active plan limit", async () => {
+    const base = {
+      ...scope,
+      enabled: false,
+      channels: [] as "instagram"[],
+      informationalFormat: "card_news" as const,
+      trendFormat: "reel" as const,
+    };
+    const repository = createPublishCalendarRepository(harness(() => ({ rows: [], rowCount: 0 })).pool);
+    await expect(repository.saveWeeklySettings({ ...base, weeklySchedule: [
+      { id: null, dayOfWeek: 0 as 1, time: "11:30", sortOrder: 0 },
+    ] })).rejects.toThrowError("publish_calendar_day_invalid");
+    await expect(repository.saveWeeklySettings({ ...base, weeklySchedule: [
+      { id: null, dayOfWeek: 1, time: "24:00", sortOrder: 0 },
+    ] })).rejects.toThrowError("publish_calendar_time_invalid");
+    await expect(repository.saveWeeklySettings({ ...base, weeklySchedule: [
+      { id: null, dayOfWeek: 1, time: "11:30", sortOrder: -1 },
+    ] })).rejects.toThrowError("publish_calendar_sort_order_invalid");
+    const oversizedSort = harness(() => ({ rows: [], rowCount: 0 }));
+    await expect(createPublishCalendarRepository(oversizedSort.pool).saveWeeklySettings({
+      ...base,
+      weeklySchedule: [{ id: null, dayOfWeek: 1, time: "11:30", sortOrder: 2_147_483_648 }],
+    })).rejects.toThrowError("publish_calendar_sort_order_invalid");
+    expect(oversizedSort.statements).toEqual([]);
+    await expect(repository.saveWeeklySettings({ ...base, weeklySchedule: [
+      { id: null, dayOfWeek: 1, time: "11:30", sortOrder: 0 },
+      { id: null, dayOfWeek: 1, time: "12:30", sortOrder: 0 },
+    ] })).rejects.toThrowError("publish_calendar_sort_order_invalid");
+    await expect(repository.saveWeeklySettings({ ...base, weeklySchedule: Array.from({ length: 25 }, (_, sortOrder) => ({
+      id: null, dayOfWeek: 1 as const, time: "11:30", sortOrder,
+    })) })).rejects.toThrowError("publish_calendar_schedule_limit_exceeded");
+    await expect(repository.saveWeeklySettings({ ...base, enabled: true, weeklySchedule: [] }))
+      .rejects.toThrowError("publish_calendar_settings_incomplete");
+    await expect(repository.saveWeeklySettings({
+      ...base,
+      enabled: true,
+      channels: ["instagram"],
+      weeklySchedule: [],
+    })).rejects.toThrowError("publish_calendar_settings_incomplete");
+
+    const limited = harness((sql) => {
+      if (sql.startsWith("select enabled,channels,informational_format,trend_format,updated_at")) {
+        return { rows: [], rowCount: 0 };
+      }
+      if (sql.includes("from brand_subscriptions subscription")) {
+        return { rows: [{ started_at: "2026-08-01T00:00:00Z", weekly_generation_limit: 30, weekly_publish_limit: 30 }], rowCount: 1 };
+      }
+      return { rows: [], rowCount: 0 };
+    });
+    await expect(createPublishCalendarRepository(limited.pool).saveWeeklySettings({
+      ...base,
+      weeklySchedule: Array.from({ length: 31 }, (_, index) => ({
+        id: null,
+        dayOfWeek: (index % 7 + 1) as 1 | 2 | 3 | 4 | 5 | 6 | 7,
+        time: "11:30",
+        sortOrder: Math.floor(index / 7),
+      })),
+    })).rejects.toThrowError("publish_calendar_publish_limit_exceeded");
+  });
+
+  it("preserves a disconnected existing channel while OFF but rejects a newly disconnected selection", async () => {
+    const weeklySchedule = [{ id: null, dayOfWeek: 1 as const, time: "11:30", sortOrder: 0 }];
+    const existing = harness((sql) => {
+      if (sql.startsWith("select enabled,channels,informational_format,trend_format,updated_at")) {
+        return { rows: [{ enabled: false, channels: ["instagram"], informational_format: "card_news", trend_format: "reel", updated_at: "2026-08-26" }], rowCount: 1 };
+      }
+      if (sql.startsWith("select id,workspace_id,brand_id,day_of_week")) return { rows: [], rowCount: 0 };
+      if (sql.includes("from brand_subscriptions subscription")) {
+        return { rows: [{ started_at: "2026-08-01", weekly_generation_limit: 30, weekly_publish_limit: 30 }], rowCount: 1 };
+      }
+      if (sql.includes("from brand_channels")) return { rows: [], rowCount: 0 };
+      if (sql.startsWith("insert into publish_calendar_settings")) {
+        return { rows: [{ enabled: false, channels: ["instagram"], informational_format: "card_news", trend_format: "reel", updated_at: "2026-08-26" }], rowCount: 1 };
+      }
+      if (sql.startsWith("insert into publish_calendar_weekly_schedule_entries")) {
+        return { rows: [{ id: "30000000-0000-4000-8000-000000000001", day_of_week: 1, slot_time: "11:30", sort_order: 0 }], rowCount: 1 };
+      }
+      return { rows: [], rowCount: 0 };
+    });
+    await expect(createPublishCalendarRepository(existing.pool).saveWeeklySettings({
+      ...scope,
+      enabled: false,
+      channels: ["instagram"],
+      informationalFormat: "card_news",
+      trendFormat: "reel",
+      weeklySchedule,
+    })).resolves.toMatchObject({ channels: ["instagram"] });
+
+    const newlySelected = harness((sql) => {
+      if (sql.startsWith("select enabled,channels,informational_format,trend_format,updated_at")) return { rows: [], rowCount: 0 };
+      if (sql.startsWith("select id,workspace_id,brand_id,day_of_week")) return { rows: [], rowCount: 0 };
+      if (sql.includes("from brand_subscriptions subscription")) {
+        return { rows: [{ started_at: "2026-08-01", weekly_generation_limit: 30, weekly_publish_limit: 30 }], rowCount: 1 };
+      }
+      if (sql.includes("from brand_channels")) return { rows: [], rowCount: 0 };
+      return { rows: [], rowCount: 0 };
+    });
+    await expect(createPublishCalendarRepository(newlySelected.pool).saveWeeklySettings({
+      ...scope,
+      enabled: false,
+      channels: ["instagram"],
+      informationalFormat: "card_news",
+      trendFormat: "reel",
+      weeklySchedule,
+    })).rejects.toThrowError("publish_calendar_channel_not_connected");
+  });
+
+  it("saves weekly configuration with the enabled value read under the brand lock", async () => {
+    const scheduleId = "30000000-0000-4000-8000-000000000001";
+    const run = harness((sql, values) => {
+      if (sql.startsWith("select enabled,channels,informational_format,trend_format,updated_at")) {
+        return {
+          rows: [{
+            enabled: true,
+            channels: ["instagram"],
+            informational_format: "card_news",
+            trend_format: "reel",
+            updated_at: "2026-08-26T00:00:00Z",
+          }],
+          rowCount: 1,
+        };
+      }
+      if (sql.startsWith("select id,workspace_id,brand_id,day_of_week")) {
+        return {
+          rows: [{ id: scheduleId, workspace_id: scope.workspaceId, brand_id: scope.brandId, day_of_week: 1, slot_time: "11:30", sort_order: 0 }],
+          rowCount: 1,
+        };
+      }
+      if (sql.includes("from brand_subscriptions subscription")) return activeSubscription(sql)!;
+      if (sql.includes("from brand_channels")) return { rows: [{ channel: "instagram" }], rowCount: 1 };
+      if (sql.startsWith("insert into publish_calendar_settings")) {
+        expect(values[2]).toBe(true);
+        return {
+          rows: [{ enabled: true, channels: ["instagram"], informational_format: "reel", trend_format: "card_news", updated_at: "2026-08-27T00:00:00Z" }],
+          rowCount: 1,
+        };
+      }
+      if (sql.startsWith("update publish_calendar_weekly_schedule_entries")) return { rows: [], rowCount: 1 };
+      if (sql.startsWith("delete from publish_calendar_weekly_schedule_entries")) return { rows: [], rowCount: 0 };
+      if (sql.startsWith("select id,day_of_week,slot_time,sort_order")) {
+        return { rows: [{ id: scheduleId, day_of_week: 2, slot_time: "12:30", sort_order: 0 }], rowCount: 1 };
+      }
+      return { rows: [], rowCount: 0 };
+    });
+
+    await expect(createPublishCalendarRepository(run.pool).saveWeeklyConfiguration({
+      ...scope,
+      channels: ["instagram"],
+      informationalFormat: "reel",
+      trendFormat: "card_news",
+      weeklySchedule: [{ id: scheduleId, dayOfWeek: 2, time: "12:30", sortOrder: 0 }],
+    })).resolves.toMatchObject({ enabled: true, informationalFormat: "reel", trendFormat: "card_news" });
+
+    const statements = run.statements.map(({ sql }) => sql);
+    expect(statements.findIndex((sql) => sql.includes("pg_advisory_xact_lock")))
+      .toBeLessThan(statements.findIndex((sql) => sql.startsWith("select enabled,")));
+    expect(statements.find((sql) => sql.startsWith("select enabled,"))).toContain("for update");
+  });
+
+  it("turns weekly publishing OFF without plan or channel validation and without rewriting configuration", async () => {
+    const scheduleId = "30000000-0000-4000-8000-000000000001";
+    const run = harness((sql) => {
+      if (sql.startsWith("select enabled,channels,informational_format,trend_format,updated_at")) {
+        return {
+          rows: [{ enabled: true, channels: ["instagram"], informational_format: "reel", trend_format: "card_news", updated_at: "2026-08-26T00:00:00Z" }],
+          rowCount: 1,
+        };
+      }
+      if (sql.startsWith("select id,day_of_week,slot_time,sort_order")) {
+        return { rows: [{ id: scheduleId, day_of_week: 2, slot_time: "12:30", sort_order: 0 }], rowCount: 1 };
+      }
+      if (sql.startsWith("insert into publish_calendar_settings")) {
+        return {
+          rows: [{ enabled: false, channels: ["instagram"], informational_format: "reel", trend_format: "card_news", updated_at: "2026-08-27T00:00:00Z" }],
+          rowCount: 1,
+        };
+      }
+      throw new Error(`unexpected query: ${sql}`);
+    });
+
+    await expect(createPublishCalendarRepository(run.pool).setWeeklyEnabled({ ...scope, enabled: false }))
+      .resolves.toEqual({
+        brandId: scope.brandId,
+        enabled: false,
+        channels: ["instagram"],
+        informationalFormat: "reel",
+        trendFormat: "card_news",
+        weeklySchedule: [{ id: scheduleId, dayOfWeek: 2, time: "12:30", sortOrder: 0 }],
+        updatedAt: "2026-08-27T00:00:00.000Z",
+      });
+
+    const sql = run.statements.map((statement) => statement.sql).join("\n");
+    expect(sql).not.toContain("from brand_subscriptions subscription");
+    expect(sql).not.toContain("from brand_channels");
+    expect(sql).not.toContain("update publish_calendar_weekly_schedule_entries");
+    expect(sql).not.toContain("delete from publish_calendar_weekly_schedule_entries");
+    const settingsWrite = run.statements.find(({ sql: statement }) => statement.startsWith("insert into publish_calendar_settings"))!.sql;
+    expect(settingsWrite).not.toContain("channels=excluded.channels");
+    expect(settingsWrite).not.toContain("informational_format=excluded.informational_format");
+    expect(settingsWrite).not.toContain("trend_format=excluded.trend_format");
+  });
+
+  it("turns weekly publishing ON only with a saved row and a currently connected supported selected channel", async () => {
+    const scheduleId = "30000000-0000-4000-8000-000000000001";
+    const connected = harness((sql) => {
+      if (sql.startsWith("select enabled,channels,informational_format,trend_format,updated_at")) {
+        return { rows: [{ enabled: false, channels: ["instagram"], informational_format: "card_news", trend_format: "reel", updated_at: null }], rowCount: 1 };
+      }
+      if (sql.startsWith("select id,day_of_week,slot_time,sort_order")) {
+        return { rows: [{ id: scheduleId, day_of_week: 1, slot_time: "11:30", sort_order: 0 }], rowCount: 1 };
+      }
+      if (sql.includes("from brand_channels")) return { rows: [{ channel: "instagram" }], rowCount: 1 };
+      if (sql.startsWith("insert into publish_calendar_settings")) {
+        return { rows: [{ enabled: true, channels: ["instagram"], informational_format: "card_news", trend_format: "reel", updated_at: "2026-08-27T00:00:00Z" }], rowCount: 1 };
+      }
+      return { rows: [], rowCount: 0 };
+    });
+    await expect(createPublishCalendarRepository(connected.pool).setWeeklyEnabled({ ...scope, enabled: true }))
+      .resolves.toMatchObject({ enabled: true, weeklySchedule: [{ id: scheduleId }] });
+    expect(connected.statements.some(({ sql }) => sql.includes("from brand_subscriptions subscription"))).toBe(false);
+
+    const incomplete = harness((sql) => {
+      if (sql.startsWith("select enabled,channels,informational_format,trend_format,updated_at")) {
+        return { rows: [{ enabled: false, channels: ["instagram"], informational_format: "card_news", trend_format: "reel", updated_at: null }], rowCount: 1 };
+      }
+      if (sql.startsWith("select id,day_of_week,slot_time,sort_order")) return { rows: [], rowCount: 0 };
+      return { rows: [], rowCount: 0 };
+    });
+    await expect(createPublishCalendarRepository(incomplete.pool).setWeeklyEnabled({ ...scope, enabled: true }))
+      .rejects.toThrowError("publish_calendar_settings_incomplete");
+  });
+
   it("returns the effective queue time without replacing the original slot reservation", async () => {
     const run = harness((sql) => sql.includes("queue_schedule.effective_scheduled_for") ? { rows: [slotRow({ effective_scheduled_for: "2099-08-15T03:30:00Z" })], rowCount: 1 } : { rows: [], rowCount: 0 });
     await expect(createPublishCalendarRepository(run.pool).listSlots({ ...scope, startsAt: new Date("2099-08-01T00:00:00Z"), endsAt: new Date("2099-09-01T00:00:00Z") })).resolves.toEqual([
@@ -164,7 +447,7 @@ describe("publish calendar repository settings and slot validation", () => {
     expect(run.statements).toEqual([]);
   });
 
-  it("creates a future open slot under the brand lock without reserving exhausted quota", async () => {
+  it("returns quota_exhausted without creating a future automatic slot under the brand lock", async () => {
     const run = harness((sql) => {
       if (sql.includes("clock_timestamp()")) return { rows: [{ future: true }], rowCount: 1 };
       if (sql.includes("from brand_channels")) return { rows: [{ channel: "instagram" }], rowCount: 1 };
@@ -185,12 +468,17 @@ describe("publish calendar repository settings and slot validation", () => {
       recommendationKind: "informational",
       contentFormat: "card_news",
       channels: ["instagram"],
-      idempotencyKey: automaticSlotKey({ kstDate: "2099-08-15", time: "11:30", occurrence: 0 }),
-    })).resolves.toMatchObject({ status: "open", contentSuggestionId: null });
+      idempotencyKey: automaticKey("2099-08-15"),
+    })).resolves.toEqual({ status: "quota_exhausted", slot: null });
 
     const sql = run.statements.map(({ sql }) => sql);
     expect(sql.findIndex((value) => value.includes("pg_advisory_xact_lock")))
       .toBeLessThan(sql.findIndex((value) => value.includes("from brand_subscriptions subscription")));
+    expect(sql.some((value) => value.startsWith("insert into publish_calendar_slots"))).toBe(false);
+    const usage = run.statements.find(({ sql: value }) => (
+      value.includes("calendar_usage") && value.includes("direct_publish_groups")
+    ));
+    expect(usage?.values[3]).toContain("open");
   });
 
   it("stores an internal automatic key without applying customer spacing", async () => {
@@ -210,7 +498,7 @@ describe("publish calendar repository settings and slot validation", () => {
       };
       throw new Error(`unexpected query: ${sql}`);
     });
-    const idempotencyKey = automaticSlotKey({ kstDate: "2099-08-15", time: "11:30", occurrence: 1 });
+    const idempotencyKey = automaticKey("2099-08-15", "30000000-0000-4000-8000-000000000092");
 
     await expect(createPublishCalendarRepository(run.pool).createSlot({
       ...scope,
@@ -220,7 +508,10 @@ describe("publish calendar repository settings and slot validation", () => {
       contentFormat: "reel",
       channels: ["instagram"],
       idempotencyKey,
-    })).resolves.toMatchObject({ idempotencyKey });
+    })).resolves.toEqual({
+      status: "created",
+      slot: expect.objectContaining({ idempotencyKey }),
+    });
 
     const insert = run.statements.find(({ sql }) => sql.startsWith("insert into publish_calendar_slots"));
     expect(insert?.sql).toContain("idempotency_key");
@@ -228,7 +519,7 @@ describe("publish calendar repository settings and slot validation", () => {
   });
 
   it("returns an existing automatic key before time, channel, and quota checks", async () => {
-    const idempotencyKey = automaticSlotKey({ kstDate: "2000-01-01", time: "11:30", occurrence: 0 });
+    const idempotencyKey = automaticKey("2000-01-01");
     const run = harness((sql) => {
       if (sql.includes("idempotency_key=$3::text")) return {
         rows: [slotRow({
@@ -248,7 +539,13 @@ describe("publish calendar repository settings and slot validation", () => {
       contentFormat: "reel",
       channels: ["instagram"],
       idempotencyKey,
-    })).resolves.toMatchObject({ idempotencyKey, scheduledFor: "2000-01-01T02:30:00.000Z" });
+    })).resolves.toEqual({
+      status: "existing",
+      slot: expect.objectContaining({
+        idempotencyKey,
+        scheduledFor: "2000-01-01T02:30:00.000Z",
+      }),
+    });
 
     expect(run.statements.some(({ sql }) => sql.includes("clock_timestamp()"))).toBe(false);
     expect(run.statements.some(({ sql }) => sql.includes("from brand_channels"))).toBe(false);
@@ -268,7 +565,7 @@ describe("publish calendar repository settings and slot validation", () => {
       recommendationKind: "informational",
       contentFormat: "card_news",
       channels: ["instagram"],
-      idempotencyKey: automaticSlotKey({ kstDate: "2099-08-15", time: "11:30", occurrence: 0 }),
+      idempotencyKey: automaticKey("2099-08-15"),
     })).rejects.toThrowError("publish_calendar_time_past");
 
     const sql = run.statements.map(({ sql }) => sql);
@@ -291,7 +588,7 @@ describe("publish calendar repository settings and slot validation", () => {
       recommendationKind: "informational",
       contentFormat: "card_news",
       channels: ["instagram"],
-      idempotencyKey: automaticSlotKey({ kstDate: "2020-01-01", time: "09:00", occurrence: 0 }),
+      idempotencyKey: automaticKey("2020-01-01"),
     })).rejects.toThrowError("publish_calendar_time_past");
     await expect(disconnected.createSlot({
       ...scope,
@@ -300,7 +597,7 @@ describe("publish calendar repository settings and slot validation", () => {
       recommendationKind: "informational",
       contentFormat: "card_news",
       channels: ["instagram"],
-      idempotencyKey: automaticSlotKey({ kstDate: "2099-01-01", time: "09:00", occurrence: 0 }),
+      idempotencyKey: automaticKey("2099-01-01"),
     })).rejects.toThrowError("publish_calendar_channel_not_connected");
 
     const inactiveRun = harness((sql) => {
@@ -316,8 +613,229 @@ describe("publish calendar repository settings and slot validation", () => {
       recommendationKind: "informational",
       contentFormat: "card_news",
       channels: ["instagram"],
-      idempotencyKey: automaticSlotKey({ kstDate: "2099-01-01", time: "09:00", occurrence: 1 }),
+      idempotencyKey: automaticKey("2099-01-01", "30000000-0000-4000-8000-000000000092"),
     })).rejects.toThrowError("publish_calendar_subscription_inactive");
+  });
+
+  it("batches automatic occurrences under one lock and usage read with cancel boundaries and replay precedence", async () => {
+    const periodEnd = new Date("2099-08-15T03:00:00.000Z");
+    const beforeKey = automaticKey("2099-08-15", "30000000-0000-4000-8000-000000000093");
+    const boundaryKey = automaticKey("2099-08-15", "30000000-0000-4000-8000-000000000094");
+    const replayKey = automaticKey("2099-08-15", "30000000-0000-4000-8000-000000000095");
+    let inserted = 0;
+    const run = harness((sql, values) => {
+      if (sql.startsWith("select settings.enabled")) return {
+        rows: [{
+          enabled: true,
+          channels: ["instagram"],
+          informational_format: "card_news",
+          trend_format: "reel",
+        }],
+        rowCount: 1,
+      };
+      if (sql.startsWith("select id,day_of_week,slot_time,sort_order")) return {
+        rows: [
+          { id: "30000000-0000-4000-8000-000000000095", day_of_week: 6, slot_time: "12:01", sort_order: 2 },
+          { id: "30000000-0000-4000-8000-000000000094", day_of_week: 6, slot_time: "12:00", sort_order: 1 },
+          { id: "30000000-0000-4000-8000-000000000093", day_of_week: 6, slot_time: "11:59", sort_order: 0 },
+        ],
+        rowCount: 3,
+      };
+      if (sql.includes("for update of subscription")) return {
+        rows: [{
+          status: "cancel_scheduled",
+          started_at: "2099-08-01T00:00:00.000Z",
+          current_period_start: "2099-08-01T00:00:00.000Z",
+          current_period_end: periodEnd,
+          weekly_generation_limit: 10,
+          weekly_publish_limit: 3,
+        }],
+        rowCount: 1,
+      };
+      if (sql.includes("idempotency_key=any")) return {
+        rows: [slotRow({
+          id: "existing-after-period",
+          scheduled_for: "2099-08-15T03:01:00.000Z",
+          idempotency_key: replayKey,
+        })],
+        rowCount: 1,
+      };
+      if (sql.includes("from brand_channels")) return { rows: [{ channel: "instagram" }], rowCount: 1 };
+      if (sql.includes("target_windows") && sql.includes("direct_publish_groups")) {
+        return { rows: [{ window_index: 0, published_count: 0, reserved_count: 0 }], rowCount: 1 };
+      }
+      if (sql.includes("clock_timestamp()")) return { rows: [{ now: new Date("2099-08-15T00:00:00.000Z") }], rowCount: 1 };
+      if (sql.startsWith("insert into publish_calendar_slots")) {
+        inserted += 1;
+        return {
+          rows: [slotRow({
+            id: `created-${inserted}`,
+            scheduled_for: values[2],
+            idempotency_key: values[6],
+            channels: values[5],
+          })],
+          rowCount: 1,
+        };
+      }
+      throw new Error(`unexpected query: ${sql}`);
+    });
+
+    await expect((createPublishCalendarRepository(run.pool) as any).provisionAutomaticOccurrences({
+      ...scope,
+      occurrences: [
+        {
+          scheduleEntryId: "30000000-0000-4000-8000-000000000095",
+          scheduledFor: new Date("2099-08-15T03:01:00.000Z"),
+          recommendationKind: "informational",
+          idempotencyKey: replayKey,
+        },
+        {
+          scheduleEntryId: "30000000-0000-4000-8000-000000000094",
+          scheduledFor: periodEnd,
+          recommendationKind: "trend",
+          idempotencyKey: boundaryKey,
+        },
+        {
+          scheduleEntryId: "30000000-0000-4000-8000-000000000093",
+          scheduledFor: new Date(periodEnd.getTime() - 60_000),
+          recommendationKind: "informational",
+          idempotencyKey: beforeKey,
+        },
+      ],
+    })).resolves.toEqual([
+      { idempotencyKey: beforeKey, status: "created", slot: expect.objectContaining({ idempotencyKey: beforeKey }) },
+      { idempotencyKey: boundaryKey, status: "subscription_ineligible", slot: null },
+      { idempotencyKey: replayKey, status: "existing", slot: expect.objectContaining({ idempotencyKey: replayKey }) },
+    ]);
+
+    expect(run.statements.filter(({ sql }) => sql.includes("pg_advisory_xact_lock"))).toHaveLength(1);
+    expect(run.statements.filter(({ sql }) => (
+      sql.includes("target_windows") && sql.includes("direct_publish_groups")
+    ))).toHaveLength(1);
+    expect(run.statements.filter(({ sql }) => sql.includes("idempotency_key=any"))).toHaveLength(1);
+    expect(run.statements.filter(({ sql }) => sql.startsWith("insert into publish_calendar_slots"))).toHaveLength(1);
+  });
+
+  it("does not apply the cancel_scheduled period boundary to an active subscription", async () => {
+    const idempotencyKey = automaticKey("2099-08-15", "30000000-0000-4000-8000-000000000096");
+    const run = harness((sql, values) => {
+      if (sql.startsWith("select settings.enabled")) return {
+        rows: [{ enabled: true, channels: ["instagram"], informational_format: "card_news", trend_format: "reel" }],
+        rowCount: 1,
+      };
+      if (sql.startsWith("select id,day_of_week,slot_time,sort_order")) return {
+        rows: [{ id: "30000000-0000-4000-8000-000000000096", day_of_week: 6, slot_time: "12:01", sort_order: 0 }],
+        rowCount: 1,
+      };
+      if (sql.includes("for update of subscription")) return {
+        rows: [{
+          status: "active",
+          started_at: "2099-08-01T00:00:00.000Z",
+          current_period_start: "2099-08-01T00:00:00.000Z",
+          current_period_end: "2099-08-15T03:00:00.000Z",
+          weekly_generation_limit: 10,
+          weekly_publish_limit: 1,
+        }],
+        rowCount: 1,
+      };
+      if (sql.includes("idempotency_key=any")) return { rows: [], rowCount: 0 };
+      if (sql.includes("from brand_channels")) return { rows: [{ channel: "instagram" }], rowCount: 1 };
+      if (sql.includes("target_windows") && sql.includes("direct_publish_groups")) {
+        return { rows: [{ window_index: 0, published_count: 0, reserved_count: 0 }], rowCount: 1 };
+      }
+      if (sql.includes("clock_timestamp()")) return { rows: [{ now: new Date("2099-08-15T00:00:00.000Z") }], rowCount: 1 };
+      if (sql.startsWith("insert into publish_calendar_slots")) return {
+        rows: [slotRow({ scheduled_for: values[2], idempotency_key: values[6] })], rowCount: 1,
+      };
+      throw new Error(`unexpected query: ${sql}`);
+    });
+
+    await expect((createPublishCalendarRepository(run.pool) as any).provisionAutomaticOccurrences({
+      ...scope,
+      occurrences: [{
+        scheduleEntryId: "30000000-0000-4000-8000-000000000096",
+        scheduledFor: new Date("2099-08-15T03:01:00.000Z"),
+        recommendationKind: "trend",
+        idempotencyKey,
+      }],
+    })).resolves.toEqual([{
+      idempotencyKey,
+      status: "created",
+      slot: expect.objectContaining({ idempotencyKey }),
+    }]);
+  });
+
+  it("spends one computed remaining unit in schedule sort order and identifies every batch result", async () => {
+    const firstEntryId = "30000000-0000-4000-8000-000000000097";
+    const secondEntryId = "30000000-0000-4000-8000-000000000098";
+    const firstKey = automaticKey("2099-08-15", firstEntryId);
+    const secondKey = automaticKey("2099-08-15", secondEntryId);
+    const run = harness((sql, values) => {
+      if (sql.startsWith("select settings.enabled")) return {
+        rows: [{ enabled: true, channels: ["instagram"], informational_format: "card_news", trend_format: "reel" }],
+        rowCount: 1,
+      };
+      if (sql.startsWith("select id,day_of_week,slot_time,sort_order")) return {
+        rows: [
+          { id: firstEntryId, day_of_week: 6, slot_time: "12:05", sort_order: 0 },
+          { id: secondEntryId, day_of_week: 6, slot_time: "12:05", sort_order: 1 },
+        ],
+        rowCount: 2,
+      };
+      if (sql.includes("for update of subscription")) return {
+        rows: [{
+          status: "active",
+          started_at: "2099-08-01T00:00:00.000Z",
+          current_period_start: "2099-08-01T00:00:00.000Z",
+          current_period_end: "2099-09-01T00:00:00.000Z",
+          weekly_generation_limit: 10,
+          weekly_publish_limit: 2,
+        }],
+        rowCount: 1,
+      };
+      if (sql.includes("idempotency_key=any")) return { rows: [], rowCount: 0 };
+      if (sql.includes("from brand_channels")) return { rows: [{ channel: "instagram" }], rowCount: 1 };
+      if (sql.includes("target_windows") && sql.includes("direct_publish_groups")) {
+        return { rows: [{ window_index: 0, published_count: 0, reserved_count: 1 }], rowCount: 1 };
+      }
+      if (sql.includes("clock_timestamp()")) return { rows: [{ now: new Date("2099-08-15T00:00:00.000Z") }], rowCount: 1 };
+      if (sql.startsWith("insert into publish_calendar_slots")) return {
+        rows: [slotRow({ scheduled_for: values[2], idempotency_key: values[6] })], rowCount: 1,
+      };
+      throw new Error(`unexpected query: ${sql}`);
+    });
+
+    await expect((createPublishCalendarRepository(run.pool) as any).provisionAutomaticOccurrences({
+      ...scope,
+      occurrences: [
+        {
+          scheduleEntryId: secondEntryId,
+          scheduledFor: new Date("2099-08-15T03:05:00.000Z"),
+          recommendationKind: "trend",
+          idempotencyKey: secondKey,
+        },
+        {
+          scheduleEntryId: firstEntryId,
+          scheduledFor: new Date("2099-08-15T03:05:00.000Z"),
+          recommendationKind: "informational",
+          idempotencyKey: firstKey,
+        },
+      ],
+    })).resolves.toEqual([
+      { idempotencyKey: firstKey, status: "created", slot: expect.objectContaining({ idempotencyKey: firstKey }) },
+      { idempotencyKey: secondKey, status: "quota_exhausted", slot: null },
+    ]);
+
+    const usageReads = run.statements.filter(({ sql }) => (
+      sql.includes("target_windows") && sql.includes("direct_publish_groups")
+    ));
+    expect(usageReads).toHaveLength(1);
+    expect(run.statements.filter(({ sql }) => sql.includes("pg_advisory_xact_lock"))).toHaveLength(1);
+    expect(usageReads[0]!.sql.indexOf("relevant_direct_keys"))
+      .toBeLessThan(usageReads[0]!.sql.indexOf("direct_publish_groups"));
+    expect(usageReads[0]!.sql).toContain("slot.scheduled_for>=target.starts_at");
+    expect(usageReads[0]!.sql).toContain("queue.published_at>=bounds.starts_at");
+    expect(run.statements.filter(({ sql }) => sql.startsWith("insert into publish_calendar_slots"))).toHaveLength(1);
   });
 });
 
@@ -1415,6 +1933,41 @@ describe("publish calendar usage and subscription renewal", () => {
     const repository = createPublishCalendarRepository(harness(() => ({ rows: [], rowCount: 0 })).pool);
     await expect(repository.getWeeklyUsage({ ...scope, at: new Date("2026-08-13T00:00:00Z") }))
       .rejects.toThrowError("publish_calendar_subscription_inactive");
+  });
+
+  it("projects a due active renewal without issuing an update", async () => {
+    const run = harness((sql) => {
+      if (sql.startsWith("select subscription.brand_id")) return {
+        rows: [{
+          brand_id: scope.brandId,
+          plan_code: "starter",
+          pending_plan_code: "growth",
+          status: "active",
+          cancel_at_period_end: false,
+          current_plan_active: true,
+          pending_plan_active: true,
+          started_at: "2025-12-31T00:00:00.000Z",
+          current_period_start: "2025-12-31T00:00:00.000Z",
+          current_period_end: "2026-01-31T00:00:00.000Z",
+        }],
+        rowCount: 1,
+      };
+      return { rows: [], rowCount: 0 };
+    });
+
+    await expect(createPublishCalendarRepository(run.pool)
+      .previewDueSubscriptionRenewals(new Date("2026-04-20T00:00:00.000Z")))
+      .resolves.toEqual([{
+        status: "applied",
+        brandId: scope.brandId,
+        previousPlanCode: "starter",
+        planCode: "growth",
+        currentPeriodStart: new Date("2026-03-31T00:00:00.000Z"),
+        currentPeriodEnd: new Date("2026-04-30T00:00:00.000Z"),
+        cancelled: false,
+      }]);
+    expect(run.statements.some(({ sql }) => sql.startsWith("update brand_subscriptions"))).toBe(false);
+    expect(run.statements.some(({ sql }) => sql === "begin")).toBe(false);
   });
 
   it("applies a pending plan only at renewal and catches up elapsed calendar months", async () => {

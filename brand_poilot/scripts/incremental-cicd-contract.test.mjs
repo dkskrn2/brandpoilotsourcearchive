@@ -106,10 +106,99 @@ test("deployment scripts inspect legacy cutover sources but normal rollback targ
   assert.match(example, /^API_CHANGED=/m);
   assert.match(example, /^CARD_NEWS_WORKER_SOURCE_SHA=/m);
   assert.match(example, /^CARD_NEWS_WORKER_CHANGED=/m);
+  assert.match(workflow, /component: "publishScheduler"[^\n]*dockerfile: "workers\/brand-pilot-publish-scheduler\/Dockerfile"[^\n]*imageKeys: \["PUBLISH_SCHEDULER_IMAGE"\]/);
+  assert.match(workflow, /if: fromJSON\(needs\.impact\.outputs\.components\)\.publishScheduler[\s\S]*node --test workers\/brand-pilot-publish-scheduler\/src\/scheduler\.test\.mjs/);
+  assert.match(example, /^PUBLISH_SCHEDULER_IMAGE=/m);
+  assert.match(example, /^PUBLISH_SCHEDULER_SOURCE_SHA=/m);
+  assert.match(example, /^PUBLISH_SCHEDULER_CHANGED=/m);
 });
 
 test("workflow does not apply database migrations automatically", () => {
   assert.doesNotMatch(workflow, /npm run db:migrate|node scripts\/migrate\.mjs|\bpsql\b/);
+});
+
+test("migration changes run all impacted PostgreSQL contracts without a silent skip", () => {
+  const migrationGate = workflow.match(
+    /- name: Verify migrations\n([\s\S]*?)(?=\n {6}- name:)/,
+  )?.[1] ?? "";
+  assert.match(migrationGate, /if: needs\.impact\.outputs\.migration_changed == 'true'/);
+  for (const migration of ["086", "092"]) {
+    assert.match(
+      migrationGate,
+      new RegExp(
+        `npm exec --workspace @brand-pilot/api -- vitest run src/publishCalendarMigration${migration}\\.postgres\\.integration\\.test\\.ts`,
+      ),
+    );
+  }
+  assert.doesNotMatch(
+    migrationGate,
+    /publishCalendarMigration(?:086|092)\.postgres\.integration\.test\.ts[^\n]*(?:\|\|\s*true|--passWithNoTests)/,
+  );
+
+  assert.match(
+    migrationGate,
+    /npm exec --workspace @brand-pilot\/api -- vitest run src\/aiContentPromptVersionMigration091\.postgres\.integration\.test\.ts/,
+  );
+  assert.doesNotMatch(
+    migrationGate,
+    /aiContentPromptVersionMigration091\.postgres\.integration\.test\.ts[^\n]*(?:\|\|\s*true|--passWithNoTests)/,
+  );
+
+  const migration092Test = readFileSync(
+    "apps/api/src/publishCalendarMigration092.postgres.integration.test.ts",
+    "utf8",
+  );
+  assert.doesNotMatch(migration092Test, /\b(?:describe|it|test)\.skip\s*\(|\bskip\s*:/);
+  assert.match(
+    migration092Test,
+    /import\s*\{\s*createPublishCalendarRepository\s*\}\s*from\s*"\.\/publishCalendarRepository\.js"/,
+  );
+  assert.match(
+    migration092Test,
+    /createPublishCalendarRepository\(application\)/,
+  );
+  assert.match(
+    migration092Test,
+    /createDatabasePublishCalendarAllocator\(application,\s*repository\)/,
+  );
+  assert.match(migration092Test, /allocator\.allocateAll\s*\(/);
+  assert.match(migration092Test, /repository\.saveWeeklySettings\s*\(/);
+  assert.match(migration092Test, /repository\.saveWeeklyConfiguration\s*\(/);
+  assert.match(migration092Test, /repository\.setWeeklyEnabled\s*\(/);
+  assert.match(
+    migration092Test,
+    /Promise\.all\s*\(\s*\[[\s\S]*?repository\.setWeeklyEnabled\s*\([\s\S]*?repository\.saveWeeklyConfiguration\s*\(/,
+  );
+  assert.match(migration092Test, /repository\.getWeeklySettings\s*\(/);
+  assert.match(migration092Test, /from pg_auth_members[\s\S]*where member\.rolname=current_user/);
+
+  const weeklyRepository = readFileSync("apps/api/src/publishCalendarRepository.ts", "utf8");
+  assert.match(weeklyRepository, /saveWeeklyConfiguration\s*\(/);
+  assert.match(weeklyRepository, /setWeeklyEnabled\s*\(/);
+  assert.match(
+    weeklyRepository,
+    /insert into publish_calendar_weekly_schedule_entries\([\s\S]*?returning id,day_of_week,slot_time,sort_order/,
+  );
+});
+
+test("API verification runs the real publish-due repository PostgreSQL path without a silent skip", () => {
+  const verifyJob = workflow;
+  assert.match(
+    verifyJob,
+    /npm exec --workspace @brand-pilot\/api -- vitest run src\/publishDueRun\.postgres\.integration\.test\.ts/,
+  );
+  assert.doesNotMatch(
+    verifyJob,
+    /publishDueRun\.postgres\.integration\.test\.ts[^\n]*(?:\|\|\s*true|--passWithNoTests)/,
+  );
+
+  const integration = readFileSync("apps/api/src/publishDueRun.postgres.integration.test.ts", "utf8");
+  assert.doesNotMatch(integration, /\b(?:describe|it|test)\.skip\s*\(|\bskip\s*:/);
+  assert.match(integration, /import\s*\{\s*createRepository\s*\}\s*from\s*"\.\/repository\.js"/);
+  assert.match(integration, /createRepository\(application,/);
+  assert.match(integration, /repository\.runDuePublishing\s*\(/);
+  assert.doesNotMatch(integration, /import\s*\{\s*runPublishDue\s*\}/);
+  assert.doesNotMatch(integration, /claimQueueItem\s*:/);
 });
 
 test("bash parser accepts schema 3 and returns each component source revision", (t) => {

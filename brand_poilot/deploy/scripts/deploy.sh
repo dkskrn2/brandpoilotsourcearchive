@@ -8,19 +8,42 @@ source "$SCRIPT_DIR/lib.sh"
 
 ROOT="${BRAND_PILOT_ROOT:-/opt/brand-pilot}"
 READY_TIMEOUT_SECONDS="${READY_TIMEOUT_SECONDS:-120}"
-[[ $# -eq 3 && "$2" == "--phase" ]] || fail "usage_deploy_manifest_phase"
-MANIFEST="$1"
-PHASE="$3"
-[[ "$PHASE" == "canary" ]] || fail "use_promote_for_production"
+DEPLOY_MODE=""
+MANIFEST="${1:-}"
+PHASE=""
+if [[ $# -eq 3 && "$2" == "--phase" ]]; then
+  DEPLOY_MODE="api"
+  PHASE="$3"
+  [[ "$PHASE" == "canary" ]] || fail "use_promote_for_production"
+elif [[ $# -eq 3 && "$2" == "--component" && "$3" == "publish-scheduler" ]]; then
+  DEPLOY_MODE="publish-scheduler"
+else
+  fail "usage_deploy_manifest_phase_or_component"
+fi
 
 for command_name in cmp docker flock grep id install mktemp sha256sum sync; do
   require_command "$command_name"
 done
 
+if [[ "$DEPLOY_MODE" == "publish-scheduler" ]]; then
+  # publish-scheduler) targets publish-scheduler-1 only.
+  require_command realpath
+  [[ "$(basename -- "$MANIFEST")" == "release.env" && -f "$MANIFEST" && ! -L "$MANIFEST" ]] ||
+    fail "publish_scheduler_manifest_invalid"
+  mkdir -p -- "$ROOT/state"
+  exec 9>"$ROOT/state/deploy.lock"
+  flock -n 9 || fail "deploy_lock_busy"
+  [[ ! -e "$ROOT/state/transition.journal" && ! -L "$ROOT/state/transition.journal" ]] ||
+    fail "deploy_transition_in_progress"
+  deploy_publish_scheduler_release "$ROOT" "$(cd -- "$(dirname -- "$MANIFEST")" && pwd)" "$READY_TIMEOUT_SECONDS"
+  status_ok "publish_scheduler_deployment"
+  exit 0
+fi
+
 POST_075_DATA_MIGRATION_ID="076_manual_content_generation_brand_rules.sql"
 POST_075_DATA_MIGRATION_SHA256="da42c957d4307d58c1f37f5d508c8a1f14836727080d6290e4b0537e43167604"
-POST_075_SCHEMA_MIGRATION_ID="091_ai_content_prompt_lineage_v4.sql"
-POST_075_SCHEMA_MIGRATION_SHA256="05696c55ee959cd80ef7cdf30fcb07e93e0579da515042ebd8e8aafb9cde5e10"
+POST_075_SCHEMA_MIGRATION_ID="092_publish_calendar_weekly_schedule.sql"
+POST_075_SCHEMA_MIGRATION_SHA256="c1bf905666ce4dabac137c0522fa0dc0300f574eda6d1e9648283f00b2af4d2b"
 
 validate_post_075_data_migration_evidence() {
   local evidence_file="$1"
@@ -220,6 +243,7 @@ export IMAGE_WORKER_IMAGE="${RELEASE_MANIFEST[IMAGE_WORKER_IMAGE]}"
 export CARD_NEWS_WORKER_IMAGE="${RELEASE_MANIFEST[CARD_NEWS_WORKER_IMAGE]}"
 export BLOG_WORKER_IMAGE="${RELEASE_MANIFEST[BLOG_WORKER_IMAGE]}"
 export REEL_WORKER_IMAGE="${RELEASE_MANIFEST[REEL_WORKER_IMAGE]}"
+export PUBLISH_SCHEDULER_IMAGE="${RELEASE_MANIFEST[PUBLISH_SCHEDULER_IMAGE]}"
 
 START_CADDY=false
 if [[ -z "$CURRENT_SHA" && -z "$PREVIOUS_CANDIDATE_SHA" ]]; then

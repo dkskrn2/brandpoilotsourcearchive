@@ -16,6 +16,7 @@
 - `workers/brand-pilot-subject-analysis-worker`: 제품·서비스 분석과 소구점 생성 워커
 - `workers/brand-pilot-content-proposal-worker`: 콘텐츠 제안 생성 워커
 - `workers/brand-pilot-card-news-worker`, `brand-pilot-blog-worker`, `brand-pilot-reel-worker`: 산출물 유형별 생성 워커
+- `workers/brand-pilot-publish-scheduler`: 게시 실행과 게시 캘린더 자동 배정을 primary API에 요청하는 독립 스케줄러
 - `db`: PostgreSQL 마이그레이션, 스모크 테스트, 로컬 DB 안내
 - `docs`: 제품 명세, 배포·운영 절차, 출시 체크리스트
 
@@ -181,7 +182,7 @@ Frontend-only, server-only, migration 포함 릴리스의 명령과 rollback 경
 
 운영 AI 실행은 모두 `@openai/codex@0.145.0`으로 고정된 Codex CLI와 Ubuntu의 단일 ChatGPT 로그인으로 수행합니다. 직접 OpenAI API key를 요구하거나 model API를 호출하는 운영 경로는 없습니다. 로그인 상태는 `/opt/brand-pilot/shared/codex`를 컨테이너의 writable `/codex`로 mount해 공유하고, worker root filesystem과 일반 작업 공간은 read-only/tmpfs 경계에 둡니다.
 
-릴리스에는 9개 worker image key와 10개 profile 전용 worker service(DM 2개 포함)가 들어가지만 첫 배포에서 자동 시작하지 않습니다. 2026-07-30 Ubuntu ChatGPT 로그인과 비출력 상태 검사는 완료됐습니다. 이는 worker 배포 또는 실제 온보딩 QA 완료를 뜻하지 않습니다. image digest, profile별 점진 활성화, 인증 권한과 증빙 형식은 [Ubuntu 배포 런북](docs/operations/UBUNTU_DEPLOYMENT.md)을 따르세요.
+릴리스에는 9개 Codex worker image key와 10개 profile 전용 worker service(DM 2개 포함), 그리고 별도의 게시 스케줄러 image/service가 들어가지만 첫 배포에서 자동 시작하지 않습니다. 2026-07-30 Ubuntu ChatGPT 로그인과 비출력 상태 검사는 완료됐습니다. 이는 worker 배포 또는 실제 온보딩 QA 완료를 뜻하지 않습니다. image digest, profile별 점진 활성화, 인증 권한과 증빙 형식은 [Ubuntu 배포 런북](docs/operations/UBUNTU_DEPLOYMENT.md)을 따르세요.
 
 ## 선택적 로컬 PostgreSQL
 
@@ -211,10 +212,10 @@ URL을 새로 등록하면 해당 URL을 즉시 한 번 크롤링합니다. 이�
 - URL 크롤링: 15분마다 실행 후보를 확인
 - 콘텐츠 생성: 매일 오전 10시 KST, 브랜드별 1회만 생성
 - 성과 수집: 로컬 중앙 API가 매일 오전 3시 KST 이후 첫 스케줄러 틱에서 브랜드·채널별 1회 실행
-- 자동 게시: 브랜드 전체에서 하루 최대 4개 주제 그룹을 11:30, 14:30, 17:30, 20:30 KST 정책 슬롯에 배정
+- 자동 게시: 사용자가 켠 채널과 요일별 주간 일정에 맞춰 하루 여러 슬롯을 배정하며, 같은 시각도 중복 등록할 수 있음
 - 자동 승인: 검토만 건너뛰며 즉시 게시하지 않음. 이미지 렌더 완료 후에도 정책 슬롯까지 대기
 
-같은 주제의 활성 채널 결과물은 하나의 `topic_publish_group`으로 묶이며, 준비된 결과물 전체가 같은 슬롯과 `scheduled_for`를 공유합니다. 한도는 채널별 4개가 아니라 브랜드별 주제 그룹 4개입니다.
+자동 배정은 구독 시작일 기준 주간 게시 한도 안에서 추천 콘텐츠와 비어 있는 주간 슬롯을 연결합니다. 추천 콘텐츠가 부족하면 슬롯은 비워 두며, 이미 배정된 슬롯과 완료된 게시를 중복 생성하지 않습니다. 자동 게시 설정의 DB 기본값은 꺼짐이고, 운영 활성화 절차는 [게시 스케줄러 활성화·중지 런북](docs/operations/PUBLISH_SCHEDULER.md)을 따릅니다.
 
 ## 멀티채널 기반
 
@@ -228,13 +229,13 @@ Webflow는 지원 채널이 아닙니다. 마이그레이션 `035_remove_webflow
 
 성과 수집은 Vercel Cron 작업이 아닙니다. `.env.example`의 안전한 예제 기본값은 `LOCAL_SCHEDULER_ENABLED=false`입니다. 매일 03:00 KST 성과 수집 작업을 실행하려면 실제 로컬 중앙 API 환경(`apps/api/.env` 또는 프로세스 환경 변수)에 `LOCAL_SCHEDULER_ENABLED=true`를 설정하고 하나 이상의 API 프로세스를 지속 실행해야 합니다. 스케줄러는 매분 성과 수집 진입점을 호출하고, 저장소가 03:00 KST 이전 요청과 당일 중복 실행을 처리합니다. 03:00에 프로세스가 중단돼 있었더라도 재시작 후 다음 틱에서 당일 작업을 보충 실행합니다. Vercel 인스턴스에서는 `VERCEL` 환경 분기로 로컬 스케줄러가 시작되지 않습니다.
 
-기존 `/internal/cron/source-crawl`, `/internal/cron/daily-generation`, `/internal/cron/publish-due` 엔드포인트는 Vercel Cron에서 계속 호출할 수 있으며 `CRON_SECRET` 인증이 필요합니다. 게시 캘린더 자동 배정은 별도 `POST /internal/cron/publish-calendar-allocate`를 사용합니다. 이 호출은 콘텐츠 추천 배치가 완료된 뒤 매일 05:20 KST에 등록하며, 운영 API의 로컬 스케줄러를 켜지 않습니다. 캘린더 자동 설정의 DB 기본값은 꺼짐이므로 migration/API 배포만으로 기존 브랜드에 슬롯이나 게시가 생성되지 않습니다.
+기존 `/internal/cron/source-crawl`, `/internal/cron/daily-generation`과 게시 스케줄러 엔드포인트는 `CRON_SECRET` 인증이 필요합니다. 게시 실행은 primary API의 `POST /internal/cron/publish-due`, 게시 캘린더 자동 배정은 primary API의 `POST /internal/cron/publish-calendar-allocate`를 사용합니다. 두 작업의 canary 사전 검증은 각각 인증된 read-only `GET .../preview`를 사용하며, 기존 mutating `GET /internal/cron/publish-due`는 제거되었습니다. 캘린더 자동 설정의 DB 기본값은 꺼짐이므로 API 배포만으로 기존 브랜드에 슬롯이나 게시가 생성되지 않습니다.
 
 자동 운영을 배포 환경에서 사용하려면 다음 순서를 따르세요.
 
 1. `npm run db:migrate`로 Supabase 적용 이력을 확인하고 pending 마이그레이션을 적용합니다.
-2. Vercel Production 환경에 충분히 긴 임의의 `CRON_SECRET`을 등록합니다.
-3. API를 배포하고 `source-crawl`, `daily-generation`, `publish-due` Cron 호출을 확인합니다. 게시 캘린더를 활성화하는 릴리스에서는 추천 작업 뒤의 `publish-calendar-allocate` POST 호출도 별도로 확인합니다.
+2. 운영 API 환경에 충분히 긴 임의의 `CRON_SECRET`을 등록하고 Compose의 `API_INSTANCE_ROLE`이 primary/canary에 명시됐는지 확인합니다.
+3. API를 배포하고 read-only preview를 먼저 확인한 뒤 primary POST 실행 경로를 확인합니다.
 
 코드 변경만으로 운영 DB 마이그레이션이나 Vercel 배포가 자동 수행되지는 않습니다.
 
@@ -262,7 +263,8 @@ npm run verify:reel --workspace @brand-pilot/image-worker
 
 실제 런타임이 읽는 환경 변수는 다음과 같습니다. 값은 `.env` 또는 배포 비밀 저장소에만 두고 문서에 기록하지 않습니다.
 
-- 중앙 API: `SUPABASE_DATABASE_URL`, `DATABASE_URL`, `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_BRAND_ASSETS_BUCKET`, `PUBLISH_ARTIFACT_ALLOWED_ORIGINS`, `WORKER_API_TOKEN`, `WORKER_CODEX_MAX_CONCURRENCY`, `WORKER_CODEX_DM_RESERVED_SLOTS`, `CRON_SECRET`, `LOCAL_SCHEDULER_ENABLED`, `SOURCE_CRAWL_BATCH_SIZE`, `SOURCE_CRAWL_DISCOVERY_LIMIT`, `SOURCE_CRAWL_TIME_BUDGET_MS`, `CREDENTIAL_ENCRYPTION_KEY`, `INSTAGRAM_PUBLISH_ENABLED`, `IMAGE_JOB_COOLDOWN_MS`, `META_GRAPH_VERSION`, `META_APP_ID`, `META_APP_SECRET`, `META_OAUTH_REDIRECT_URI`, `META_TRENDS_OAUTH_REDIRECT_URI`, `META_WEBHOOK_VERIFY_TOKEN`, `KAKAO_REST_API_KEY`, `KAKAO_CLIENT_SECRET`, `KAKAO_REDIRECT_URI`, `AUTH_FRONTEND_URL`, `AUTH_PREVIEW_FRONTEND_URL`, `BRAND_PILOT_DEV_BRAND_ID`, `PORT`, `HOST`, `NODE_ENV`, `VERCEL`
+- 중앙 API: `SUPABASE_DATABASE_URL`, `DATABASE_URL`, `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_BRAND_ASSETS_BUCKET`, `PUBLISH_ARTIFACT_ALLOWED_ORIGINS`, `WORKER_API_TOKEN`, `WORKER_CODEX_MAX_CONCURRENCY`, `WORKER_CODEX_DM_RESERVED_SLOTS`, `CRON_SECRET`, `API_INSTANCE_ROLE`, `LOCAL_SCHEDULER_ENABLED`, `SOURCE_CRAWL_BATCH_SIZE`, `SOURCE_CRAWL_DISCOVERY_LIMIT`, `SOURCE_CRAWL_TIME_BUDGET_MS`, `CREDENTIAL_ENCRYPTION_KEY`, `INSTAGRAM_PUBLISH_ENABLED`, `IMAGE_JOB_COOLDOWN_MS`, `META_GRAPH_VERSION`, `META_APP_ID`, `META_APP_SECRET`, `META_OAUTH_REDIRECT_URI`, `META_TRENDS_OAUTH_REDIRECT_URI`, `META_WEBHOOK_VERIFY_TOKEN`, `KAKAO_REST_API_KEY`, `KAKAO_CLIENT_SECRET`, `KAKAO_REDIRECT_URI`, `AUTH_FRONTEND_URL`, `AUTH_PREVIEW_FRONTEND_URL`, `BRAND_PILOT_DEV_BRAND_ID`, `PORT`, `HOST`, `NODE_ENV`, `VERCEL`
+- 게시 스케줄러: `PRIMARY_API_INTERNAL_URL`, `CRON_SECRET_FILE`, `PUBLISH_TICK_MS`, `PUBLISH_TIMEOUT_MS`
 - 고객 UI: `VITE_API_BASE_URL`, `VITE_AUTH_DESTINATION`, `VITE_META_TRENDS_CONNECT_URL` (로컬 UI에서 Meta 트렌드 OAuth를 시작할 때 배포된 HTTPS API의 `/auth/meta/trends/start` 사용)
 - 콘텐츠 생성 워커(코드 경로 `brand-pilot-image-worker`): `BRAND_PILOT_API_URL`, `WORKER_API_TOKEN`, `WORKER_ID`, `WORKER_RESOURCE_POLL_INTERVAL_MS`, `WORKER_RESOURCE_HEARTBEAT_INTERVAL_MS`, `BLOB_READ_WRITE_TOKEN`, `IMAGE_PROVIDER`, `IMAGE_RENDER_COMMAND`, `IMAGE_JOB_TIMEOUT_MS`, `IMAGE_MODEL`, `IMAGE_RETRY_DELAY_MS`, `POLL_INTERVAL_MS`, `HEARTBEAT_INTERVAL_MS`, `WORKER_CONTROL_PORT`, `PYTHON`, `CODEX_HOME`, `CODEX_COMMAND`, `APPDATA`, `NODE_ENV`
 - 제품·서비스 분석 워커: `BRAND_PILOT_API_URL`, `WORKER_API_TOKEN`, `SUBJECT_ANALYSIS_WORKER_ID`, `SUBJECT_ANALYSIS_POLL_MS`, `SUBJECT_ANALYSIS_LEASE_SECONDS`, `SUBJECT_ANALYSIS_HEARTBEAT_MS`, `SUBJECT_ANALYSIS_API_TIMEOUT_MS`, `SUBJECT_ANALYSIS_CODEX_TIMEOUT_MS`, `SUBJECT_ANALYSIS_CODEX_COMMAND`, `SUBJECT_ANALYSIS_CODEX_MODEL`, `SUBJECT_ANALYSIS_CODEX_REASONING_EFFORT`, `SUBJECT_ANALYSIS_CODEX_FAST_MODE`
@@ -287,6 +289,7 @@ Rollout 기준은 Feed 활성 유지, Story capability 확인 후 활성화, Ree
 - [서버 이전 및 출시 체크리스트](docs/SERVER_MIGRATION_AND_LAUNCH_CHECKLIST.md)
 - [Vercel 중앙 API 배포](docs/VERCEL_CENTRAL_API_DEPLOYMENT.md)
 - [Vercel preview 인증](docs/operations/VERCEL_PREVIEW_AUTH.md)
+- [게시 스케줄러 활성화·중지 런북](docs/operations/PUBLISH_SCHEDULER.md)
 - [콘텐츠 생성 워커 설정](docs/IMAGE_WORKER_SETUP.md)
 - [콘텐츠 생성 워커 README](workers/brand-pilot-image-worker/README.md)
 - [Instagram DM 자동응답 설계](docs/superpowers/specs/2026-07-14-instagram-dm-ai-auto-reply-design.md)

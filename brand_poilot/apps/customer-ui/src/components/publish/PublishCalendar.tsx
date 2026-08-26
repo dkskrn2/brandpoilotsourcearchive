@@ -1,19 +1,31 @@
-import { CalendarDays, ChevronLeft, ChevronRight, Clock3, Settings2, X } from "lucide-react";
+import { CalendarDays, ChevronLeft, ChevronRight, Settings2, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { ChannelType, PublishCalendarManualOptions, PublishCalendarNewContentSetup, PublishCalendarSettings, PublishItem } from "../../types";
-import { dateKey, monthCells, timeLabel, type CalendarEntry } from "../../features/publishing/publishCalendar";
-import { ChannelLogo } from "../channels/ChannelLogo";
-import { Badge } from "../ui/Badge";
+import type { ChannelConnection, ChannelType, PublishCalendarManualOptions, PublishCalendarNewContentSetup, PublishCalendarSettings, PublishCalendarWeeklySettings, PublishCalendarWeeklySettingsInput, PublishCalendarWeeklyUsage, PublishItem } from "../../types";
+import { dateKey, monthCells, timeLabel } from "../../features/publishing/publishCalendar";
+import { publishStatusPresentation } from "../../features/publishing/publishPresentation";
 import { FocusTrap } from "../ui/FocusTrap";
-import { ManualPublishProvisioner } from "./ManualPublishProvisioner";
-import { PublishManagementPreview, resolvePublishPreview, type PublishCardPreview } from "./PublishManagementPreview";
+import type { PublishCardPreview } from "./PublishManagementPreview";
 import type { PublishCalendarBulkDraft, PublishCalendarBulkDraftRow } from "../../features/publishing/publishCalendarBulkDraft";
+import { PublishContentPickerDialog } from "./PublishContentPickerDialog";
+import { PublishDateDetail, type PresentedCalendarEntry } from "./PublishDateDetail";
+import { PublishMobileAgenda } from "./PublishMobileAgenda";
+import { AutoPublishHeaderControl } from "./AutoPublishHeaderControl";
+import { WeeklyAutoPublishDialog } from "./WeeklyAutoPublishDialog";
 
 type Props = {
   monthKey: string;
-  entries: CalendarEntry[];
+  entries: PresentedCalendarEntry[];
   connectedChannels: ChannelType[];
+  channelCatalog?: ChannelConnection[];
+  publishableChannels?: ChannelType[];
   settings: PublishCalendarSettings | null;
+  weeklyCapability?: boolean | null;
+  weeklySettings?: PublishCalendarWeeklySettings | null;
+  weeklyStatus?: AsyncLoadStatus;
+  weeklyUsage?: PublishCalendarWeeklyUsage | null;
+  weeklyUsageStatus?: AsyncLoadStatus;
+  channelsStatus?: AsyncLoadStatus;
+  capabilitiesStatus?: AsyncLoadStatus;
   settingsError: string | null;
   slotsError: string | null;
   slotsLoading: boolean;
@@ -37,14 +49,16 @@ type Props = {
   onRescheduleItem(itemKey: string, trigger: HTMLButtonElement): void;
   onLoadManualOptions(): void;
   onSaveSettings(input: Omit<PublishCalendarSettings, "brandId" | "updatedAt">): Promise<{ ok: boolean; message?: string }>;
+  onSaveWeeklySettings?(input: PublishCalendarWeeklySettingsInput): Promise<{ ok: boolean; message?: string }>;
+  onToggleWeekly?(enabled: boolean): Promise<{ ok: boolean; message?: string }>;
+  onRetryWeekly?(): void;
+  onRetryLegacySettings?(): void;
+  onRetryWeeklyMetadata?(): void;
+  onRetryWeeklyUsage?(): void;
   saving?: boolean;
 };
 
-const label: Record<string, string> = { open: "추천 대기", proposal_assigned: "추천 배정", generation_pending: "생성 대기", content_assigned: "콘텐츠 배정", ready: "게시 준비", pre_generation: "생성 전", generating: "생성 중", completed_unpublished: "미게시", reserved: "예약 · 생성 대기", publish_queued: "게시 대기", scheduled: "예약", deferred: "게시 지연", publishing: "게시 중", partially_published: "일부 게시", publish_delayed: "게시 지연", quota_blocked: "한도 대기", published: "완료", failed: "실패", result_unknown: "결과 확인 필요", cancelled: "취소" };
-const variant = (status: string) => status === "published" || status === "ready" ? "ok" : status === "publish_delayed" || status === "quota_blocked" || status === "deferred" || status === "partially_published" || status === "result_unknown" ? "warn" : status === "failed" ? "bad" : status === "cancelled" ? "neutral" : "info" as const;
-const channelLabel: Record<ChannelType, string> = { instagram: "Instagram", threads: "Threads", tiktok: "TikTok", youtube: "YouTube", linkedin: "LinkedIn", x: "X" };
-const detailTimeFormatter = new Intl.DateTimeFormat("ko-KR", { timeZone: "Asia/Seoul", hour: "2-digit", minute: "2-digit", hourCycle: "h23" });
-const unreservedPageSize = 6;
+type AsyncLoadStatus = "idle" | "loading" | "ready" | "error";
 
 function shiftMonth(value: string, amount: number) {
   const [year, month] = value.split("-").map(Number);
@@ -52,27 +66,18 @@ function shiftMonth(value: string, amount: number) {
   return `${next.getUTCFullYear()}-${String(next.getUTCMonth() + 1).padStart(2, "0")}`;
 }
 function fullDate(key: string) { const [, month, day] = key.split("-"); return `${Number(month)}월 ${Number(day)}일`; }
-function generatedMediaPreview(item: PublishItem, generatedPreviews: ReadonlyMap<string, PublishCardPreview>): PublishCardPreview | null {
-  if (item.contentStatus !== "completed") return null;
-  const target = item.targets.find((candidate) => candidate.artifactPublicUrl || candidate.previewBody || candidate.previewTitle) ?? item.targets[0];
-  const reviewTarget = item.reviewTargets.find((candidate) => candidate.previewBody || candidate.previewTitle) ?? item.reviewTargets[0];
-  const preview = resolvePublishPreview({
-    title: item.title,
-    artifactPublicUrl: target?.artifactPublicUrl,
-    outputJson: target?.outputJson ?? reviewTarget?.outputJson,
-    previewBody: target?.previewBody ?? reviewTarget?.previewBody
-  });
-  if (preview.kind === "image" || preview.kind === "video") return preview;
-  return item.sourceRefs.generationOutputId
-    ? generatedPreviews.get(item.sourceRefs.generationOutputId) ?? null
-    : null;
-}
-function detailTimes(entry: CalendarEntry) {
-  if (entry.status === "published") return [{ label: "게시 완료 시각", value: entry.publishedAt ?? entry.calendarDate }];
-  if (entry.scheduledFor && entry.effectiveScheduledFor && entry.scheduledFor !== entry.effectiveScheduledFor) {
-    return [{ label: "원래 예약 시각", value: entry.scheduledFor }, { label: "지연 후 실제 게시 예정", value: entry.effectiveScheduledFor }];
-  }
-  return [{ label: "게시 예정 시각", value: entry.scheduledFor ?? entry.effectiveScheduledFor ?? entry.calendarDate }];
+function useMobileAgenda() {
+  const query = "(max-width: 639px)";
+  const [mobile, setMobile] = useState(() => window.matchMedia?.(query).matches ?? false);
+  useEffect(() => {
+    const media = window.matchMedia?.(query);
+    if (!media) return;
+    const update = () => setMobile(media.matches);
+    update();
+    media.addEventListener?.("change", update);
+    return () => media.removeEventListener?.("change", update);
+  }, []);
+  return mobile;
 }
 function SettingsDialog({ settings, channels, onClose, onSave, saving }: { settings: PublishCalendarSettings; channels: ChannelType[]; onClose(): void; onSave: Props["onSaveSettings"]; saving?: boolean }) {
   const [enabled, setEnabled] = useState(settings.enabled);
@@ -104,23 +109,21 @@ function SettingsDialog({ settings, channels, onClose, onSave, saving }: { setti
   </FocusTrap></div>;
 }
 
-function SettingsUnavailableDialog({ message, onClose }: { message: string; onClose(): void }) {
-  return <div className="modal-backdrop"><FocusTrap active initialFocusSelector=".auto-publish-settings__close" className="modal-panel auto-publish-settings" role="dialog" aria-modal="true" aria-label="자동 게시 설정" onKeyDown={(event) => event.key === "Escape" && onClose()}><header className="auto-publish-settings__header"><div><h2>자동 게시 설정</h2><p>{message}</p></div><button className="button icon-button auto-publish-settings__close" type="button" aria-label="닫기" onClick={onClose}><X size={18} /></button></header><div className="auto-publish-settings__body"><p role="alert">설정을 불러온 뒤에만 변경할 수 있습니다.</p></div></FocusTrap></div>;
+function SettingsUnavailableDialog({ message, retryLabel, retrying = false, onRetry, onClose }: { message: string; retryLabel: string; retrying?: boolean; onRetry?(): void; onClose(): void }) {
+  return <div className="modal-backdrop"><FocusTrap active initialFocusSelector=".auto-publish-settings__close" className="modal-panel auto-publish-settings" role="dialog" aria-modal="true" aria-label="자동 게시 설정" onKeyDown={(event) => event.key === "Escape" && !retrying && onClose()}><header className="auto-publish-settings__header"><div><h2>자동 게시 설정</h2><p>{message}</p></div><button className="button icon-button auto-publish-settings__close" type="button" aria-label="닫기" disabled={retrying} onClick={onClose}><X size={18} /></button></header><div className="auto-publish-settings__body"><p role={retrying ? "status" : "alert"}>{retrying ? "설정을 다시 불러오는 중입니다." : "설정을 불러온 뒤에만 변경할 수 있습니다."}</p><button className="button" type="button" aria-label={retryLabel} disabled={retrying} onClick={onRetry}>다시 시도</button></div></FocusTrap></div>;
 }
 
-export function PublishCalendar({ monthKey, entries, connectedChannels, settings, settingsError, slotsError, slotsLoading, unreservedItems = [], generatedPreviews = new Map(), focusedItemKey, onFocusedItemHandled, assignableContents, manualOptions, manualOptionsError, manualOptionsLoading, onMonthChange, onStartNew, initialBulkDraft, onStartBulk, onContinueBulk, onProvisionBatch, onAssign, onCancel, onScheduleItem, onRescheduleItem, onLoadManualOptions, onSaveSettings, saving }: Props) {
+export function PublishCalendar({ monthKey, entries, connectedChannels, channelCatalog = [], publishableChannels = [], settings, weeklyCapability = false, weeklySettings = null, weeklyStatus = "ready", weeklyUsage = null, weeklyUsageStatus = "ready", channelsStatus = "ready", capabilitiesStatus = "ready", settingsError, slotsError, slotsLoading, unreservedItems = [], generatedPreviews = new Map(), focusedItemKey, onFocusedItemHandled, assignableContents, manualOptions, manualOptionsError, manualOptionsLoading, onMonthChange, onStartNew, initialBulkDraft, onStartBulk, onContinueBulk, onProvisionBatch, onAssign, onCancel, onScheduleItem, onRescheduleItem, onLoadManualOptions, onSaveSettings, onSaveWeeklySettings, onToggleWeekly, onRetryWeekly, onRetryLegacySettings, onRetryWeeklyMetadata, onRetryWeeklyUsage, saving }: Props) {
+  const mobileAgenda = useMobileAgenda();
   const cells = useMemo(() => monthCells(monthKey), [monthKey]);
-  const byDate = useMemo(() => entries.reduce((map, entry) => { const key = dateKey(entry.calendarDate); map.set(key, [...(map.get(key) ?? []), entry]); return map; }, new Map<string, CalendarEntry[]>()), [entries]);
+  const byDate = useMemo(() => entries.reduce((map, entry) => { const key = dateKey(entry.calendarDate); map.set(key, [...(map.get(key) ?? []), entry]); return map; }, new Map<string, PresentedCalendarEntry[]>()), [entries]);
   const today = dateKey(new Date());
   const [selectedDate, setSelectedDate] = useState(today.startsWith(monthKey) ? today : `${monthKey}-01`);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [creationTrayOpen, setCreationTrayOpen] = useState(Boolean(initialBulkDraft));
-  const [assignedContentId, setAssignedContentId] = useState("");
-  const [unreservedQuery, setUnreservedQuery] = useState("");
-  const [unreservedStatus, setUnreservedStatus] = useState("all");
-  const [unreservedVisibleCount, setUnreservedVisibleCount] = useState(unreservedPageSize);
-  const detailHeadingRef = useRef<HTMLHeadingElement>(null);
+  const [contentPickerOpen, setContentPickerOpen] = useState(Boolean(initialBulkDraft));
+  const contentPickerTriggerRef = useRef<HTMLButtonElement | null>(null);
+  const contentPickerWasOpenRef = useRef(false);
   const settingsTriggerRef = useRef<HTMLButtonElement>(null);
   const settingsWasOpenRef = useRef(false);
   const bulkOptionsRequestedRef = useRef(false);
@@ -133,53 +136,66 @@ export function PublishCalendar({ monthKey, entries, connectedChannels, settings
     setSelectedId(entry.id);
     onFocusedItemHandled?.();
   }, [entries, focusedItemKey, onFocusedItemHandled]);
-  useEffect(() => { setAssignedContentId(""); }, [selectedDate, selectedId]);
   useEffect(() => {
     if (!initialBulkDraft || manualOptions || manualOptionsLoading || bulkOptionsRequestedRef.current) return;
     bulkOptionsRequestedRef.current = true;
     onLoadManualOptions();
   }, [initialBulkDraft, manualOptions, manualOptionsLoading, onLoadManualOptions]);
   useEffect(() => { if (settingsWasOpenRef.current && !settingsOpen) settingsTriggerRef.current?.focus(); settingsWasOpenRef.current = settingsOpen; }, [settingsOpen]);
+  useEffect(() => { if (contentPickerWasOpenRef.current && !contentPickerOpen) contentPickerTriggerRef.current?.focus(); contentPickerWasOpenRef.current = contentPickerOpen; }, [contentPickerOpen]);
   const dateEntries = (byDate.get(selectedDate) ?? []).sort((a, b) => Date.parse(a.calendarDate) - Date.parse(b.calendarDate));
-  const selected = dateEntries.find((entry) => entry.id === selectedId) ?? null;
-  const unreservedStatuses = useMemo(() => Array.from(new Set(unreservedItems.map((item) => item.status))).sort((a, b) => (label[a] ?? a).localeCompare(label[b] ?? b, "ko")), [unreservedItems]);
-  const filteredUnreservedItems = useMemo(() => {
-    const query = unreservedQuery.trim().toLocaleLowerCase("ko-KR");
-    return unreservedItems.filter((item) => (unreservedStatus === "all" || item.status === unreservedStatus) && (!query || item.title.toLocaleLowerCase("ko-KR").includes(query)));
-  }, [unreservedItems, unreservedQuery, unreservedStatus]);
-  const visibleUnreservedItems = filteredUnreservedItems.slice(0, unreservedVisibleCount);
-  const remainingUnreservedCount = Math.max(0, filteredUnreservedItems.length - visibleUnreservedItems.length);
-  useEffect(() => { setUnreservedVisibleCount(unreservedPageSize); }, [unreservedItems, unreservedQuery, unreservedStatus]);
-  useEffect(() => { if (selected) { const stacked = window.matchMedia?.("(max-width: 980px)").matches; detailHeadingRef.current?.focus(stacked ? undefined : { preventScroll: true }); if (stacked) detailHeadingRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }); } }, [selected]);
-  return <section className="publish-calendar-layout" aria-label="월간 게시 일정">
-    <div className="publish-calendar-card"><header className="publish-calendar-toolbar"><div><span className="publish-calendar-eyebrow"><CalendarDays size={15} /> 월간 게시 계획</span><h2>{monthKey.replace("-", "년 ")}월</h2></div><div className="actions"><button ref={settingsTriggerRef} className="button" type="button" onClick={() => setSettingsOpen(true)}>자동 게시 설정</button><button className="button icon-button" type="button" aria-label="이전 달" onClick={() => onMonthChange(shiftMonth(monthKey, -1))}><ChevronLeft size={18} /></button><button className="button icon-button" type="button" aria-label="다음 달" onClick={() => onMonthChange(shiftMonth(monthKey, 1))}><ChevronRight size={18} /></button></div></header>
-      <div className="publish-calendar-scroll" role="region" aria-label="게시 캘린더 스크롤"><div className="publish-calendar-weekdays" aria-hidden="true">{["월", "화", "수", "목", "금", "토", "일"].map((day) => <span key={day}>{day}</span>)}</div>
-      <div className="publish-calendar-grid" role="grid" aria-label="게시 캘린더">{Array.from({ length: 6 }, (_, week) => <div role="row" className="publish-calendar-row" key={week}>{cells.slice(week * 7, week * 7 + 7).map((cell) => { const slots = byDate.get(cell.key) ?? []; return <div role="gridcell" aria-label={fullDate(cell.key)} className={`publish-calendar-cell${cell.current ? "" : " is-outside"}`} key={cell.key}><button className="publish-calendar-cell__button" type="button" aria-label={`${fullDate(cell.key)} 일정 보기`} onClick={() => { setSelectedDate(cell.key); setSelectedId(null); }}><span>{cell.day}</span></button>{slots.slice(0, 3).map((entry) => <button className="publish-calendar-cell__entry" type="button" data-publish-focus-key={entry.id} aria-label={`${entry.title} 슬롯 상세 보기`} onClick={() => { setSelectedDate(cell.key); setSelectedId(entry.id); }} key={entry.id}><span>{timeLabel(entry)}</span><strong>{entry.title}</strong></button>)}{slots.length > 3 ? <span>+{slots.length - 3}</span> : null}</div>; })}</div>)}</div></div>
+  const selectMobileDate = (key: string) => { setSelectedDate(key); setSelectedId(null); if (!key.startsWith(monthKey)) onMonthChange(key.slice(0, 7)); };
+  const shiftMobileWeek = (key: string) => { selectMobileDate(key); };
+  const metadataStatus: AsyncLoadStatus = channelsStatus === "error" || capabilitiesStatus === "error"
+    ? "error"
+    : channelsStatus === "ready" && capabilitiesStatus === "ready"
+      ? "ready"
+      : "loading";
+  const metadataError = channelsStatus === "error" && capabilitiesStatus === "error"
+    ? "자동 게시 사용 조건을 확인하지 못했습니다."
+    : channelsStatus === "error"
+      ? "게시 채널 정보를 확인하지 못했습니다."
+      : "자동 게시 지원 정보를 확인하지 못했습니다.";
+  const usableSelectedChannel = metadataStatus === "ready" && Boolean(weeklySettings?.channels.some((type) => publishableChannels.includes(type) && channelCatalog.some((channel) => channel.type === type && channel.enabled && channel.status === "connected" && channel.oauthState === "connected")));
+  const canEnableWeekly = metadataStatus === "ready" && Boolean(weeklySettings && weeklySettings.weeklySchedule.length > 0 && weeklySettings.channels.length > 0 && usableSelectedChannel);
+  const weeklyDisabledReason = !weeklySettings
+    ? settingsError ?? "주간 자동 게시 설정을 불러오는 중입니다."
+    : weeklySettings.weeklySchedule.length === 0
+      ? "자동 게시를 켜려면 먼저 주간 일정을 한 개 이상 저장해 주세요."
+      : weeklySettings.channels.length === 0
+        ? "자동 게시를 켜려면 게시 채널을 한 개 이상 저장해 주세요."
+        : !usableSelectedChannel
+          ? "자동 게시를 켜려면 선택한 채널 중 게시 가능한 연결 채널이 필요합니다."
+          : null;
+  const metadataState = metadataStatus === "loading" ? "자동 게시 사용 조건을 확인하는 중입니다." : metadataError;
+  const weeklyState = weeklyStatus === "error" ? "자동 게시 상태 확인 불가" : "자동 게시 상태를 확인하는 중입니다.";
+  const availabilityState = weeklyStatus !== "ready" ? weeklyState : metadataState;
+  const availabilityStatus = weeklyStatus !== "ready" ? weeklyStatus : metadataStatus;
+  const availabilityRetry = weeklyStatus !== "ready" ? onRetryWeekly : onRetryWeeklyMetadata;
+  const availabilityRetryLabel = weeklyStatus !== "ready" ? "자동 게시 다시 시도" : "자동 게시 정보 다시 시도";
+  const showConfirmedControl = Boolean(weeklySettings && ((weeklyStatus === "ready" && metadataStatus === "ready") || weeklySettings.enabled));
+  return <section className="publish-calendar-layout" aria-label={mobileAgenda ? "주간 게시 계획" : "월간 게시 일정"}>
+    <div className="publish-calendar-card"><header className="publish-calendar-toolbar"><div><span className="publish-calendar-eyebrow"><CalendarDays size={15} /> {mobileAgenda ? "주간 게시 계획" : "월간 게시 계획"}</span><h2>{monthKey.replace("-", "년 ")}월</h2></div><div className="actions">{weeklyCapability === true
+      ? weeklySettings && showConfirmedControl
+        ? <div><AutoPublishHeaderControl enabled={weeklySettings.enabled} canEnable={canEnableWeekly} disabledReason={weeklyStatus === "ready" && metadataStatus === "ready" ? weeklyDisabledReason : null} onToggle={onToggleWeekly ?? (async () => ({ ok: false, message: "자동 게시 상태를 변경할 수 없습니다." }))} onEdit={() => setSettingsOpen(true)} editButtonRef={settingsTriggerRef} />{weeklyStatus !== "ready" || metadataStatus !== "ready" ? <div className="auto-publish-header-control"><span role={availabilityStatus === "error" ? "alert" : "status"}>{availabilityState}</span>{availabilityStatus === "error" ? <button className="button" type="button" aria-label={availabilityRetryLabel} onClick={availabilityRetry}>다시 시도</button> : null}</div> : null}</div>
+        : weeklySettings
+          ? <div className="auto-publish-header-control"><div className="auto-publish-header-control__main"><span className="auto-publish-header-control__label">자동 게시</span><span role={availabilityStatus === "error" ? "alert" : "status"}>{availabilityState}</span>{availabilityStatus === "error" ? <button className="button" type="button" aria-label={availabilityRetryLabel} onClick={availabilityRetry}>다시 시도</button> : null}<button ref={settingsTriggerRef} className="button" type="button" aria-label="자동 게시 수정" onClick={() => setSettingsOpen(true)}>수정</button></div></div>
+          : <div className="auto-publish-header-control"><div className="auto-publish-header-control__main"><span className="auto-publish-header-control__label">자동 게시</span><span role={weeklyStatus === "error" ? "alert" : "status"}>{weeklyStatus === "error" ? "자동 게시 상태 확인 불가" : "자동 게시 상태를 확인하는 중입니다."}</span>{weeklyStatus === "error" ? <button className="button" type="button" aria-label="자동 게시 다시 시도" onClick={onRetryWeekly}>다시 시도</button> : null}<button ref={settingsTriggerRef} className="button" type="button" disabled={weeklyStatus !== "error"} onClick={() => setSettingsOpen(true)}>수정</button></div><small>{settingsError ?? "주간 자동 게시 설정을 불러오는 중입니다."}</small></div>
+      : weeklyCapability === null
+        ? <div className="auto-publish-header-control"><span role="status">자동 게시 상태를 확인하는 중입니다.</span></div>
+        : <button ref={settingsTriggerRef} className="button" type="button" onClick={() => setSettingsOpen(true)}>자동 게시 설정</button>}{!mobileAgenda ? <><button className="button icon-button" type="button" aria-label="이전 달" onClick={() => onMonthChange(shiftMonth(monthKey, -1))}><ChevronLeft size={18} /></button><button className="button icon-button" type="button" aria-label="다음 달" onClick={() => onMonthChange(shiftMonth(monthKey, 1))}><ChevronRight size={18} /></button></> : null}</div></header>
+      {mobileAgenda ? <PublishMobileAgenda anchorDate={selectedDate} selectedDate={selectedDate} selectedId={selectedId} entries={entries} onSelectDate={selectMobileDate} onSelectEntry={(key, id) => { setSelectedDate(key); setSelectedId(id); if (!key.startsWith(monthKey)) onMonthChange(key.slice(0, 7)); }} onWeekChange={shiftMobileWeek} /> : <div className="publish-calendar-scroll" role="region" aria-label="게시 캘린더 스크롤"><div className="publish-calendar-weekdays" aria-hidden="true">{["월", "화", "수", "목", "금", "토", "일"].map((day) => <span key={day}>{day}</span>)}</div>
+      <div className="publish-calendar-grid" role="grid" aria-label="게시 캘린더">{Array.from({ length: 6 }, (_, week) => <div role="row" className="publish-calendar-row" key={week}>{cells.slice(week * 7, week * 7 + 7).map((cell) => { const slots = byDate.get(cell.key) ?? []; return <div role="gridcell" aria-label={fullDate(cell.key)} className={`publish-calendar-cell${cell.current ? "" : " is-outside"}`} key={cell.key}><button className="publish-calendar-cell__button" type="button" aria-label={`${fullDate(cell.key)} 일정 보기`} onClick={() => { setSelectedDate(cell.key); setSelectedId(null); }}><span>{cell.day}</span></button>{slots.slice(0, 3).map((entry) => { const presentation = publishStatusPresentation(entry.operationalStatus); return <button className={`publish-calendar-cell__entry ${presentation.className}`} type="button" data-publish-focus-key={entry.id} aria-label={`${entry.title} ${presentation.label} 슬롯 상세 보기`} onClick={() => { setSelectedDate(cell.key); setSelectedId(entry.id); }} key={entry.id}><span>{timeLabel(entry)}</span><span className="publish-calendar-cell__status">{presentation.label}</span><strong>{entry.title}</strong></button>; })}{slots.length > 3 ? <span>+{slots.length - 3}</span> : null}</div>; })}</div>)}</div></div>}
     </div>
-    <aside className="publish-calendar-detail" aria-label={selected ? `${selected.title} 슬롯 상세` : `${fullDate(selectedDate)} 게시 일정`}>
-      <header className="publish-calendar-detail__header"><div><span>{selected ? "슬롯 상세" : "선택한 날짜"}</span><h2 ref={detailHeadingRef} tabIndex={-1}>{selected ? selected.title : fullDate(selectedDate)}</h2></div><Badge variant={selected ? variant(selected.status) : "neutral"}>{selected ? label[selected.status] ?? selected.status : `${dateEntries.length}개 일정`}</Badge></header>
-      {slotsLoading ? <p role="status" aria-label="캘린더 슬롯을 불러오는 중입니다.">캘린더 슬롯을 불러오는 중입니다.</p> : slotsError ? <p role="alert">{slotsError}</p> : selected ? <div className="publish-calendar-slot-detail">
-        <div className="publish-calendar-slot-detail__time"><Clock3 size={18} /><span>{detailTimes(selected).map((time) => <span key={time.label}><small>{time.label}</small><strong>{detailTimeFormatter.format(new Date(time.value))}</strong></span>)}</span></div>
-        <dl><div><dt>게시 방식</dt><dd>{selected.mode === "automatic" ? "자동" : "수동"} 게시</dd></div>{selected.recommendationKind ? <div><dt>추천 종류</dt><dd>{selected.recommendationKind === "trend" ? "트렌드성 추천" : "정보성 추천"}</dd></div> : null}<div><dt>콘텐츠 형식</dt><dd>{selected.contentFormat === "reel" ? "릴스" : selected.contentFormat === "card_news" ? "카드뉴스" : "설정 전"}</dd></div><div><dt>게시 채널</dt><dd>{selected.channels.map((channel) => channelLabel[channel]).join(", ") || "채널 설정 전"}</dd></div>{selected.lastError ? <div><dt>상태·오류</dt><dd>{selected.lastError}</dd></div> : null}</dl>
-        {selected.status === "open" ? <div className="publish-calendar-manual-form"><label>배정할 콘텐츠<select aria-label="배정할 콘텐츠" value={assignedContentId} onChange={(event) => setAssignedContentId(event.target.value)}><option value="">콘텐츠 선택</option>{assignableContents.map((content) => <option value={content.id} key={content.id}>{content.title}</option>)}</select></label><button className="button primary" type="button" disabled={!assignedContentId} onClick={() => { const content = assignableContents.find((item) => item.id === assignedContentId); if (content) void onAssign(selected.id, content).then((assigned) => { if (assigned) setAssignedContentId(""); }); }}>선택 콘텐츠 배정</button></div> : null}
-        {selected.reschedulable ? <button className="button primary" type="button" onClick={(event) => onRescheduleItem(selected.id, event.currentTarget)}>예약 변경</button> : null}
-        {(selected.cancellable ?? !["published", "cancelled", "publishing"].includes(selected.status)) ? <button className="button" type="button" onClick={() => onCancel(selected.id)}>슬롯 취소</button> : null}<button className="button" type="button" onClick={() => setSelectedId(null)}>전체 일정 보기</button>
-      </div> : <div className="publish-calendar-detail__list">
-        {dateEntries.map((entry) => <button className="publish-calendar-entry" type="button" onClick={() => setSelectedId(entry.id)} key={entry.id}><span>{timeLabel(entry)}</span><strong>{entry.title}</strong><Badge variant={variant(entry.status)}>{label[entry.status] ?? entry.status}</Badge></button>)}
-        <section aria-label="미예약 콘텐츠 보관함" className="publish-calendar-unreserved">
-          <div className="publish-calendar-unreserved__header"><div><h3>미예약 콘텐츠</h3><span>{filteredUnreservedItems.length}개</span></div>{unreservedItems.length > 0 ? <div className="publish-calendar-unreserved__controls"><input type="search" aria-label="미예약 콘텐츠 검색" placeholder="제목 검색" value={unreservedQuery} onChange={(event) => setUnreservedQuery(event.target.value)} /><select aria-label="미예약 콘텐츠 상태" value={unreservedStatus} onChange={(event) => setUnreservedStatus(event.target.value)}><option value="all">전체 상태</option>{unreservedStatuses.map((status) => <option value={status} key={status}>{label[status] ?? status}</option>)}</select></div> : null}</div>
-          {filteredUnreservedItems.length === 0 ? <p className="publish-calendar-unreserved__empty">{unreservedItems.length === 0 ? "게시 일정을 설정할 콘텐츠가 없습니다." : "검색 조건에 맞는 콘텐츠가 없습니다."}</p> : <div className="publish-calendar-unreserved__list">{visibleUnreservedItems.map((item) => {
-            const preview = generatedMediaPreview(item, generatedPreviews);
-            return <article className={`publish-calendar-unreserved__item${preview ? " has-thumbnail" : ""}`} aria-label={item.title} data-item-key={item.itemKey} data-publish-focus-key={item.itemKey} tabIndex={-1} key={item.itemKey}>
-              {preview ? <div className="publish-calendar-unreserved__thumbnail"><PublishManagementPreview title={item.title} preview={preview} /></div> : null}
-              <div className="publish-calendar-unreserved__body"><strong>{item.title}</strong><div className="publish-calendar-unreserved__footer"><div className="publish-calendar-unreserved__meta"><Badge variant="neutral">{label[item.status] ?? item.status}</Badge><span>{item.contentFormat === "reel" ? "릴스" : item.contentFormat === "card_news" ? "카드뉴스" : "형식 설정 전"}</span></div>{item.schedulable && item.contentFormat ? <button className="button" type="button" onClick={(event) => onScheduleItem(item, selectedDate, event.currentTarget)}>게시 설정</button> : null}</div></div>
-            </article>;
-          })}</div>}
-          {remainingUnreservedCount > 0 ? <button className="button publish-calendar-unreserved__more" type="button" onClick={() => setUnreservedVisibleCount((count) => count + unreservedPageSize)}>더 보기 ({remainingUnreservedCount}개)</button> : null}
-        </section>
-        {!creationTrayOpen ? <button className="button" type="button" onClick={() => { setCreationTrayOpen(true); onLoadManualOptions(); }}>새 콘텐츠·일괄 등록</button> : manualOptionsLoading ? <p role="status">콘텐츠 등록 선택 항목을 불러오는 중입니다.</p> : manualOptionsError && !manualOptions ? <div><p role="alert">{manualOptionsError}</p><button className="button" type="button" onClick={onLoadManualOptions}>선택 항목 다시 불러오기</button></div> : <ManualPublishProvisioner dateKey={selectedDate} connected={connectedChannels.includes("instagram")} options={manualOptions} optionsError={manualOptionsError} onStartNew={onStartNew} initialBulkDraft={initialBulkDraft} onStartBulk={onStartBulk} onContinueBulk={onContinueBulk} onProvisionBatch={onProvisionBatch} />}
-      </div>}
-    </aside>
-    {settingsOpen ? settings ? <SettingsDialog settings={settings} channels={connectedChannels} saving={saving} onClose={() => setSettingsOpen(false)} onSave={onSaveSettings} /> : <SettingsUnavailableDialog message={settingsError ?? "자동 게시 설정을 불러오는 중입니다."} onClose={() => setSettingsOpen(false)} /> : null}
+    <PublishDateDetail dateKey={selectedDate} entries={dateEntries} selectedId={selectedId} slotsLoading={slotsLoading} slotsError={slotsError} assignableContents={assignableContents} onSelectEntry={setSelectedId} onAssign={onAssign} onCancel={onCancel} onRescheduleItem={onRescheduleItem} onOpenContentPicker={(trigger) => { contentPickerTriggerRef.current = trigger; setContentPickerOpen(true); onLoadManualOptions(); }} hideEntryList={mobileAgenda} />
+    {contentPickerOpen ? <PublishContentPickerDialog dateKey={selectedDate} unreservedItems={unreservedItems} generatedPreviews={generatedPreviews} connected={connectedChannels.includes("instagram")} options={manualOptions} optionsError={manualOptionsError} optionsLoading={Boolean(manualOptionsLoading)} initialBulkDraft={initialBulkDraft} onScheduleItem={(item, key, trigger) => { const restoreTarget = contentPickerTriggerRef.current ?? trigger; contentPickerWasOpenRef.current = false; setContentPickerOpen(false); onScheduleItem(item, key, restoreTarget); }} onStartNew={onStartNew} onStartBulk={onStartBulk} onContinueBulk={onContinueBulk} onProvisionBatch={onProvisionBatch} onLoadOptions={onLoadManualOptions} onClose={() => setContentPickerOpen(false)} /> : null}
+    {settingsOpen ? weeklyCapability === true
+      ? weeklySettings
+        ? <WeeklyAutoPublishDialog settings={weeklySettings} channels={channelCatalog} publishableChannels={publishableChannels} settingsStatus={weeklyStatus} metadataStatus={metadataStatus} usage={weeklyUsage} usageStatus={weeklyUsageStatus} saving={saving} onRetrySettings={onRetryWeekly} onRetryMetadata={onRetryWeeklyMetadata} onRetryUsage={onRetryWeeklyUsage} onClose={() => setSettingsOpen(false)} onSave={onSaveWeeklySettings ?? (async () => ({ ok: false, message: "주간 자동 게시 설정을 저장할 수 없습니다." }))} />
+        : <SettingsUnavailableDialog message={settingsError ?? "주간 자동 게시 설정을 불러오는 중입니다."} retryLabel="주간 설정 다시 시도" retrying={weeklyStatus === "loading"} onRetry={onRetryWeekly} onClose={() => setSettingsOpen(false)} />
+      : settings
+        ? <SettingsDialog settings={settings} channels={connectedChannels} saving={saving} onClose={() => setSettingsOpen(false)} onSave={onSaveSettings} />
+        : <SettingsUnavailableDialog message={settingsError ?? "자동 게시 설정을 불러오는 중입니다."} retryLabel="자동 게시 설정 다시 시도" onRetry={onRetryLegacySettings} onClose={() => setSettingsOpen(false)} />
+    : null}
   </section>;
 }

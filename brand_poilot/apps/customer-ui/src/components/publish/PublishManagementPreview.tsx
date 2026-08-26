@@ -6,6 +6,8 @@ export type PublishCardPreview =
   | { kind: "text"; text: string }
   | { kind: "document" }
   | { kind: "pending" }
+  | { kind: "generating" }
+  | { kind: "unavailable" }
   | { kind: "failed" };
 
 interface PreviewSource {
@@ -16,6 +18,7 @@ interface PreviewSource {
   previewBody?: string | null;
   artifactPublicUrl?: string | null;
   outputJson?: ContentOutputJson | Record<string, unknown>;
+  contentStatus?: "pre_generation" | "generating" | "completed" | "failed";
   pending?: boolean;
   failed?: boolean;
 }
@@ -26,8 +29,8 @@ function assetUrl(value: unknown) {
 }
 
 export function resolvePublishPreview(source: PreviewSource): PublishCardPreview {
-  if (source.failed) return { kind: "failed" };
-  if (source.pending) return { kind: "pending" };
+  if (source.failed || source.contentStatus === "failed") return { kind: "failed" };
+  if (source.pending || source.contentStatus === "pre_generation") return { kind: "pending" };
   if (source.previewVideoUrl) {
     return {
       kind: "video",
@@ -59,6 +62,8 @@ export function resolvePublishPreview(source: PreviewSource): PublishCardPreview
   if (typeof outputJson.html === "string" || outputJson.deliveryFormat === "html" || source.artifactPublicUrl) {
     return { kind: "document" };
   }
+  if (source.contentStatus === "generating") return { kind: "generating" };
+  if (source.contentStatus === "completed") return { kind: "unavailable" };
   return { kind: "pending" };
 }
 
@@ -92,6 +97,12 @@ export function PublishManagementPreview({
   }
   if (preview.kind === "failed") {
     return <div className="publish-card__placeholder is-failed">콘텐츠 생성 실패</div>;
+  }
+  if (preview.kind === "generating") {
+    return <div className="publish-card__placeholder">콘텐츠 생성 중</div>;
+  }
+  if (preview.kind === "unavailable") {
+    return <div className="publish-card__placeholder">미리보기 없음</div>;
   }
   return <div className="publish-card__placeholder">콘텐츠 생성 전</div>;
 }

@@ -1,7 +1,120 @@
 import { describe, expect, it, vi } from "vitest";
+import type { PublishCalendarSettings, PublishCalendarWeeklySettingsInput } from "../types";
 import { ApiRequestError, apiClient, SUPPORT_REQUESTS_CHANGED_EVENT } from "./apiClient";
 
 describe("apiClient", () => {
+  it("capability-gates new UI against an old API without attempting a weekly write", async () => {
+    const legacySettings = {
+      brandId: "brand-1",
+      enabled: false,
+      channels: ["instagram"],
+      informationalFormat: "card_news",
+      trendFormat: "reel",
+      slotTimes: ["11:30"],
+      updatedAt: null,
+    };
+    const fetchMock = vi.fn(async (url: string | URL | Request) => {
+      const href = String(url);
+      if (href.endsWith("/publish-calendar/settings/weekly")) {
+        return new Response(JSON.stringify({ error: "not_found" }), { status: 404 });
+      }
+      return new Response(JSON.stringify(legacySettings), { status: 200 });
+    });
+    const client = apiClient({ baseUrl: "http://api.test", fetcher: fetchMock as typeof fetch });
+
+    const weekly = await client.getPublishCalendarWeeklySettings("brand-1");
+    const fallback = weekly === null ? await client.getPublishCalendarSettings("brand-1") : weekly;
+
+    expect(weekly).toBeNull();
+    expect(fallback).toEqual(legacySettings);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock).not.toHaveBeenCalledWith(
+      "http://api.test/brands/brand-1/publish-calendar/settings/weekly",
+      expect.objectContaining({ method: "PUT" }),
+    );
+  });
+
+  it("keeps the old UI exact DTO working against the new API legacy endpoint", async () => {
+    const payload = {
+      enabled: true,
+      channels: ["instagram"],
+      informationalFormat: "card_news",
+      trendFormat: "reel",
+      slotTimes: ["11:30", "20:30"],
+    } satisfies Omit<PublishCalendarSettings, "brandId" | "updatedAt">;
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ brandId: "brand-1", ...payload, updatedAt: null }), { status: 200 }));
+    const client = apiClient({ baseUrl: "http://api.test", fetcher: fetchMock as typeof fetch });
+
+    await client.getPublishCalendarSettings("brand-1");
+    await client.savePublishCalendarSettings("brand-1", payload);
+
+    expect(fetchMock).toHaveBeenNthCalledWith(1,
+      "http://api.test/brands/brand-1/publish-calendar/settings",
+      expect.objectContaining({ method: "GET" }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(2,
+      "http://api.test/brands/brand-1/publish-calendar/settings",
+      expect.objectContaining({ method: "PUT", body: JSON.stringify(payload) }),
+    );
+  });
+
+  it("uses only versioned weekly settings and the dedicated toggle against a new API", async () => {
+    const settings = {
+      brandId: "brand-1",
+      enabled: false,
+      channels: ["instagram"],
+      informationalFormat: "card_news",
+      trendFormat: "reel",
+      weeklySchedule: [{ id: "40000000-0000-4000-8000-000000000001", dayOfWeek: 1, time: "11:30", sortOrder: 0 }],
+      updatedAt: null,
+    };
+    const input = {
+      channels: ["instagram"],
+      informationalFormat: "reel",
+      trendFormat: "card_news",
+      weeklySchedule: [{ id: null, dayOfWeek: 1, time: "12:30", sortOrder: 0 }],
+    } satisfies PublishCalendarWeeklySettingsInput;
+    const fetchMock = vi.fn(async (_url: string | URL | Request, _init?: RequestInit) => (
+      new Response(JSON.stringify(settings), { status: 200 })
+    ));
+    const client = apiClient({ baseUrl: "http://api.test", fetcher: fetchMock as typeof fetch });
+
+    await client.getPublishCalendarWeeklySettings("brand-1");
+    await client.savePublishCalendarWeeklySettings("brand-1", input);
+    await client.setPublishCalendarEnabled("brand-1", true);
+
+    expect(fetchMock).toHaveBeenNthCalledWith(1,
+      "http://api.test/brands/brand-1/publish-calendar/settings/weekly",
+      expect.objectContaining({ method: "GET" }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(2,
+      "http://api.test/brands/brand-1/publish-calendar/settings/weekly",
+      expect.objectContaining({ method: "PUT", body: JSON.stringify(input) }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(3,
+      "http://api.test/brands/brand-1/publish-calendar/settings/enabled",
+      expect.objectContaining({ method: "PATCH", body: JSON.stringify({ enabled: true }) }),
+    );
+    expect(fetchMock.mock.calls.every(([url]) => !String(url).endsWith("/publish-calendar/settings"))).toBe(true);
+  });
+
+  it.each([
+    {
+      label: "server error",
+      fetcher: vi.fn(async () => new Response(JSON.stringify({ error: "internal_error" }), { status: 500 })),
+      expected: ApiRequestError,
+    },
+    {
+      label: "network error",
+      fetcher: vi.fn(async () => { throw new TypeError("network unavailable"); }),
+      expected: TypeError,
+    },
+  ])("does not misclassify a weekly capability $label as unsupported", async ({ fetcher, expected }) => {
+    const client = apiClient({ baseUrl: "http://api.test", fetcher: fetcher as typeof fetch });
+
+    await expect(client.getPublishCalendarWeeklySettings("brand-1")).rejects.toBeInstanceOf(expected);
+  });
+
   it("reads the canonical publish items endpoint", async () => {
     const fetchMock = vi.fn(async () => new Response(JSON.stringify([{ itemKey: "output:one" }]), { status: 200 }));
     const client = apiClient({ baseUrl: "http://api.test", fetcher: fetchMock as typeof fetch });
@@ -809,12 +922,6 @@ describe("apiClient", () => {
       if (href.endsWith("/content-generation/run")) {
         return new Response(JSON.stringify({ processed: 1, created: 3, updated: 1, failed: 0 }), { status: 200 });
       }
-      if (href.endsWith("/publish-queue/schedule")) {
-        return new Response(JSON.stringify({ processed: 3, created: 0, updated: 3, failed: 0 }), { status: 200 });
-      }
-      if (href.endsWith("/publish-queue/queue-1/publish")) {
-        return new Response(JSON.stringify({ id: "queue-1", status: "published", publishedUrl: "mock://instagram/output-1" }), { status: 200 });
-      }
       return new Response(JSON.stringify({ error: "unexpected" }), { status: 500 });
     });
     const client = apiClient({ baseUrl: "http://api.test", fetcher: fetchMock as typeof fetch });
@@ -854,8 +961,6 @@ describe("apiClient", () => {
     expect(await client.listTopicRows("brand-1", "skipped")).toEqual([expect.objectContaining({ status: "skipped", topicTitle: "Jeju food" })]);
     expect(await client.crawlSources("brand-1")).toMatchObject({ processed: 2 });
     expect(await client.generateContent("brand-1")).toMatchObject({ created: 3 });
-    expect(await client.schedulePublishQueue("brand-1")).toMatchObject({ updated: 3 });
-    expect(await client.publishQueueItem("queue-1")).toMatchObject({ status: "published" });
   });
 
   it("sends raw channel secret under secretValue so the API owns encryption", async () => {

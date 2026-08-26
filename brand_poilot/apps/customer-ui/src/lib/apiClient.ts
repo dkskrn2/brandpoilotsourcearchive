@@ -46,6 +46,8 @@ import type {
   PublishCalendarManualOptions,
   PublishCalendarManualSlotInput,
   PublishCalendarSlot,
+  PublishCalendarWeeklySettings,
+  PublishCalendarWeeklySettingsInput,
   PublishCalendarWeeklyUsage,
   PublishItem,
   PublishSlot,
@@ -727,6 +729,32 @@ export function apiClient(options: ApiClientOptions = {}) {
     savePublishCalendarSettings(brandId: string, payload: Omit<PublishCalendarSettings, "brandId" | "updatedAt">) {
       return request<PublishCalendarSettings>(fetcher, `${baseUrl}/brands/${brandId}/publish-calendar/settings`, { method: "PUT", body: JSON.stringify(payload) });
     },
+    async getPublishCalendarWeeklySettings(brandId: string) {
+      try {
+        return await request<PublishCalendarWeeklySettings>(
+          fetcher,
+          `${baseUrl}/brands/${brandId}/publish-calendar/settings/weekly`,
+          { method: "GET" },
+        );
+      } catch (error) {
+        if (error instanceof ApiRequestError && error.status === 404) return null;
+        throw error;
+      }
+    },
+    savePublishCalendarWeeklySettings(brandId: string, payload: PublishCalendarWeeklySettingsInput) {
+      return request<PublishCalendarWeeklySettings>(
+        fetcher,
+        `${baseUrl}/brands/${brandId}/publish-calendar/settings/weekly`,
+        { method: "PUT", body: JSON.stringify(payload) },
+      );
+    },
+    setPublishCalendarEnabled(brandId: string, enabled: boolean) {
+      return request<PublishCalendarWeeklySettings>(
+        fetcher,
+        `${baseUrl}/brands/${brandId}/publish-calendar/settings/enabled`,
+        { method: "PATCH", body: JSON.stringify({ enabled }) },
+      );
+    },
     listPublishCalendarSlots(brandId: string, period: { from: string; to: string }) {
       return request<PublishCalendarSlot[]>(fetcher, `${baseUrl}/brands/${brandId}/publish-calendar/slots?${new URLSearchParams(period)}`, { method: "GET" });
     },
@@ -840,12 +868,6 @@ export function apiClient(options: ApiClientOptions = {}) {
     },
     generateContent(brandId: string) {
       return request<PipelineRunResult>(fetcher, `${baseUrl}/brands/${brandId}/content-generation/run`, { method: "POST" });
-    },
-    schedulePublishQueue(brandId: string) {
-      return request<PipelineRunResult>(fetcher, `${baseUrl}/brands/${brandId}/publish-queue/schedule`, { method: "POST" });
-    },
-    publishQueueItem(queueId: string) {
-      return request<{ id: string; status: string; publishedUrl: string | null }>(fetcher, `${baseUrl}/publish-queue/${queueId}/publish`, { method: "POST" });
     },
     retryPublishQueueItem(queueId: string) {
       return request<{ id: string; status: "queued" | "scheduled" }>(fetcher, `${baseUrl}/publish-queue/${queueId}/retry`, { method: "POST" });

@@ -73,6 +73,15 @@ export type PublishStatus = "unreserved" | "reserved" | "publish_queued" | "sche
   | "publishing" | "partially_published" | "published" | "failed" | "result_unknown" | "cancelled";
 export type PublishItemStatus = Exclude<PublishStatus, "unreserved">
   | "completed_unpublished" | "generating" | "pre_generation";
+export type PublishOperationalStatus = "action_required" | "upcoming" | "delayed_today" | "publishing"
+  | "partially_published" | "published" | "cancelled";
+
+export interface PublishOperationalState {
+  status: PublishOperationalStatus;
+  reason: "review_required" | "publish_failed" | "result_unknown" | "reserved_time_passed"
+    | "stale_reservation" | "reservation_expired" | "future_reservation" | "publishing"
+    | "partially_published" | "published" | "cancelled";
+}
 
 export interface PublishItemTargetDto {
   queueId: string;
@@ -119,6 +128,8 @@ export interface PublishItemDto {
   contentStatus: "pre_generation" | "generating" | "completed" | "failed";
   publishStatus: PublishStatus;
   status: PublishItemStatus;
+  operationalStatus: PublishOperationalStatus;
+  operationalReason: PublishOperationalState["reason"];
   groupStatus: string | null;
   publicationProgress: "none" | "partial" | "complete";
   scheduledFor: string | null;
@@ -674,6 +685,23 @@ export interface PublishCalendarSettingsDto {
   updatedAt: string | null;
 }
 
+export interface PublishCalendarWeeklyScheduleEntryDto {
+  id: string;
+  dayOfWeek: 1 | 2 | 3 | 4 | 5 | 6 | 7;
+  time: string;
+  sortOrder: number;
+}
+
+export interface PublishCalendarWeeklySettingsDto {
+  brandId: string;
+  enabled: boolean;
+  channels: Channel[];
+  informationalFormat: "card_news" | "reel";
+  trendFormat: "card_news" | "reel";
+  weeklySchedule: PublishCalendarWeeklyScheduleEntryDto[];
+  updatedAt: string | null;
+}
+
 export interface PublishCalendarSlotDto {
   id: string;
   workspaceId: string;
@@ -980,6 +1008,68 @@ export interface PipelineRunResult {
   updated: number;
   failed: number;
   reason?: "daily_topic_limit" | "no_producible_channel" | "no_usable_topic";
+}
+
+export interface PublishDueRunResult {
+  acquired: boolean;
+  expiredTargets: number;
+  expiredSlots: number;
+  dueQueued: number;
+  published: number;
+  failed: number;
+  resultUnknown: number;
+  selectedProviderCandidateQueueIds?: string[];
+  processedProviderCandidateQueueIds?: string[];
+}
+
+export interface PublishDueExecutionGuard {
+  expectedProviderCandidateQueueIds: string[];
+}
+
+export interface PublishDuePreviewResult {
+  observedAt: string;
+  counts: {
+    recoveredPublished: number;
+    resultUnknown: number;
+    expiredTargets: number;
+    expiredSlots: number;
+    delayedQueued: number;
+    providerCandidates: number;
+  };
+  recovery: {
+    publishedQueueIds: string[];
+    resultUnknownQueueIds: string[];
+  };
+  expiry: {
+    targetQueueIds: string[];
+    slotIds: string[];
+  };
+  delayedQueueIds: string[];
+  providerCandidateQueueIds: string[];
+}
+
+export interface PublishCalendarAllocationPreviewResult {
+  observedAt: string;
+  renewalDueBrandIds: string[];
+  brandsSelected: number;
+  counts: {
+    renewalsDue: number;
+    occurrences: number;
+    recommendations: number;
+    quotaBlockedBrands: number;
+  };
+  occurrences: Array<{
+    brandId: string;
+    idempotencyKey: string;
+    status: "existing" | "create" | "quota_blocked" | "subscription_ineligible";
+  }>;
+  recommendationAssignments: Array<{
+    brandId: string;
+    recommendationId: string;
+    slotId: string | null;
+    idempotencyKey: string | null;
+  }>;
+  quotaBlockedBrandIds: string[];
 }
 
 export interface DailyGenerationRunResult extends PipelineRunResult {
@@ -1472,11 +1562,12 @@ export interface ApiRepository
     quotaBlocked: number;
     brandsFailed: number;
   }>;
+  previewPublishCalendarAllocation?(now?: Date): Promise<PublishCalendarAllocationPreviewResult>;
   runDailyPerformanceSync(now?: Date): Promise<PerformanceSyncSummaryDto>;
   getDashboard(brandId: string): Promise<DashboardDto>;
   getPerformanceInsights?(brandId: string): Promise<PerformanceInsightsDto>;
-  schedulePublishQueue(brandId: string, now?: Date): Promise<PipelineRunResult>;
-  runDuePublishing(now?: Date): Promise<PipelineRunResult>;
+  runDuePublishing(now?: Date, guard?: PublishDueExecutionGuard): Promise<PublishDueRunResult>;
+  previewDuePublishing?(now?: Date): Promise<PublishDuePreviewResult>;
   runDueAiContentPublishing?(): Promise<PipelineRunResult>;
   publishQueueItem(queueId: string): Promise<{ id: string; status: string; publishedUrl: string | null }>;
   retryPublishQueueItem(queueId: string): Promise<{ id: string; status: "queued" | "scheduled" }>;

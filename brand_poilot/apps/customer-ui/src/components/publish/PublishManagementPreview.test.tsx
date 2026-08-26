@@ -41,4 +41,24 @@ describe("PublishManagementPreview", () => {
     rerender(<PublishManagementPreview title="생성 대기" preview={{ kind: "pending" }} />);
     expect(screen.getByText("콘텐츠 생성 전")).toBeVisible();
   });
+
+  it("shows no-preview for completed content without a usable artifact", () => {
+    const preview = resolvePublishPreview({ title: "생성 완료", contentStatus: "completed" });
+
+    render(<PublishManagementPreview title="생성 완료" preview={preview} />);
+
+    expect(screen.getByText("미리보기 없음")).toBeVisible();
+    expect(screen.queryByText("콘텐츠 생성 전")).not.toBeInTheDocument();
+  });
+
+  it("reserves the pre-generation label for content that has not started", () => {
+    const pending = resolvePublishPreview({ title: "생성 전", contentStatus: "pre_generation" });
+    const generating = resolvePublishPreview({ title: "생성 중", contentStatus: "generating" });
+    const { rerender } = render(<PublishManagementPreview title="생성 전" preview={pending} />);
+
+    expect(screen.getByText("콘텐츠 생성 전")).toBeVisible();
+    rerender(<PublishManagementPreview title="생성 중" preview={generating} />);
+    expect(screen.getByText("콘텐츠 생성 중")).toBeVisible();
+    expect(screen.queryByText("콘텐츠 생성 전")).not.toBeInTheDocument();
+  });
 });

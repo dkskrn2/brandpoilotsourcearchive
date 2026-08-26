@@ -29,6 +29,38 @@ test("classifies UI, API, and one worker without widening unrelated components",
   );
 });
 
+test("classifies the dependency-free publish scheduler without widening other server images", () => {
+  for (const path of [
+    "brand_poilot/workers/brand-pilot-publish-scheduler/Dockerfile",
+    "brand_poilot/workers/brand-pilot-publish-scheduler/src/scheduler.mjs",
+    "brand_poilot/workers/brand-pilot-publish-scheduler/src/scheduler.test.mjs",
+  ]) {
+    const impact = classifyChangedPaths([path]);
+    assert.deepEqual(enabled(impact), ["publishScheduler"], path);
+    assert.equal(impact.buildAllServer, false, path);
+    assert.deepEqual(impact.unknownPaths, [], path);
+  }
+});
+
+test("classifies the publish scheduler smoke tool as release tooling without rebuilding server images", () => {
+  const impact = classifyChangedPaths(["brand_poilot/scripts/publish-scheduler-smoke.mjs"]);
+  assert.deepEqual(enabled(impact), []);
+  assert.equal(impact.buildAllServer, false);
+  assert.equal(impact.deployBundleChanged, true);
+  assert.deepEqual(impact.unknownPaths, []);
+});
+
+test("rebuilds the scheduler for shared Docker context changes but not dependency graph changes", () => {
+  const dockerignore = classifyChangedPaths(["brand_poilot/.dockerignore"]);
+  assert.equal(dockerignore.components.publishScheduler, true);
+  assert.equal(dockerignore.buildAllServer, true);
+
+  for (const path of ["brand_poilot/package.json", "brand_poilot/package-lock.json"]) {
+    const dependency = classifyChangedPaths([path]);
+    assert.equal(dependency.components.publishScheduler, false, path);
+  }
+});
+
 test("builds the shared DM and Wiki image once for DM worker changes", () => {
   const impact = classifyChangedPaths(["brand_poilot/workers/brand-pilot-dm-worker/src/worker.ts"]);
   assert.deepEqual(enabled(impact), ["dmWikiWorker"]);
@@ -56,7 +88,12 @@ test("widens shared runtime and dependency graph changes to every server image",
   ]) {
     const impact = classifyChangedPaths([path]);
     assert.equal(impact.buildAllServer, true, path);
-    assert.deepEqual(enabled(impact).filter((name) => name !== "customerUi"), [...SERVER_COMPONENTS].sort(), path);
+    assert.deepEqual(
+      enabled(impact).filter((name) => name !== "customerUi"),
+      SERVER_COMPONENTS.filter((name) => name !== "publishScheduler").sort(),
+      path,
+    );
+    assert.equal(impact.components.publishScheduler, false, path);
   }
 });
 
@@ -202,7 +239,7 @@ test("fails closed to all server images for an unknown runtime-capable path", ()
   const impact = classifyChangedPaths(["brand_poilot/runtime/new-entrypoint.sh"]);
   assert.equal(impact.buildAllServer, true);
   assert.deepEqual(impact.unknownPaths, ["brand_poilot/runtime/new-entrypoint.sh"]);
-  assert.deepEqual(enabled(impact), [...SERVER_COMPONENTS].sort());
+  assert.deepEqual(enabled(impact), SERVER_COMPONENTS.filter((name) => name !== "publishScheduler").sort());
 });
 
 test("normalizes paths, removes duplicates, and rejects empty input", () => {
@@ -346,7 +383,7 @@ test("default profile keeps catalog source changes on the broad fail-safe path",
     "brand_poilot/packages/brand-pilot-content-contracts/src/catalog.ts",
   ]);
 
-  assert.deepEqual(enabled(impact), [...SERVER_COMPONENTS].sort());
+  assert.deepEqual(enabled(impact), SERVER_COMPONENTS.filter((name) => name !== "publishScheduler").sort());
   assert.equal(impact.buildAllServer, true);
   assert.equal(impact.verifiedScope, false);
   assert.deepEqual(impact.unknownPaths, [

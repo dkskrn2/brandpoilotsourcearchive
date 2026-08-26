@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { subscriptionWeekWindow, usageAvailability } from "./publishCalendarQuota.js";
+import {
+  reservePublicationUnit,
+  subscriptionWeekWindow,
+  usageAvailability,
+} from "./publishCalendarQuota.js";
 
 describe("subscriptionWeekWindow", () => {
   it("anchors repeated seven-day windows to midnight KST on the subscription start date", () => {
@@ -54,5 +58,19 @@ describe("usageAvailability", () => {
       .toThrowError("usage_counter_invalid");
     expect(() => usageAvailability({ limit: 1, succeeded: -1, reserved: 0 }))
       .toThrowError("usage_counter_invalid");
+  });
+
+  it("reserves one publication unit regardless of how many channel targets it contains", () => {
+    const before = usageAvailability({ limit: 30, succeeded: 27, reserved: 2 });
+    const afterMultiChannelSlot = reservePublicationUnit(before);
+
+    expect(afterMultiChannelSlot).toEqual({
+      limit: 30,
+      succeeded: 27,
+      reserved: 3,
+      remaining: 3,
+      additionalAvailable: 0,
+    });
+    expect(reservePublicationUnit(afterMultiChannelSlot!)).toBeNull();
   });
 });

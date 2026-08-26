@@ -21,6 +21,26 @@ export type CalendarEntry = {
 
 const kst = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Seoul", year: "numeric", month: "2-digit", day: "2-digit" });
 const kstTime = new Intl.DateTimeFormat("ko-KR", { timeZone: "Asia/Seoul", hour: "2-digit", minute: "2-digit", hourCycle: "h23" });
+const kstDateTime = new Intl.DateTimeFormat("ko-KR", { timeZone: "Asia/Seoul", year: "numeric", month: "long", day: "numeric", weekday: "long", hour: "2-digit", minute: "2-digit", hourCycle: "h23" });
+
+export function formatPublishDateTime(value: string | Date) {
+  return kstDateTime.format(value instanceof Date ? value : new Date(value));
+}
+
+export function defaultScheduleTime(date: string, now = new Date(), preferredTimes: readonly string[] = []) {
+  if (date === dateKey(now)) {
+    const fiveMinutes = 5 * 60 * 1000;
+    const earliest = new Date(Math.ceil((now.getTime() + 15 * 60 * 1000) / fiveMinutes) * fiveMinutes);
+    return kstTime.format(earliest);
+  }
+  if (date > dateKey(now)) {
+    const preferred = preferredTimes
+      .filter((time) => /^([01]\d|2[0-3]):[0-5]\d$/.test(time))
+      .sort((left, right) => left.localeCompare(right))[0];
+    if (preferred) return preferred;
+  }
+  return "11:30";
+}
 
 export function dateKey(value: string | Date) {
   const parts = kst.formatToParts(value instanceof Date ? value : new Date(value));

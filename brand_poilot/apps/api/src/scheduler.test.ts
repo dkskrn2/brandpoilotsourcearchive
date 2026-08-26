@@ -8,7 +8,7 @@ function repositoryForScheduler() {
     crawlDueSources: vi.fn(async () => ({ brandsSelected: 0, runsStarted: 0, processed: 0, created: 0, updated: 0, failed: 0, status: "succeeded" as const })),
     runDailyGeneration: vi.fn(async () => ({ brandsSelected: 0, runsStarted: 0, processed: 0, created: 0, updated: 0, failed: 0, status: "succeeded" as const })),
     runDailyPerformanceSync: vi.fn(async () => ({ status: "not_due" as const, runDate: "2026-07-13", channelsSelected: 0, runsStarted: 0, targetCount: 0, successCount: 0, failureCount: 0 })),
-    runDuePublishing: vi.fn(async () => ({ processed: 0, created: 0, updated: 0, failed: 0 }))
+    runDuePublishing: vi.fn(async () => ({ acquired: true, expiredTargets: 0, expiredSlots: 0, dueQueued: 0, published: 0, failed: 0, resultUnknown: 0 }))
   } as unknown as ApiRepository;
 }
 
@@ -67,7 +67,7 @@ describe("local scheduler", () => {
     });
     vi.mocked(repository.runDuePublishing).mockImplementation(async () => {
       order.push("publishing:start");
-      return { processed: 0, created: 0, updated: 0, failed: 0 };
+      return { acquired: true, expiredTargets: 0, expiredSlots: 0, dueQueued: 0, published: 0, failed: 0, resultUnknown: 0 };
     });
 
     const tick = runSchedulerTick(repository, new Date("2026-07-13T01:00:00.000Z"));
@@ -100,7 +100,7 @@ describe("local scheduler", () => {
   it("publishes due work and exposes the error when performance sync rejects", async () => {
     const repository = repositoryForScheduler();
     const now = new Date("2026-07-13T01:01:00.000Z");
-    const publishing = { processed: 1, created: 1, updated: 0, failed: 0 };
+    const publishing = { acquired: true, expiredTargets: 0, expiredSlots: 0, dueQueued: 1, published: 1, failed: 0, resultUnknown: 0 };
     vi.mocked(repository.runDailyPerformanceSync).mockRejectedValue(new Error("performance sync failed"));
     vi.mocked(repository.runDuePublishing).mockResolvedValue(publishing);
 

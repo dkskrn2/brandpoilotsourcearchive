@@ -22,6 +22,7 @@ export interface ApiRuntimeConfig {
     allowedSubjects: string[];
   };
   schedulerEnabled: boolean;
+  instanceRole: "primary" | "canary" | "unassigned";
   instagramPublishEnabled: boolean;
   aiContentAttachmentUploadSessionsEnabled: boolean;
   automatedContentEnabled: boolean;
@@ -100,6 +101,12 @@ function parseBoolean(value: string | undefined, key: string, fallback = false) 
   if (value === "true") return true;
   if (value === "false") return false;
   return invalid(key);
+}
+
+function parseInstanceRole(value: string | undefined): ApiRuntimeConfig["instanceRole"] {
+  if (value === undefined) return "unassigned";
+  if (value === "primary" || value === "canary") return value;
+  return invalid("API_INSTANCE_ROLE");
 }
 
 function parsePositiveInteger(
@@ -224,6 +231,7 @@ export function loadApiRuntimeConfig(
   const cookieSecure = parseBoolean(env.COOKIE_SECURE, "COOKIE_SECURE");
   const devAuthEnabled = parseBoolean(env.DEV_AUTH_ENABLED, "DEV_AUTH_ENABLED");
   const schedulerEnabled = parseBoolean(env.LOCAL_SCHEDULER_ENABLED, "LOCAL_SCHEDULER_ENABLED");
+  const instanceRole = parseInstanceRole(env.API_INSTANCE_ROLE);
   const instagramPublishEnabled = parseBoolean(env.INSTAGRAM_PUBLISH_ENABLED, "INSTAGRAM_PUBLISH_ENABLED");
   const automatedContentEnabled = parseBoolean(
     env.AUTOMATED_CONTENT_ENABLED,
@@ -357,6 +365,7 @@ export function loadApiRuntimeConfig(
     ...(aiContentDatabaseUrlFile ? { aiContentDatabaseUrlFile } : {}),
     ...(contentSuggestionOAuth ? { contentSuggestionOAuth } : {}),
     schedulerEnabled,
+    instanceRole,
     instagramPublishEnabled,
     aiContentAttachmentUploadSessionsEnabled,
     automatedContentEnabled,

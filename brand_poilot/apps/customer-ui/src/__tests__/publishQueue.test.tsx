@@ -26,6 +26,37 @@ const manualOptions = {
   },
 };
 
+const weeklySettings = {
+  brandId: "brand-1",
+  enabled: false,
+  channels: ["instagram" as const],
+  informationalFormat: "card_news" as const,
+  trendFormat: "reel" as const,
+  weeklySchedule: [{ id: "40000000-0000-4000-8000-000000000001", dayOfWeek: 1 as const, time: "11:17", sortOrder: 0 }],
+  updatedAt: "2026-08-26T00:00:00.000Z",
+};
+
+const connectedInstagram = {
+  type: "instagram" as const,
+  label: "Instagram",
+  enabled: true,
+  oauthState: "connected" as const,
+  status: "connected" as const,
+  accountLabel: "@brand",
+  lastHealthyAt: "2026-08-26T00:00:00.000Z",
+  lastPublishedAt: "",
+};
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
+
 function target(overrides: Partial<PublishItemTarget> = {}): PublishItemTarget {
   return {
     queueId: "queue-1", channelOutputId: "channel-output-1", channel: "instagram", status: "scheduled",
@@ -41,7 +72,7 @@ function item(overrides: Partial<PublishItem> = {}): PublishItem {
     createdAt: "2026-08-20T00:00:00.000Z", contentFormat: "card_news", channels: ["instagram"],
     source: { type: "topic_table", label: "주제표", detail: "사장님 콘텐츠", urls: [] }, targets: [target()],
     reviewTargets: [],
-    contentStatus: "completed", publishStatus: "scheduled", status: "scheduled", groupStatus: "ready", publicationProgress: "none",
+    contentStatus: "completed", publishStatus: "scheduled", status: "scheduled", operationalStatus: "upcoming", operationalReason: "future_reservation", groupStatus: "ready", publicationProgress: "none",
     scheduledFor: "2026-08-23T02:30:00.000Z", effectiveScheduledFor: "2026-08-23T02:30:00.000Z", publishedAt: null,
     calendarDate: "2026-08-23T02:30:00.000Z", calendarPlacement: "dated", assignmentMode: "manual",
     sourceRefs: { contentTopicId: null, proposalId: null, generationId: null, generationOutputId: "output-1", calendarSlotId: "slot-1", topicPublishGroupId: null, queueIds: ["queue-1"] },
@@ -71,10 +102,21 @@ afterEach(() => {
 async function renderPage(
   overrides: Record<string, ReturnType<typeof vi.fn>> = {},
   generationGateway: Pick<AiContentGateway, "listGenerations"> = { listGenerations: vi.fn(async () => []) },
+  useUrlDefault = false,
 ) {
+  if (!useUrlDefault && !new URLSearchParams(window.location.search).has("status")) {
+    const query = new URLSearchParams(window.location.search);
+    query.set("status", "all");
+    window.history.replaceState({}, "", `${window.location.pathname}?${query}`);
+  }
   const api = {
     listPublishItems: vi.fn(async () => [] as PublishItem[]),
     listChannels: vi.fn(async () => []),
+    getChannelCapabilities: vi.fn(async () => [{ channel: "instagram" as const, catalogStatus: "available" as const, enabled: true, connectionStatus: "connected" as const, canGenerate: true, generationFormats: ["card_news" as const], exportModes: ["image" as const], publishModes: ["instagram_feed_carousel" as const], readiness: "ready" as const, reasonCode: null }]),
+    getPublishCalendarWeeklySettings: vi.fn(async () => null),
+    savePublishCalendarWeeklySettings: vi.fn(async (_brandId: string, payload: Record<string, unknown>) => ({ ...weeklySettings, ...payload })),
+    setPublishCalendarEnabled: vi.fn(async (_brandId: string, enabled: boolean) => ({ ...weeklySettings, enabled })),
+    getPublishCalendarUsage: vi.fn(async () => manualOptions.usage),
     getPublishCalendarSettings: vi.fn(async () => ({ brandId: "brand-1", enabled: false, channels: [], informationalFormat: "card_news", trendFormat: "reel", slotTimes: ["11:30"], updatedAt: null })),
     getPublishCalendarManualOptions: vi.fn(async () => { throw new Error("not_configured"); }),
     listPublishCalendarContentCandidates: vi.fn(async () => ({ items: [] })),
@@ -85,8 +127,6 @@ async function renderPage(
     cancelPublishCalendarSlot: vi.fn(async () => ({ id: "slot-1", status: "cancelled" })),
     savePublishCalendarSettings: vi.fn(async (_brandId: string, payload: Record<string, unknown>) => ({ brandId: "brand-1", updatedAt: "2026-08-23T00:00:00.000Z", ...payload })),
     generateContent: vi.fn(async () => ({ processed: 1, created: 1, updated: 0, failed: 0 })),
-    schedulePublishQueue: vi.fn(async () => ({ processed: 1, created: 0, updated: 1, failed: 0 })),
-    publishQueueItem: vi.fn(async () => ({ id: "queue-1", status: "published", publishedUrl: "https://instagram.example/post" })),
     retryPublishQueueItem: vi.fn(async () => ({ id: "queue-1", status: "queued" })),
     cancelPublishQueueItem: vi.fn(async () => ({ id: "queue-1", status: "cancelled" })),
     reviewContentOutput: vi.fn(async (outputId: string, action: string) => ({ id: outputId, status: action === "approve" ? "approved" : action === "reject" ? "rejected" : "regenerating" })),
@@ -106,6 +146,84 @@ async function renderPage(
 }
 
 describe("PublishQueuePage canonical collection", () => {
+  it("defaults a URL without status to required work", async () => {
+    const required = item({ itemKey: "required", title: "처리할 게시", operationalStatus: "action_required", operationalReason: "stale_reservation" });
+    const upcoming = item({ itemKey: "upcoming", title: "나중 게시", operationalStatus: "upcoming", operationalReason: "future_reservation" });
+
+    await renderPage({ listPublishItems: vi.fn(async () => [required, upcoming]) }, undefined, true);
+
+    expect(await screen.findByRole("article", { name: "처리할 게시" })).toBeVisible();
+    expect(screen.queryByRole("article", { name: "나중 게시" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /처리 필요/ })).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it.each([
+    ["needs_review", "검토할 콘텐츠", "게시 실패 콘텐츠", "검토 대기 1"],
+    ["failed", "게시 실패 콘텐츠", "검토할 콘텐츠", "게시 실패 1"],
+  ])("preserves the precise semantics of the active %s legacy link", async (status, visibleTitle, hiddenTitle, selectedLabel) => {
+    window.history.replaceState({}, "", `/publish-queue?status=${status}`);
+    const review = item({
+      itemKey: "legacy:review",
+      title: "검토할 콘텐츠",
+      targets: [],
+      reviewTargets: [reviewTarget()],
+      status: "completed_unpublished",
+      publishStatus: "unreserved",
+      operationalStatus: "action_required",
+      operationalReason: "review_required",
+      scheduledFor: null,
+      effectiveScheduledFor: null,
+      calendarDate: null,
+      calendarPlacement: "unreserved",
+    });
+    const failed = item({
+      itemKey: "legacy:failed",
+      title: "게시 실패 콘텐츠",
+      status: "failed",
+      publishStatus: "failed",
+      operationalStatus: "action_required",
+      operationalReason: "publish_failed",
+      targets: [target({ status: "failed", lastError: "provider_not_implemented" })],
+    });
+
+    await renderPage({ listPublishItems: vi.fn(async () => [review, failed]) });
+
+    expect(await screen.findByRole("article", { name: visibleTitle })).toBeVisible();
+    expect(screen.queryByRole("article", { name: hiddenTitle })).not.toBeInTheDocument();
+    expect(screen.getAllByRole("button", { pressed: true })).toHaveLength(1);
+    expect(screen.getByRole("button", { name: selectedLabel, pressed: true })).toBeVisible();
+    expect(screen.getByRole("button", { name: "처리 필요 2" })).toHaveAttribute("aria-pressed", "false");
+    await userEvent.click(screen.getByRole("button", { name: "전체 2" }));
+    expect(screen.getAllByRole("button", { pressed: true })).toHaveLength(1);
+    expect(screen.getByRole("button", { name: "전체 2", pressed: true })).toBeVisible();
+    expect(screen.queryByRole("button", { name: selectedLabel })).not.toBeInTheDocument();
+  });
+
+  it("keeps the selected list filter after visiting the calendar", async () => {
+    const published = item({
+      itemKey: "filter:published",
+      title: "완료 콘텐츠",
+      status: "published",
+      publishStatus: "published",
+      operationalStatus: "published",
+      operationalReason: "published",
+      publicationProgress: "complete",
+      targets: [target({ status: "published", publishedAt: "2026-08-23T03:00:00.000Z" })],
+    });
+    const upcoming = item({ itemKey: "filter:upcoming", title: "예정 콘텐츠" });
+    await renderPage({ listPublishItems: vi.fn(async () => [published, upcoming]) });
+
+    await userEvent.click(await screen.findByRole("button", { name: /완료 1/ }));
+    expect(screen.getByRole("article", { name: "완료 콘텐츠" })).toBeVisible();
+    expect(screen.queryByRole("article", { name: "예정 콘텐츠" })).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("tab", { name: "캘린더" }));
+    await userEvent.click(screen.getByRole("tab", { name: "목록" }));
+
+    expect(screen.getByRole("button", { name: /완료 1/ })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("article", { name: "완료 콘텐츠" })).toBeVisible();
+    expect(screen.queryByRole("article", { name: "예정 콘텐츠" })).not.toBeInTheDocument();
+  });
+
   it("uses one collection for both views and never calls retired base reads", async () => {
     const items = [
       item(),
@@ -115,10 +233,14 @@ describe("PublishQueuePage canonical collection", () => {
     const oldRead = vi.fn(async () => { throw new Error("retired_read"); });
     const api = await renderPage({ listPublishItems: vi.fn(async () => items), listPublishQueue: oldRead, listContentOutputs: oldRead, listPublishResults: oldRead, listPublishCalendarSlots: oldRead });
 
-    expect(await screen.findByRole("article", { name: "예약된 SNS 마케팅" })).toHaveAttribute("data-item-key", "output:dated");
+    const listCard = await screen.findByRole("article", { name: "예약된 SNS 마케팅" });
+    expect(listCard).toHaveAttribute("data-item-key", "output:dated");
+    expect(within(listCard).getByText("게시 예정")).toBeVisible();
     expect(screen.getByRole("article", { name: "숨김 실패 콘텐츠" })).toBeVisible();
     await userEvent.click(screen.getByRole("tab", { name: "캘린더" }));
-    expect(await screen.findByRole("button", { name: "예약된 SNS 마케팅 슬롯 상세 보기" })).toBeVisible();
+    expect(await screen.findByRole("button", { name: "예약된 SNS 마케팅 게시 예정 슬롯 상세 보기" })).toBeVisible();
+    expect(screen.queryByRole("region", { name: "미예약 콘텐츠 보관함" })).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "콘텐츠 추가" }));
     expect(within(screen.getByRole("region", { name: "미예약 콘텐츠 보관함" })).getByText("미예약 사장님 콘텐츠")).toBeVisible();
     expect(screen.queryByText("숨김 실패 콘텐츠")).not.toBeInTheDocument();
     expect(api.listPublishItems).toHaveBeenCalledTimes(1);
@@ -144,6 +266,7 @@ describe("PublishQueuePage canonical collection", () => {
     await renderPage({ listPublishItems: vi.fn(async () => unreserved) });
 
     await userEvent.click(await screen.findByRole("tab", { name: "캘린더" }));
+    await userEvent.click(screen.getByRole("button", { name: "콘텐츠 추가" }));
     const tray = await screen.findByRole("region", { name: "미예약 콘텐츠 보관함" });
     const search = within(tray).getByRole("searchbox", { name: "미예약 콘텐츠 검색" });
     const status = within(tray).getByRole("combobox", { name: "미예약 콘텐츠 상태" });
@@ -199,6 +322,7 @@ describe("PublishQueuePage canonical collection", () => {
     await renderPage({ listPublishItems: vi.fn(async () => [generated, pending]) });
 
     await userEvent.click(await screen.findByRole("tab", { name: "캘린더" }));
+    await userEvent.click(screen.getByRole("button", { name: "콘텐츠 추가" }));
     const tray = await screen.findByRole("region", { name: "미예약 콘텐츠 보관함" });
     expect(within(tray).getByRole("img", { name: "생성 완료 카드뉴스 미리보기" })).toHaveAttribute("src", "https://cdn.example.com/card-1.webp");
     expect(within(within(tray).getByRole("article", { name: "생성 전 콘텐츠" })).queryByRole("img")).not.toBeInTheDocument();
@@ -241,8 +365,44 @@ describe("PublishQueuePage canonical collection", () => {
 
     expect(listGenerations).not.toHaveBeenCalled();
     await userEvent.click(await screen.findByRole("tab", { name: "캘린더" }));
+    await userEvent.click(screen.getByRole("button", { name: "콘텐츠 추가" }));
     const tray = await screen.findByRole("region", { name: "미예약 콘텐츠 보관함" });
     expect(await within(tray).findByRole("img", { name: "생성 결과 카드뉴스 미리보기" })).toHaveAttribute("src", "https://cdn.example.com/generated-card.webp");
+    expect(listGenerations).toHaveBeenCalledTimes(1);
+    expect(listGenerations).toHaveBeenCalledWith("brand-1");
+  });
+
+  it("loads generated media for a reserved item and shows it in the selected calendar detail", async () => {
+    const reserved = item({
+      itemKey: "output:reserved-thumbnail",
+      title: "예약된 생성 카드뉴스",
+      scheduledFor: "2026-08-29T02:30:00.000Z",
+      effectiveScheduledFor: "2026-08-29T02:30:00.000Z",
+      calendarDate: "2026-08-29T02:30:00.000Z",
+      sourceRefs: { ...item().sourceRefs, generationId: "generation-reserved", generationOutputId: "output-reserved" },
+    });
+    const listGenerations = vi.fn(async () => [{
+      id: "generation-reserved",
+      outputs: [{
+        id: "output-reserved",
+        status: "completed",
+        artifact: {
+          queueId: "output-reserved",
+          kind: "image_gallery",
+          deliveryFormat: "instagram_feed_carousel",
+          assets: [{ url: "https://cdn.example.com/reserved-card.webp", fileName: "card.webp", mimeType: "image/webp", width: 1080, height: 1350 }],
+          posterUrl: null,
+          html: null,
+          text: null,
+        },
+      }],
+    }] as AiContentGeneration[]);
+    await renderPage({ listPublishItems: vi.fn(async () => [reserved]) }, { listGenerations });
+
+    await userEvent.click(await screen.findByRole("tab", { name: "캘린더" }));
+    await userEvent.click(await screen.findByRole("button", { name: "예약된 생성 카드뉴스 게시 예정 슬롯 상세 보기" }));
+
+    expect(await screen.findByRole("img", { name: "예약된 생성 카드뉴스 미리보기" })).toHaveAttribute("src", "https://cdn.example.com/reserved-card.webp");
     expect(listGenerations).toHaveBeenCalledTimes(1);
     expect(listGenerations).toHaveBeenCalledWith("brand-1");
   });
@@ -261,10 +421,367 @@ describe("PublishQueuePage canonical collection", () => {
     const api = await renderPage({ listPublishItems: vi.fn(async () => [item()]) });
     await screen.findByRole("article", { name: "예약된 SNS 마케팅" });
     expect(api.listChannels).not.toHaveBeenCalled();
+    expect(api.getChannelCapabilities).not.toHaveBeenCalled();
+    expect(api.getPublishCalendarWeeklySettings).not.toHaveBeenCalled();
     expect(api.getPublishCalendarSettings).not.toHaveBeenCalled();
     await userEvent.click(screen.getByRole("tab", { name: "캘린더" }));
     await waitFor(() => expect(api.listChannels).toHaveBeenCalledWith("brand-1"));
+    expect(api.getChannelCapabilities).toHaveBeenCalledWith("brand-1");
+    expect(api.getPublishCalendarWeeklySettings).toHaveBeenCalledWith("brand-1");
     expect(api.getPublishCalendarSettings).toHaveBeenCalledWith("brand-1");
+  });
+
+  it("uses the weekly read, dedicated confirmed toggle, usage, and weekly save without touching legacy writes", async () => {
+    const getPublishCalendarSettings = vi.fn(async () => ({ brandId: "brand-1", enabled: false, channels: [], informationalFormat: "card_news" as const, trendFormat: "reel" as const, slotTimes: ["11:30"], updatedAt: null }));
+    const savePublishCalendarSettings = vi.fn();
+    const setPublishCalendarEnabled = vi.fn(async (_brandId: string, enabled: boolean) => ({ ...weeklySettings, enabled }));
+    const savePublishCalendarWeeklySettings = vi.fn(async (_brandId: string, payload: Record<string, unknown>) => ({ ...weeklySettings, ...payload }));
+    const api = await renderPage({
+      listChannels: vi.fn(async () => [connectedInstagram]),
+      getPublishCalendarWeeklySettings: vi.fn(async () => weeklySettings),
+      getPublishCalendarSettings,
+      getPublishCalendarUsage: vi.fn(async () => manualOptions.usage),
+      setPublishCalendarEnabled,
+      savePublishCalendarWeeklySettings,
+      savePublishCalendarSettings,
+    });
+
+    await userEvent.click(await screen.findByRole("tab", { name: "캘린더" }));
+    const offSwitch = await screen.findByRole("switch", { name: "자동 게시 OFF" });
+    expect(offSwitch).toHaveAttribute("aria-checked", "false");
+    expect(getPublishCalendarSettings).not.toHaveBeenCalled();
+    expect(api.getPublishCalendarUsage).toHaveBeenCalledWith("brand-1");
+
+    await userEvent.click(offSwitch);
+    await waitFor(() => expect(screen.getByRole("switch", { name: "자동 게시 ON" })).toHaveAttribute("aria-checked", "true"));
+    expect(setPublishCalendarEnabled).toHaveBeenCalledWith("brand-1", true);
+
+    await userEvent.click(screen.getByRole("button", { name: "자동 게시 수정" }));
+    const dialog = await screen.findByRole("dialog", { name: "주간 자동 게시 설정" });
+    expect(within(dialog).queryByRole("switch")).not.toBeInTheDocument();
+    await userEvent.clear(within(dialog).getByLabelText("월요일 1번째 게시 시간"));
+    await userEvent.type(within(dialog).getByLabelText("월요일 1번째 게시 시간"), "11:43");
+    await userEvent.click(within(dialog).getByRole("button", { name: "설정 저장" }));
+
+    await waitFor(() => expect(savePublishCalendarWeeklySettings).toHaveBeenCalledWith("brand-1", expect.objectContaining({
+      weeklySchedule: [expect.objectContaining({ time: "11:43" })],
+    })));
+    expect(savePublishCalendarWeeklySettings.mock.calls[0][1]).not.toHaveProperty("enabled");
+    expect(savePublishCalendarSettings).not.toHaveBeenCalled();
+  });
+
+  it("keeps the confirmed weekly state and reports a safe error when the dedicated toggle fails", async () => {
+    const setPublishCalendarEnabled = vi.fn(async () => { throw new Error("provider detail must stay private"); });
+    await renderPage({
+      listChannels: vi.fn(async () => [connectedInstagram]),
+      getPublishCalendarWeeklySettings: vi.fn(async () => weeklySettings),
+      getPublishCalendarUsage: vi.fn(async () => manualOptions.usage),
+      setPublishCalendarEnabled,
+    });
+
+    await userEvent.click(await screen.findByRole("tab", { name: "캘린더" }));
+    await userEvent.click(await screen.findByRole("switch", { name: "자동 게시 OFF" }));
+
+    expect(await screen.findByRole("switch", { name: "자동 게시 OFF" })).toHaveAttribute("aria-checked", "false");
+    expect(screen.getByRole("alert")).toHaveTextContent("자동 게시 상태를 변경하지 못했습니다. 잠시 후 다시 시도하세요.");
+    expect(screen.queryByText(/provider detail/)).not.toBeInTheDocument();
+  });
+
+  it("does not invent OFF after a weekly read failure and retries the strict weekly read", async () => {
+    const getPublishCalendarWeeklySettings = vi.fn()
+      .mockRejectedValueOnce(new Error("temporary read failure"))
+      .mockResolvedValueOnce({ ...weeklySettings, enabled: true });
+    await renderPage({
+      listChannels: vi.fn(async () => [connectedInstagram]),
+      getPublishCalendarWeeklySettings,
+      getPublishCalendarUsage: vi.fn(async () => manualOptions.usage),
+    });
+
+    await userEvent.click(await screen.findByRole("tab", { name: "캘린더" }));
+    expect(await screen.findByText("자동 게시 상태 확인 불가")).toBeVisible();
+    expect(screen.queryByRole("switch", { name: /자동 게시 (ON|OFF)/ })).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "자동 게시 다시 시도" }));
+    await waitFor(() => expect(screen.getByRole("switch", { name: "자동 게시 ON" })).toBeVisible());
+    expect(getPublishCalendarWeeklySettings).toHaveBeenCalledTimes(2);
+  });
+
+  it("retries a non-404 weekly settings failure inside the edit surface", async () => {
+    const getPublishCalendarWeeklySettings = vi.fn()
+      .mockRejectedValueOnce(new Error("temporary read failure"))
+      .mockResolvedValueOnce(weeklySettings);
+    await renderPage({
+      listChannels: vi.fn(async () => [connectedInstagram]),
+      getPublishCalendarWeeklySettings,
+      getPublishCalendarUsage: vi.fn(async () => manualOptions.usage),
+    });
+
+    await userEvent.click(await screen.findByRole("tab", { name: "캘린더" }));
+    await userEvent.click(await screen.findByRole("button", { name: "수정" }));
+    const unavailable = await screen.findByRole("dialog", { name: "자동 게시 설정" });
+    await userEvent.click(within(unavailable).getByRole("button", { name: "주간 설정 다시 시도" }));
+
+    expect(getPublishCalendarWeeklySettings).toHaveBeenCalledTimes(2);
+    expect(await screen.findByRole("dialog", { name: "주간 자동 게시 설정" })).toBeVisible();
+  });
+
+  it("retries only the legacy endpoint inside the edit surface after weekly 404 and legacy read failure", async () => {
+    const getPublishCalendarWeeklySettings = vi.fn(async () => null);
+    const getPublishCalendarSettings = vi.fn()
+      .mockRejectedValueOnce(new Error("legacy read failure"))
+      .mockResolvedValueOnce({ brandId: "brand-1", enabled: false, channels: [], informationalFormat: "card_news", trendFormat: "reel", slotTimes: ["11:30"], updatedAt: null });
+    await renderPage({ getPublishCalendarWeeklySettings, getPublishCalendarSettings });
+
+    await userEvent.click(await screen.findByRole("tab", { name: "캘린더" }));
+    await userEvent.click(await screen.findByRole("button", { name: "자동 게시 설정" }));
+    const unavailable = await screen.findByRole("dialog", { name: "자동 게시 설정" });
+    await userEvent.click(within(unavailable).getByRole("button", { name: "자동 게시 설정 다시 시도" }));
+
+    expect(getPublishCalendarWeeklySettings).toHaveBeenCalledTimes(1);
+    expect(getPublishCalendarSettings).toHaveBeenCalledTimes(2);
+    expect(within(await screen.findByRole("dialog", { name: "자동 게시 설정" })).getByRole("button", { name: "설정 저장" })).toBeVisible();
+  });
+
+  it("shows metadata checking and failure states without inventing disconnected or unsupported channels", async () => {
+    let rejectChannels!: (reason: Error) => void;
+    const channelsPending = new Promise<never>((_resolve, reject) => { rejectChannels = reject; });
+    await renderPage({
+      getPublishCalendarWeeklySettings: vi.fn(async () => weeklySettings),
+      listChannels: vi.fn(() => channelsPending),
+      getChannelCapabilities: vi.fn(() => new Promise(() => {})),
+    });
+
+    await userEvent.click(await screen.findByRole("tab", { name: "캘린더" }));
+    expect(await screen.findByText("자동 게시 사용 조건을 확인하는 중입니다.")).toBeVisible();
+    expect(screen.queryByRole("switch", { name: /자동 게시 (ON|OFF)/ })).not.toBeInTheDocument();
+    expect(screen.queryByText(/미연결|자동 게시 미지원/)).not.toBeInTheDocument();
+
+    rejectChannels(new Error("channels_down"));
+    expect(await screen.findByText("게시 채널 정보를 확인하지 못했습니다.")).toBeVisible();
+    expect(screen.getByRole("button", { name: "자동 게시 정보 다시 시도" })).toBeVisible();
+    expect(screen.queryByRole("switch", { name: /자동 게시 (ON|OFF)/ })).not.toBeInTheDocument();
+  });
+
+  it("does not refetch weekly support data when only the displayed month changes", async () => {
+    const api = await renderPage({
+      getPublishCalendarWeeklySettings: vi.fn(async () => weeklySettings),
+      listChannels: vi.fn(async () => [connectedInstagram]),
+      getPublishCalendarUsage: vi.fn(async () => manualOptions.usage),
+    });
+
+    await userEvent.click(await screen.findByRole("tab", { name: "캘린더" }));
+    await screen.findByRole("switch", { name: "자동 게시 OFF" });
+    await userEvent.click(screen.getByRole("button", { name: "다음 달" }));
+
+    expect(api.getPublishCalendarWeeklySettings).toHaveBeenCalledTimes(1);
+    expect(api.listChannels).toHaveBeenCalledTimes(1);
+    expect(api.getChannelCapabilities).toHaveBeenCalledTimes(1);
+    expect(api.getPublishCalendarUsage).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps a confirmed toggle mutation when an older weekly GET resolves later", async () => {
+    let resolveStale!: (value: typeof weeklySettings) => void;
+    const staleRead = new Promise<typeof weeklySettings>((resolve) => { resolveStale = resolve; });
+    const getPublishCalendarWeeklySettings = vi.fn()
+      .mockResolvedValueOnce({ ...weeklySettings, enabled: true })
+      .mockImplementationOnce(() => staleRead);
+    const listChannels = vi.fn()
+      .mockRejectedValueOnce(new Error("channels_down"))
+      .mockResolvedValueOnce([connectedInstagram]);
+    const setPublishCalendarEnabled = vi.fn(async () => ({ ...weeklySettings, enabled: false }));
+    await renderPage({
+      getPublishCalendarWeeklySettings,
+      listChannels,
+      getPublishCalendarUsage: vi.fn(async () => manualOptions.usage),
+      setPublishCalendarEnabled,
+    });
+
+    await userEvent.click(await screen.findByRole("tab", { name: "캘린더" }));
+    expect(await screen.findByRole("switch", { name: "자동 게시 ON" })).toBeVisible();
+    await userEvent.click(screen.getByRole("button", { name: "자동 게시 정보 다시 시도" }));
+    await waitFor(() => expect(listChannels).toHaveBeenCalledTimes(2));
+    await userEvent.click(screen.getByRole("switch", { name: "자동 게시 ON" }));
+    await waitFor(() => expect(screen.getByRole("switch", { name: "자동 게시 OFF" })).toBeVisible());
+
+    resolveStale({ ...weeklySettings, enabled: true });
+    await act(async () => { await staleRead; });
+    expect(screen.getByRole("switch", { name: "자동 게시 OFF" })).toBeVisible();
+  });
+
+  it("keeps a confirmed configuration save when an older weekly GET resolves later", async () => {
+    let resolveStale!: (value: typeof weeklySettings) => void;
+    const staleRead = new Promise<typeof weeklySettings>((resolve) => { resolveStale = resolve; });
+    const getPublishCalendarWeeklySettings = vi.fn()
+      .mockResolvedValueOnce(weeklySettings)
+      .mockImplementationOnce(() => staleRead);
+    const listChannels = vi.fn()
+      .mockRejectedValueOnce(new Error("channels_down"))
+      .mockResolvedValueOnce([connectedInstagram]);
+    const saved = { ...weeklySettings, weeklySchedule: [{ ...weeklySettings.weeklySchedule[0], time: "12:34" }] };
+    const savePublishCalendarWeeklySettings = vi.fn(async () => saved);
+    await renderPage({
+      getPublishCalendarWeeklySettings,
+      listChannels,
+      getPublishCalendarUsage: vi.fn(async () => manualOptions.usage),
+      savePublishCalendarWeeklySettings,
+    });
+
+    await userEvent.click(await screen.findByRole("tab", { name: "캘린더" }));
+    await userEvent.click(await screen.findByRole("button", { name: "자동 게시 수정" }));
+    const dialog = await screen.findByRole("dialog", { name: "주간 자동 게시 설정" });
+    expect(within(dialog).getByRole("button", { name: "설정 저장" })).toBeDisabled();
+    await userEvent.click(within(dialog).getByRole("button", { name: "게시 채널 다시 시도" }));
+    await waitFor(() => expect(listChannels).toHaveBeenCalledTimes(2));
+    await userEvent.clear(within(dialog).getByLabelText("월요일 1번째 게시 시간"));
+    await userEvent.type(within(dialog).getByLabelText("월요일 1번째 게시 시간"), "12:34");
+    await userEvent.click(within(dialog).getByRole("button", { name: "설정 저장" }));
+    await waitFor(() => expect(savePublishCalendarWeeklySettings).toHaveBeenCalledTimes(1));
+
+    resolveStale(weeklySettings);
+    await act(async () => { await staleRead; });
+    await userEvent.click(screen.getByRole("button", { name: "자동 게시 수정" }));
+    expect(within(await screen.findByRole("dialog", { name: "주간 자동 게시 설정" })).getByLabelText("월요일 1번째 게시 시간")).toHaveValue("12:34");
+  });
+
+  it.each(["mutation-first", "get-first"] as const)("keeps a confirmed toggle when a retry GET starts during PATCH and completes %s", async (order) => {
+    const mutation = deferred<typeof weeklySettings>();
+    const retryRead = deferred<typeof weeklySettings>();
+    const getPublishCalendarWeeklySettings = vi.fn()
+      .mockResolvedValueOnce({ ...weeklySettings, enabled: true })
+      .mockRejectedValueOnce(new Error("weekly refresh failed"))
+      .mockImplementationOnce(() => retryRead.promise);
+    const listChannels = vi.fn()
+      .mockRejectedValueOnce(new Error("channels down"))
+      .mockResolvedValue([connectedInstagram]);
+    const setPublishCalendarEnabled = vi.fn(() => mutation.promise);
+    await renderPage({
+      getPublishCalendarWeeklySettings,
+      listChannels,
+      getPublishCalendarUsage: vi.fn(async () => manualOptions.usage),
+      setPublishCalendarEnabled,
+    });
+
+    await userEvent.click(await screen.findByRole("tab", { name: "캘린더" }));
+    await userEvent.click(await screen.findByRole("button", { name: "자동 게시 정보 다시 시도" }));
+    expect(await screen.findByRole("button", { name: "자동 게시 다시 시도" })).toBeVisible();
+    await userEvent.click(screen.getByRole("switch", { name: "자동 게시 ON" }));
+    await waitFor(() => expect(setPublishCalendarEnabled).toHaveBeenCalledTimes(1));
+    await userEvent.click(screen.getByRole("button", { name: "자동 게시 다시 시도" }));
+    await waitFor(() => expect(getPublishCalendarWeeklySettings).toHaveBeenCalledTimes(3));
+
+    if (order === "mutation-first") {
+      mutation.resolve({ ...weeklySettings, enabled: false });
+      await waitFor(() => expect(screen.getByRole("switch", { name: "자동 게시 OFF" })).toBeVisible());
+      retryRead.resolve({ ...weeklySettings, enabled: true });
+      await act(async () => { await retryRead.promise; });
+    } else {
+      retryRead.resolve({ ...weeklySettings, enabled: true });
+      await act(async () => { await retryRead.promise; });
+      mutation.resolve({ ...weeklySettings, enabled: false });
+      await act(async () => { await mutation.promise; });
+    }
+
+    expect(screen.getByRole("switch", { name: "자동 게시 OFF" })).toBeVisible();
+  });
+
+  it.each(["mutation-first", "get-first"] as const)("keeps a confirmed configuration when a retry GET starts during PUT and completes %s", async (order) => {
+    const mutation = deferred<typeof weeklySettings>();
+    const retryRead = deferred<typeof weeklySettings>();
+    const getPublishCalendarWeeklySettings = vi.fn()
+      .mockResolvedValueOnce({ ...weeklySettings, enabled: true })
+      .mockRejectedValueOnce(new Error("weekly refresh failed"))
+      .mockImplementationOnce(() => retryRead.promise);
+    const listChannels = vi.fn()
+      .mockRejectedValueOnce(new Error("channels down"))
+      .mockResolvedValue([connectedInstagram]);
+    const savePublishCalendarWeeklySettings = vi.fn(() => mutation.promise);
+    await renderPage({
+      getPublishCalendarWeeklySettings,
+      listChannels,
+      getPublishCalendarUsage: vi.fn(async () => manualOptions.usage),
+      savePublishCalendarWeeklySettings,
+    });
+
+    await userEvent.click(await screen.findByRole("tab", { name: "캘린더" }));
+    await userEvent.click(await screen.findByRole("button", { name: "자동 게시 정보 다시 시도" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "자동 게시 다시 시도" })).toBeVisible());
+    await userEvent.click(screen.getByRole("button", { name: "자동 게시 수정" }));
+    const dialog = await screen.findByRole("dialog", { name: "주간 자동 게시 설정" });
+    await userEvent.clear(within(dialog).getByLabelText("월요일 1번째 게시 시간"));
+    await userEvent.type(within(dialog).getByLabelText("월요일 1번째 게시 시간"), "12:34");
+    await userEvent.click(within(dialog).getByRole("button", { name: "설정 저장" }));
+    await waitFor(() => expect(savePublishCalendarWeeklySettings).toHaveBeenCalledTimes(1));
+    await userEvent.click(within(dialog).getByRole("button", { name: "주간 설정 다시 시도" }));
+    await waitFor(() => expect(getPublishCalendarWeeklySettings).toHaveBeenCalledTimes(3));
+
+    const saved = { ...weeklySettings, enabled: true, weeklySchedule: [{ ...weeklySettings.weeklySchedule[0], time: "12:34" }] };
+    if (order === "mutation-first") {
+      mutation.resolve(saved);
+      await act(async () => { await mutation.promise; });
+      retryRead.resolve(weeklySettings);
+      await act(async () => { await retryRead.promise; });
+    } else {
+      retryRead.resolve(weeklySettings);
+      await act(async () => { await retryRead.promise; });
+      mutation.resolve(saved);
+      await act(async () => { await mutation.promise; });
+    }
+
+    await userEvent.click(await screen.findByRole("button", { name: "자동 게시 수정" }));
+    expect(within(await screen.findByRole("dialog", { name: "주간 자동 게시 설정" })).getByLabelText("월요일 1번째 게시 시간")).toHaveValue("12:34");
+  });
+
+  it("maps the stable incomplete settings error from PUT to an actionable Korean fallback", async () => {
+    await renderPage({
+      getPublishCalendarWeeklySettings: vi.fn(async () => ({ ...weeklySettings, enabled: true })),
+      listChannels: vi.fn(async () => [connectedInstagram]),
+      getPublishCalendarUsage: vi.fn(async () => manualOptions.usage),
+      savePublishCalendarWeeklySettings: vi.fn(async () => { throw { errorCode: "publish_calendar_settings_incomplete" }; }),
+    });
+
+    await userEvent.click(await screen.findByRole("tab", { name: "캘린더" }));
+    await userEvent.click(await screen.findByRole("button", { name: "자동 게시 수정" }));
+    const dialog = await screen.findByRole("dialog", { name: "주간 자동 게시 설정" });
+    await userEvent.click(within(dialog).getByRole("button", { name: "설정 저장" }));
+
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent("자동 게시를 켠 상태로 저장하려면 주간 일정과 게시 가능한 연결 채널을 각각 한 개 이상 설정해 주세요.");
+  });
+
+  it("maps the stable incomplete settings error from PATCH to an actionable Korean fallback", async () => {
+    await renderPage({
+      getPublishCalendarWeeklySettings: vi.fn(async () => weeklySettings),
+      listChannels: vi.fn(async () => [connectedInstagram]),
+      getPublishCalendarUsage: vi.fn(async () => manualOptions.usage),
+      setPublishCalendarEnabled: vi.fn(async () => { throw { errorCode: "publish_calendar_settings_incomplete" }; }),
+    });
+
+    await userEvent.click(await screen.findByRole("tab", { name: "캘린더" }));
+    await userEvent.click(await screen.findByRole("switch", { name: "자동 게시 OFF" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("자동 게시를 켠 상태로 저장하려면 주간 일정과 게시 가능한 연결 채널을 각각 한 개 이상 설정해 주세요.");
+  });
+
+  it("renders the legacy settings path after weekly 404 and never performs a weekly write", async () => {
+    const savePublishCalendarWeeklySettings = vi.fn();
+    const setPublishCalendarEnabled = vi.fn();
+    const savePublishCalendarSettings = vi.fn(async (_brandId: string, payload: Record<string, unknown>) => ({ brandId: "brand-1", updatedAt: null, ...payload }));
+    await renderPage({
+      getPublishCalendarWeeklySettings: vi.fn(async () => null),
+      getPublishCalendarSettings: vi.fn(async () => ({ brandId: "brand-1", enabled: false, channels: [], informationalFormat: "card_news", trendFormat: "reel", slotTimes: ["11:30"], updatedAt: null })),
+      savePublishCalendarWeeklySettings,
+      setPublishCalendarEnabled,
+      savePublishCalendarSettings,
+    });
+
+    await userEvent.click(await screen.findByRole("tab", { name: "캘린더" }));
+    expect(await screen.findByRole("button", { name: "자동 게시 설정" })).toBeVisible();
+    expect(screen.queryByRole("switch", { name: /자동 게시 (ON|OFF)/ })).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "자동 게시 설정" }));
+    await userEvent.click(within(await screen.findByRole("dialog", { name: "자동 게시 설정" })).getByRole("button", { name: "설정 저장" }));
+
+    await waitFor(() => expect(savePublishCalendarSettings).toHaveBeenCalledTimes(1));
+    expect(savePublishCalendarWeeklySettings).not.toHaveBeenCalled();
+    expect(setPublishCalendarEnabled).not.toHaveBeenCalled();
   });
 
   it("opens the same fixed-source schedule panel lazily from the list", async () => {
@@ -295,14 +812,20 @@ describe("PublishQueuePage canonical collection", () => {
     await waitFor(() => expect(screen.getByRole("article", { name: "예약된 SNS 마케팅" })).toHaveFocus());
   });
 
-  it("changes the same reservation from both the list card and calendar detail", async () => {
+  it("offers the same delayed-today reservation change from the list card and calendar detail", async () => {
     vi.useFakeTimers({ toFake: ["Date"] });
     vi.setSystemTime(new Date("2026-08-24T00:00:00.000Z"));
     const reserved = item({
-      scheduledFor: "2026-08-31T02:30:00.000Z",
-      effectiveScheduledFor: "2026-08-31T02:30:00.000Z",
-      calendarDate: "2026-08-31T02:30:00.000Z",
-      targets: [target({ scheduledFor: "2026-08-31T02:30:00.000Z" })],
+      operationalStatus: "delayed_today",
+      operationalReason: "reserved_time_passed",
+      status: "deferred",
+      publishStatus: "deferred",
+      scheduledFor: "2026-08-23T23:30:00.000Z",
+      effectiveScheduledFor: "2026-08-23T23:45:00.000Z",
+      calendarDate: "2026-08-23T23:45:00.000Z",
+      groupStatus: "scheduled",
+      sourceRefs: { ...item().sourceRefs, topicPublishGroupId: "group-1" },
+      targets: [target({ status: "scheduled", scheduledFor: "2026-08-23T23:30:00.000Z" })],
     });
     const listPublishItems = vi.fn(async () => [reserved]);
     const reschedulePublishCalendarSlot = vi.fn(async () => ({ id: "slot-1" }));
@@ -324,9 +847,50 @@ describe("PublishQueuePage canonical collection", () => {
     expect(await screen.findByText("예약 시간을 변경했습니다.")).toBeVisible();
 
     await userEvent.click(screen.getByRole("tab", { name: "캘린더" }));
-    await userEvent.click(await screen.findByRole("button", { name: "예약된 SNS 마케팅 슬롯 상세 보기" }));
+    await userEvent.click(await screen.findByRole("button", { name: "예약된 SNS 마케팅 게시 지연 슬롯 상세 보기" }));
     await userEvent.click(screen.getByRole("button", { name: "예약 변경" }));
     expect(await screen.findByRole("dialog", { name: "예약된 SNS 마케팅 예약 변경" })).toBeVisible();
+  });
+
+  it("hides reservation changes for mixed queued and scheduled targets in both views", async () => {
+    const mixed = item({
+      groupStatus: "scheduled",
+      sourceRefs: { ...item().sourceRefs, topicPublishGroupId: "group-1", queueIds: ["queue-1", "queue-2"] },
+      targets: [
+        target({ queueId: "queue-1", status: "queued" }),
+        target({ queueId: "queue-2", channelOutputId: "channel-output-2", status: "scheduled" }),
+      ],
+    });
+    await renderPage({ listPublishItems: vi.fn(async () => [mixed]) });
+
+    const card = await screen.findByRole("article", { name: "예약된 SNS 마케팅" });
+    expect(within(card).queryByRole("button", { name: "예약 변경" })).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("tab", { name: "캘린더" }));
+    await userEvent.click(await screen.findByRole("button", { name: "예약된 SNS 마케팅 게시 예정 슬롯 상세 보기" }));
+    expect(screen.queryByRole("button", { name: "예약 변경" })).not.toBeInTheDocument();
+  });
+
+  it("uses saved preferred times when a new reservation date changes", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-08-25T06:00:00.000Z"));
+    const schedulable = item({ status: "completed_unpublished", publishStatus: "unreserved", calendarDate: null, calendarPlacement: "unreserved", scheduledFor: null, effectiveScheduledFor: null, targets: [], schedulable: true, scheduleBlockedReason: null });
+    await renderPage({
+      listPublishItems: vi.fn(async () => [schedulable]),
+      getPublishCalendarSettings: vi.fn(async () => ({ brandId: "brand-1", enabled: true, channels: ["instagram"], informationalFormat: "card_news", trendFormat: "reel", slotTimes: ["14:00", "09:00"], updatedAt: null })),
+      getPublishCalendarManualOptions: vi.fn(async () => manualOptions),
+    });
+    await userEvent.click(await screen.findByRole("tab", { name: "캘린더" }));
+    await userEvent.click(screen.getByRole("button", { name: "자동 게시 설정" }));
+    expect(await screen.findByRole("dialog", { name: "자동 게시 설정" })).toBeVisible();
+    expect(screen.getByLabelText("게시 시간")).toHaveValue("14:00, 09:00");
+    await userEvent.click(screen.getByRole("button", { name: "닫기" }));
+    await userEvent.click(screen.getByRole("button", { name: "콘텐츠 추가" }));
+    await userEvent.click(within(screen.getByRole("region", { name: "미예약 콘텐츠 보관함" })).getByRole("button", { name: "게시 설정" }));
+    await userEvent.clear(screen.getByLabelText("게시 날짜"));
+    await userEvent.type(screen.getByLabelText("게시 날짜"), "2026-08-26");
+
+    expect(screen.getByLabelText("게시 시간")).toHaveValue("09:00");
   });
 
   it("ignores a stale manual-options response after selecting another item", async () => {
@@ -388,12 +952,17 @@ describe("PublishQueuePage canonical collection", () => {
     const provisionPublishCalendarManualSlot = vi.fn(async (_brandId: string, _payload: unknown) => ({ id: "slot-new" }));
     await renderPage({ getPublishCalendarManualOptions, provisionPublishCalendarManualSlot, listPublishItems: vi.fn(async () => [schedulable]) });
     await userEvent.click(await screen.findByRole("tab", { name: "캘린더" }));
+    const contentTrigger = screen.getByRole("button", { name: "콘텐츠 추가" });
+    await userEvent.click(contentTrigger);
     const tray = await screen.findByRole("region", { name: "미예약 콘텐츠 보관함" });
     await userEvent.click(within(tray).getByRole("button", { name: "게시 설정" }));
 
-    expect(await screen.findByRole("dialog", { name: "예약된 SNS 마케팅 게시 설정" })).toHaveClass("publish-schedule-panel");
+    const scheduleDialog = await screen.findByRole("dialog", { name: "예약된 SNS 마케팅 게시 설정" });
+    expect(scheduleDialog).toHaveClass("publish-schedule-panel");
     expect(screen.queryByRole("combobox", { name: "게시할 콘텐츠" })).not.toBeInTheDocument();
-    expect(getPublishCalendarManualOptions).toHaveBeenCalledTimes(1);
+    expect(getPublishCalendarManualOptions).toHaveBeenCalledTimes(2);
+    await userEvent.click(within(scheduleDialog).getByRole("button", { name: "닫기" }));
+    await waitFor(() => expect(contentTrigger).toHaveFocus());
   });
 
   it("never offers a new schedule action for non-schedulable publish states", async () => {
@@ -404,14 +973,18 @@ describe("PublishQueuePage canonical collection", () => {
     expect(screen.queryByRole("button", { name: "게시 설정" })).not.toBeInTheDocument();
   });
 
-  it("does not offer reservation changes for past, deferred, publishing, failed, or completed items", async () => {
+  it("does not offer reservation changes for action-required, unsafe delayed, publishing, partial, failed, unknown, completed, or cancelled items", async () => {
     const future = "2099-08-23T02:30:00.000Z";
     const blocked = [
-      item({ itemKey: "past", title: "지난 예약", scheduledFor: "2026-08-01T02:30:00.000Z", effectiveScheduledFor: "2026-08-01T02:30:00.000Z", calendarDate: "2026-08-01T02:30:00.000Z" }),
-      item({ itemKey: "deferred", title: "재시도 중", status: "deferred", publishStatus: "deferred", scheduledFor: future, effectiveScheduledFor: future, calendarDate: future, targets: [target({ status: "deferred", scheduledFor: future })] }),
-      item({ itemKey: "publishing", title: "게시 중", status: "publishing", publishStatus: "publishing", scheduledFor: future, effectiveScheduledFor: future, calendarDate: future, targets: [target({ status: "publishing", scheduledFor: future })] }),
-      item({ itemKey: "failed", title: "게시 실패", status: "failed", publishStatus: "failed", scheduledFor: future, effectiveScheduledFor: future, calendarDate: future, targets: [target({ status: "failed", scheduledFor: future })] }),
-      item({ itemKey: "published", title: "게시 완료", status: "published", publishStatus: "published", publicationProgress: "complete", scheduledFor: future, effectiveScheduledFor: future, calendarDate: future, targets: [target({ status: "published", scheduledFor: future })] }),
+      item({ itemKey: "past", title: "지난 예약", operationalStatus: "action_required", operationalReason: "stale_reservation", scheduledFor: "2026-08-01T02:30:00.000Z", effectiveScheduledFor: "2026-08-01T02:30:00.000Z", calendarDate: "2026-08-01T02:30:00.000Z" }),
+      item({ itemKey: "deferred", title: "재시도 중", operationalStatus: "delayed_today", operationalReason: "reserved_time_passed", status: "deferred", publishStatus: "deferred", scheduledFor: future, effectiveScheduledFor: future, calendarDate: future, targets: [target({ status: "deferred", scheduledFor: future })] }),
+      item({ itemKey: "publishing", title: "게시 중", operationalStatus: "publishing", operationalReason: "publishing", status: "publishing", publishStatus: "publishing", scheduledFor: future, effectiveScheduledFor: future, calendarDate: future, targets: [target({ status: "publishing", scheduledFor: future })] }),
+      item({ itemKey: "partial", title: "일부 게시", operationalStatus: "partially_published", operationalReason: "partially_published", status: "partially_published", publishStatus: "partially_published", publicationProgress: "partial", scheduledFor: future, effectiveScheduledFor: future, calendarDate: future }),
+      item({ itemKey: "review", title: "검토 필요", operationalStatus: "action_required", operationalReason: "review_required", scheduledFor: future, effectiveScheduledFor: future, calendarDate: future }),
+      item({ itemKey: "failed", title: "게시 실패", operationalStatus: "action_required", operationalReason: "publish_failed", status: "failed", publishStatus: "failed", scheduledFor: future, effectiveScheduledFor: future, calendarDate: future, targets: [target({ status: "failed", scheduledFor: future })] }),
+      item({ itemKey: "unknown", title: "결과 확인 필요", operationalStatus: "action_required", operationalReason: "result_unknown", status: "result_unknown", publishStatus: "result_unknown", scheduledFor: future, effectiveScheduledFor: future, calendarDate: future }),
+      item({ itemKey: "published", title: "게시 완료", operationalStatus: "published", operationalReason: "published", status: "published", publishStatus: "published", publicationProgress: "complete", scheduledFor: future, effectiveScheduledFor: future, calendarDate: future, targets: [target({ status: "published", scheduledFor: future })] }),
+      item({ itemKey: "cancelled", title: "예약 취소", operationalStatus: "cancelled", operationalReason: "cancelled", status: "cancelled", publishStatus: "cancelled", scheduledFor: future, effectiveScheduledFor: future, calendarDate: future, targets: [target({ status: "cancelled", scheduledFor: future })] }),
     ];
     await renderPage({ listPublishItems: vi.fn(async () => blocked) });
 
@@ -472,12 +1045,13 @@ describe("PublishQueuePage canonical collection", () => {
     await renderPage({ getPublishCalendarManualOptions, listChannels: vi.fn(async () => [{ type: "instagram", enabled: true, status: "connected" }]), listPublishItems: vi.fn(async () => []) });
     await userEvent.click(await screen.findByRole("tab", { name: "캘린더" }));
     expect(getPublishCalendarManualOptions).not.toHaveBeenCalled();
-    await userEvent.click(screen.getByRole("button", { name: "새 콘텐츠·일괄 등록" }));
+    await userEvent.click(screen.getByRole("button", { name: "콘텐츠 추가" }));
     await waitFor(() => expect(getPublishCalendarManualOptions).toHaveBeenCalledTimes(1));
+    await userEvent.click(screen.getByRole("tab", { name: "새 콘텐츠" }));
     expect(await screen.findByRole("combobox", { name: "콘텐츠 목적" })).toBeVisible();
     expect(screen.getByRole("combobox", { name: "주제 방식" })).toBeVisible();
     expect(screen.getByRole("combobox", { name: "콘텐츠 형식" })).toBeVisible();
-    await userEvent.click(screen.getByRole("radio", { name: "여러 주제 일괄 설정" }));
+    await userEvent.click(screen.getByRole("tab", { name: "일괄 등록" }));
     expect(screen.getByRole("table", { name: "일괄 주제 설정" })).toBeVisible();
   });
 
@@ -491,7 +1065,8 @@ describe("PublishQueuePage canonical collection", () => {
     });
 
     await userEvent.click(await screen.findByRole("tab", { name: "캘린더" }));
-    await userEvent.click(screen.getByRole("button", { name: "새 콘텐츠·일괄 등록" }));
+    await userEvent.click(screen.getByRole("button", { name: "콘텐츠 추가" }));
+    await userEvent.click(screen.getByRole("tab", { name: "새 콘텐츠" }));
 
     expect(await screen.findByRole("alert")).toHaveTextContent("게시 예약을 사용하려면 구독 플랜을 확인해 주세요.");
     expect(screen.queryByText("게시 설정 선택 항목을 불러오지 못했습니다.")).not.toBeInTheDocument();
@@ -547,7 +1122,7 @@ describe("PublishQueuePage canonical collection", () => {
     const listPublishItems = vi.fn(async () => [item()]);
     const api = await renderPage({ listPublishItems });
     await userEvent.click(await screen.findByRole("tab", { name: "캘린더" }));
-    await userEvent.click(await screen.findByRole("button", { name: "예약된 SNS 마케팅 슬롯 상세 보기" }));
+    await userEvent.click(await screen.findByRole("button", { name: "예약된 SNS 마케팅 게시 예정 슬롯 상세 보기" }));
     await userEvent.click(screen.getByRole("button", { name: "슬롯 취소" }));
     await waitFor(() => expect(api.cancelPublishCalendarSlot).toHaveBeenCalledWith("brand-1", "slot-1"));
     expect(listPublishItems).toHaveBeenCalledTimes(2);
@@ -574,28 +1149,41 @@ describe("PublishQueuePage canonical collection", () => {
   });
 
   it("keeps calendar placement separate from original, effective and published times", async () => {
-    const deferred = item({ title: "지연 예약", status: "deferred", publishStatus: "deferred", scheduledFor: "2026-08-23T02:30:00.000Z", effectiveScheduledFor: "2026-08-23T03:00:00.000Z", calendarDate: "2026-08-23T03:00:00.000Z", targets: [target({ status: "deferred", scheduledFor: "2026-08-23T02:30:00.000Z" })] });
-    const published = item({ itemKey: "output:published", title: "게시 완료", status: "published", publishStatus: "published", publicationProgress: "complete", scheduledFor: "2026-08-22T02:30:00.000Z", effectiveScheduledFor: "2026-08-22T03:00:00.000Z", publishedAt: "2026-08-23T04:00:00.000Z", calendarDate: "2026-08-23T04:00:00.000Z", sourceRefs: { contentTopicId: null, proposalId: null, generationId: null, generationOutputId: "output-published", calendarSlotId: "slot-published", topicPublishGroupId: null, queueIds: ["queue-published"] }, targets: [target({ queueId: "queue-published", status: "published", scheduledFor: "2026-08-22T02:30:00.000Z", publishedAt: "2026-08-23T04:00:00.000Z" })] });
+    const deferred = item({ title: "지연 예약", status: "deferred", operationalStatus: "delayed_today", operationalReason: "reserved_time_passed", publishStatus: "deferred", scheduledFor: "2026-08-23T02:30:00.000Z", effectiveScheduledFor: "2026-08-23T03:00:00.000Z", calendarDate: "2026-08-23T03:00:00.000Z", targets: [target({ status: "deferred", scheduledFor: "2026-08-23T02:30:00.000Z" })] });
+    const published = item({ itemKey: "output:published", title: "게시 완료", status: "published", operationalStatus: "published", operationalReason: "published", publishStatus: "published", publicationProgress: "complete", scheduledFor: "2026-08-22T02:30:00.000Z", effectiveScheduledFor: "2026-08-22T03:00:00.000Z", publishedAt: "2026-08-23T04:00:00.000Z", calendarDate: "2026-08-23T04:00:00.000Z", sourceRefs: { contentTopicId: null, proposalId: null, generationId: null, generationOutputId: "output-published", calendarSlotId: "slot-published", topicPublishGroupId: null, queueIds: ["queue-published"] }, targets: [target({ queueId: "queue-published", status: "published", scheduledFor: "2026-08-22T02:30:00.000Z", publishedAt: "2026-08-23T04:00:00.000Z" })] });
     await renderPage({ listPublishItems: vi.fn(async () => [deferred, published]) });
+    const deferredCard = await screen.findByRole("article", { name: "지연 예약" });
+    expect(within(deferredCard).getByText("원래 예약 2026년 8월 23일 일요일 11:30")).toBeVisible();
+    expect(within(deferredCard).getByText("실제 실행 예정 2026년 8월 23일 일요일 12:00")).toBeVisible();
     await userEvent.click(await screen.findByRole("tab", { name: "캘린더" }));
 
-    await userEvent.click(await screen.findByRole("button", { name: "지연 예약 슬롯 상세 보기" }));
+    await userEvent.click(await screen.findByRole("button", { name: "지연 예약 게시 지연 슬롯 상세 보기" }));
     expect(screen.getByText("원래 예약 시각")).toBeVisible();
     expect(screen.getByText("지연 후 실제 게시 예정")).toBeVisible();
+    expect(screen.getByText("원래 예약 시각").parentElement?.textContent).toBe("원래 예약 시각2026년 8월 23일 일요일 11:30");
+    expect(screen.getByText("지연 후 실제 게시 예정").parentElement?.textContent).toBe("지연 후 실제 게시 예정2026년 8월 23일 일요일 12:00");
     await userEvent.click(screen.getByRole("button", { name: "전체 일정 보기" }));
-    await userEvent.click(screen.getByRole("button", { name: "게시 완료 슬롯 상세 보기" }));
+    await userEvent.click(screen.getByRole("button", { name: "게시 완료 게시 완료 슬롯 상세 보기" }));
     expect(screen.getByText("게시 완료 시각")).toBeVisible();
     expect(screen.queryByText("원래 예약 시각")).not.toBeInTheDocument();
   });
 
   it("keeps queue-specific cancellation and retry behavior", async () => {
     const cancellable = item({ itemKey: "direct:cancel", sourceRefs: { contentTopicId: null, proposalId: null, generationId: null, generationOutputId: "output-1", calendarSlotId: null, topicPublishGroupId: null, queueIds: ["queue-cancel"] }, targets: [target({ queueId: "queue-cancel", status: "scheduled" })] });
-    const failed = item({ itemKey: "direct:retry", title: "재시도 콘텐츠", status: "failed", publishStatus: "failed", calendarPlacement: "hidden", calendarDate: null, scheduledFor: null, effectiveScheduledFor: null, sourceRefs: { contentTopicId: null, proposalId: null, generationId: null, generationOutputId: "output-2", calendarSlotId: null, topicPublishGroupId: null, queueIds: ["queue-retry"] }, targets: [target({ queueId: "queue-retry", status: "failed", scheduledFor: null, lastError: "oauth_required" })], lastError: "oauth_required" });
-    const listPublishItems = vi.fn(async () => [cancellable, failed]);
+    const retryable = item({ itemKey: "direct:retry", title: "재시도 콘텐츠", status: "failed", operationalStatus: "action_required", operationalReason: "publish_failed", publishStatus: "failed", calendarPlacement: "hidden", calendarDate: null, scheduledFor: null, effectiveScheduledFor: null, sourceRefs: { contentTopicId: null, proposalId: null, generationId: null, generationOutputId: "output-2", calendarSlotId: null, topicPublishGroupId: null, queueIds: ["queue-retry"] }, targets: [target({ queueId: "queue-retry", status: "failed", scheduledFor: null, lastError: "provider_not_implemented" })], lastError: "provider_not_implemented" });
+    const nonRetryable = item({ itemKey: "direct:no-retry", title: "재시도 불가 콘텐츠", status: "failed", operationalStatus: "action_required", operationalReason: "publish_failed", publishStatus: "failed", calendarPlacement: "hidden", calendarDate: null, scheduledFor: null, effectiveScheduledFor: null, sourceRefs: { contentTopicId: null, proposalId: null, generationId: null, generationOutputId: "output-3", calendarSlotId: null, topicPublishGroupId: null, queueIds: ["queue-no-retry"] }, targets: [target({ queueId: "queue-no-retry", status: "failed", scheduledFor: null, lastError: "instagram_publish_failed" })], lastError: "instagram_publish_failed" });
+    const listPublishItems = vi.fn(async () => [cancellable, retryable, nonRetryable]);
     const api = await renderPage({ listPublishItems });
 
     await userEvent.click(await screen.findByRole("button", { name: "예약 취소" }));
     await waitFor(() => expect(api.cancelPublishQueueItem).toHaveBeenCalledWith("queue-cancel"));
+    const retryableCard = screen.getByRole("article", { name: "재시도 콘텐츠" });
+    expect(within(retryableCard).getByText("이 채널은 아직 자동 게시를 지원하지 않습니다.")).toBeVisible();
+    expect(within(retryableCard).getByRole("button", { name: "재시도" })).toBeVisible();
+    const nonRetryableCard = screen.getByRole("article", { name: "재시도 불가 콘텐츠" });
+    expect(within(nonRetryableCard).getByText("Instagram 게시에 실패했습니다. 잠시 후 다시 시도해 주세요.")).toBeVisible();
+    expect(within(nonRetryableCard).queryByRole("button", { name: "재시도" })).not.toBeInTheDocument();
+    expect(within(nonRetryableCard).queryByText("instagram_publish_failed")).not.toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "재시도" }));
     await waitFor(() => expect(api.retryPublishQueueItem).toHaveBeenCalledWith("queue-retry"));
     expect(listPublishItems).toHaveBeenCalledTimes(3);
@@ -704,13 +1292,11 @@ describe("PublishQueuePage canonical collection", () => {
     expect(card).toHaveAttribute("data-publish-deep-link", "true");
   });
 
-  it("refreshes same collection after scheduling and publishing", async () => {
-    const listPublishItems = vi.fn(async () => [item()]);
-    const api = await renderPage({ listPublishItems });
-    await userEvent.click(await screen.findByRole("button", { name: "정책 큐 배정" }));
-    await waitFor(() => expect(api.schedulePublishQueue).toHaveBeenCalledWith("brand-1"));
-    await userEvent.click(screen.getByRole("button", { name: "다음 게시 실행" }));
-    await waitFor(() => expect(api.publishQueueItem).toHaveBeenCalledWith("queue-1"));
-    expect(listPublishItems).toHaveBeenCalledTimes(3);
+  it("does not expose legacy queue scheduling or direct publish operations", async () => {
+    await renderPage({ listPublishItems: vi.fn(async () => [item()]) });
+    await screen.findByRole("article", { name: "예약된 SNS 마케팅" });
+    expect(screen.queryByText("운영 도구")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "정책 큐 배정" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "다음 게시 실행" })).not.toBeInTheDocument();
   });
 });

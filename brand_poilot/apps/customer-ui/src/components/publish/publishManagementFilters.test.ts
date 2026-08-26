@@ -8,15 +8,14 @@ import {
 
 describe("publishManagementFilters", () => {
   const statuses: PublishManagementStatus[] = [
-    "generating",
-    "needs_review",
-    "queued",
-    "publish_queued",
-    "scheduled",
+    "action_required",
+    "preparing",
+    "upcoming",
+    "delayed_today",
     "publishing",
-    "completed",
-    "failed",
-    "rejected"
+    "partially_published",
+    "published",
+    "cancelled"
   ];
 
   it("maps each internal status to exactly one visible group", () => {
@@ -31,12 +30,19 @@ describe("publishManagementFilters", () => {
 
   it("counts grouped filters without losing rows", () => {
     expect(countPublishManagementFilters(statuses)).toEqual({
-      all: 9,
-      preparing: 2,
-      needs_review: 1,
-      upcoming: 3,
+      action_required: 1,
+      preparing: 1,
+      upcoming: 4,
       completed: 1,
-      issues: 2
+      cancelled: 1,
+      all: 8
     });
+  });
+
+  it("keeps a previous-day active reservation in required work and out of upcoming", () => {
+    const projectedPreviousDayReservation: PublishManagementStatus = "action_required";
+
+    expect(matchesPublishManagementFilter(projectedPreviousDayReservation, "action_required")).toBe(true);
+    expect(matchesPublishManagementFilter(projectedPreviousDayReservation, "upcoming")).toBe(false);
   });
 });

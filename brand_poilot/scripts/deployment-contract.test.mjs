@@ -37,6 +37,7 @@ const deploymentArtifacts = [
   "workers/brand-pilot-card-news-worker/Dockerfile",
   "workers/brand-pilot-blog-worker/Dockerfile",
   "workers/brand-pilot-reel-worker/Dockerfile",
+  "workers/brand-pilot-publish-scheduler/Dockerfile",
   "deploy/compose.production.yml",
   "deploy/Caddyfile",
   "deploy/Caddyfile.canary",
@@ -51,6 +52,7 @@ const deploymentArtifacts = [
   "deploy/env/card-news-worker.env.example",
   "deploy/env/blog-worker.env.example",
   "deploy/env/reel-worker.env.example",
+  "deploy/env/publish-scheduler.env.example",
   "deploy/scripts/preflight.sh",
   "deploy/scripts/preflight-ai-content.sh",
   "deploy/scripts/stage-ai-content-release.sh",
@@ -86,7 +88,7 @@ const deploymentScripts = [
   ubuntuBootstrapPath,
 ];
 
-test("cutover API image contains ordered migrations through onboarding product image imports 088", () => {
+test("cutover API image contains ordered migrations through weekly schedule storage 092", () => {
   const dockerfile = read("apps/api/Dockerfile");
   const migrate = read("scripts/migrate.mjs");
   const runner = read("scripts/migrationRunner.mjs");
@@ -114,6 +116,7 @@ test("cutover API image contains ordered migrations through onboarding product i
   assert.equal(existsSync("db/migrations/089_free_subscription_plan.sql"), true);
   assert.equal(existsSync("db/migrations/090_existing_brand_free_subscriptions.sql"), true);
   assert.equal(existsSync("db/migrations/091_ai_content_prompt_lineage_v4.sql"), true);
+  assert.equal(existsSync("db/migrations/092_publish_calendar_weekly_schedule.sql"), true);
   assert.match(migrate, /AI_CONTENT_074_AUTHORIZATION_PUBLIC_KEY_FILE/);
   assert.match(migrate, /AI_CONTENT_074_PROVIDER_ATTESTATION_PUBLIC_KEY_FILE/);
   assert.doesNotMatch(migrate, /readFile\([^\n]*(?:PRIVATE|SIGNING)|createPrivateKey|AI_CONTENT_074_(?:AUTHORIZATION|PROVIDER_ATTESTATION)_KEY_FILE/);
@@ -159,7 +162,7 @@ test("deployment applies or verifies the pinned post-075 data migration before c
   assert.ok(migrationGate >= 0 && migrationGate < transition && transition < canary);
 });
 
-test("deployment applies the ordered post-075 schemas through prompt lineage 091 before canary mutation", () => {
+test("deployment applies the ordered post-075 schemas through weekly schedule storage 092 before canary mutation", () => {
   const deploy = read("deploy/scripts/deploy.sh");
   const runner = read("scripts/migrationRunner.mjs");
   assert.match(runner, /077_content_suggestion_batches\.sql/);
@@ -192,8 +195,10 @@ test("deployment applies the ordered post-075 schemas through prompt lineage 091
   assert.match(runner, /8134f35d21f72f7418b5502bb5cfb10c8f296f147788bcd8b539d6d930588552/);
   assert.match(runner, /091_ai_content_prompt_lineage_v4\.sql/);
   assert.match(runner, /05696c55ee959cd80ef7cdf30fcb07e93e0579da515042ebd8e8aafb9cde5e10/);
-  assert.match(deploy, /POST_075_SCHEMA_MIGRATION_ID="091_ai_content_prompt_lineage_v4\.sql"/);
-  assert.match(deploy, /POST_075_SCHEMA_MIGRATION_SHA256="05696c55ee959cd80ef7cdf30fcb07e93e0579da515042ebd8e8aafb9cde5e10"/);
+  assert.match(runner, /092_publish_calendar_weekly_schedule\.sql/);
+  assert.match(runner, /c1bf905666ce4dabac137c0522fa0dc0300f574eda6d1e9648283f00b2af4d2b/);
+  assert.match(deploy, /POST_075_SCHEMA_MIGRATION_ID="092_publish_calendar_weekly_schedule\.sql"/);
+  assert.match(deploy, /POST_075_SCHEMA_MIGRATION_SHA256="c1bf905666ce4dabac137c0522fa0dc0300f574eda6d1e9648283f00b2af4d2b"/);
   assert.match(deploy, /scripts\/migrate\.mjs --post-075-schema/);
   assert.match(deploy, /post-075-schema-migration-evidence\.v1/);
   const dataGate = deploy.lastIndexOf("run_post_075_data_migration_gate");
@@ -305,6 +310,19 @@ test("AI content prompt lineage v4 migration is append-only and preserves v2/v3 
   assert.doesNotMatch(migration, /\b(?:insert|update|delete|merge|truncate)\b/i);
 });
 
+test("weekly schedule migration scrubs provider default ACLs before granting exact application CRUD", () => {
+  const migration = read("db/migrations/092_publish_calendar_weekly_schedule.sql");
+  const runner = read("scripts/migrationRunner.mjs");
+  assert.match(migration, /aclexplode\s*\(\s*coalesce\s*\(\s*relation\.relacl\s*,\s*acldefault\s*\(\s*'r'\s*,\s*relation\.relowner\s*\)\s*\)\s*\)/i);
+  assert.match(migration, /if\s+acl_grantee\.grantee\s*=\s*0\s+then[\s\S]*revoke all on table public\.publish_calendar_weekly_schedule_entries from public/i);
+  assert.doesNotMatch(migration, /acl_grantee\.grantee_role_name\s*=\s*'PUBLIC'/i);
+  assert.match(migration, /format\(\s*'revoke all on table public\.publish_calendar_weekly_schedule_entries from %I'/i);
+  assert.match(migration, /grant select,insert,update,delete on public\.publish_calendar_weekly_schedule_entries to %I/i);
+  assert.doesNotMatch(migration, /publish_calendar_weekly_(?:schema_owner|application|acl_leak)/i);
+  assert.match(runner, /weekly_schedule_unexpected_acl_count/);
+  assert.match(runner, /sealed\.weekly_schedule_unexpected_acl_count\s*!==\s*0/);
+});
+
 test("FAQ runbook excludes Wiki without permanently disabling generic Wiki rollouts", () => {
   const rollout = read("deploy/scripts/rollout-workers.sh");
   const runbook = read("docs/operations/faq-utterance-matching-rollout.md");
@@ -354,7 +372,7 @@ test("cutover API image contains both ordered migrations in an actual no-network
   try {
     const script = [
       "const fs=require('node:fs');",
-      "const required=['/app/db/migrations/074_ai_content_maintenance_write_fence.sql','/app/db/migrations/075_ai_content_three_format_cutover.sql','/app/db/migrations/076_manual_content_generation_brand_rules.sql','/app/db/migrations/077_content_suggestion_batches.sql','/app/db/migrations/078_faq_utterance_matching.sql','/app/db/migrations/079_publish_calendar_runtime.sql','/app/db/migrations/080_reference_channel_archive.sql','/app/db/migrations/081_meta_ad_library_references.sql','/app/db/migrations/082_manual_brand_visual_assets.sql','/app/db/migrations/083_manual_visual_selection_write_fence_invoker.sql','/app/db/migrations/084_ai_content_usage_reversal_identity_invoker.sql','/app/db/migrations/085_publish_calendar_idempotency_expand.sql','/app/db/migrations/086_publish_calendar_same_time_contract.sql','/app/db/migrations/087_ai_content_prompt_lineage_v3.sql','/app/db/migrations/088_onboarding_product_image_imports.sql','/app/db/migrations/089_free_subscription_plan.sql','/app/db/migrations/090_existing_brand_free_subscriptions.sql','/app/db/migrations/091_ai_content_prompt_lineage_v4.sql','/app/scripts/migrationRunner.mjs','/app/scripts/migrate.mjs','/app/scripts/databaseTls.mjs'];",
+      "const required=['/app/db/migrations/074_ai_content_maintenance_write_fence.sql','/app/db/migrations/075_ai_content_three_format_cutover.sql','/app/db/migrations/076_manual_content_generation_brand_rules.sql','/app/db/migrations/077_content_suggestion_batches.sql','/app/db/migrations/078_faq_utterance_matching.sql','/app/db/migrations/079_publish_calendar_runtime.sql','/app/db/migrations/080_reference_channel_archive.sql','/app/db/migrations/081_meta_ad_library_references.sql','/app/db/migrations/082_manual_brand_visual_assets.sql','/app/db/migrations/083_manual_visual_selection_write_fence_invoker.sql','/app/db/migrations/084_ai_content_usage_reversal_identity_invoker.sql','/app/db/migrations/085_publish_calendar_idempotency_expand.sql','/app/db/migrations/086_publish_calendar_same_time_contract.sql','/app/db/migrations/087_ai_content_prompt_lineage_v3.sql','/app/db/migrations/088_onboarding_product_image_imports.sql','/app/db/migrations/089_free_subscription_plan.sql','/app/db/migrations/090_existing_brand_free_subscriptions.sql','/app/db/migrations/091_ai_content_prompt_lineage_v4.sql','/app/db/migrations/092_publish_calendar_weekly_schedule.sql','/app/scripts/migrationRunner.mjs','/app/scripts/migrate.mjs','/app/scripts/databaseTls.mjs'];",
       "for(const path of required)if(!fs.existsSync(path))throw new Error('missing:'+path);",
     ].join("");
     const inspect = spawnSync("docker", ["run", "--rm", "--network", "none", "--entrypoint", "node", tag, "-e", script], {
@@ -1021,6 +1039,16 @@ test("production keeps publish scheduling external and every API local scheduler
       `${serviceName} must explicitly disable its local scheduler`,
     );
   }
+  assert.equal(
+    services.get("api-primary").text.match(/^\s+API_INSTANCE_ROLE:\s+primary\s*$/gm)?.length,
+    1,
+    "api-primary must have the explicit primary scheduler role",
+  );
+  assert.equal(
+    services.get("api-canary").text.match(/^\s+API_INSTANCE_ROLE:\s+canary\s*$/gm)?.length,
+    1,
+    "api-canary must have the explicit canary scheduler role",
+  );
   for (const [serviceName, service] of services) {
     assert.doesNotMatch(
       service.text,
@@ -1043,6 +1071,128 @@ test("production keeps publish scheduling external and every API local scheduler
       /publish|calendar/i,
       `${serviceName} must not define a local publish/calendar runner command`,
     );
+  }
+});
+
+test("publish scheduler is an isolated hardened singleton profile with only its cron secret", () => {
+  const compose = read("deploy/compose.production.yml");
+  const services = assertComposeTopology(compose);
+  const scheduler = services.get("publish-scheduler-1")?.text ?? "";
+  const envExample = read("deploy/env/publish-scheduler.env.example");
+  const releaseExample = read("deploy/release.env.example");
+  const dockerfile = read("workers/brand-pilot-publish-scheduler/Dockerfile");
+
+  assert.match(scheduler, /^ {4}profiles:\s*\r?\n {6}- "publish-scheduler"$/m);
+  assert.equal(compose.match(/^ {2}publish-scheduler-\d+:$/gm)?.length, 1);
+  assert.match(scheduler, /image: \$\{PUBLISH_SCHEDULER_IMAGE:\?PUBLISH_SCHEDULER_IMAGE is required\}/);
+  assert.match(scheduler, /PRIMARY_API_INTERNAL_URL: http:\/\/api-primary:4000/);
+  assert.match(scheduler, /CRON_SECRET_FILE: \/run\/secrets\/cron-secret/);
+  assert.match(scheduler, /PUBLISH_TICK_MS: "60000"/);
+  assert.match(scheduler, /PUBLISH_TIMEOUT_MS: "240000"/);
+  assert.match(scheduler, /read_only: true/);
+  assert.match(scheduler, /cap_drop:\s*\r?\n\s+- ALL/);
+  assert.match(scheduler, /no-new-privileges:true/);
+  assert.match(scheduler, /tmpfs:\s*\r?\n\s+- \/tmp:/);
+  assert.match(scheduler, /restart: unless-stopped/);
+  assert.match(scheduler, /healthcheck:/);
+  assert.equal(scheduler.match(/\/run\/secrets\//g)?.length, 2, "only env and mount may name cron secret");
+  assert.match(scheduler, /\/opt\/brand-pilot\/shared\/secrets\/cron-secret\}:\/run\/secrets\/cron-secret:ro/);
+  assert.doesNotMatch(scheduler, /DATABASE|SUPABASE|META_|BLOB|CODEX_(?:HOME|ACCOUNT)|auth\.json/i);
+  assert.match(dockerfile, /^USER node$/m);
+  assert.match(envExample, /^PRIMARY_API_INTERNAL_URL=http:\/\/api-primary:4000$/m);
+  assert.match(envExample, /^CRON_SECRET_FILE=\/run\/secrets\/cron-secret$/m);
+  assert.match(envExample, /^PUBLISH_TICK_MS=60000$/m);
+  assert.match(envExample, /^PUBLISH_TIMEOUT_MS=240000$/m);
+  assert.doesNotMatch(envExample, /CRON_SECRET=|DATABASE|SUPABASE|META_|BLOB|CODEX/i);
+  assert.match(releaseExample, /^PUBLISH_SCHEDULER_IMAGE=required-at-deploy-time$/m);
+  assert.match(releaseExample, /^PUBLISH_SCHEDULER_SOURCE_SHA=required-at-deploy-time$/m);
+  assert.match(releaseExample, /^PUBLISH_SCHEDULER_CHANGED=true-or-false$/m);
+});
+
+test("scheduler release tooling provisions one 0600 secret and targets no unrelated service", () => {
+  const preflight = read("deploy/scripts/preflight.sh");
+  const deploy = read("deploy/scripts/deploy.sh");
+  const rollback = read("deploy/scripts/rollback.sh");
+  const lib = read("deploy/scripts/lib.sh");
+
+  assert.match(lib, /shared\/secrets\/cron-secret/);
+  assert.match(preflight, /require_publish_scheduler_secret/);
+  assert.match(preflight, /require_publish_scheduler_environment_file/);
+  assert.match(preflight, /require_file_mode_600[^\n]*CRON_SECRET_FILE/);
+  assert.match(preflight, /status_ok "publish_scheduler_secret"/);
+  assert.match(lib, /PUBLISH_SCHEDULER_IMAGE/);
+  assert.match(lib, /publish_scheduler_image_revision_mismatch/);
+  assert.match(lib, /publish_scheduler_release_sha_mismatch/);
+  assert.match(lib, /publish_scheduler_environment_unknown_key/);
+  assert.match(lib, /publish-scheduler-1/);
+  assert.match(deploy, /--component[\s\S]*publish-scheduler/);
+  assert.match(rollback, /--component[\s\S]*publish-scheduler/);
+  assert.match(lib, /pull publish-scheduler-1/);
+  assert.match(lib, /up -d --no-deps --pull never --force-recreate --wait[\s\S]*publish-scheduler-1/);
+  assert.match(lib, /stop --timeout 30 publish-scheduler-1/);
+  assert.match(lib, /rm -f publish-scheduler-1/);
+  const deployBranch = deploy.match(/if \[\[ "\$DEPLOY_MODE" == "publish-scheduler" \]\]; then([\s\S]*?)\nfi/)?.[1] ?? "";
+  const rollbackBranch = rollback.match(/if \[\[ "\$ROLLBACK_MODE" == "publish-scheduler" \]\]; then([\s\S]*?)\nfi/)?.[1] ?? "";
+  assert.doesNotMatch(deployBranch, /reconcile_transition|enforce_ai_content|api-primary|api-canary|caddy/);
+  assert.doesNotMatch(rollbackBranch, /reconcile_transition|enforce_ai_content|api-primary|api-canary|caddy/);
+  assert.match(deployBranch, /transition\.journal/);
+  assert.match(rollbackBranch, /transition\.journal/);
+  assert.match(lib, /publish-scheduler-transition\.journal/);
+  assert.match(lib, /publish-scheduler-previous/);
+  assert.match(lib, /PRIOR_ACTIVE/);
+  assert.match(lib, /PRIOR_IMAGE/);
+  assert.match(lib, /PRIOR_REVISION/);
+  assert.match(lib, /restore_publish_scheduler_snapshot/);
+  assert.match(lib, /publish_scheduler_transition_stale/);
+  assert.match(lib, /trap [^\n]*publish_scheduler/);
+  assert.doesNotMatch(rollback, /disable_publish_scheduler_release/);
+  assert.match(rollback, /--component[^\n]*publish-scheduler[^\n]*--previous/);
+  assert.match(rollback, /rollback_publish_scheduler_release/);
+});
+
+test("scheduler transition contract preserves disabled and active snapshots without unrelated mutations", () => {
+  const lib = read("deploy/scripts/lib.sh");
+  const section = (start, end) => lib.slice(lib.indexOf(`${start}() {`), lib.indexOf(`${end}() {`));
+  const deployFunction = section("deploy_publish_scheduler_release", "rollback_publish_scheduler_release");
+  const rollbackFunction = section("rollback_publish_scheduler_release", "verify_release_image_revision");
+  const applyFunction = section("apply_publish_scheduler_snapshot", "restore_publish_scheduler_snapshot");
+
+  assert.match(deployFunction, /inspect_publish_scheduler_runtime/);
+  assert.match(deployFunction, /write_publish_scheduler_state[^\n]*deploy/);
+  assert.match(deployFunction, /restore_publish_scheduler_snapshot/);
+  assert.match(deployFunction, /remove_state_file "\$transition"/);
+  assert.match(rollbackFunction, /expected_active/);
+  assert.match(rollbackFunction, /expected_image/);
+  assert.match(rollbackFunction, /expected_revision/);
+  assert.match(rollbackFunction, /restore_publish_scheduler_snapshot/);
+  assert.match(rollbackFunction, /remove_state_file "\$previous"/);
+  assert.match(applyFunction, /if \[\[ "\$active" == "true" \]\]/);
+  assert.match(applyFunction, /PUBLISH_SCHEDULER_IMAGE="\$image"/);
+  assert.match(applyFunction, /stop --timeout 30 publish-scheduler-1/);
+  assert.match(applyFunction, /rm -f publish-scheduler-1/);
+  assert.ok(deployFunction.indexOf("inspect_publish_scheduler_runtime") < deployFunction.indexOf("pull publish-scheduler-1"));
+  assert.ok(deployFunction.indexOf("inspect_publish_scheduler_runtime") < deployFunction.indexOf("write_publish_scheduler_state"));
+  assert.ok(rollbackFunction.indexOf("inspect_publish_scheduler_runtime") < rollbackFunction.indexOf("write_publish_scheduler_state"));
+  for (const source of [deployFunction, rollbackFunction, applyFunction]) {
+    assert.doesNotMatch(source, /\b(?:api-canary|caddy|dm-worker|wiki-worker)\b.*(?:up|stop|rm|restart)/);
+    assert.doesNotMatch(source, /mapfile[^\n]*< </);
+  }
+});
+
+test("scheduler ps failures propagate before disabled-state mutation", () => {
+  const libPath = bashPath("deploy/scripts/lib.sh");
+  const bash = findBash();
+  const common = `source '${libPath}'\n` +
+    `docker() { printf 'docker-call=%s\\n' "$*" >&2; if [[ "$1" == compose && "$*" == *" ps "* ]]; then return 23; fi; return 0; }\n`;
+  for (const invocation of [
+    `inspect_publish_scheduler_runtime /release`,
+    `apply_publish_scheduler_snapshot /release 10 false NONE NONE`,
+  ]) {
+    const result = spawnSync(bash, ["-lc", `${common}${invocation}`], { encoding: "utf8" });
+    assert.notEqual(result.status, 0, invocation);
+    const calls = result.stderr;
+    assert.match(calls, / ps /);
+    assert.doesNotMatch(calls, / (?:up|stop|rm|restart) /);
   }
 });
 
@@ -2552,10 +2702,15 @@ test("CI publishing verifies release tooling plus only affected workspaces", () 
     "node --test scripts/ai-content-three-format-cutover.postgres.integration.test.mjs",
     "AI_CONTENT_074_ENFORCE_BENCHMARK=false node --test scripts/ai-content-074.postgres.integration.test.mjs",
     "npm exec --workspace @brand-pilot/api -- vitest run src/publishCalendarMigration086.postgres.integration.test.ts",
+    "npm exec --workspace @brand-pilot/api -- vitest run src/publishCalendarMigration092.postgres.integration.test.ts",
   ]) {
     assert.ok(verifyJob.includes(command), `migration verify job missing ${command}`);
   }
   assert.doesNotMatch(verifyJob, /ai-content-074\.postgres\.integration\.test\.mjs[^\n]*--test-name-pattern/);
+  assert.doesNotMatch(
+    verifyJob,
+    /publishCalendarMigration092\.postgres\.integration\.test\.ts[^\n]*(?:\|\|\s*true|--passWithNoTests)/,
+  );
 });
 
 test("CI publishing uses an affected linux-amd64 matrix with immutable metadata and cache", () => {
@@ -2702,6 +2857,7 @@ function writeReleaseManifest(directory, overrides = {}, extraLines = []) {
     RELEASE_SCHEMA: "3",
     RELEASE_SHA: "1".repeat(40),
     API_IMAGE: `ghcr.io/dkskrn2/brand-pilot-api@sha256:${digest}`,
+    PUBLISH_SCHEDULER_IMAGE: `ghcr.io/dkskrn2/brand-pilot-publish-scheduler@sha256:${digest}`,
     DM_WORKER_IMAGE: `ghcr.io/dkskrn2/brand-pilot-dm-worker@sha256:${digest}`,
     WIKI_WORKER_IMAGE: `ghcr.io/dkskrn2/brand-pilot-wiki-worker@sha256:${digest}`,
     CONTENT_PROPOSAL_WORKER_IMAGE: `ghcr.io/dkskrn2/brand-pilot-content-proposal-worker@sha256:${digest}`,
@@ -2721,6 +2877,7 @@ function writeReleaseManifest(directory, overrides = {}, extraLines = []) {
   if (values.RELEASE_SCHEMA === "2" || values.RELEASE_SCHEMA === "3") {
     for (const imageKey of [
       "API_IMAGE",
+      "PUBLISH_SCHEDULER_IMAGE",
       "DM_WORKER_IMAGE",
       "WIKI_WORKER_IMAGE",
       "CONTENT_PROPOSAL_WORKER_IMAGE",
@@ -2763,6 +2920,7 @@ function seedRelease(
   writeReleaseManifest(releaseDirectory, {
     RELEASE_SHA: sha,
     API_IMAGE: `ghcr.io/dkskrn2/brand-pilot-api@sha256:${digest}`,
+    PUBLISH_SCHEDULER_IMAGE: `ghcr.io/dkskrn2/brand-pilot-publish-scheduler@sha256:${digest}`,
     DM_WORKER_IMAGE: `ghcr.io/dkskrn2/brand-pilot-dm-worker@sha256:${digest}`,
     WIKI_WORKER_IMAGE: `ghcr.io/dkskrn2/brand-pilot-wiki-worker@sha256:${digest}`,
     CONTENT_PROPOSAL_WORKER_IMAGE: `ghcr.io/dkskrn2/brand-pilot-content-proposal-worker@sha256:${digest}`,
@@ -2863,7 +3021,7 @@ if [[ "$*" == *"/app/scripts/ai-content-cutover-floor-probe.mjs"* ]]; then
   exit 0
 fi
 if [[ "$*" == *"/app/scripts/migrate.mjs --post-075-schema"* ]]; then
-  printf '{\n  "post075SchemaMigration": {\n    "contractVersion": "post-075-schema-migration-evidence.v1",\n    "providerRoleName": "postgres",\n    "migrationId": "091_ai_content_prompt_lineage_v4.sql",\n    "migrationSha256": "%s",\n    "status": "already_applied"\n  }\n}\n' "$POST_075_SCHEMA_SHA_FOR_TEST"
+  printf '{\n  "post075SchemaMigration": {\n    "contractVersion": "post-075-schema-migration-evidence.v1",\n    "providerRoleName": "postgres",\n    "migrationId": "092_publish_calendar_weekly_schedule.sql",\n    "migrationSha256": "%s",\n    "status": "already_applied"\n  }\n}\n' "$POST_075_SCHEMA_SHA_FOR_TEST"
   exit 0
 fi
 if [[ "$1 $2" == "image inspect" ]]; then

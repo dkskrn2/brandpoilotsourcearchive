@@ -3,6 +3,7 @@ import { fileURLToPath } from "node:url";
 
 export const SERVER_COMPONENTS = Object.freeze([
   "api",
+  "publishScheduler",
   "dmWikiWorker",
   "contentProposalWorker",
   "brandIntelligenceWorker",
@@ -303,6 +304,7 @@ const MANUAL_BRAND_VISUAL_IMAGE_WORKER_PATHS = new Set([
 ]);
 
 const WORKER_PATHS = Object.freeze([
+  ["workers/brand-pilot-publish-scheduler/", "publishScheduler"],
   ["workers/brand-pilot-dm-worker/", "dmWikiWorker"],
   ["workers/brand-pilot-content-proposal-worker/", "contentProposalWorker"],
   ["workers/brand-pilot-brand-intelligence-worker/", "brandIntelligenceWorker"],
@@ -326,7 +328,9 @@ const normalizePath = (value) => {
 };
 
 const enableAllServer = (components) => {
-  for (const component of SERVER_COMPONENTS) components[component] = true;
+  for (const component of SERVER_COMPONENTS) {
+    if (component !== "publishScheduler") components[component] = true;
+  }
 };
 
 const enableAiContentCutoverServer = (components) => {
@@ -771,6 +775,7 @@ export function classifyChangedPaths(values, options = {}) {
     if (path === "package.json" || path === "package-lock.json" || path === ".dockerignore" || path.startsWith("workers/brand-pilot-worker-runtime/")) {
       buildAllServer = true;
       enableAllServer(components);
+      if (path === ".dockerignore") components.publishScheduler = true;
       if (path === "package.json" || path === "package-lock.json") components.customerUi = true;
       continue;
     }
@@ -785,6 +790,10 @@ export function classifyChangedPaths(values, options = {}) {
 
     if (RELEASE_TOOLING_TEST_PATHS.has(path) || (path.startsWith("scripts/") && path.endsWith(".test.mjs"))) continue;
     if (path === "scripts/release-impact.mjs" || path === "scripts/assemble-release-manifest.mjs") {
+      deployBundleChanged = true;
+      continue;
+    }
+    if (path === "scripts/publish-scheduler-smoke.mjs") {
       deployBundleChanged = true;
       continue;
     }

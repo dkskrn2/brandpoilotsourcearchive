@@ -39,6 +39,7 @@ describe("publish items repository", () => {
     await expect(repository.listPublishItems({ workspaceId: "workspace-1", brandId: "brand-1" }))
       .resolves.toEqual([expect.objectContaining({
         status: "cancelled", calendarDate: null, calendarPlacement: "hidden", schedulable: false,
+        operationalStatus: "cancelled", operationalReason: "cancelled",
         sourceRefs: expect.objectContaining({ calendarSlotId: "slot-1", topicPublishGroupId: "group-1" }),
       })]);
   });
@@ -60,6 +61,7 @@ describe("publish items repository", () => {
     await expect(repository.listPublishItems({ workspaceId: "workspace-1", brandId: "brand-1" }))
       .resolves.toEqual([expect.objectContaining({
         status: "publish_queued", calendarPlacement: "hidden", schedulable: false,
+        operationalStatus: "action_required", operationalReason: "review_required",
         sourceRefs: expect.objectContaining({ topicPublishGroupId: "group-2" }),
       })]);
   });
@@ -81,7 +83,29 @@ describe("publish items repository", () => {
     await expect(repository.listPublishItems({ workspaceId: "workspace-1", brandId: "brand-1" }))
       .resolves.toEqual([expect.objectContaining({
         status: "pre_generation", calendarPlacement: "unreserved", schedulable: true,
+        operationalStatus: "action_required", operationalReason: "review_required",
         sourceRefs: expect.objectContaining({ topicPublishGroupId: "group-3" }),
+      })]);
+  });
+
+  it("keeps a zero-target content failure out of publish-failed provenance", async () => {
+    const query = vi.fn(async () => ({
+      rowCount: 1,
+      rows: [{
+        item_key: "topic:topic-4", workspace_id: "workspace-1", brand_id: "brand-1",
+        title: "생성 실패 콘텐츠", created_at: "2026-08-20T00:00:00.000Z", content_format: "card_news",
+        content_status: "failed", content_topic_id: "topic-4", proposal_id: null,
+        generation_id: null, generation_output_id: null, source_type: "unknown", source_label: "근거 없음",
+        source_detail: null, source_urls: [], base_schedulable: false, calendar_slot_id: null,
+        group_status: null, source_group_id: null, group_content_topic_id: null, queue_id: null,
+      }],
+    }));
+    const repository = createPublishItemsRepository({ query } as never);
+
+    await expect(repository.listPublishItems({ workspaceId: "workspace-1", brandId: "brand-1" }))
+      .resolves.toEqual([expect.objectContaining({
+        contentStatus: "failed", status: "failed",
+        operationalStatus: "action_required", operationalReason: "review_required",
       })]);
   });
 });

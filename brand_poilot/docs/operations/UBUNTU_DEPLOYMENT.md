@@ -66,10 +66,11 @@ DEV_AUTH_ENABLED=false
 DB_POOL_MAX=3
 ```
 
-The release contains 9 digest-pinned worker image keys and 10 profile-only
-worker services, but no worker starts with the API/Caddy deployment. Section 13
-is a separate, operator-controlled activation gate. Scheduler, publication, and
-database schema changes remain out of scope until their own approvals.
+The release contains 9 digest-pinned Codex worker image keys, 10 profile-only
+worker services, and one separately digest-pinned publish scheduler service.
+No worker or scheduler starts with the API/Caddy deployment. Section 13 is the
+worker activation gate; Section 14 is the separate publish scheduler gate.
+Publication and database schema changes remain out of scope until their own approvals.
 
 Keep the frontend and API DNS owners separate. `app.danbammsg.co.kr` remains a
 Vercel custom domain. `api.danbammsg.co.kr` and
@@ -375,7 +376,7 @@ Do not copy a development `.env` wholesale. Do not add `api.env` to Git.
 
 ### Shared environment ownership and release boundary
 
-The operator, not an image or release script, creates the eleven fixed production
+The operator, not an image or release script, creates the twelve fixed production
 environment files:
 
 ```text
@@ -390,6 +391,7 @@ environment files:
 /opt/brand-pilot/shared/env/card-news-worker-1.env
 /opt/brand-pilot/shared/env/blog-worker-1.env
 /opt/brand-pilot/shared/env/marketing-worker-1.env
+/opt/brand-pilot/shared/env/publish-scheduler.env
 ```
 
 `/opt/brand-pilot/shared/env` must remain owner `bpdeploy`, mode 700. Every file
@@ -418,6 +420,8 @@ install -m 0600 deploy/env/blog-worker.env.example \
   /opt/brand-pilot/shared/env/blog-worker-1.env
 install -m 0600 deploy/env/marketing-worker.env.example \
   /opt/brand-pilot/shared/env/marketing-worker-1.env
+install -m 0600 deploy/env/publish-scheduler.env.example \
+  /opt/brand-pilot/shared/env/publish-scheduler.env
 chmod 700 /opt/brand-pilot/shared/env
 chmod 600 /opt/brand-pilot/shared/env/*.env
 stat -c '%a %U:%G %n' /opt/brand-pilot/shared/env \
@@ -451,7 +455,8 @@ do not add a temporary or arbitrary origin.
 
 The workflow
 `.github/workflows/publish-brand-pilot-server-images.yml` verifies the source,
-builds the linux/amd64 API image and nine Codex CLI worker images in CI, pushes
+builds the linux/amd64 API image, nine Codex CLI worker images, and the standalone
+publish scheduler image in CI, pushes
 them to GHCR, captures every immutable image digest plus the Caddy digest, and
 uploads:
 
@@ -485,6 +490,7 @@ sha256sum --check release.env.sha256
 grep -Fx "RELEASE_SHA=<RELEASE_SHA>" release.env
 required_ghcr_images=(
   API_IMAGE
+  PUBLISH_SCHEDULER_IMAGE
   DM_WORKER_IMAGE
   WIKI_WORKER_IMAGE
   CONTENT_PROPOSAL_WORKER_IMAGE
@@ -522,6 +528,7 @@ test "$release_sha" = "<RELEASE_SHA>"
 test "$(git -C /opt/brand-pilot/repo rev-parse HEAD)" = "$release_sha"
 required_image_keys=(
   API_IMAGE
+  PUBLISH_SCHEDULER_IMAGE
   DM_WORKER_IMAGE
   WIKI_WORKER_IMAGE
   CONTENT_PROPOSAL_WORKER_IMAGE
@@ -1045,7 +1052,7 @@ docker compose -p brand-pilot -f "$release_dir/compose.production.yml" --env-fil
 docker compose -p brand-pilot -f "$release_dir/compose.production.yml" --env-file "$release_dir/release.env" ps
 docker inspect --format '{{.Name}} {{.Config.Image}} {{.RestartCount}} {{.State.Health.Status}}' \
   brand-pilot-api-primary-1 brand-pilot-api-canary-1 brand-pilot-caddy-1
-grep -E '^(RELEASE_SHA|API_IMAGE|DM_WORKER_IMAGE|WIKI_WORKER_IMAGE|CONTENT_PROPOSAL_WORKER_IMAGE|BRAND_INTELLIGENCE_WORKER_IMAGE|SUBJECT_ANALYSIS_WORKER_IMAGE|IMAGE_WORKER_IMAGE|CARD_NEWS_WORKER_IMAGE|BLOG_WORKER_IMAGE|MARKETING_WORKER_IMAGE|CADDY_IMAGE)=' \
+grep -E '^(RELEASE_SHA|API_IMAGE|PUBLISH_SCHEDULER_IMAGE|DM_WORKER_IMAGE|WIKI_WORKER_IMAGE|CONTENT_PROPOSAL_WORKER_IMAGE|BRAND_INTELLIGENCE_WORKER_IMAGE|SUBJECT_ANALYSIS_WORKER_IMAGE|IMAGE_WORKER_IMAGE|CARD_NEWS_WORKER_IMAGE|BLOG_WORKER_IMAGE|MARKETING_WORKER_IMAGE|CADDY_IMAGE)=' \
   "$release_dir/release.env"
 curl --fail https://api.danbammsg.co.kr/ready
 ```
@@ -1058,13 +1065,13 @@ sudo ss -lntp
 
 Record evidence that:
 
-- The exact `RELEASE_SHA`, `API_IMAGE`, nine worker image keys, and
+- The exact `RELEASE_SHA`, `API_IMAGE`, `PUBLISH_SCHEDULER_IMAGE`, nine worker image keys, and
   `CADDY_IMAGE` are immutable and digest-pinned.
-- Every API and worker image has
+- Every API, worker, and publish scheduler image has
   `org.opencontainers.image.revision=<RELEASE_SHA>`.
 - Services are `api-primary`, `api-canary`, and `caddy`.
 - All ten worker services remain behind explicit Compose profiles until their
-  Section 13 gate.
+  Section 13 gate, and `publish-scheduler-1` remains behind its Section 14 gate.
 - Only TCP 80/443 are publicly bound by this stack.
 - `LOCAL_SCHEDULER_ENABLED=false`, `INSTAGRAM_PUBLISH_ENABLED=false`,
   `AI_CONTENT_ATTACHMENT_UPLOAD_SESSIONS_ENABLED=false`,
@@ -1527,3 +1534,22 @@ The Ubuntu ChatGPT login is verified. All deployed SHA/digest, worker, job,
 duration, rollback, and product-verification fields remain `pending` until the
 incremental production rollout is actually performed. Do not call login success
 deployment success or onboarding QA.
+
+## 14. Publish scheduler activation boundary
+
+The publish scheduler is not part of the general API/worker activation sequence
+above. Use [게시 스케줄러 활성화·중지 런북](PUBLISH_SCHEDULER.md) only after the
+serving primary release is fixed, migration 092 evidence is already present,
+all external due callers are confirmed absent, and the exact preview queue IDs
+have been approved.
+
+The scheduler component path may start or replace only
+`publish-scheduler-1`. It must not run a DB migration or recreate API, Caddy,
+UI, or an unrelated worker. Observe three successful heartbeat updates and
+verify the approved target/attempt/provider result before recording activation.
+If any stop condition occurs, disable the scheduler component first and preserve
+the API/UI/DB, reservations, completed publications, and migration 092.
+
+Running the full deployment test suite, regardless of duration, is not evidence
+that these production activation gates passed. This section documents the gate;
+it does not authorize or perform activation.

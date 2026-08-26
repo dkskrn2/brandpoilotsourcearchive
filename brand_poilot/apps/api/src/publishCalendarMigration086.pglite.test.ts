@@ -10,6 +10,7 @@ import { createPublishCalendarRepository } from "./publishCalendarRepository.js"
 const migration079Path = resolve(process.cwd(), "../../db/migrations/079_publish_calendar_runtime.sql");
 const migration085Path = resolve(process.cwd(), "../../db/migrations/085_publish_calendar_idempotency_expand.sql");
 const migration086Path = resolve(process.cwd(), "../../db/migrations/086_publish_calendar_same_time_contract.sql");
+const migration092Path = resolve(process.cwd(), "../../db/migrations/092_publish_calendar_weekly_schedule.sql");
 
 function pool(database: PGlite): Pool {
   const query = async (sql: string, values: unknown[] = []) => {
@@ -72,19 +73,20 @@ async function bootstrap(database: PGlite) {
   `);
 }
 
-async function loadThrough086(database: PGlite) {
+async function loadPublishCalendarContracts(database: PGlite) {
   await database.exec(await readFile(migration079Path, "utf8"));
   await database.exec(await readFile(migration085Path, "utf8"));
   await database.exec(await readFile(migration086Path, "utf8"));
+  await database.exec(await readFile(migration092Path, "utf8"));
 }
 
-describe("migration 086 publish calendar same-time contract", () => {
+describe("publish calendar same-time and weekly persistence contracts", () => {
   let database: PGlite;
 
   beforeAll(async () => {
     database = await PGlite.create({ extensions: { pgcrypto } });
     await bootstrap(database);
-    await loadThrough086(database);
+    await loadPublishCalendarContracts(database);
   }, 30_000);
 
   afterAll(async () => database?.close());
@@ -177,7 +179,7 @@ describe("migration 086 publish calendar same-time contract", () => {
     );
   });
 
-  it("keeps the Release A allocator and repository extending duplicate and near-time settings", async () => {
+  it("keeps allocator persistence idempotent for duplicate and near-time weekly rows", async () => {
     const workspaceId = "10000000-0000-4000-8000-000000000090";
     const brandId = "20000000-0000-4000-8000-000000000090";
     await database.query("insert into workspaces(id) values($1)", [workspaceId]);
@@ -197,18 +199,42 @@ describe("migration 086 publish calendar same-time contract", () => {
        ) values($1,'rollback_fixture','active','2026-01-01','2026-01-01','2100-01-01')`,
       [brandId],
     );
+    await database.query(
+      `insert into publish_calendar_settings(
+         brand_id,workspace_id,enabled,channels,informational_format,trend_format
+       ) values($1,$2,true,array['instagram'],'card_news','reel')`,
+      [brandId, workspaceId],
+    );
+    await database.query(
+      `insert into publish_calendar_weekly_schedule_entries(
+         id,workspace_id,brand_id,day_of_week,slot_time,sort_order
+       ) values
+         ('30000000-0000-4000-8000-000000000086',$1,$2,4,'11:30',0),
+         ('30000000-0000-4000-8000-000000000087',$1,$2,4,'11:30',1),
+         ('30000000-0000-4000-8000-000000000088',$1,$2,4,'11:31',2)`,
+      [workspaceId, brandId],
+    );
 
     const repository = createPublishCalendarRepository(pool(database));
     const automaticBrand = {
       workspaceId,
       brandId,
+      subscriptionPlan: {
+        startedAt: new Date("2026-01-01T00:00:00.000Z"),
+        weeklyGenerationLimit: 100,
+        weeklyPublishLimit: 100,
+      },
       settings: {
         brandId,
         enabled: true,
         channels: ["instagram" as const],
         informationalFormat: "card_news" as const,
         trendFormat: "reel" as const,
-        slotTimes: ["11:30", "11:30", "11:31"],
+        weeklySchedule: [
+          { id: "30000000-0000-4000-8000-000000000086", dayOfWeek: 4 as const, time: "11:30", sortOrder: 0 },
+          { id: "30000000-0000-4000-8000-000000000087", dayOfWeek: 4 as const, time: "11:30", sortOrder: 1 },
+          { id: "30000000-0000-4000-8000-000000000088", dayOfWeek: 4 as const, time: "11:31", sortOrder: 2 },
+        ],
         updatedAt: "2099-08-12T00:00:00.000Z",
       },
     };
@@ -237,11 +263,11 @@ describe("migration 086 publish calendar same-time contract", () => {
       new Date(scheduled_for).toISOString() >= "2099-08-20T00:00:00.000Z"
     ));
 
-    expect(first.openSlotsCreated).toBe(21);
+    expect(first.openSlotsCreated).toBe(3);
     expect(second.openSlotsCreated).toBe(3);
-    expect(stored.rows).toHaveLength(24);
-    expect(new Set(publishItemKeys).size).toBe(24);
-    expect(new Set(slotIds).size).toBe(24);
+    expect(stored.rows).toHaveLength(6);
+    expect(new Set(publishItemKeys).size).toBe(6);
+    expect(new Set(slotIds).size).toBe(6);
     expect(nextHorizon.map(({ scheduled_for }) => new Date(scheduled_for).toISOString())).toEqual([
       "2099-08-20T02:30:00.000Z",
       "2099-08-20T02:30:00.000Z",

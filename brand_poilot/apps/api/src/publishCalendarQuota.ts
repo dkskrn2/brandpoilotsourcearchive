@@ -64,3 +64,12 @@ export function usageAvailability({
     additionalAvailable: Math.max(0, limit - succeeded - reserved),
   };
 }
+
+export function reservePublicationUnit(availability: UsageAvailability): UsageAvailability | null {
+  if (availability.additionalAvailable < 1) return null;
+  return usageAvailability({
+    limit: availability.limit,
+    succeeded: availability.succeeded,
+    reserved: availability.reserved + 1,
+  });
+}

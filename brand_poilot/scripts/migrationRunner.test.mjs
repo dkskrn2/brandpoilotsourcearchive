@@ -4618,6 +4618,7 @@ test("an installation applied through 064 has every later migration pending", as
       "089_free_subscription_plan.sql",
       "090_existing_brand_free_subscriptions.sql",
       "091_ai_content_prompt_lineage_v4.sql",
+      "092_publish_calendar_weekly_schedule.sql",
     ],
   );
 });
@@ -4801,6 +4802,25 @@ test("AI content prompt lineage v4 follows migration 090 without changing histor
   );
 });
 
+test("weekly publish schedule storage 092 follows prompt lineage 091 deterministically", async () => {
+  const loaded = await migrationRunner.loadMigrations();
+  const ids = loaded.map(({ id }) => id);
+  const migration092Index = ids.indexOf("092_publish_calendar_weekly_schedule.sql");
+
+  assert.equal(
+    migration092Index,
+    ids.indexOf("091_ai_content_prompt_lineage_v4.sql") + 1,
+  );
+  assert.equal(
+    migrationRunner.post075SchemaMigrationChecksums["092_publish_calendar_weekly_schedule.sql"],
+    "c1bf905666ce4dabac137c0522fa0dc0300f574eda6d1e9648283f00b2af4d2b",
+  );
+  assert.equal(
+    loaded[migration092Index].checksum,
+    migrationRunner.post075SchemaMigrationChecksums["092_publish_calendar_weekly_schedule.sql"],
+  );
+});
+
 const post076SchemaMigrationIdsForTests = [
   "077_content_suggestion_batches.sql",
   "078_faq_utterance_matching.sql",
@@ -4817,6 +4837,7 @@ const post076SchemaMigrationIdsForTests = [
   "089_free_subscription_plan.sql",
   "090_existing_brand_free_subscriptions.sql",
   "091_ai_content_prompt_lineage_v4.sql",
+  "092_publish_calendar_weekly_schedule.sql",
 ];
 
 test("post-075 data migrations are a closed DML-only contract", async () => {

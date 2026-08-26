@@ -2,11 +2,109 @@ import AxeBuilder from "@axe-core/playwright";
 import { expect, test, type Page, type Route } from "@playwright/test";
 
 const brandId = "00000000-0000-4000-8000-000000000100";
+const publishFixtureNow = new Date("2026-08-25T06:00:00.000Z");
 const session = {
   user: { id: "user-a11y", displayName: "접근성 사용자", email: "a11y@example.com" },
   workspace: { id: "workspace-a11y", name: "접근성 워크스페이스" },
   brand: { id: brandId, name: "접근성 브랜드" },
 };
+
+const schedulablePublishItem = {
+  itemKey: "output:e2e-schedulable",
+  workspaceId: "workspace-a11y",
+  brandId,
+  title: "예약 가능한 콘텐츠",
+  createdAt: "2026-08-20T00:00:00.000Z",
+  contentFormat: "card_news",
+  channels: [],
+  source: { type: "topic_table", label: "주제표", detail: null, urls: [] },
+  targets: [],
+  reviewTargets: [],
+  contentStatus: "completed",
+  publishStatus: "unreserved",
+  status: "completed_unpublished",
+  operationalStatus: "action_required",
+  operationalReason: "review_required",
+  groupStatus: null,
+  publicationProgress: "none",
+  scheduledFor: null,
+  effectiveScheduledFor: null,
+  publishedAt: null,
+  calendarDate: null,
+  calendarPlacement: "unreserved",
+  assignmentMode: null,
+  sourceRefs: { contentTopicId: null, proposalId: null, generationId: null, generationOutputId: "output-e2e", calendarSlotId: null, topicPublishGroupId: null, queueIds: [] },
+  schedulable: true,
+  scheduleBlockedReason: null,
+  lastError: null,
+};
+
+function datedPublishTarget(queueId: string, status: "scheduled" | "deferred" | "published", scheduledFor: string) {
+  return {
+    queueId,
+    channelOutputId: `channel-${queueId}`,
+    channel: "instagram",
+    status,
+    scheduledFor,
+    publishedAt: status === "published" ? scheduledFor : null,
+    failedAt: null,
+    lastError: null,
+    externalPostId: status === "published" ? `post-${queueId}` : null,
+    externalUrl: status === "published" ? `https://instagram.example/${queueId}` : null,
+    previewTitle: queueId,
+    previewBody: `${queueId} 본문`,
+    outputJson: {},
+    artifactPublicUrl: null,
+    sourceSummary: "게시 일정 e2e",
+  };
+}
+
+function datedPublishItem(input: {
+  id: string;
+  title: string;
+  calendarDate: string;
+  status: "reserved" | "deferred" | "published";
+  operationalStatus: "upcoming" | "delayed_today" | "published";
+  operationalReason: "future_reservation" | "reserved_time_passed" | "published";
+  targetStatus: "scheduled" | "deferred" | "published";
+}) {
+  const target = datedPublishTarget(`queue-${input.id}`, input.targetStatus, input.calendarDate);
+  return {
+    itemKey: `output:${input.id}`,
+    workspaceId: "workspace-a11y",
+    brandId,
+    title: input.title,
+    createdAt: "2026-08-20T00:00:00.000Z",
+    contentFormat: "card_news",
+    channels: ["instagram"],
+    source: { type: "topic_table", label: "주제표", detail: null, urls: [] },
+    targets: [target],
+    reviewTargets: [],
+    contentStatus: "completed",
+    publishStatus: input.status,
+    status: input.status,
+    operationalStatus: input.operationalStatus,
+    operationalReason: input.operationalReason,
+    groupStatus: input.status === "reserved" ? "scheduled" : null,
+    publicationProgress: input.status === "published" ? "complete" : "none",
+    scheduledFor: input.calendarDate,
+    effectiveScheduledFor: input.calendarDate,
+    publishedAt: input.status === "published" ? input.calendarDate : null,
+    calendarDate: input.calendarDate,
+    calendarPlacement: "dated",
+    assignmentMode: "manual",
+    sourceRefs: { contentTopicId: null, proposalId: null, generationId: null, generationOutputId: input.id, calendarSlotId: `slot-${input.id}`, topicPublishGroupId: input.status === "reserved" ? `group-${input.id}` : null, queueIds: [target.queueId] },
+    schedulable: false,
+    scheduleBlockedReason: "already_reserved",
+    lastError: null,
+  };
+}
+
+const datedPublishItems = [
+  datedPublishItem({ id: "published", title: "완료된 게시", calendarDate: "2026-08-26T02:30:00.000Z", status: "published", operationalStatus: "published", operationalReason: "published", targetStatus: "published" }),
+  datedPublishItem({ id: "delayed", title: "지연된 게시", calendarDate: "2026-08-27T02:30:00.000Z", status: "deferred", operationalStatus: "delayed_today", operationalReason: "reserved_time_passed", targetStatus: "deferred" }),
+  datedPublishItem({ id: "scheduled", title: "예정된 게시", calendarDate: "2026-08-28T02:30:00.000Z", status: "reserved", operationalStatus: "upcoming", operationalReason: "future_reservation", targetStatus: "scheduled" }),
+];
 
 const proposal = {
   contractVersion: "content-proposal.v1",
@@ -203,6 +301,31 @@ async function installFixture(page: Page) {
     if (path.endsWith("/channel-connection-request")) return json(route, {
       id: "request-1", brandId, status: "draft", requestedChannels: [], note: "", createdAt: null, updatedAt: null,
     });
+    if (path.endsWith("/publish-calendar/settings/weekly")) return json(route, {
+      brandId, enabled: false, channels: ["instagram"], informationalFormat: "card_news", trendFormat: "reel",
+      weeklySchedule: [{ id: "40000000-0000-4000-8000-000000000001", dayOfWeek: 1, time: "11:17", sortOrder: 0 }],
+      updatedAt: "2026-08-25T00:00:00.000Z",
+    });
+    if (path.endsWith("/publish-calendar/settings")) return json(route, {
+      brandId, enabled: true, channels: ["instagram"], informationalFormat: "card_news", trendFormat: "reel", slotTimes: ["11:30"], updatedAt: null,
+    });
+    if (path.endsWith("/publish-calendar/usage")) return json(route, {
+      startsAt: "2026-08-24T00:00:00.000Z", endsAt: "2026-08-31T00:00:00.000Z",
+      generation: { limit: 10, succeeded: 1, reserved: 0, remaining: 9, additionalAvailable: 9 },
+      publishing: { limit: 30, succeeded: 1, reserved: 2, remaining: 29, additionalAvailable: 27 },
+    });
+    if (path.endsWith("/publish-calendar/manual-options")) return json(route, {
+      purposes: [{ value: "informational", label: "정보성" }],
+      subjectModes: [{ value: "topic_text", label: "직접 입력", requiredField: "topicText" }],
+      channels: [{ value: "instagram", label: "Instagram", formats: [{ value: "card_news", label: "카드뉴스" }, { value: "reel", label: "릴스" }] }],
+      products: [], suggestions: [], references: [],
+      usage: {
+        startsAt: "2026-08-24T00:00:00.000Z", endsAt: "2026-08-31T00:00:00.000Z",
+        generation: { limit: 10, succeeded: 1, reserved: 0, remaining: 9, additionalAvailable: 9 },
+        publishing: { limit: 7, succeeded: 1, reserved: 2, remaining: 6, additionalAvailable: 4 },
+      },
+    });
+    if (path.endsWith("/publish-items")) return json(route, [schedulablePublishItem, ...datedPublishItems]);
     if (path.endsWith("/publish-queue") || path.endsWith("/publish-results") || path.endsWith("/content-outputs")) return json(route, []);
     if (path.endsWith("/instagram-dm/settings")) return json(route, {
       brandId, enabled: false, wikiReady: true, messagePermissionReady: true,
@@ -377,6 +500,126 @@ test(`${path} does not overflow at approved widths`, async ({ page }) => {
   }
 });
 }
+
+test("publish filters, responsive calendar, and content submit controls remain reachable", async ({ page }) => {
+  await page.clock.install({ time: publishFixtureNow });
+
+  for (const viewport of [
+    { width: 1280, height: 720 },
+    { width: 1024, height: 768 },
+    { width: 390, height: 844 },
+  ]) {
+    await page.setViewportSize(viewport);
+    await page.goto("/publish-queue", { waitUntil: "domcontentloaded" });
+
+    const filters = page.locator(".queue-filters");
+    await expect(filters).toBeVisible();
+    const lastFilter = filters.getByRole("button").last();
+    await lastFilter.scrollIntoViewIfNeeded();
+    await expect(lastFilter).toBeVisible();
+
+    await page.getByRole("tab", { name: "캘린더" }).click();
+    if (viewport.width < 640) {
+      await expect(page.getByRole("region", { name: "주간 게시 일정" })).toBeVisible();
+      await expect(page.getByRole("grid", { name: "게시 캘린더" })).toHaveCount(0);
+
+      const agenda = page.getByRole("region", { name: "주간 게시 일정" });
+      for (const status of [
+        { date: "8월 26일 일정 보기", slot: "완료된 게시 게시 완료 슬롯 상세 보기", className: "is-completed", label: "게시 완료" },
+        { date: "8월 27일 일정 보기", slot: "지연된 게시 게시 지연 슬롯 상세 보기", className: "is-delayed", label: "게시 지연" },
+        { date: "8월 28일 일정 보기", slot: "예정된 게시 게시 예정 슬롯 상세 보기", className: "is-upcoming", label: "게시 예정" },
+      ]) {
+        const dateControl = agenda.getByRole("button", { name: status.date });
+        await dateControl.focus();
+        await page.keyboard.press("Enter");
+        await expect(dateControl).toHaveAttribute("aria-current", "date");
+        const slot = agenda.getByRole("button", { name: status.slot });
+        await expect(slot).toHaveClass(/publish-mobile-agenda__slot/);
+        await expect(slot).toHaveClass(new RegExp(status.className));
+        await expect(slot.getByText(status.label)).toBeVisible();
+      }
+
+      const scheduledSlot = agenda.getByRole("button", { name: "예정된 게시 게시 예정 슬롯 상세 보기" });
+      await scheduledSlot.focus();
+      await page.keyboard.press("Space");
+      await expect(scheduledSlot).toHaveAttribute("aria-pressed", "true");
+      const selectedDetail = page.getByLabel("예정된 게시 슬롯 상세");
+      await expect(selectedDetail.getByText("게시 예정", { exact: true })).toBeVisible();
+      await expect(selectedDetail.getByRole("button", { name: "예약 변경" })).toBeVisible();
+      await expect(selectedDetail.getByRole("button", { name: "슬롯 취소" })).toBeVisible();
+
+      await agenda.getByRole("button", { name: "다음 주" }).click();
+      await expect(agenda.getByRole("button", { name: "9월 4일 일정 보기" })).toHaveAttribute("aria-current", "date");
+      await expect(agenda.getByRole("button", { name: "9월 6일 일정 보기" })).toBeVisible();
+      await agenda.getByRole("button", { name: "이전 주" }).click();
+      await expect(agenda.getByRole("button", { name: "8월 28일 일정 보기" })).toHaveAttribute("aria-current", "date");
+      await expect(agenda.getByRole("button", { name: "8월 24일 일정 보기" })).toBeVisible();
+    } else {
+      await expect(page.getByRole("grid", { name: "게시 캘린더" })).toBeVisible();
+      await expect(page.getByRole("region", { name: "주간 게시 일정" })).toHaveCount(0);
+      const monthGrid = page.getByRole("grid", { name: "게시 캘린더" });
+      await expect(monthGrid.getByRole("button", { name: "완료된 게시 게시 완료 슬롯 상세 보기" })).toHaveClass(/is-completed/);
+      await expect(monthGrid.getByRole("button", { name: "지연된 게시 게시 지연 슬롯 상세 보기" })).toHaveClass(/is-delayed/);
+      await expect(monthGrid.getByRole("button", { name: "예정된 게시 게시 예정 슬롯 상세 보기" })).toHaveClass(/is-upcoming/);
+    }
+
+    await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1), {
+      message: `publish calendar must not overflow at ${viewport.width}x${viewport.height}`,
+    }).toBe(true);
+
+    await page.getByRole("button", { name: "콘텐츠 추가" }).click();
+    const picker = page.getByRole("dialog", { name: "콘텐츠 추가" });
+    await picker.getByRole("article", { name: "예약 가능한 콘텐츠" }).getByRole("button", { name: "게시 설정" }).click();
+    const schedule = page.getByRole("dialog", { name: "예약 가능한 콘텐츠 게시 설정" });
+    for (const control of [
+      schedule.getByRole("textbox", { name: "게시 날짜" }),
+      schedule.getByRole("textbox", { name: "게시 시간" }),
+      schedule.getByRole("button", { name: "게시 예약" }),
+    ]) {
+      await control.scrollIntoViewIfNeeded();
+      await expect(control).toBeVisible();
+    }
+    await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1), {
+      message: `publish schedule must not overflow at ${viewport.width}x${viewport.height}`,
+    }).toBe(true);
+    await schedule.getByRole("button", { name: "닫기" }).click();
+
+    await page.getByRole("button", { name: "콘텐츠 추가" }).click();
+    const newContentPicker = page.getByRole("dialog", { name: "콘텐츠 추가" });
+    await newContentPicker.getByRole("tab", { name: "새 콘텐츠" }).click();
+    const submit = newContentPicker.getByRole("button", { name: "생성 1단계에서 계속" });
+    await submit.scrollIntoViewIfNeeded();
+    await expect(submit).toBeVisible();
+    await expectNoSeriousOrCriticalViolations(page, `publish picker ${viewport.width}x${viewport.height}`);
+    await newContentPicker.getByRole("button", { name: "닫기" }).click();
+  }
+});
+
+test("weekly automatic settings stacks without overflow and keeps keyboard focus contained", async ({ page }) => {
+  await page.clock.install({ time: publishFixtureNow });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto("/publish-queue", { waitUntil: "domcontentloaded" });
+  await page.getByRole("tab", { name: "캘린더" }).click();
+  const edit = page.getByRole("button", { name: "자동 게시 수정" });
+  await expect(edit).toBeVisible();
+  await edit.click();
+
+  const dialog = page.getByRole("dialog", { name: "주간 자동 게시 설정" });
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByRole("heading", { name: "주간 자동 게시 설정" })).toBeFocused();
+  await expect.poll(() => dialog.evaluate((element) => element.scrollWidth <= element.clientWidth + 1), {
+    message: "weekly automatic settings dialog must not overflow horizontally",
+  }).toBe(true);
+  await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1), {
+    message: "weekly automatic settings page must not overflow horizontally",
+  }).toBe(true);
+
+  await page.keyboard.press("Shift+Tab");
+  await expect(dialog.getByRole("button", { name: "설정 저장" })).toBeFocused();
+  await page.keyboard.press("Escape");
+  await expect(dialog).toHaveCount(0);
+  await expect(edit).toBeFocused();
+});
 
 test("reduced motion removes transitions, animations, and smooth scrolling", async ({ page }) => {
   await page.emulateMedia({ reducedMotion: "reduce" });

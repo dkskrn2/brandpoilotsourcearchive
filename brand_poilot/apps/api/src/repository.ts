@@ -34,6 +34,7 @@ import { createAiContentSubjectRepository } from "./aiContentSubjectRepository.j
 import { createPublishCalendarRepository } from "./publishCalendarRepository.js";
 import { createDatabasePublishCalendarAllocator } from "./publishCalendarAllocator.js";
 import { createPublishItemsRepository } from "./publishItemsRepository.js";
+import { canAutoRetryCalendarPublish, previewPublishDue, runPublishDue, type PublishDueClaim } from "./publishDueRun.js";
 import { enqueueAutomatedCardNews } from "./automatedCardNews.js";
 import { createBrandIntelligenceRepository } from "./brandIntelligenceRepository.js";
 import { createBrandIntelligenceProvider } from "./brandIntelligenceProvider.js";
@@ -1220,6 +1221,8 @@ interface RepositoryOptions {
   publishAssetMaxBytes?: number;
   publishArtifactAllowedOrigins?: readonly string[];
   instagramPublish?: RepositoryInstagramPublishOptions;
+  publishDueBatchSize?: number;
+  publishDueConcurrency?: number;
   imageRenderCooldownMs?: number;
   fetchInstagramImageManifest?: typeof fetchInstagramImageManifest;
   fetchImageAsset?: typeof fetch;
@@ -1710,13 +1713,17 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
     );
   }
 
-  async function publishQueueItemInternal(queueId: string) {
+  async function claimPublishQueueItemInternal(
+    queryable: Pick<Pool, "query"> | Pick<PoolClient, "query">,
+    queueId: string,
+  ): Promise<PublishDueClaim<Record<string, any>> | null> {
     if (!instagramPublish.enabled) throw new Error("publishing_disabled");
-    const result = await pool.query(
+    const result = await queryable.query(
       `with selected as (
          select pq.id
          from publish_queue pq
          join channel_outputs co on co.id=pq.channel_output_id
+          and co.workspace_id=pq.workspace_id and co.brand_id=pq.brand_id and co.channel=pq.channel
          join brands brand on brand.id=pq.brand_id and brand.workspace_id=pq.workspace_id
          join brand_channels policy_channel
            on policy_channel.brand_id=pq.brand_id and policy_channel.workspace_id=pq.workspace_id
@@ -1733,8 +1740,11 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
          left join publish_calendar_slots slot
            on slot.topic_publish_group_id=pq.topic_publish_group_id and slot.workspace_id=pq.workspace_id
           and slot.brand_id=pq.brand_id and slot.status<>'cancelled'
-         where pq.id = $1 and pq.status = 'scheduled'
-           and pq.scheduled_for <= clock_timestamp()
+         where pq.id = $1
+           and (
+             (pq.status = 'scheduled' and pq.scheduled_for <= clock_timestamp())
+             or (pq.status = 'deferred' and pq.deferred_until <= clock_timestamp())
+           )
            and brand.status = 'active' and brand.deleted_at is null
            and policy_channel.enabled and policy_channel.status = 'connected'
            and (
@@ -1813,7 +1823,7 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
              last_error = null,
              updated_at = now()
          from selected
-         where pq.id = selected.id and pq.status = 'scheduled'
+         where pq.id = selected.id and pq.status in ('scheduled','deferred')
          returning pq.*
        ), queue_context as (
          select pq.id, pq.workspace_id, pq.brand_id, pq.channel, pq.channel_output_id,
@@ -1824,12 +1834,18 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
                cc.id as credential_id, cc.provider as credential_provider,
                cc.status as credential_status, cc.expires_at as credential_expires_at,
                cc.scopes as credential_scopes, cc.encrypted_payload, cc.auth_mode,
-               bcf.capability_status, bcf.capability_metadata,
+                bcf.capability_status, bcf.capability_metadata,
+                slot.id as calendar_slot_id,slot.scheduled_for as calendar_scheduled_for,
                coalesce((select max(pa.attempt_number) from publish_attempts pa where pa.publish_queue_id = pq.id), 0) + 1 as attempt_number
          from claimed pq
-         join channel_outputs co on co.id = pq.channel_output_id
-         left join storage_artifacts sa on sa.id = co.rendered_artifact_id
-         left join brand_channels bc on bc.brand_id = pq.brand_id and bc.channel = pq.channel and bc.deleted_at is null
+          join channel_outputs co on co.id = pq.channel_output_id
+          left join storage_artifacts sa on sa.id = co.rendered_artifact_id
+          left join publish_calendar_slots slot
+            on slot.topic_publish_group_id=pq.topic_publish_group_id
+           and slot.workspace_id=pq.workspace_id and slot.brand_id=pq.brand_id
+           and slot.status<>'cancelled'
+         left join brand_channels bc on bc.workspace_id = pq.workspace_id
+          and bc.brand_id = pq.brand_id and bc.channel = pq.channel and bc.deleted_at is null
          left join lateral (
            select current_credential.*
            from channel_credentials current_credential
@@ -1853,8 +1869,18 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
        cross join attempt`,
       [queueId]
     );
-    if (!result.rowCount) throw new Error("publish_queue_not_publishable");
-    const queue = result.rows[0];
+    if (!result.rowCount) return null;
+    return { queueId, context: result.rows[0] };
+  }
+
+  async function publishQueueItemInternal(
+    queueId: string,
+    existingClaim?: PublishDueClaim<Record<string, any>>,
+  ) {
+    if (!instagramPublish.enabled) throw new Error("publishing_disabled");
+    const claim = existingClaim ?? await claimPublishQueueItemInternal(pool, queueId);
+    if (!claim) throw new Error("publish_queue_not_publishable");
+    const queue = claim.context;
     let externalPostId = `mock_${queue.channel_output_id}`;
     let publishedUrl: string | null = mockPublishedUrl(queue.channel, queue.channel_output_id);
     let requestMetadata: Record<string, unknown> = { mode: "mock", channel: queue.channel };
@@ -2133,7 +2159,14 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
               channelNeedsAttention: true,
             }
           : classifyMetaGraphPublishError(providerError);
-        const effectiveRetryable = classification.retryable && Number(queue.attempt_number ?? 1) < 5;
+        const failedAt = new Date();
+        const retryAt = new Date(failedAt.getTime() + 5 * 60 * 1000);
+        const effectiveRetryable = classification.retryable
+          && Number(queue.attempt_number ?? 1) < 5
+          && canAutoRetryCalendarPublish(
+            queue.calendar_slot_id ? new Date(queue.calendar_scheduled_for) : null,
+            retryAt,
+          );
         const responseMetadata = error instanceof InstagramPublishStageError
           ? {
               stage: error.stage,
@@ -2152,8 +2185,17 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
              returning id
            ), failed_queue as (
              update publish_queue
-             set status = case when $4::boolean then 'scheduled' else 'failed' end,
-                 scheduled_for = case when $4::boolean then now() + interval '5 minutes' else scheduled_for end,
+             set status = case
+                   when $4::boolean and $9::boolean then 'deferred'
+                   when $4::boolean then 'scheduled'
+                   else 'failed'
+                 end,
+                 scheduled_for = case
+                   when $4::boolean and not $9::boolean then $10::timestamptz
+                   else scheduled_for
+                 end,
+                 deferred_until = case when $4::boolean and $9::boolean
+                   then $10::timestamptz else deferred_until end,
                  failed_at = case when $4::boolean then null else now() end,
                  last_error = $3, updated_at = now()
              where id = $2 and status = 'publishing' and exists (select 1 from failed_attempt)
@@ -2189,7 +2231,9 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
             classification.channelNeedsAttention,
             queue.brand_id,
             queue.channel,
-            JSON.stringify(responseMetadata)
+            JSON.stringify(responseMetadata),
+            Boolean(queue.calendar_slot_id),
+            retryAt,
           ]
         ).catch(() => undefined);
       }
@@ -2218,7 +2262,26 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
     ...aiContentDownload,
     ...publishCalendar,
     ...publishItems,
-    allocatePublishCalendar: (now) => publishCalendarAllocator.allocateAll(now),
+    allocatePublishCalendar: (now) => instagramPublish.enabled
+      ? publishCalendarAllocator.allocateAll(now)
+      : Promise.resolve({
+        brandsSelected: 0,
+        openSlotsCreated: 0,
+        proposalsAssigned: 0,
+        quotaBlocked: 0,
+        brandsFailed: 0,
+      }),
+    previewPublishCalendarAllocation: (now = new Date()) => instagramPublish.enabled
+      ? publishCalendarAllocator.previewAll(now)
+      : Promise.resolve({
+        observedAt: now.toISOString(),
+        renewalDueBrandIds: [],
+        brandsSelected: 0,
+        counts: { renewalsDue: 0, occurrences: 0, recommendations: 0, quotaBlockedBrands: 0 },
+        occurrences: [],
+        recommendationAssignments: [],
+        quotaBlockedBrandIds: [],
+      }),
     async getFaqCapabilities(brandId) {
       return faqPolicyForBrand(brandId);
     },
@@ -5233,394 +5296,39 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
       return buildPerformanceInsights({ brandId, period: "30d", snapshots });
     },
 
-    async schedulePublishQueue(brandId, now = new Date()) {
-      if (!instagramPublish.enabled) throw new Error("publishing_disabled");
-      const client = await pool.connect();
-      try {
-        await client.query("begin");
-        const brand = await client.query(
-          `select id from brands where id = $1 and deleted_at is null for update`,
-          [brandId]
-        );
-        if (!brand.rowCount) throw new Error("brand_not_found");
-        await client.query("select pg_advisory_xact_lock(hashtext($1))", [`publish-calendar:${brandId}`]);
-        const subscription = await client.query(
-          `select subscription.started_at,plan.weekly_publish_limit
-             from brand_subscriptions subscription
-             join billing_plan_catalog plan on plan.code=subscription.plan_code and plan.active
-            where subscription.brand_id=$1::uuid
-              and subscription.status in ('active','cancel_scheduled')
-              and subscription.current_period_start<=$2::timestamptz
-              and subscription.current_period_end>$2::timestamptz`,
-          [brandId, now],
-        );
-        if (!subscription.rowCount) throw new Error("publish_calendar_subscription_inactive");
-        const subscriptionStartedAt = new Date(subscription.rows[0].started_at);
-        const publishLimit = Number(subscription.rows[0].weekly_publish_limit);
-        const quotaWindows = new Map<string, Set<string>>();
-
-        async function allowedPublicationGroupIds(at: Date): Promise<Set<string>> {
-          const window = subscriptionWeekWindow({ subscriptionStartedAt, now: at });
-          const key = window.startsAt.toISOString();
-          const cached = quotaWindows.get(key);
-          if (cached) return cached;
-          const result = await client.query(
-            `with calendar_publish_groups as (
-               select slot.topic_publish_group_id as group_id,
-                      bool_or(queue.status='published') as published,
-                      max(queue.published_at) filter (where queue.status='published') as published_at,
-                      bool_or(queue.status in ('queued','scheduled','publishing','deferred')) as reserved,
-                      slot.scheduled_for as reserved_at
-                 from publish_calendar_slots slot
-                 join publish_queue queue on queue.topic_publish_group_id=slot.topic_publish_group_id
-                where slot.brand_id=$1::uuid and slot.status<>'cancelled'
-                group by slot.topic_publish_group_id,slot.scheduled_for
-             ), direct_publish_groups as (
-               select queue.topic_publish_group_id as group_id,
-                      bool_or(queue.status='published') as published,
-                      max(queue.published_at) filter (where queue.status='published') as published_at,
-                      bool_or(queue.status in ('queued','scheduled','publishing','deferred')) as reserved,
-                      min(coalesce(queue.scheduled_for,queue.queued_at))
-                        filter (where queue.status in ('queued','scheduled','publishing','deferred')) as reserved_at
-                 from publish_queue queue
-                where queue.brand_id=$1::uuid
-                  and not exists (
-                    select 1 from publish_calendar_slots linked_slot
-                     where linked_slot.topic_publish_group_id=queue.topic_publish_group_id
-                       and linked_slot.status<>'cancelled'
-                  )
-                group by queue.topic_publish_group_id
-             ), publication_units as (
-               select * from calendar_publish_groups
-               union all
-               select * from direct_publish_groups
-             ), published_units as (
-               select group_id from publication_units
-                where published and published_at >= $2::timestamptz and published_at < $3::timestamptz
-             ), ranked_reservations as (
-               select group_id,row_number() over (
-                        order by greatest(reserved_at,$2::timestamptz),group_id
-                      ) as reservation_rank
-                 from publication_units
-                where not published and reserved
-                  and greatest(reserved_at,$2::timestamptz) < $3::timestamptz
-             ), allowed_groups as (
-               select group_id from published_units
-               union all
-               select group_id from ranked_reservations
-                where reservation_rank <= greatest(0,$4::integer-(select count(*) from published_units))
-             )
-             select coalesce(array_agg(group_id order by group_id),array[]::uuid[]) as allowed_group_ids
-               from allowed_groups /* allowed_group_ids */`,
-            [brandId, window.startsAt, window.endsAt, publishLimit],
-          );
-          const allowed = new Set<string>((result.rows[0]?.allowed_group_ids ?? [])
-            .map((value: unknown) => String(value)));
-          quotaWindows.set(key, allowed);
-          return allowed;
-        }
-
-        await client.query(
-          `with latest_render_jobs as (
-             select distinct on (j.channel_output_id) j.channel_output_id, j.status
-             from jobs j
-             where j.job_type in ('instagram_feed_render', 'instagram_story_render', 'instagram_reel_render')
-             order by j.channel_output_id, j.created_at desc, j.id desc
-           ), readiness as (
-             select tpg.id,
-                    count(co.id) > 0
-                    and bool_and(
-                      co.status = 'rejected'
-                      or latest_render.status = 'failed'
-                      or (
-                        co.status not in ('pending_review', 'auto_approval_blocked', 'regenerating')
-                        and co.status <> 'regenerated'
-                        and not coalesce(latest_render.status in ('queued', 'running'), false)
-                        and pq.id is not null
-                      )
-                    ) as terminal_decided,
-                    count(pq.id) filter (where pq.status = 'queued') > 0 as has_queued_output
-             from topic_publish_groups tpg
-             join channel_outputs co on co.content_topic_id = tpg.content_topic_id and co.status <> 'regenerated'
-             left join publish_queue pq on pq.channel_output_id = co.id
-             left join latest_render_jobs latest_render on latest_render.channel_output_id = co.id
-             where tpg.brand_id = $1 and tpg.status in ('waiting', 'ready')
-             group by tpg.id
-           )
-           update topic_publish_groups tpg
-           set status = case when readiness.terminal_decided and readiness.has_queued_output then 'ready' else 'waiting' end,
-               updated_at = now()
-           from readiness
-           where tpg.id = readiness.id
-             and tpg.status in ('waiting', 'ready')`,
-          [brandId]
-        );
-
-        await client.query(
-          `update publish_calendar_slots slot
-              set status='publish_delayed',last_error='content_not_ready_at_reserved_time',updated_at=now()
-            where slot.brand_id=$1::uuid and slot.scheduled_for <= $2::timestamptz
-              and slot.status in ('proposal_assigned','generation_pending','content_assigned','ready')
-              and not exists (
-                select 1 from topic_publish_groups publish_group
-                 where publish_group.id=slot.topic_publish_group_id and publish_group.status='ready'
-                   and exists (
-                     select 1 from publish_queue queue
-                      where queue.topic_publish_group_id=publish_group.id and queue.status='queued'
-                   )
-              )`,
-          [brandId, now],
-        );
-        const calendarReadyGroups = await client.query(
-          `select slot.id as slot_id,publish_group.id as group_id,slot.scheduled_for
-             from publish_calendar_slots slot
-             join topic_publish_groups publish_group on publish_group.id=slot.topic_publish_group_id
-            where slot.brand_id=$1::uuid and publish_group.brand_id=$1::uuid
-              and publish_group.status='ready'
-              and slot.status in ('content_assigned','ready','publish_delayed','quota_blocked')
-              and exists (
-                select 1 from publish_queue queue
-                 where queue.topic_publish_group_id=publish_group.id and queue.status='queued'
-              )
-            order by slot.scheduled_for,slot.id
-            for update of slot,publish_group`,
-          [brandId],
-        );
-
-        let processed = 0;
-        let updated = 0;
-        for (const group of calendarReadyGroups.rows) {
-          const scheduledFor = new Date(group.scheduled_for);
-          if (!Number.isFinite(scheduledFor.getTime())) throw new Error("publish_calendar_slot_time_invalid");
-          const effectiveScheduledFor = scheduledFor <= now ? now : scheduledFor;
-          const allowedGroups = await allowedPublicationGroupIds(effectiveScheduledFor);
-          if (!allowedGroups.has(String(group.group_id))) {
-            await client.query(
-              `update publish_calendar_slots
-                  set status='quota_blocked',last_error='publish_weekly_quota_exceeded',updated_at=now()
-                where id=$1::uuid and brand_id=$2::uuid
-                  and status in ('content_assigned','ready','publish_delayed','quota_blocked')`,
-              [group.slot_id, brandId],
-            );
-            continue;
-          }
-          const slotDate = kstDateKey(effectiveScheduledFor);
-          const claimed = await client.query(
-            `update topic_publish_groups
-                set status='scheduled',slot_date=$2::date,slot_number=null,
-                    scheduled_for=$3::timestamptz,updated_at=now()
-              where id=$1 and status='ready'
-              returning id`,
-            [group.group_id, slotDate, effectiveScheduledFor],
-          );
-          if (!claimed.rowCount) continue;
-          const queueRows = await client.query(
-            `update publish_queue
-                set status='scheduled',slot_date=$2::date,slot_number=null,
-                    scheduled_for=$3::timestamptz,updated_at=now()
-              where topic_publish_group_id=$1 and status='queued'`,
-            [group.group_id, slotDate, effectiveScheduledFor],
-          );
-          await client.query(
-            `update publish_calendar_slots
-                set status='scheduled',last_error=null,updated_at=now()
-              where id=$1::uuid and brand_id=$2::uuid
-                and status in ('content_assigned','ready','publish_delayed','quota_blocked')`,
-            [group.slot_id, brandId],
-          );
-          processed += 1;
-          updated += queueRows.rowCount ?? 0;
-        }
-
-        const readyGroups = await client.query(
-          `select id
-           from topic_publish_groups
-           where brand_id = $1 and status = 'ready'
-             and exists (
-               select 1 from publish_queue pq
-               where pq.topic_publish_group_id = topic_publish_groups.id and pq.status = 'queued'
-             )
-             and not exists (
-               select 1 from publish_calendar_slots linked_slot
-                where linked_slot.topic_publish_group_id=topic_publish_groups.id
-                  and linked_slot.status<>'cancelled'
-             )
-           order by created_at asc, id asc
-           for update`,
-          [brandId]
-        );
-
-        const slotlessScheduledFor = nextPolicySlots(now, 1)[0];
-        if (!slotlessScheduledFor) throw new Error("policy_slot_unavailable");
-        const slotlessDate = kstDateKey(slotlessScheduledFor);
-        for (const group of readyGroups.rows) {
-          const allowedGroups = await allowedPublicationGroupIds(slotlessScheduledFor);
-          if (!allowedGroups.has(String(group.id))) continue;
-          const claimed = await client.query(
-            `update topic_publish_groups
-             set status = 'scheduled', slot_date = $2::date, slot_number = $3,
-                 scheduled_for = $4, updated_at = now()
-             where id = $1 and status = 'ready' and slot_date is null and slot_number is null
-             returning id`,
-            [group.id, slotlessDate, null, slotlessScheduledFor]
-          );
-          if (!claimed.rowCount) continue;
-          const queueRows = await client.query(
-            `update publish_queue
-             set status = 'scheduled', slot_date = $2::date, slot_number = $3,
-                 scheduled_for = $4, updated_at = now()
-             where topic_publish_group_id = $1 and status = 'queued'`,
-            [group.id, slotlessDate, null, slotlessScheduledFor]
-          );
-          processed += 1;
-          updated += queueRows.rowCount ?? 0;
-        }
-        await client.query("commit");
-        return { processed, created: 0, updated, failed: 0 };
-      } catch (error) {
-        await client.query("rollback");
-        throw error;
-      } finally {
-        client.release();
+    async runDuePublishing(now = new Date(), guard) {
+      if (!instagramPublish.enabled) {
+        return {
+          acquired: false,
+          expiredTargets: 0,
+          expiredSlots: 0,
+          dueQueued: 0,
+          published: 0,
+          failed: 0,
+          resultUnknown: 0,
+          ...(guard === undefined ? {} : {
+            selectedProviderCandidateQueueIds: [],
+            processedProviderCandidateQueueIds: [],
+          }),
+        };
       }
+      return runPublishDue({
+        pool,
+        now,
+        batchSize: options.publishDueBatchSize ?? Number(process.env.PUBLISH_DUE_BATCH_SIZE ?? "50"),
+        concurrency: options.publishDueConcurrency ?? Number(process.env.PUBLISH_DUE_CONCURRENCY ?? "4"),
+        expectedProviderCandidateQueueIds: guard?.expectedProviderCandidateQueueIds,
+        claimQueueItem: claimPublishQueueItemInternal,
+        dispatchClaim: async (claim) => publishQueueItemInternal(claim.queueId, claim),
+      });
     },
 
-    async runDuePublishing(now = new Date()) {
-      if (!instagramPublish.enabled) {
-        return { processed: 0, created: 0, updated: 0, failed: 0 };
-      }
-      const renewals = await this.applyDueSubscriptionRenewals?.(now) ?? [];
-      await pool.query(
-        `with recovered as (
-           update publish_queue pq
-           set status = 'published', published_at = coalesce(
-                 pq.published_at,
-                 (select max(pa.finished_at) from publish_attempts pa where pa.publish_queue_id = pq.id and pa.status = 'succeeded'),
-                 now()
-               ),
-               last_error = null, updated_at = now()
-           where pq.status = 'publishing'
-             and exists (
-               select 1 from publish_attempts pa
-               where pa.publish_queue_id = pq.id and pa.status = 'succeeded'
-             )
-           returning pq.id, pq.brand_id, pq.channel,pq.topic_publish_group_id
-         ), recovered_channels as (
-           update brand_channels channel
-           set last_published_at = now(), status = 'connected', last_error = null
-           from recovered
-           where channel.brand_id = recovered.brand_id and channel.channel = recovered.channel
-           returning channel.id
-         ), recovered_groups as (
-           update topic_publish_groups publish_group
-              set status=case
-                    when not exists (
-                      select 1 from publish_queue pending
-                       where pending.topic_publish_group_id=publish_group.id and pending.status<>'published'
-                         and pending.id not in (select recovered_queue.id from recovered recovered_queue)
-                    ) then 'published'
-                    else 'partially_published'
-                  end,
-                  updated_at=now()
-             from recovered
-            where publish_group.id=recovered.topic_publish_group_id
-            returning publish_group.id,publish_group.status
-         ), recovered_slots as (
-           update publish_calendar_slots slot
-              set status='published',last_error=null,updated_at=now()
-             from recovered_groups
-            where slot.topic_publish_group_id=recovered_groups.id
-              and recovered_groups.status='published'
-            returning slot.id
-         ), abandoned as (
-           update publish_queue pq
-           set status = 'failed', failed_at = now(), last_error = 'publish_delivery_unknown', updated_at = now()
-           where pq.status = 'publishing'
-             and pq.publishing_started_at < now() - interval '30 minutes'
-             and not exists (
-               select 1 from publish_attempts pa
-               where pa.publish_queue_id = pq.id and pa.status = 'succeeded'
-             )
-             and pq.id not in (select id from recovered)
-           returning pq.id,pq.topic_publish_group_id
-         ), abandoned_slots as (
-           update publish_calendar_slots slot
-              set status='publish_delayed',last_error='publish_delivery_unknown',updated_at=now()
-             from abandoned
-            where slot.topic_publish_group_id=abandoned.topic_publish_group_id
-              and slot.status not in ('published','cancelled')
-            returning slot.id
-         )
-         update publish_attempts pa
-         set status = 'failed', error_code = 'publish_delivery_unknown',
-             error_message = 'publish_delivery_unknown', finished_at = now()
-         where pa.status = 'running'
-           and pa.publish_queue_id in (select id from abandoned)`,
-      );
-      const brands = await pool.query(
-        `select id from brands
-          where status='active' and deleted_at is null
-            and (
-              exists (
-                select 1 from publish_calendar_settings settings
-                 where settings.brand_id=brands.id and settings.enabled
-              )
-              or exists (
-                select 1 from publish_calendar_slots slot
-                 where slot.brand_id=brands.id
-                   and slot.status in ('proposal_assigned','generation_pending','content_assigned','ready','publish_delayed','quota_blocked','scheduled')
-              )
-            )`,
-      );
-      let processed = 0;
-      let created = 0;
-      let updated = 0;
-      let failed = renewals.filter((renewal) => renewal.status === "failed").length;
-      const eligibleBrandIds: string[] = [];
-      for (const brand of brands.rows) {
-        try {
-          const scheduled = await this.schedulePublishQueue(brand.id, now);
-          processed += scheduled.processed;
-          updated += scheduled.updated;
-          eligibleBrandIds.push(String(brand.id));
-        } catch {
-          failed += 1;
-        }
-      }
-      const due = await pool.query(
-          `with ranked_due as (
-             select queue.id,queue.scheduled_for,queue.queued_at,
-                    row_number() over (
-                      partition by queue.brand_id
-                      order by queue.scheduled_for,queue.queued_at,queue.id
-                    ) as brand_rank
-               from publish_queue queue
-               join brands brand on brand.id=queue.brand_id and brand.workspace_id=queue.workspace_id
-               left join publish_calendar_slots linked_slot
-                 on linked_slot.topic_publish_group_id=queue.topic_publish_group_id
-                and linked_slot.workspace_id=queue.workspace_id
-                and linked_slot.brand_id=queue.brand_id
-                and linked_slot.status<>'cancelled'
-              where queue.status='scheduled' and queue.scheduled_for<=$1::timestamptz
-                and brand.status='active' and brand.deleted_at is null
-                and (linked_slot.id is null or queue.brand_id=any($2::uuid[]))
-           )
-           select id from ranked_due
-            order by brand_rank,scheduled_for,queued_at,id
-            limit 50`,
-          [now, eligibleBrandIds],
-        );
-      for (const queue of due.rows) {
-        try {
-          await publishQueueItemInternal(queue.id);
-          processed += 1;
-          updated += 1;
-        } catch {
-          processed += 1;
-          failed += 1;
-        }
-      }
-      return { processed, created, updated, failed };
+    async previewDuePublishing(now = new Date()) {
+      return previewPublishDue({
+        pool,
+        now,
+        batchSize: options.publishDueBatchSize ?? Number(process.env.PUBLISH_DUE_BATCH_SIZE ?? "50"),
+      });
     },
 
     async runDueAiContentPublishing() {
