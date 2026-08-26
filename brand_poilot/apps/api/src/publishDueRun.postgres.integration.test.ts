@@ -34,9 +34,14 @@ it("uses the production claim and recovery lifecycle as the PostgreSQL applicati
       );
       create table storage_artifacts(id uuid primary key,public_url text null);
       create table channel_outputs(
-        id uuid primary key,workspace_id uuid not null,brand_id uuid not null,channel text not null,
+        id uuid primary key,workspace_id uuid not null,brand_id uuid not null,content_topic_id uuid not null,
+        channel text not null,status text not null,
         delivery_format text not null,output_json jsonb not null default '{}'::jsonb,
         rendered_artifact_id uuid null
+      );
+      create table jobs(
+        id uuid primary key,channel_output_id uuid not null,job_type text not null,status text not null,
+        created_at timestamptz not null default now()
       );
       create table brand_channels(
         id uuid primary key,workspace_id uuid not null,brand_id uuid not null,channel text not null,
@@ -60,7 +65,7 @@ it("uses the production claim and recovery lifecycle as the PostgreSQL applicati
         current_period_start timestamptz not null,current_period_end timestamptz not null
       );
       create table topic_publish_groups(
-        id uuid primary key,workspace_id uuid not null,brand_id uuid not null,status text not null,
+        id uuid primary key,workspace_id uuid not null,brand_id uuid not null,content_topic_id uuid not null,status text not null,
         scheduled_for timestamptz null,updated_at timestamptz not null default now()
       );
       create table publish_calendar_slots(
@@ -86,7 +91,7 @@ it("uses the production claim and recovery lifecycle as the PostgreSQL applicati
       revoke all on all tables in schema public from public,${applicationRole};
       revoke all on all sequences in schema public from public,${applicationRole};
       grant usage on schema public to ${applicationRole};
-      grant select on workspaces,brands,storage_artifacts,channel_outputs,channel_credentials,
+      grant select on workspaces,brands,storage_artifacts,channel_outputs,jobs,channel_credentials,
         brand_content_formats,billing_plan_catalog,brand_subscriptions to ${applicationRole};
       grant select,update on brand_channels,topic_publish_groups,publish_calendar_slots,publish_queue to ${applicationRole};
       grant select,insert,update on publish_attempts to ${applicationRole};
@@ -146,6 +151,7 @@ it("uses the production claim and recovery lifecycle as the PostgreSQL applicati
       const outputBrandId = input.outputBrandId ?? ownerBrandId;
       const channelId = ownerBrandId === brandId ? brandChannelId : otherBrandChannelId;
       const artifactId = `40000000-0000-4000-8000-${suffix}`;
+      const contentTopicId = `45000000-0000-4000-8000-${suffix}`;
       const outputId = `50000000-0000-4000-8000-${suffix}`;
       const groupId = `60000000-0000-4000-8000-${suffix}`;
       const slotId = `70000000-0000-4000-8000-${suffix}`;
@@ -155,17 +161,19 @@ it("uses the production claim and recovery lifecycle as the PostgreSQL applicati
         [artifactId, `https://cdn.example.com/${suffix}/manifest.json`],
       );
       await administrator!.query(
-        `insert into channel_outputs(id,workspace_id,brand_id,channel,delivery_format,output_json,rendered_artifact_id)
-         values($1,$2,$3,'instagram','instagram_reel','{}'::jsonb,$4)`,
-        [outputId, workspaceId, outputBrandId, artifactId],
+        `insert into channel_outputs(
+           id,workspace_id,brand_id,content_topic_id,channel,status,delivery_format,output_json,rendered_artifact_id
+         ) values($1,$2,$3,$4,'instagram','approved','instagram_reel','{}'::jsonb,$5)`,
+        [outputId, workspaceId, outputBrandId, contentTopicId, artifactId],
       );
       await administrator!.query(
-        `insert into topic_publish_groups(id,workspace_id,brand_id,status,scheduled_for)
-         values($1,$2,$3,$4,$5)`,
+        `insert into topic_publish_groups(id,workspace_id,brand_id,content_topic_id,status,scheduled_for)
+         values($1,$2,$3,$4,$5,$6)`,
         [
           groupId,
           workspaceId,
           ownerBrandId,
+          contentTopicId,
           input.groupStatus ?? (input.status === "publishing" ? "partially_published" : "scheduled"),
           input.scheduledFor,
         ],
@@ -194,7 +202,7 @@ it("uses the production claim and recovery lifecycle as the PostgreSQL applicati
           input.lastError ?? null,
         ],
       );
-      return { artifactId, outputId, groupId, slotId, queueId };
+      return { artifactId, contentTopicId, outputId, groupId, slotId, queueId };
     };
 
     const dueTarget = await insertPublishTarget({
@@ -202,6 +210,50 @@ it("uses the production claim and recovery lifecycle as the PostgreSQL applicati
       status: "scheduled",
       scheduledFor: new Date("2026-08-26T11:30:00+09:00"),
     });
+    const pendingSiblingTarget = await insertPublishTarget({
+      sequence: 9,
+      status: "queued",
+      scheduledFor: new Date("2026-08-26T11:30:00+09:00"),
+      slotStatus: "content_assigned",
+      groupStatus: "waiting",
+    });
+    await administrator.query(
+      "update publish_calendar_slots set channels=array['instagram','threads'] where id=$1",
+      [pendingSiblingTarget.slotId],
+    );
+    await administrator.query(
+      `insert into channel_outputs(
+         id,workspace_id,brand_id,content_topic_id,channel,status,delivery_format,output_json,rendered_artifact_id
+       ) values(
+         '59000000-0000-4000-8000-000000000009',$1,$2,$3,'threads','pending_review','channel_text','{}'::jsonb,null
+       )`,
+      [workspaceId, brandId, pendingSiblingTarget.contentTopicId],
+    );
+    const siblingOutputs = await application.query(
+      `select output.channel,output.status,queue.status as queue_status
+         from channel_outputs output
+         left join publish_queue queue on queue.channel_output_id=output.id
+        where output.content_topic_id=$1
+        order by output.channel`,
+      [pendingSiblingTarget.contentTopicId],
+    );
+    expect(siblingOutputs.rows).toEqual([
+      { channel: "instagram", status: "approved", queue_status: "queued" },
+      { channel: "threads", status: "pending_review", queue_status: null },
+    ]);
+    const siblingReadiness = await application.query(
+      `select bool_and(
+         output.status='rejected'
+         or (output.status not in ('pending_review','auto_approval_blocked','regenerating') and queue.id is not null)
+       ) as terminal_decided
+         from topic_publish_groups publish_group
+         join channel_outputs output on output.content_topic_id=publish_group.content_topic_id
+         left join publish_queue queue on queue.channel_output_id=output.id
+        where publish_group.id=$1
+        group by publish_group.id`,
+      [pendingSiblingTarget.groupId],
+    );
+    expect(siblingReadiness.rows[0]).toEqual({ terminal_decided: false });
     const providerInputs: Array<Record<string, unknown>> = [];
     const repository = createRepository(application, {
       instagramPublish: { enabled: true },
@@ -263,6 +315,24 @@ it("uses the production claim and recovery lifecycle as the PostgreSQL applicati
       accessToken: "brand-a-token",
       instagramBusinessAccountId: "account-brand-a",
     });
+    const pendingSiblingState = await application.query(
+      `select queue.status as queue_status,publish_group.status as group_status,slot.status as slot_status
+         from publish_queue queue
+         join topic_publish_groups publish_group on publish_group.id=queue.topic_publish_group_id
+         join publish_calendar_slots slot on slot.topic_publish_group_id=publish_group.id
+        where queue.id=$1`,
+      [pendingSiblingTarget.queueId],
+    );
+    expect(pendingSiblingState.rows[0]).toEqual({
+      queue_status: "queued",
+      group_status: "waiting",
+      slot_status: "content_assigned",
+    });
+    await administrator.query("delete from publish_queue where topic_publish_group_id=$1", [pendingSiblingTarget.groupId]);
+    await administrator.query("delete from channel_outputs where content_topic_id=$1", [pendingSiblingTarget.contentTopicId]);
+    await administrator.query("delete from publish_calendar_slots where id=$1", [pendingSiblingTarget.slotId]);
+    await administrator.query("delete from topic_publish_groups where id=$1", [pendingSiblingTarget.groupId]);
+    await administrator.query("delete from storage_artifacts where id=$1", [pendingSiblingTarget.artifactId]);
     const storedSuccess = await application.query(
       `select queue.status,queue.published_at,attempt.status as attempt_status,attempt.external_post_id
          from publish_queue queue join publish_attempts attempt on attempt.publish_queue_id=queue.id

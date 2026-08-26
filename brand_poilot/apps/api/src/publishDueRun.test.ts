@@ -77,6 +77,8 @@ describe("publish due run", () => {
     }];
     const query = vi.fn(async (sql: string) => {
       expect(sql).toContain("publish_due_preview");
+      expect(sql).toContain("readiness.terminal_decided");
+      expect(sql).toContain("readiness.has_queued_output");
       expect(sql).not.toMatch(/\b(update|insert|delete)\b/i);
       expect(sql).not.toContain("pg_try_advisory");
       return { rows, rowCount: 1 };
@@ -317,6 +319,26 @@ describe("publish due run", () => {
     expect(delayedSql).toContain("deferred_until=case");
     expect(delayedSql).toContain("then $1::timestamptz else null end");
     expect(delayedSql).not.toContain("scheduled_for=$1::timestamptz");
+  });
+
+  it("requires every sibling output to reach a terminal decision before scheduling a calendar group", async () => {
+    const fixture = dueHarness({ candidates: [] });
+
+    await runPublishDue({
+      pool: fixture.pool as any,
+      now: new Date("2026-08-26T12:00:00+09:00"),
+      claimQueueItem: fixture.claimQueueItem,
+      dispatchClaim: vi.fn(),
+    });
+
+    const delayedSql = fixture.events.find((sql) => sql.includes("publish_due_queue_delayed")) ?? "";
+    expect(delayedSql).toContain("latest_render_jobs as");
+    expect(delayedSql).toContain("output.status not in ('pending_review','auto_approval_blocked','regenerating')");
+    expect(delayedSql).toContain("latest_render.status in ('queued','running')");
+    expect(delayedSql).toContain("output.status='rejected'");
+    expect(delayedSql).toContain("coalesce(latest_render.status='failed',false)");
+    expect(delayedSql).toContain("readiness.terminal_decided");
+    expect(delayedSql).toContain("readiness.has_queued_output");
   });
 
   it("bounds fair batches across ten brands and limits slow provider concurrency", async () => {

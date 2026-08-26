@@ -246,13 +246,44 @@ const expirySql = `/* publish_due_expire */
     (select count(*)::integer from result_unknown_targets) as result_unknown`;
 
 const queueDelayedSql = `/* publish_due_queue_delayed */
-  with calendar_ready as (
+  with latest_render_jobs as (
+    select distinct on (job.channel_output_id) job.channel_output_id,job.status
+      from jobs job
+     where job.job_type in ('instagram_feed_render','instagram_story_render','instagram_reel_render')
+     order by job.channel_output_id,job.created_at desc,job.id desc
+  ), readiness as (
+    select publish_group.id,
+           count(output.id)>0
+           and bool_and(
+             output.status='rejected'
+             or coalesce(latest_render.status='failed',false)
+             or (
+               output.status not in ('pending_review','auto_approval_blocked','regenerating')
+               and output.status<>'regenerated'
+               and not coalesce(latest_render.status in ('queued','running'),false)
+               and queue.id is not null
+             )
+           ) as terminal_decided,
+           count(queue.id) filter (where queue.status='queued')>0 as has_queued_output
+      from topic_publish_groups publish_group
+      join channel_outputs output
+        on output.content_topic_id=publish_group.content_topic_id
+       and output.status<>'regenerated'
+      left join publish_queue queue on queue.channel_output_id=output.id
+      left join latest_render_jobs latest_render on latest_render.channel_output_id=output.id
+     where publish_group.status in ('waiting','ready')
+     group by publish_group.id
+  ), calendar_ready as (
     select slot.id as slot_id,slot.topic_publish_group_id,slot.scheduled_for
       from publish_calendar_slots slot
       join topic_publish_groups publish_group
         on publish_group.id=slot.topic_publish_group_id
        and publish_group.workspace_id=slot.workspace_id
        and publish_group.brand_id=slot.brand_id
+      join readiness
+        on readiness.id=publish_group.id
+       and readiness.terminal_decided
+       and readiness.has_queued_output
      where ${calendarReadyPredicate}
      order by slot.scheduled_for,slot.brand_id,slot.id
      for update of slot,publish_group
@@ -419,7 +450,34 @@ export async function runPublishDue<TContext = unknown>(
 export const runPublishDueRun = runPublishDue;
 
 const previewSql = `/* publish_due_preview */
-  with recovered as (
+  with latest_render_jobs as (
+    select distinct on (job.channel_output_id) job.channel_output_id,job.status
+      from jobs job
+     where job.job_type in ('instagram_feed_render','instagram_story_render','instagram_reel_render')
+     order by job.channel_output_id,job.created_at desc,job.id desc
+  ), readiness as (
+    select publish_group.id,
+           count(output.id)>0
+           and bool_and(
+             output.status='rejected'
+             or coalesce(latest_render.status='failed',false)
+             or (
+               output.status not in ('pending_review','auto_approval_blocked','regenerating')
+               and output.status<>'regenerated'
+               and not coalesce(latest_render.status in ('queued','running'),false)
+               and queue.id is not null
+             )
+           ) as terminal_decided,
+           count(queue.id) filter (where queue.status='queued')>0 as has_queued_output
+      from topic_publish_groups publish_group
+      join channel_outputs output
+        on output.content_topic_id=publish_group.content_topic_id
+       and output.status<>'regenerated'
+      left join publish_queue queue on queue.channel_output_id=output.id
+      left join latest_render_jobs latest_render on latest_render.channel_output_id=output.id
+     where publish_group.status in ('waiting','ready')
+     group by publish_group.id
+  ), recovered as (
     select queue.id,queue.topic_publish_group_id
       from publish_queue queue
      where ${recoveredQueuePredicate}
@@ -461,6 +519,10 @@ const previewSql = `/* publish_due_preview */
         on publish_group.id=slot.topic_publish_group_id
        and publish_group.workspace_id=slot.workspace_id
        and publish_group.brand_id=slot.brand_id
+      join readiness
+        on readiness.id=publish_group.id
+       and readiness.terminal_decided
+       and readiness.has_queued_output
      where ${calendarReadyPredicate}
   ), delayed_targets as (
     select queue.id,queue.brand_id,queue.queued_at,
