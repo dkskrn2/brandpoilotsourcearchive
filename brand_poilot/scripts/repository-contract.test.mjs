@@ -1075,7 +1075,7 @@ test("게시 실행은 인증된 primary-only POST와 read-only GET preview를 �
   );
   assert.doesNotMatch(httpServer, /app\.get\(\s*["']\/internal\/cron\/publish-due["']/);
   assert.match(httpServer, /app\.get\(\s*["']\/internal\/cron\/publish-due\/preview["']/);
-  const routeStart = httpServer.search(/app\.post\(\s*["']\/internal\/cron\/publish-due["']/);
+  const routeStart = httpServer.search(/app\.post(?:<[^>]+>)?\(\s*["']\/internal\/cron\/publish-due["']/);
   assert.notEqual(routeStart, -1, "POST /internal/cron/publish-due must be registered");
   const sourceAfterRouteStart = httpServer.slice(routeStart + 1);
   const nextRouteOffset = sourceAfterRouteStart.search(
