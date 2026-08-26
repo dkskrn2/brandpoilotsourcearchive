@@ -2262,8 +2262,26 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
     ...aiContentDownload,
     ...publishCalendar,
     ...publishItems,
-    allocatePublishCalendar: (now) => publishCalendarAllocator.allocateAll(now),
-    previewPublishCalendarAllocation: (now) => publishCalendarAllocator.previewAll(now),
+    allocatePublishCalendar: (now) => instagramPublish.enabled
+      ? publishCalendarAllocator.allocateAll(now)
+      : Promise.resolve({
+        brandsSelected: 0,
+        openSlotsCreated: 0,
+        proposalsAssigned: 0,
+        quotaBlocked: 0,
+        brandsFailed: 0,
+      }),
+    previewPublishCalendarAllocation: (now = new Date()) => instagramPublish.enabled
+      ? publishCalendarAllocator.previewAll(now)
+      : Promise.resolve({
+        observedAt: now.toISOString(),
+        renewalDueBrandIds: [],
+        brandsSelected: 0,
+        counts: { renewalsDue: 0, occurrences: 0, recommendations: 0, quotaBlockedBrands: 0 },
+        occurrences: [],
+        recommendationAssignments: [],
+        quotaBlockedBrandIds: [],
+      }),
     async getFaqCapabilities(brandId) {
       return faqPolicyForBrand(brandId);
     },

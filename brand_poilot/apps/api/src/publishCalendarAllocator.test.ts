@@ -7,6 +7,7 @@ import {
   type ScheduledRecommendation,
 } from "./publishCalendarAllocator.js";
 import { automaticSlotKey } from "./publishCalendarIdempotency.js";
+import type { AppliedSubscriptionRenewal } from "./types.js";
 
 const entryIds = {
   thursdayMorning: "30000000-0000-4000-8000-000000000001",
@@ -18,6 +19,11 @@ const entryIds = {
 const brand: AutomaticCalendarBrand = {
   workspaceId: "10000000-0000-4000-8000-000000000001",
   brandId: "20000000-0000-4000-8000-000000000001",
+  subscriptionPlan: {
+    startedAt: new Date("2026-08-01T00:00:00.000Z"),
+    weeklyGenerationLimit: 30,
+    weeklyPublishLimit: 30,
+  },
   settings: {
     brandId: "20000000-0000-4000-8000-000000000001",
     enabled: true,
@@ -48,7 +54,10 @@ function dependencies(options: {
   const slots: Array<Record<string, unknown>> = [...(options.existing ?? [])];
   let recommendations = [...(options.recommendations ?? dailyRecommendations)];
   let assignments = 0;
-  const listEnabledBrands = vi.fn(async () => options.selectedBrands ?? [brand]);
+  const listEnabledBrands = vi.fn(async (
+    _at: Date,
+    _projectedRenewals?: AppliedSubscriptionRenewal[],
+  ) => options.selectedBrands ?? [brand]);
   const listSlots = vi.fn(async ({ startsAt, endsAt }: { startsAt: Date; endsAt: Date }) => (
     slots.filter(({ scheduledFor }) => {
       const instant = new Date(scheduledFor as string | Date);
@@ -117,7 +126,12 @@ function dependencies(options: {
   });
   const getWeeklyUsage = vi.fn();
   const applyDueSubscriptionRenewals = vi.fn(async () => []);
-  const previewDueSubscriptionRenewals = vi.fn(async () => [{ brandId: "brand-renewal" }]);
+  const previewDueSubscriptionRenewals = vi.fn(async (): Promise<AppliedSubscriptionRenewal[]> => [{
+    status: "failed",
+    brandId: "brand-renewal",
+    previousPlanCode: "starter",
+    errorCode: "subscription_renewal_plan_inactive",
+  }]);
   const previewAutomaticOccurrences = vi.fn(async (input: {
     occurrences: Array<Record<string, unknown>>;
   }) => input.occurrences.map((occurrence, index) => ({
@@ -169,6 +183,62 @@ describe("publish calendar allocator", () => {
     expect(deps.applyDueSubscriptionRenewals).not.toHaveBeenCalled();
     expect(deps.provisionAutomaticOccurrences).not.toHaveBeenCalled();
     expect(deps.assignSlot).not.toHaveBeenCalled();
+  });
+
+  it("projects a due active renewal into the same brand and recommendation candidates as execution", async () => {
+    const deps = dependencies({ selectedBrands: [] });
+    const renewal = {
+      status: "applied" as const,
+      brandId: brand.brandId,
+      previousPlanCode: "starter",
+      planCode: "growth",
+      currentPeriodStart: new Date("2026-08-01T00:00:00.000Z"),
+      currentPeriodEnd: new Date("2026-09-01T00:00:00.000Z"),
+      cancelled: false,
+    };
+    deps.previewDueSubscriptionRenewals.mockResolvedValue([renewal] as never);
+    deps.applyDueSubscriptionRenewals.mockResolvedValue([renewal] as never);
+    deps.previewAutomaticOccurrences.mockImplementation(async (input) => input.occurrences.map((occurrence) => ({
+      idempotencyKey: String(occurrence.idempotencyKey),
+      status: "create" as const,
+      slot: null,
+    })) as never);
+    deps.listEnabledBrands.mockImplementation(async (_at, projectedRenewals = []) => (
+      projectedRenewals.some((candidate) => (
+        candidate.status === "applied" && !candidate.cancelled && candidate.brandId === brand.brandId
+      )) ? [brand] : []
+    ));
+    const allocator = createPublishCalendarAllocator(deps as never);
+    const now = new Date("2026-08-12T19:00:00.000Z");
+
+    const preview = await allocator.previewAll(now);
+    const previewOccurrenceKeys = preview.occurrences.map(({ idempotencyKey }) => idempotencyKey);
+    const previewRecommendationIds = preview.recommendationAssignments.map(({ recommendationId }) => recommendationId);
+    const executed = await allocator.allocateAll(now);
+    const executeOccurrenceKeys = deps.provisionAutomaticOccurrences.mock.calls[0]![0].occurrences
+      .map((occurrence) => String(occurrence.idempotencyKey));
+    const executeRecommendationIds = deps.assignSlot.mock.calls
+      .map(([input]) => String(input.contentSuggestionId));
+
+    expect(preview).toMatchObject({
+      renewalDueBrandIds: [brand.brandId],
+      brandsSelected: 1,
+    });
+    expect(executed.brandsSelected).toBe(1);
+    expect(previewOccurrenceKeys).toEqual(executeOccurrenceKeys);
+    expect(previewRecommendationIds).toEqual(executeRecommendationIds);
+    expect(deps.previewAutomaticOccurrences).toHaveBeenCalledWith(expect.objectContaining({
+      subscriptionProjection: {
+        status: "active",
+        startedAt: brand.subscriptionPlan.startedAt,
+        currentPeriodStart: renewal.currentPeriodStart,
+        currentPeriodEnd: renewal.currentPeriodEnd,
+        weeklyGenerationLimit: brand.subscriptionPlan.weeklyGenerationLimit,
+        weeklyPublishLimit: brand.subscriptionPlan.weeklyPublishLimit,
+      },
+    }));
+    expect(deps.listEnabledBrands).toHaveBeenNthCalledWith(1, now, [renewal]);
+    expect(deps.listEnabledBrands).toHaveBeenNthCalledWith(2, now, [renewal]);
   });
 
   it("uses the stored informational or trend intent without synthesizing content", () => {

@@ -381,11 +381,16 @@ it("runs the actual weekly settings repository transaction as the application ro
       const retainedId = created.weeklySchedule[1]!.id;
 
       await expect(listEnabledAutomaticCalendarBrands(application, new Date()))
-        .resolves.toEqual([{
+        .resolves.toEqual([expect.objectContaining({
           workspaceId,
           brandId,
           settings: created,
-        }]);
+          subscriptionPlan: expect.objectContaining({
+            startedAt: expect.any(Date),
+            weeklyGenerationLimit: expect.any(Number),
+            weeklyPublishLimit: expect.any(Number),
+          }),
+        })]);
 
       const updated = await repository.saveWeeklyConfiguration({
         workspaceId,
@@ -682,6 +687,63 @@ it("runs the actual weekly settings repository transaction as the application ro
         [workspaceId, brandId],
       )).resolves.toMatchObject({ rows: [{ count: 3 }] });
       await repository.setWeeklyEnabled({ workspaceId, brandId, enabled: true });
+
+      await administrator.query("delete from publish_calendar_slots where brand_id=$1", [brandId]);
+      await administrator.query(
+        `update brand_subscriptions set
+            status='active',cancel_at_period_end=false,pending_plan_code=null,
+            started_at=$2::timestamptz-interval '2 months',
+            current_period_start=$2::timestamptz-interval '1 month',
+            current_period_end=$2::timestamptz-interval '1 minute'
+          where brand_id=$1`,
+        [brandId, allocationNow],
+      );
+      const dueStateBeforePreview = await client.query<{ snapshot: unknown }>(
+        `select jsonb_build_object(
+           'slots',(select jsonb_agg(to_jsonb(slot) order by slot.id) from publish_calendar_slots slot),
+           'subscriptions',(select jsonb_agg(to_jsonb(subscription) order by subscription.brand_id) from brand_subscriptions subscription)
+         ) snapshot`,
+      );
+      const duePreview = await allocator.previewAll(allocationNow);
+      expect(duePreview).toMatchObject({
+        renewalDueBrandIds: [brandId],
+        brandsSelected: 1,
+        counts: { renewalsDue: 1, occurrences: 4, recommendations: 2, quotaBlockedBrands: 1 },
+      });
+      const dueStateAfterPreview = await client.query<{ snapshot: unknown }>(
+        `select jsonb_build_object(
+           'slots',(select jsonb_agg(to_jsonb(slot) order by slot.id) from publish_calendar_slots slot),
+           'subscriptions',(select jsonb_agg(to_jsonb(subscription) order by subscription.brand_id) from brand_subscriptions subscription)
+         ) snapshot`,
+      );
+      expect(dueStateAfterPreview.rows[0]?.snapshot).toEqual(dueStateBeforePreview.rows[0]?.snapshot);
+
+      const dueExecution = await allocator.allocateAll(allocationNow);
+      expect(dueExecution).toEqual({
+        brandsSelected: 1,
+        openSlotsCreated: 3,
+        proposalsAssigned: 2,
+        quotaBlocked: 1,
+        brandsFailed: 0,
+      });
+      const executedCandidates = await client.query<{
+        idempotency_key: string;
+        content_suggestion_id: string | null;
+      }>(
+        `select idempotency_key,content_suggestion_id
+           from publish_calendar_slots
+          where brand_id=$1 and assignment_mode='automatic'
+          order by idempotency_key`,
+        [brandId],
+      );
+      expect(new Set(duePreview.occurrences
+        .filter(({ status }) => status === "create")
+        .map(({ idempotencyKey }) => idempotencyKey)))
+        .toEqual(new Set(executedCandidates.rows.map(({ idempotency_key }) => idempotency_key)));
+      expect(new Set(duePreview.recommendationAssignments.map(({ recommendationId }) => recommendationId)))
+        .toEqual(new Set(executedCandidates.rows
+          .map(({ content_suggestion_id }) => content_suggestion_id)
+          .filter((value): value is string => value !== null)));
 
       await administrator.query("update ai_content_maintenance_state set enabled=true where singleton");
       await expect(repository.saveWeeklySettings({

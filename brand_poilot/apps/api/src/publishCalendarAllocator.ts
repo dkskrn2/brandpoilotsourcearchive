@@ -3,8 +3,14 @@ import { automaticSlotKey } from "./publishCalendarIdempotency.js";
 import type {
   AutomaticOccurrenceInput,
   PublishCalendarRepository,
+  ProjectedSubscriptionPlan,
 } from "./publishCalendarRepository.js";
-import type { Channel, PublishCalendarAllocationPreviewResult, PublishCalendarWeeklySettingsDto } from "./types.js";
+import type {
+  AppliedSubscriptionRenewal,
+  Channel,
+  PublishCalendarAllocationPreviewResult,
+  PublishCalendarWeeklySettingsDto,
+} from "./types.js";
 
 const KST_OFFSET_MILLISECONDS = 9 * 60 * 60 * 1_000;
 const DAY_MILLISECONDS = 24 * 60 * 60 * 1_000;
@@ -14,6 +20,10 @@ export interface AutomaticCalendarBrand {
   workspaceId: string;
   brandId: string;
   settings: PublishCalendarWeeklySettingsDto;
+  subscriptionPlan: Pick<
+    ProjectedSubscriptionPlan,
+    "startedAt" | "weeklyGenerationLimit" | "weeklyPublishLimit"
+  >;
 }
 
 export interface ScheduledRecommendation {
@@ -28,7 +38,7 @@ export type PublishCalendarAllocatorDependencies = Pick<
   "listSlots" | "provisionAutomaticOccurrences" | "previewAutomaticOccurrences" | "assignSlot"
     | "applyDueSubscriptionRenewals" | "previewDueSubscriptionRenewals"
 > & {
-  listEnabledBrands(at: Date): Promise<AutomaticCalendarBrand[]>;
+  listEnabledBrands(at: Date, projectedRenewals?: AppliedSubscriptionRenewal[]): Promise<AutomaticCalendarBrand[]>;
   listUnassignedRecommendations(brand: AutomaticCalendarBrand): Promise<ScheduledRecommendation[]>;
 };
 
@@ -163,7 +173,7 @@ export function createPublishCalendarAllocator(dependencies: PublishCalendarAllo
     allocateBrand,
     async previewAll(now = new Date()): Promise<PublishCalendarAllocationPreviewResult> {
       const renewals = await dependencies.previewDueSubscriptionRenewals(now);
-      const brands = await dependencies.listEnabledBrands(now);
+      const brands = await dependencies.listEnabledBrands(now, renewals);
       const result: PublishCalendarAllocationPreviewResult = {
         observedAt: now.toISOString(),
         renewalDueBrandIds: renewals.map(({ brandId }) => brandId),
@@ -175,6 +185,10 @@ export function createPublishCalendarAllocator(dependencies: PublishCalendarAllo
       };
       for (const brand of brands) {
         const { startsAt, endsAt, occurrences } = buildAutomaticOccurrences(brand, now);
+        const renewal = renewals.find((candidate): candidate is Extract<
+          AppliedSubscriptionRenewal,
+          { status: "applied" }
+        > => candidate.status === "applied" && !candidate.cancelled && candidate.brandId === brand.brandId);
         const [slots, occurrenceResults, recommendations] = await Promise.all([
           dependencies.listSlots({
             workspaceId: brand.workspaceId,
@@ -186,6 +200,14 @@ export function createPublishCalendarAllocator(dependencies: PublishCalendarAllo
             workspaceId: brand.workspaceId,
             brandId: brand.brandId,
             occurrences,
+            subscriptionProjection: renewal ? {
+              status: "active",
+              startedAt: brand.subscriptionPlan.startedAt,
+              currentPeriodStart: renewal.currentPeriodStart,
+              currentPeriodEnd: renewal.currentPeriodEnd,
+              weeklyGenerationLimit: brand.subscriptionPlan.weeklyGenerationLimit,
+              weeklyPublishLimit: brand.subscriptionPlan.weeklyPublishLimit,
+            } : undefined,
           }),
           dependencies.listUnassignedRecommendations(brand),
         ]);
@@ -247,7 +269,7 @@ export function createPublishCalendarAllocator(dependencies: PublishCalendarAllo
     },
     async allocateAll(now = new Date()) {
       const renewals = await dependencies.applyDueSubscriptionRenewals(now);
-      const brands = await dependencies.listEnabledBrands(now);
+      const brands = await dependencies.listEnabledBrands(now, renewals);
       const result = {
         brandsSelected: brands.length,
         openSlotsCreated: 0,
@@ -288,16 +310,28 @@ function mapWeeklySettings(rows: Array<Record<string, unknown>>): PublishCalenda
   };
 }
 
-export async function listEnabledAutomaticCalendarBrands(pool: Pool, at: Date) {
+export async function listEnabledAutomaticCalendarBrands(
+  pool: Pool,
+  at: Date,
+  projectedRenewals: AppliedSubscriptionRenewal[] = [],
+) {
+  const activeProjections = projectedRenewals.filter((renewal): renewal is Extract<
+    AppliedSubscriptionRenewal,
+    { status: "applied" }
+  > => renewal.status === "applied" && !renewal.cancelled);
   const result = await pool.query(
     `select settings.workspace_id,settings.brand_id,settings.enabled,
             settings.informational_format,settings.trend_format,settings.updated_at,
+            subscription.started_at,plan.weekly_generation_limit,plan.weekly_publish_limit,
             active_channels.channels as active_channels,
             schedule.id as schedule_entry_id,schedule.day_of_week,
             schedule.slot_time,schedule.sort_order
        from publish_calendar_settings settings
        join brand_subscriptions subscription on subscription.brand_id=settings.brand_id
-       join billing_plan_catalog plan on plan.code=subscription.plan_code and plan.active
+       left join unnest($3::uuid[],$4::text[]) projected(brand_id,plan_code)
+         on projected.brand_id=subscription.brand_id
+       join billing_plan_catalog plan
+         on plan.code=coalesce(projected.plan_code,subscription.plan_code) and plan.active
        join publish_calendar_weekly_schedule_entries schedule
          on schedule.workspace_id=settings.workspace_id and schedule.brand_id=settings.brand_id
        cross join lateral (
@@ -310,11 +344,18 @@ export async function listEnabledAutomaticCalendarBrands(pool: Pool, at: Date) {
             and channel.status='connected' and channel.enabled and channel.deleted_at is null
        ) active_channels
       where settings.enabled and cardinality(active_channels.channels)>0
-        and subscription.status in ('active','cancel_scheduled')
-        and subscription.current_period_start<=$1::timestamptz
-        and subscription.current_period_end>$1::timestamptz
+        and (
+          projected.brand_id is not null
+          or (
+            subscription.status in ('active','cancel_scheduled')
+            and subscription.current_period_start<=$1::timestamptz
+            and subscription.current_period_end>$1::timestamptz
+          )
+        )
       order by settings.brand_id,schedule.day_of_week,schedule.sort_order,schedule.id`,
-    [at, SUPPORTED_AUTOMATIC_CHANNELS],
+    [at, SUPPORTED_AUTOMATIC_CHANNELS,
+      activeProjections.map(({ brandId }) => brandId),
+      activeProjections.map(({ planCode }) => planCode)],
   );
   const rowsByBrand = new Map<string, Array<Record<string, unknown>>>();
   for (const row of result.rows) {
@@ -325,6 +366,11 @@ export async function listEnabledAutomaticCalendarBrands(pool: Pool, at: Date) {
     workspaceId: String(rows[0]!.workspace_id),
     brandId: String(rows[0]!.brand_id),
     settings: mapWeeklySettings(rows),
+    subscriptionPlan: {
+      startedAt: new Date(rows[0]!.started_at as string | Date),
+      weeklyGenerationLimit: Number(rows[0]!.weekly_generation_limit),
+      weeklyPublishLimit: Number(rows[0]!.weekly_publish_limit),
+    },
   }));
 }
 
@@ -334,8 +380,8 @@ export function createDatabasePublishCalendarAllocator(
 ) {
   return createPublishCalendarAllocator({
     ...calendar,
-    async listEnabledBrands(at) {
-      return listEnabledAutomaticCalendarBrands(pool, at);
+    async listEnabledBrands(at, projectedRenewals) {
+      return listEnabledAutomaticCalendarBrands(pool, at, projectedRenewals);
     },
     async listUnassignedRecommendations(brand) {
       const result = await pool.query(

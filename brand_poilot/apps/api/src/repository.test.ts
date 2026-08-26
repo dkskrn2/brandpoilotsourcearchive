@@ -2470,6 +2470,32 @@ describe("repository", () => {
     }
   });
 
+  it("returns truthful zero allocation previews and executions without querying when publication is disabled", async () => {
+    const query = vi.fn();
+    const connect = vi.fn();
+    const repository = createRepository({ query, connect } as any, { instagramPublish: { enabled: false } });
+    const now = new Date("2026-08-26T12:34:56.000Z");
+
+    await expect(repository.previewPublishCalendarAllocation?.(now)).resolves.toEqual({
+      observedAt: now.toISOString(),
+      renewalDueBrandIds: [],
+      brandsSelected: 0,
+      counts: { renewalsDue: 0, occurrences: 0, recommendations: 0, quotaBlockedBrands: 0 },
+      occurrences: [],
+      recommendationAssignments: [],
+      quotaBlockedBrandIds: [],
+    });
+    await expect(repository.allocatePublishCalendar?.(now)).resolves.toEqual({
+      brandsSelected: 0,
+      openSlotsCreated: 0,
+      proposalsAssigned: 0,
+      quotaBlocked: 0,
+      brandsFailed: 0,
+    });
+    expect(connect).not.toHaveBeenCalled();
+    expect(query).not.toHaveBeenCalled();
+  });
+
   it("rejects explicit publishing without querying when publication is disabled", async () => {
     const query = vi.fn();
     const publishInstagramOutput = vi.fn();

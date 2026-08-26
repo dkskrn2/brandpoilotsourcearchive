@@ -1935,6 +1935,41 @@ describe("publish calendar usage and subscription renewal", () => {
       .rejects.toThrowError("publish_calendar_subscription_inactive");
   });
 
+  it("projects a due active renewal without issuing an update", async () => {
+    const run = harness((sql) => {
+      if (sql.startsWith("select subscription.brand_id")) return {
+        rows: [{
+          brand_id: scope.brandId,
+          plan_code: "starter",
+          pending_plan_code: "growth",
+          status: "active",
+          cancel_at_period_end: false,
+          current_plan_active: true,
+          pending_plan_active: true,
+          started_at: "2025-12-31T00:00:00.000Z",
+          current_period_start: "2025-12-31T00:00:00.000Z",
+          current_period_end: "2026-01-31T00:00:00.000Z",
+        }],
+        rowCount: 1,
+      };
+      return { rows: [], rowCount: 0 };
+    });
+
+    await expect(createPublishCalendarRepository(run.pool)
+      .previewDueSubscriptionRenewals(new Date("2026-04-20T00:00:00.000Z")))
+      .resolves.toEqual([{
+        status: "applied",
+        brandId: scope.brandId,
+        previousPlanCode: "starter",
+        planCode: "growth",
+        currentPeriodStart: new Date("2026-03-31T00:00:00.000Z"),
+        currentPeriodEnd: new Date("2026-04-30T00:00:00.000Z"),
+        cancelled: false,
+      }]);
+    expect(run.statements.some(({ sql }) => sql.startsWith("update brand_subscriptions"))).toBe(false);
+    expect(run.statements.some(({ sql }) => sql === "begin")).toBe(false);
+  });
+
   it("applies a pending plan only at renewal and catches up elapsed calendar months", async () => {
     const run = harness((sql) => {
       if (sql.startsWith("select subscription.brand_id")) return {

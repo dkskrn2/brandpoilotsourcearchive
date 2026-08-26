@@ -202,6 +202,11 @@ describe("migration 086 publish calendar same-time contract", () => {
     const automaticBrand = {
       workspaceId,
       brandId,
+      subscriptionPlan: {
+        startedAt: new Date("2026-01-01T00:00:00.000Z"),
+        weeklyGenerationLimit: 100,
+        weeklyPublishLimit: 100,
+      },
       settings: {
         brandId,
         enabled: true,

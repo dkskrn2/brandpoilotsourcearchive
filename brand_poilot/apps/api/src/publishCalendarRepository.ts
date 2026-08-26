@@ -53,6 +53,14 @@ export type AutomaticOccurrenceInput = {
   recommendationKind: RecommendationKind;
   idempotencyKey: string;
 };
+export type ProjectedSubscriptionPlan = {
+  status: "active";
+  startedAt: Date;
+  currentPeriodStart: Date;
+  currentPeriodEnd: Date;
+  weeklyGenerationLimit: number;
+  weeklyPublishLimit: number;
+};
 export type AutomaticOccurrenceResult =
   | { idempotencyKey: string; status: "created" | "existing"; slot: PublishCalendarSlotDto }
   | { idempotencyKey: string; status: "quota_exhausted" | "subscription_ineligible"; slot: null };
@@ -110,6 +118,7 @@ export interface PublishCalendarRepository {
   }): Promise<AutomaticOccurrenceResult[]>;
   previewAutomaticOccurrences(input: BrandScope & {
     occurrences: AutomaticOccurrenceInput[];
+    subscriptionProjection?: ProjectedSubscriptionPlan;
   }): Promise<AutomaticOccurrencePreviewResult[]>;
   assignSlot(input: BrandScope & {
     slotId: string;
@@ -128,7 +137,7 @@ export interface PublishCalendarRepository {
   cancelSlot(input: BrandScope & { slotId: string }): Promise<PublishCalendarSlotDto>;
   getWeeklyUsage(input: BrandScope & { at?: Date }): Promise<PublishCalendarWeeklyUsageDto>;
   applyDueSubscriptionRenewals(now?: Date): Promise<AppliedSubscriptionRenewal[]>;
-  previewDueSubscriptionRenewals(now?: Date): Promise<Array<{ brandId: string }>>;
+  previewDueSubscriptionRenewals(now?: Date): Promise<AppliedSubscriptionRenewal[]>;
 }
 
 const DEFAULT_SLOT_TIMES = ["11:30", "14:30", "17:30", "20:30"];
@@ -372,7 +381,7 @@ function normalizeAutomaticOccurrences(
 
 async function evaluateAutomaticOccurrences(
   queryable: Pick<PoolClient, "query">,
-  input: BrandScope,
+  input: BrandScope & { subscriptionProjection?: ProjectedSubscriptionPlan },
   occurrences: NormalizedAutomaticOccurrence[],
   lockRows: boolean,
 ) {
@@ -424,7 +433,14 @@ async function evaluateAutomaticOccurrences(
   const databaseClock = await queryable.query("select clock_timestamp() as now");
   const now = new Date(databaseClock.rows[0]?.now ?? Date.now());
   const settingsRow = settings.rows[0];
-  const subscriptionRow = subscription.rows[0];
+  const subscriptionRow = input.subscriptionProjection ? {
+    status: input.subscriptionProjection.status,
+    started_at: input.subscriptionProjection.startedAt,
+    current_period_start: input.subscriptionProjection.currentPeriodStart,
+    current_period_end: input.subscriptionProjection.currentPeriodEnd,
+    weekly_generation_limit: input.subscriptionProjection.weeklyGenerationLimit,
+    weekly_publish_limit: input.subscriptionProjection.weeklyPublishLimit,
+  } : subscription.rows[0];
   const selectedChannels = settingsRow
     ? validateChannels((settingsRow.channels ?? []) as Channel[]).filter((channel) => SUPPORTED_CHANNELS.has(channel))
     : [];
@@ -789,6 +805,92 @@ function addAnchoredUtcMonth(value: Date, anchorDay: number): Date {
     value.getUTCSeconds(),
     value.getUTCMilliseconds(),
   ));
+}
+
+type SubscriptionRenewalRow = Record<string, unknown> & {
+  brand_id: string;
+  plan_code: string;
+  pending_plan_code: string | null;
+  cancel_at_period_end: boolean;
+  started_at: Date | string;
+  current_period_start: Date | string;
+  current_period_end: Date | string;
+  current_plan_active: boolean;
+  pending_plan_active: boolean | null;
+};
+
+function projectSubscriptionRenewal(
+  row: SubscriptionRenewalRow,
+  now: Date,
+): Extract<AppliedSubscriptionRenewal, { status: "applied" }> {
+  const previousPlanCode = String(row.plan_code);
+  const cancelled = row.cancel_at_period_end === true;
+  if (!cancelled) {
+    const targetPlanActive = row.pending_plan_code
+      ? row.pending_plan_active
+      : row.current_plan_active;
+    if (targetPlanActive !== undefined && targetPlanActive !== true) {
+      throw new Error("subscription_renewal_plan_inactive");
+    }
+  }
+  const planCode = cancelled ? previousPlanCode : String(row.pending_plan_code ?? previousPlanCode);
+  let currentPeriodStart = new Date(row.current_period_start);
+  let currentPeriodEnd = new Date(row.current_period_end);
+  if (!cancelled) {
+    const anchorDay = new Date(row.started_at).getUTCDate();
+    while (currentPeriodEnd <= now) {
+      currentPeriodStart = currentPeriodEnd;
+      currentPeriodEnd = addAnchoredUtcMonth(currentPeriodEnd, anchorDay);
+    }
+  }
+  return {
+    status: "applied",
+    brandId: String(row.brand_id),
+    previousPlanCode,
+    planCode,
+    currentPeriodStart,
+    currentPeriodEnd,
+    cancelled,
+  };
+}
+
+async function loadDueSubscriptionRenewalRows(
+  queryable: Pick<Pool, "query"> | Pick<PoolClient, "query">,
+  now: Date,
+  lock: boolean,
+): Promise<SubscriptionRenewalRow[]> {
+  const due = await queryable.query(
+    `select subscription.brand_id,subscription.plan_code,subscription.pending_plan_code,
+            subscription.status,subscription.cancel_at_period_end,
+            subscription.started_at,subscription.current_period_start,subscription.current_period_end,
+            current_plan.active as current_plan_active,pending_plan.active as pending_plan_active
+       from brand_subscriptions subscription
+       join billing_plan_catalog current_plan
+         on current_plan.code=subscription.plan_code
+       left join billing_plan_catalog pending_plan
+         on pending_plan.code=subscription.pending_plan_code
+      where subscription.current_period_end<=$1::timestamptz
+        and subscription.status in ('active','cancel_scheduled')
+      order by subscription.brand_id
+      ${lock ? "for update of subscription" : ""}`,
+    [now],
+  );
+  return due.rows as SubscriptionRenewalRow[];
+}
+
+function previewSubscriptionRenewals(rows: SubscriptionRenewalRow[], now: Date): AppliedSubscriptionRenewal[] {
+  return rows.map((row) => {
+    try {
+      return projectSubscriptionRenewal(row, now);
+    } catch (error) {
+      return {
+        status: "failed" as const,
+        brandId: String(row.brand_id),
+        previousPlanCode: String(row.plan_code),
+        errorCode: error instanceof Error ? error.message : "subscription_renewal_failed",
+      };
+    }
+  });
 }
 
 async function saveWeeklySettingsTransaction(
@@ -1975,65 +2077,25 @@ export function createPublishCalendarRepository(
     async applyDueSubscriptionRenewals(now = new Date()) {
       if (!Number.isFinite(now.getTime())) throw new Error("subscription_renewal_date_invalid");
       return transaction(fencedPool, async (client) => {
-        const due = await client.query(
-          `select subscription.brand_id,subscription.plan_code,subscription.pending_plan_code,
-                  subscription.status,subscription.cancel_at_period_end,
-                  subscription.started_at,subscription.current_period_start,subscription.current_period_end,
-                  current_plan.active as current_plan_active,pending_plan.active as pending_plan_active
-             from brand_subscriptions subscription
-             join billing_plan_catalog current_plan
-               on current_plan.code=subscription.plan_code
-             left join billing_plan_catalog pending_plan
-               on pending_plan.code=subscription.pending_plan_code
-            where subscription.current_period_end<=$1::timestamptz
-              and subscription.status in ('active','cancel_scheduled')
-            order by subscription.brand_id
-            for update of subscription`,
-          [now],
-        );
+        const due = await loadDueSubscriptionRenewalRows(client, now, true);
         const renewals: AppliedSubscriptionRenewal[] = [];
-        for (const row of due.rows) {
+        for (const row of due) {
           const previousPlanCode = String(row.plan_code);
           await client.query("savepoint publish_calendar_renewal_brand");
           try {
-            const cancelled = row.cancel_at_period_end === true;
-            if (!cancelled) {
-              const targetPlanActive = row.pending_plan_code
-                ? row.pending_plan_active
-                : row.current_plan_active;
-              if (targetPlanActive !== undefined && targetPlanActive !== true) {
-                throw new Error("subscription_renewal_plan_inactive");
-              }
-            }
-            const planCode = cancelled ? previousPlanCode : String(row.pending_plan_code ?? previousPlanCode);
-            let currentPeriodStart = new Date(row.current_period_start);
-            let currentPeriodEnd = new Date(row.current_period_end);
-            if (!cancelled) {
-              const anchorDay = new Date(row.started_at).getUTCDate();
-              while (currentPeriodEnd <= now) {
-                currentPeriodStart = currentPeriodEnd;
-                currentPeriodEnd = addAnchoredUtcMonth(currentPeriodEnd, anchorDay);
-              }
-            }
-            const status = cancelled ? "cancelled" : "active";
+            const projection = projectSubscriptionRenewal(row, now);
+            const status = projection.cancelled ? "cancelled" : "active";
             const updated = await client.query(
               `update brand_subscriptions set
                   plan_code=$2,pending_plan_code=null,current_period_start=$3::timestamptz,
                   current_period_end=$4::timestamptz,status=$5,cancel_at_period_end=false,updated_at=now()
                 where brand_id=$1::uuid`,
-              [row.brand_id, planCode, currentPeriodStart.toISOString(), currentPeriodEnd.toISOString(), status],
+              [row.brand_id, projection.planCode, projection.currentPeriodStart.toISOString(),
+                projection.currentPeriodEnd.toISOString(), status],
             );
             if (!updated.rowCount) throw new Error("subscription_renewal_update_conflict");
             await client.query("release savepoint publish_calendar_renewal_brand");
-            renewals.push({
-              status: "applied",
-              brandId: String(row.brand_id),
-              previousPlanCode,
-              planCode,
-              currentPeriodStart,
-              currentPeriodEnd,
-              cancelled,
-            });
+            renewals.push(projection);
           } catch (error) {
             await client.query("rollback to savepoint publish_calendar_renewal_brand");
             await client.query("release savepoint publish_calendar_renewal_brand");
@@ -2051,16 +2113,10 @@ export function createPublishCalendarRepository(
 
     async previewDueSubscriptionRenewals(now = new Date()) {
       if (!Number.isFinite(now.getTime())) throw new Error("subscription_renewal_date_invalid");
-      const due = await pool.query(
-        `select subscription.brand_id
-           from brand_subscriptions subscription
-           join billing_plan_catalog current_plan on current_plan.code=subscription.plan_code
-          where subscription.current_period_end<=$1::timestamptz
-            and subscription.status in ('active','cancel_scheduled')
-          order by subscription.brand_id`,
-        [now],
+      return previewSubscriptionRenewals(
+        await loadDueSubscriptionRenewalRows(pool, now, false),
+        now,
       );
-      return due.rows.map((row) => ({ brandId: String(row.brand_id) }));
     },
   };
 }
