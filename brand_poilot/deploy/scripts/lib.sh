@@ -501,10 +501,13 @@ parse_publish_scheduler_state() {
 
 inspect_publish_scheduler_runtime() {
   local release_directory="$1"
-  local container running image revision
+  local container running image revision container_output
   local -a containers=()
   local -a compose=(docker compose -p brand-pilot -f "$release_directory/compose.production.yml" --env-file "$release_directory/release.env" --profile publish-scheduler)
-  mapfile -t containers < <("${compose[@]}" ps -a -q publish-scheduler-1)
+  container_output="$("${compose[@]}" ps -a -q publish-scheduler-1)" || fail "publish_scheduler_runtime_ambiguous"
+  if [[ -n "$container_output" ]]; then
+    mapfile -t containers <<< "$container_output"
+  fi
   [[ "${#containers[@]}" -le 1 ]] || fail "publish_scheduler_runtime_ambiguous"
   PUBLISH_SCHEDULER_RUNTIME_ACTIVE="false"
   PUBLISH_SCHEDULER_RUNTIME_IMAGE="NONE"
@@ -529,7 +532,7 @@ apply_publish_scheduler_snapshot() {
   local active="$3"
   local image="$4"
   local revision="$5"
-  local actual_revision
+  local actual_revision container_output
   local -a containers=()
   local -a compose=(docker compose -p brand-pilot -f "$release_directory/compose.production.yml" --env-file "$release_directory/release.env" --profile publish-scheduler)
   if [[ "$active" == "true" ]]; then
@@ -540,15 +543,25 @@ apply_publish_scheduler_snapshot() {
     [[ "$actual_revision" == "$revision" ]] || return 1
     PUBLISH_SCHEDULER_IMAGE="$image" "${compose[@]}" up -d --no-deps --pull never --force-recreate --wait \
       --wait-timeout "$ready_timeout_seconds" publish-scheduler-1 || return 1
-    mapfile -t containers < <("${compose[@]}" ps -q publish-scheduler-1)
+    container_output="$("${compose[@]}" ps -q publish-scheduler-1)" || return 1
+    if [[ -n "$container_output" ]]; then
+      mapfile -t containers <<< "$container_output"
+    fi
     [[ "${#containers[@]}" -eq 1 && -n "${containers[0]}" ]] || return 1
   else
-    mapfile -t containers < <("${compose[@]}" ps -a -q publish-scheduler-1)
+    container_output="$("${compose[@]}" ps -a -q publish-scheduler-1)" || return 1
+    if [[ -n "$container_output" ]]; then
+      mapfile -t containers <<< "$container_output"
+    fi
     if [[ "${#containers[@]}" -gt 0 ]]; then
       "${compose[@]}" stop --timeout 30 publish-scheduler-1 || return 1
       "${compose[@]}" rm -f publish-scheduler-1 || return 1
     fi
-    mapfile -t containers < <("${compose[@]}" ps -a -q publish-scheduler-1)
+    containers=()
+    container_output="$("${compose[@]}" ps -a -q publish-scheduler-1)" || return 1
+    if [[ -n "$container_output" ]]; then
+      mapfile -t containers <<< "$container_output"
+    fi
     [[ "${#containers[@]}" -eq 0 ]] || return 1
   fi
 }
@@ -591,9 +604,9 @@ deploy_publish_scheduler_release() {
   running_api_revision="$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' "$running_api_image")" ||
     fail "publish_scheduler_primary_image_mismatch"
   [[ "$running_api_revision" == "${RELEASE_MANIFEST[API_SOURCE_SHA]}" ]] || fail "publish_scheduler_primary_image_mismatch"
+  inspect_publish_scheduler_runtime "$release_directory"
   "${compose[@]}" pull publish-scheduler-1
   validate_publish_scheduler_against_primary "$current_sha"
-  inspect_publish_scheduler_runtime "$release_directory"
   write_publish_scheduler_state "$transition" deploy "$current_sha" true \
     "${RELEASE_MANIFEST[PUBLISH_SCHEDULER_IMAGE]}" "${RELEASE_MANIFEST[PUBLISH_SCHEDULER_SOURCE_SHA]}" \
     "$PUBLISH_SCHEDULER_RUNTIME_ACTIVE" "$PUBLISH_SCHEDULER_RUNTIME_IMAGE" "$PUBLISH_SCHEDULER_RUNTIME_REVISION"
