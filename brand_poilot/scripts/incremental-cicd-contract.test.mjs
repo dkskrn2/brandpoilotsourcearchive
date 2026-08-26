@@ -65,6 +65,21 @@ test("workflow detects production impact and builds an affected image matrix", (
   assert.match(workflow, /name: Verify customer UI[\s\S]*TZ: Asia\/Seoul[\s\S]*npm run test --workspace @brand-pilot\/customer-ui/);
 });
 
+test("workflow impact script is valid bash", (t) => {
+  const bash = process.platform === "win32"
+    ? ["C:\\Program Files\\Git\\bin\\bash.exe", "C:\\Program Files\\Git\\usr\\bin\\bash.exe"].find(existsSync)
+    : ["/usr/bin/bash", "/bin/bash"].find(existsSync);
+  if (!bash) return t.skip("bash unavailable");
+
+  const script = workflow.match(/      - name: Detect affected components[\s\S]*?        run: \|\n([\s\S]*?)\n  verify:/)?.[1]
+    ?.split("\n")
+    .map((line) => line.replace(/^          /, ""))
+    .join("\n");
+  assert.ok(script, "impact script must be extractable from the workflow");
+  const result = spawnSync(bash, ["-n"], { input: script, encoding: "utf8" });
+  assert.equal(result.status, 0, result.stderr);
+});
+
 test("workflow enforces the canonical visual render policy as an append-only release history", () => {
   assert.match(workflow, /fetch-depth: 0/);
   assert.match(workflow, /verify-ai-content-visual-render-policy\.mjs --base/);

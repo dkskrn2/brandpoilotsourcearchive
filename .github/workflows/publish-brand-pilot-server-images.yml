@@ -146,7 +146,6 @@ jobs:
                   fi
                 fi
               fi
-            fi
             bootstrap=false
           fi
           IMPACT_JSON="$impact_json" node --input-type=module <<'NODE' > impact.outputs
