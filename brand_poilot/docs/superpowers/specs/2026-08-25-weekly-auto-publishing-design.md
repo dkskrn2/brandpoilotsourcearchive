@@ -38,7 +38,7 @@
 - 390px 화면에서 월간 캘린더는 약 4개 요일만 보이고 가로 탐색 안내가 없으며, 목록 상태 필터도 우측 항목이 잘렸다.
 - 목록과 캘린더가 같은 예약 항목을 표시하는 공통 데이터 연결, 캘린더의 grid/button 접근성 이름, 사이드바의 예약과 게시 성공 차감 구분은 유지할 가치가 있는 정상 동작이었다.
 
-이 점검 결과를 하나의 PR과 하나의 운영 릴리스에 함께 반영한다. 구현과 검증은 현재 운영 상태·조작 동선, 주간 설정·자동 배정, singleton scheduler·23:59 만료 순서로 진행하지만 중간 PR이나 중간 운영 배포는 만들지 않는다. 같은 배포 안에서도 실제 게시 실행은 승인된 DB migration, API, staged UI 검증이 끝난 뒤 마지막에 활성화한다. 단, 이전에 확정한 `마이그레이션 없이 진행` 조건과 주간 요일 저장 요구가 충돌하므로 migration 091은 구현 전 명시적 승인 게이트다.
+이 점검 결과를 하나의 PR과 하나의 운영 릴리스에 함께 반영한다. 구현과 검증은 현재 운영 상태·조작 동선, 주간 설정·자동 배정, singleton scheduler·23:59 만료 순서로 진행하지만 중간 PR이나 중간 운영 배포는 만들지 않는다. 같은 배포 안에서도 실제 게시 실행은 승인된 DB migration, API, staged UI 검증이 끝난 뒤 마지막에 활성화한다. 단, 이전에 확정한 `마이그레이션 없이 진행` 조건과 주간 요일 저장 요구가 충돌하므로 migration 092는 구현 전 명시적 승인 게이트다.
 
 ## 2. 확정된 제품 결정
 
@@ -450,7 +450,7 @@ rollback은 변경한 구성요소만 대상으로 한다. scheduler를 먼저 �
 
 이번 변경은 하나의 기능 브랜치, 하나의 PR, 한 번의 CI/CD와 하나의 운영 release SHA로 배포한다. 다만 실제 적용은 다음 순서를 고정한다.
 
-1. migration 091의 명시적 승인과 운영 application role 검증 결과를 확인하고 적용한다.
+1. migration 092의 명시적 승인과 운영 application role 검증 결과를 확인하고 적용한다.
 2. weekly schema와 legacy endpoint를 함께 읽을 수 있는 API를 canary에서 검증하고 staged 고객 UI를 canary와 확인한다.
 3. API를 primary로 승격한다. 기존 `promote.sh`가 이 시점에 `state/current`를 새 SHA로 바꾸는 것을 확인한다.
 4. staged 고객 UI를 production domain으로 승격하고 목록·캘린더·예약 변경·주간 설정을 운영 브라우저에서 확인한다.
@@ -459,7 +459,7 @@ rollback은 변경한 구성요소만 대상으로 한다. scheduler를 먼저 �
 7. 이상이 없을 때 scheduler 한 개만 시작하고 연속 세 tick과 heartbeat를 확인한다.
 8. 전체 확인 후 GitHub `PRODUCTION_RELEASE_SHA`를 같은 새 SHA로 갱신한다.
 
-이 순서는 CI/CD를 여러 번 실행하기 위한 분리가 아니다. 한 번의 배포 안에서 실제 게시 mutation만 마지막까지 닫아 두기 위한 activation gate다. API primary 승격 후 실패하면 scheduler를 먼저 정지하고, UI alias와 API를 같은 직전 운영 SHA로 되돌려 `state/current`를 복구한다. migration 091은 additive이므로 DROP하지 않는다.
+이 순서는 CI/CD를 여러 번 실행하기 위한 분리가 아니다. 한 번의 배포 안에서 실제 게시 mutation만 마지막까지 닫아 두기 위한 activation gate다. API primary 승격 후 실패하면 scheduler를 먼저 정지하고, UI alias와 API를 같은 직전 운영 SHA로 되돌려 `state/current`를 복구한다. migration 092는 additive이므로 DROP하지 않는다.
 
 ## 14. 완료 조건
 

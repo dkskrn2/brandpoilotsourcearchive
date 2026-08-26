@@ -12,6 +12,7 @@ import {
   legacyTriggerSearchPathMigrationChecksum,
   fullSourceMigrationIds,
   loadMigrations,
+  post075SchemaMigrationChecksums,
   readCanonicalBootstrapCatalogs,
   readCanonicalEventTriggerCatalog,
   readFenceSecurityCatalog,
@@ -84,6 +85,21 @@ const run075SchemaBodyForPglite = async (database, migration075) => {
   assert.doesNotMatch(schemaBody, /register_ai_content_075_fence_relations/);
   await database.exec(schemaBody);
 };
+
+test("092 weekly schedule storage is the checksum-pinned migration after prompt lineage 091", async () => {
+  const migrations = await loadMigrations();
+  const ids = migrations.map(({ id }) => id);
+  const migration092Index = ids.indexOf("092_publish_calendar_weekly_schedule.sql");
+  assert.equal(migration092Index, ids.indexOf("091_ai_content_prompt_lineage_v4.sql") + 1);
+  assert.equal(
+    migrations[migration092Index]?.checksum,
+    post075SchemaMigrationChecksums["092_publish_calendar_weekly_schedule.sql"],
+  );
+  assert.equal(
+    post075SchemaMigrationChecksums["092_publish_calendar_weekly_schedule.sql"],
+    "a237dd38f85e8ef53473ee3ba5e75289133e8e209271045a61b467835625056d",
+  );
+});
 
 test("073a hardens exactly the legacy trigger function closure before 074", async () => {
   const migrations = await loadMigrations();

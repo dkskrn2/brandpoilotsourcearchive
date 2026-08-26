@@ -108,6 +108,7 @@ export const fullSourceMigrationIds = Object.freeze([
   "089_free_subscription_plan.sql",
   "090_existing_brand_free_subscriptions.sql",
   "091_ai_content_prompt_lineage_v4.sql",
+  "092_publish_calendar_weekly_schedule.sql",
 ]);
 const legacyTriggerSearchPathMigrationId = "073a_legacy_trigger_function_search_path.sql";
 export const legacyTriggerSearchPathMigrationChecksum =
@@ -136,6 +137,7 @@ const post075SchemaMigrationIds = Object.freeze([
   "089_free_subscription_plan.sql",
   "090_existing_brand_free_subscriptions.sql",
   "091_ai_content_prompt_lineage_v4.sql",
+  "092_publish_calendar_weekly_schedule.sql",
 ]);
 export const post075SchemaMigrationChecksums = Object.freeze({
   "077_content_suggestion_batches.sql": "3b178464c5ae5c4e220428e0752ab3e79a2ca06b5b2b23f1e89c34e983e63f76",
@@ -153,6 +155,7 @@ export const post075SchemaMigrationChecksums = Object.freeze({
   "089_free_subscription_plan.sql": "fd58a829eb658b0ac650e033a5edd085ec452a6eb0420251c60abcd51231267a",
   "090_existing_brand_free_subscriptions.sql": "8134f35d21f72f7418b5502bb5cfb10c8f296f147788bcd8b539d6d930588552",
   "091_ai_content_prompt_lineage_v4.sql": "05696c55ee959cd80ef7cdf30fcb07e93e0579da515042ebd8e8aafb9cde5e10",
+  "092_publish_calendar_weekly_schedule.sql": "a237dd38f85e8ef53473ee3ba5e75289133e8e209271045a61b467835625056d",
 });
 const post075DeferredMigrationIds = Object.freeze([
   ...post075DataMigrationIds,
@@ -4466,7 +4469,15 @@ async function verifyPublishCalendarSchemaCatalog(client, {
        ('publish_calendar_slots','status'),('publish_calendar_slots','content_suggestion_id'),
        ('publish_calendar_slots','proposal_id'),('publish_calendar_slots','generation_id'),
        ('publish_calendar_slots','generation_output_id'),('publish_calendar_slots','topic_publish_group_id'),
-       ('publish_calendar_slots','idempotency_key')
+       ('publish_calendar_slots','idempotency_key'),
+       ('publish_calendar_weekly_schedule_entries','id'),
+       ('publish_calendar_weekly_schedule_entries','workspace_id'),
+       ('publish_calendar_weekly_schedule_entries','brand_id'),
+       ('publish_calendar_weekly_schedule_entries','day_of_week'),
+       ('publish_calendar_weekly_schedule_entries','slot_time'),
+       ('publish_calendar_weekly_schedule_entries','sort_order'),
+       ('publish_calendar_weekly_schedule_entries','created_at'),
+       ('publish_calendar_weekly_schedule_entries','updated_at')
      ), expected_constraint(relation_name,constraint_name,constraint_type,definition_fragments) as (values
        ('billing_plan_catalog','billing_plan_catalog_code_check','c',array['check','code','^[a-z][a-z0-9_]{1,31}$']::text[]),
        ('billing_plan_catalog','billing_plan_catalog_name_check','c',array['check','length','trim','>= 1','<= 100']::text[]),
@@ -4490,7 +4501,12 @@ async function verifyPublishCalendarSchemaCatalog(client, {
        ('publish_calendar_slots','publish_calendar_slots_proposal_assignment_check','c',array['check','proposal_assigned','content_suggestion_id','proposal_id']::text[]),
        ('publish_calendar_slots','publish_calendar_slots_manual_recommendation_check','c',array['check','assignment_mode','manual','recommendation_kind']::text[]),
        ('publish_calendar_slots','publish_calendar_slots_idempotency_key_check','c',array['check','idempotency_key','is null','char_length','>= 1','<= 200','btrim']::text[]),
-       ('publish_calendar_slots','publish_calendar_slots_topic_publish_group_scope_fk','f',array['foreign key','topic_publish_group_id','workspace_id','brand_id','references topic_publish_groups','on delete restrict']::text[])
+       ('publish_calendar_slots','publish_calendar_slots_topic_publish_group_scope_fk','f',array['foreign key','topic_publish_group_id','workspace_id','brand_id','references topic_publish_groups','on delete restrict']::text[]),
+       ('publish_calendar_weekly_schedule_entries','publish_calendar_weekly_schedule_day_check','c',array['check','day_of_week','>= 1','<= 7']::text[]),
+       ('publish_calendar_weekly_schedule_entries','publish_calendar_weekly_schedule_sort_check','c',array['check','sort_order','>= 0']::text[]),
+       ('publish_calendar_weekly_schedule_entries','publish_calendar_weekly_schedule_brand_day_sort_unique','u',array['unique','brand_id','day_of_week','sort_order']::text[]),
+       ('publish_calendar_weekly_schedule_entries','publish_calendar_weekly_schedule_entries_workspace_id_fkey','f',array['foreign key','workspace_id','references workspaces','on delete cascade']::text[]),
+       ('publish_calendar_weekly_schedule_entries','publish_calendar_weekly_schedule_entries_brand_id_fkey','f',array['foreign key','brand_id','references brands','on delete cascade']::text[])
      ), expected_index(relation_name,index_name,is_unique,key_columns,predicate_fragments) as (values
        ('brand_subscriptions','brand_subscriptions_due_renewal_idx',false,array['current_period_end']::text[],array['status','active','cancel_scheduled']::text[]),
        ('publish_calendar_slots','publish_calendar_slots_brand_period_idx',false,array['brand_id','scheduled_for','id']::text[],array[]::text[]),
@@ -4501,7 +4517,8 @@ async function verifyPublishCalendarSchemaCatalog(client, {
        ('publish_calendar_slots','publish_calendar_slots_brand_idempotency_unique',true,array['brand_id','idempotency_key']::text[],array['idempotency_key is not null']::text[]),
        ('publish_calendar_slots','publish_calendar_slots_generation_output_unique',true,array['brand_id','generation_output_id']::text[],array['generation_output_id is not null','status','cancelled']::text[]),
        ('publish_calendar_slots','publish_calendar_slots_publish_group_unique',true,array['brand_id','topic_publish_group_id']::text[],array['topic_publish_group_id is not null','status','cancelled']::text[]),
-       ('publish_calendar_slots','publish_calendar_slots_active_reservation_idx',false,array['brand_id','scheduled_for']::text[],array['status','proposal_assigned','quota_blocked']::text[])
+       ('publish_calendar_slots','publish_calendar_slots_active_reservation_idx',false,array['brand_id','scheduled_for']::text[],array['status','proposal_assigned','quota_blocked']::text[]),
+       ('publish_calendar_weekly_schedule_entries','publish_calendar_weekly_schedule_brand_day_sort_unique',true,array['brand_id','day_of_week','sort_order']::text[],array[]::text[])
      ), expected_idempotency_index(index_name,key_columns,predicate_expression) as (values
        ('publish_calendar_slots_brand_idempotency_unique',array['brand_id','idempotency_key']::text[],'idempotency_keyisnotnull'),
        ('publish_calendar_slots_generation_unique',array['brand_id','generation_id']::text[],
@@ -4519,7 +4536,10 @@ async function verifyPublishCalendarSchemaCatalog(client, {
        ('brand_subscriptions','publish_calendar_brand_subscriptions_write_fence',array['before insert or delete or update','execute function enforce_ai_content_write_fence()']::text[]),
        ('billing_plan_catalog','publish_calendar_billing_plan_catalog_write_fence',array['before insert or delete or update','execute function enforce_ai_content_write_fence()']::text[]),
        ('publish_calendar_settings','publish_calendar_settings_write_fence',array['before insert or delete or update','execute function enforce_ai_content_write_fence()']::text[]),
-       ('publish_calendar_slots','publish_calendar_slots_write_fence',array['before insert or delete or update','execute function enforce_ai_content_write_fence()']::text[])
+       ('publish_calendar_slots','publish_calendar_slots_write_fence',array['before insert or delete or update','execute function enforce_ai_content_write_fence()']::text[]),
+       ('publish_calendar_weekly_schedule_entries','publish_calendar_weekly_schedule_entries_set_updated_at',array['before update','execute function set_updated_at()']::text[]),
+       ('publish_calendar_weekly_schedule_entries','publish_calendar_weekly_schedule_entries_brand_scope',array['before insert or update of workspace_id, brand_id','execute function enforce_publish_calendar_brand_scope()']::text[]),
+       ('publish_calendar_weekly_schedule_entries','publish_calendar_weekly_schedule_entries_write_fence',array['before insert or delete or update','execute function enforce_ai_content_write_fence()']::text[])
      ), expected_function(function_name) as (values
        ('enforce_publish_calendar_brand_scope'),('enforce_publish_calendar_slot_scope')
      ), calendar_function as (
@@ -4533,6 +4553,7 @@ async function verifyPublishCalendarSchemaCatalog(client, {
             brand_subscription_owner.rolname::text as brand_subscription_owner,
             calendar_settings_owner.rolname::text as calendar_settings_owner,
             calendar_slot_owner.rolname::text as calendar_slot_owner,
+            weekly_schedule_owner.rolname::text as weekly_schedule_owner,
             has_table_privilege($1,'public.billing_plan_catalog','SELECT') as app_billing_plan_select,
             has_table_privilege($1,'public.billing_plan_catalog','INSERT') as app_billing_plan_insert,
             has_table_privilege($1,'public.billing_plan_catalog','UPDATE') as app_billing_plan_update,
@@ -4549,6 +4570,10 @@ async function verifyPublishCalendarSchemaCatalog(client, {
             has_table_privilege($1,'public.publish_calendar_slots','INSERT') as app_calendar_slot_insert,
             has_table_privilege($1,'public.publish_calendar_slots','UPDATE') as app_calendar_slot_update,
             has_table_privilege($1,'public.publish_calendar_slots','DELETE') as app_calendar_slot_delete,
+            has_table_privilege($1,'public.publish_calendar_weekly_schedule_entries','SELECT') as app_weekly_schedule_select,
+            has_table_privilege($1,'public.publish_calendar_weekly_schedule_entries','INSERT') as app_weekly_schedule_insert,
+            has_table_privilege($1,'public.publish_calendar_weekly_schedule_entries','UPDATE') as app_weekly_schedule_update,
+            has_table_privilege($1,'public.publish_calendar_weekly_schedule_entries','DELETE') as app_weekly_schedule_delete,
             coalesce((select bool_or(acl.grantee=0) from aclexplode(billing_plan.relacl) acl),false)
               as public_billing_plan_privilege,
             coalesce((select bool_or(acl.grantee=0) from aclexplode(brand_subscription.relacl) acl),false)
@@ -4557,6 +4582,8 @@ async function verifyPublishCalendarSchemaCatalog(client, {
               as public_calendar_settings_privilege,
             coalesce((select bool_or(acl.grantee=0) from aclexplode(calendar_slot.relacl) acl),false)
               as public_calendar_slot_privilege,
+            coalesce((select bool_or(acl.grantee=0) from aclexplode(weekly_schedule.relacl) acl),false)
+              as public_weekly_schedule_privilege,
             not exists (
               select 1 from expected_column expected
                left join information_schema.columns column_row
@@ -4686,7 +4713,8 @@ async function verifyPublishCalendarSchemaCatalog(client, {
                 ('billing_plan_catalog','customer_execution','whole_relation'),
                 ('brand_subscriptions','customer_execution','whole_relation'),
                 ('publish_calendar_settings','customer_execution','whole_relation'),
-                ('publish_calendar_slots','customer_execution','whole_relation')
+                ('publish_calendar_slots','customer_execution','whole_relation'),
+                ('publish_calendar_weekly_schedule_entries','customer_execution','whole_relation')
               )) as write_fence_row_count,
             (select count(*)::integer from calendar_function function
               where function.proowner=(select oid from pg_roles where rolname=$2)) as function_owner_count,
@@ -4705,6 +4733,8 @@ async function verifyPublishCalendarSchemaCatalog(client, {
        join pg_roles calendar_settings_owner on calendar_settings_owner.oid=calendar_settings.relowner
        join pg_class calendar_slot on calendar_slot.oid='public.publish_calendar_slots'::regclass
        join pg_roles calendar_slot_owner on calendar_slot_owner.oid=calendar_slot.relowner
+       join pg_class weekly_schedule on weekly_schedule.oid='public.publish_calendar_weekly_schedule_entries'::regclass
+       join pg_roles weekly_schedule_owner on weekly_schedule_owner.oid=weekly_schedule.relowner
       where billing_plan.oid='public.billing_plan_catalog'::regclass`,
     [applicationRoleName, schemaOwnerRoleName],
   );
@@ -4714,6 +4744,7 @@ async function verifyPublishCalendarSchemaCatalog(client, {
     || sealed.brand_subscription_owner !== schemaOwnerRoleName
     || sealed.calendar_settings_owner !== schemaOwnerRoleName
     || sealed.calendar_slot_owner !== schemaOwnerRoleName
+    || sealed.weekly_schedule_owner !== schemaOwnerRoleName
     || sealed.app_billing_plan_select !== true || sealed.app_billing_plan_insert !== true
     || sealed.app_billing_plan_update !== true || sealed.app_billing_plan_delete !== false
     || sealed.app_brand_subscription_select !== true || sealed.app_brand_subscription_insert !== true
@@ -4722,15 +4753,18 @@ async function verifyPublishCalendarSchemaCatalog(client, {
     || sealed.app_calendar_settings_update !== true || sealed.app_calendar_settings_delete !== false
     || sealed.app_calendar_slot_select !== true || sealed.app_calendar_slot_insert !== true
     || sealed.app_calendar_slot_update !== true || sealed.app_calendar_slot_delete !== false
+    || sealed.app_weekly_schedule_select !== true || sealed.app_weekly_schedule_insert !== true
+    || sealed.app_weekly_schedule_update !== true || sealed.app_weekly_schedule_delete !== true
     || sealed.public_billing_plan_privilege !== false
     || sealed.public_brand_subscription_privilege !== false
     || sealed.public_calendar_settings_privilege !== false
     || sealed.public_calendar_slot_privilege !== false
+    || sealed.public_weekly_schedule_privilege !== false
     || sealed.runtime_columns_valid !== true || sealed.idempotency_column_valid !== true
     || sealed.enabled_default_false !== true
     || sealed.constraint_catalog_valid !== true || sealed.idempotency_constraint_valid !== true
     || sealed.index_catalog_valid !== true || sealed.idempotency_index_catalog_valid !== true
-    || sealed.trigger_catalog_valid !== true || sealed.write_fence_row_count !== 4
+    || sealed.trigger_catalog_valid !== true || sealed.write_fence_row_count !== 5
     || sealed.function_owner_count !== 2 || sealed.application_function_execute_count !== 2
     || sealed.public_function_execute_count !== 0
     || (requireEmptyPlanCatalog && sealed.billing_plan_count !== 0)) {

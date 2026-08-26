@@ -10,14 +10,14 @@
 
 ---
 
-### Task 1: Add migration 091 and application-role permissions
+### Task 1: Add migration 092 and application-role permissions
 
 **Stop gate:** An earlier requirement said to continue without another migration. The current `time[]` column cannot represent weekdays, so Task 1 requires explicit approval. If approval is denied, stop this workstream and remove weekday-specific schedules from the release instead of inventing an encoded fallback.
 
 **Files:**
-- Create: `db/migrations/091_publish_calendar_weekly_schedule.sql`
-- Create: `apps/api/src/publishCalendarMigration091.pglite.test.ts`
-- Create: `apps/api/src/publishCalendarMigration091.postgres.integration.test.ts`
+- Create: `db/migrations/092_publish_calendar_weekly_schedule.sql`
+- Create: `apps/api/src/publishCalendarMigration092.pglite.test.ts`
+- Create: `apps/api/src/publishCalendarMigration092.postgres.integration.test.ts`
 - Modify: `scripts/migrations.integration.test.mjs`
 
 - [ ] **Step 1: Write failing migration tests** for table shape, brand/workspace scope enforcement, day check, sort-order uniqueness, duplicate times, write-fence coverage, and application-role CRUD.
@@ -32,9 +32,9 @@ values
 
 - [ ] **Step 2: Run and verify failure.**
 
-Run: `npm test --workspace @brand-pilot/api -- publishCalendarMigration091.pglite.test.ts`
+Run: `npm test --workspace @brand-pilot/api -- publishCalendarMigration092.pglite.test.ts`
 
-Expected: FAIL because migration 091/table does not exist.
+Expected: FAIL because migration 092/table does not exist.
 
 - [ ] **Step 3: Implement the additive migration.** Create `publish_calendar_weekly_schedule_entries` with UUID PK, separate workspace/brand FKs, `day_of_week between 1 and 7`, `slot_time time`, `sort_order >= 0`, timestamps, and unique `(brand_id, day_of_week, sort_order)`. Reuse the existing `enforce_publish_calendar_brand_scope()` trigger because `brands` has no `(workspace_id, id)` unique key for a composite FK. Register the table in the existing AI-content write-fence catalog and add the same write-fence trigger pattern. Do not create `(brand_id, day_of_week, slot_time)` uniqueness and do not drop `slot_times`.
 
@@ -42,7 +42,7 @@ Expected: FAIL because migration 091/table does not exist.
 
 - [ ] **Step 5: Run both migration tests.**
 
-Run: `npm test --workspace @brand-pilot/api -- publishCalendarMigration091.pglite.test.ts`
+Run: `npm test --workspace @brand-pilot/api -- publishCalendarMigration092.pglite.test.ts`
 
 Run: `npm run test:migrations`
 
@@ -51,7 +51,7 @@ Expected: both PASS; PostgreSQL role test must execute, not skip.
 - [ ] **Step 6: Commit.**
 
 ```bash
-git add db/migrations/091_publish_calendar_weekly_schedule.sql apps/api/src/publishCalendarMigration091.pglite.test.ts apps/api/src/publishCalendarMigration091.postgres.integration.test.ts scripts/migrations.integration.test.mjs
+git add db/migrations/092_publish_calendar_weekly_schedule.sql apps/api/src/publishCalendarMigration092.pglite.test.ts apps/api/src/publishCalendarMigration092.postgres.integration.test.ts scripts/migrations.integration.test.mjs
 git commit -m "feat(publish): add weekly schedule storage"
 ```
 
@@ -223,13 +223,13 @@ Expected: matches are limited to the legacy endpoint/client, their transition te
 
 - [ ] **Step 2: Run impacted API suites.**
 
-Run: `npm test --workspace @brand-pilot/api -- publishCalendarMigration091.pglite.test.ts publishCalendarRepository.test.ts publishCalendarProvisioning.pglite.test.ts publishCalendarAllocator.test.ts publishCalendarIdempotency.test.ts publishCalendarQuota.test.ts server.test.ts`
+Run: `npm test --workspace @brand-pilot/api -- publishCalendarMigration092.pglite.test.ts publishCalendarRepository.test.ts publishCalendarProvisioning.pglite.test.ts publishCalendarAllocator.test.ts publishCalendarIdempotency.test.ts publishCalendarQuota.test.ts server.test.ts`
 
 - [ ] **Step 3: Run application-role PostgreSQL integration.**
 
 Run: `npm run test:migrations`
 
-Expected: migration 091 role transaction executes and passes; a skip blocks release.
+Expected: migration 092 role transaction executes and passes; a skip blocks release.
 
 - [ ] **Step 4: Run customer UI tests/build.**
 
@@ -237,8 +237,8 @@ Run: `npm test --workspace @brand-pilot/customer-ui -- AutoPublishHeaderControl.
 
 Run: `npm run build --workspace @brand-pilot/customer-ui`
 
-- [ ] **Step 5: Review the cumulative diff.** At this checkpoint it may contain Workstream 1 plus approved migration 091, API, customer UI, and directly related docs. Scheduler/Compose changes start only in Workstream 3; Caddy/provider/unrelated-worker changes remain forbidden. Because the repository release policy reports `productionDeployAllowed=false` when a migration changes, the release must follow the explicit migration-approval path rather than the ordinary automatic production path.
+- [ ] **Step 5: Review the cumulative diff.** At this checkpoint it may contain Workstream 1 plus approved migration 092, API, customer UI, and directly related docs. Scheduler/Compose changes start only in Workstream 3; Caddy/provider/unrelated-worker changes remain forbidden. Because the repository release policy reports `productionDeployAllowed=false` when a migration changes, the release must follow the explicit migration-approval path rather than the ordinary automatic production path.
 
-- [ ] **Step 6: Run a local migration/API/UI rehearsal.** Apply migration 091 only to the disposable test PostgreSQL, start the candidate API/UI locally, keep master OFF, and verify weekly settings read/write and allocator idempotency. Do not apply the migration or deploy any service to production at this checkpoint.
+- [ ] **Step 6: Run a local migration/API/UI rehearsal.** Apply migration 092 only to the disposable test PostgreSQL, start the candidate API/UI locally, keep master OFF, and verify weekly settings read/write and allocator idempotency. Do not apply the migration or deploy any service to production at this checkpoint.
 
 - [ ] **Step 7: Continue on the same branch** to Workstream 3 only after the application-role PostgreSQL test and customer UI build pass. Do not create an intermediate PR or release SHA.

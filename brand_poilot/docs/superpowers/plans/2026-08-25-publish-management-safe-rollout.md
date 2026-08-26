@@ -19,11 +19,11 @@
 All three workstreams use the current isolated branch and are combined into one PR. Intermediate commits and focused test gates remain, but there is no intermediate merge, CI/CD deployment, or production release.
 
 - Workstream 1 changes the publish read model and customer UI without writing operating data.
-- Workstream 2 adds settings and allocation. Migration `091_publish_calendar_weekly_schedule.sql` is required by the normalized weekday/time design but remains an explicit approval gate because an earlier requirement said to proceed without another migration.
+- Workstream 2 adds settings and allocation. Migration `092_publish_calendar_weekly_schedule.sql` is required by the normalized weekday/time design but remains an explicit approval gate because an earlier requirement said to proceed without another migration.
 - Workstream 3 adds the API publishing transaction and the new publish-scheduler image/service. The scheduler is deployed stopped and activated only after the same release's API/UI checks pass.
 - Do not test or deploy DM, FAQ, crawl, Wiki, content generation workers, Caddy, or automatic-response settings.
 - Before every production deployment, fetch and re-read `codex-deploy/main` from `https://github.com/dkskrn2/main.git`, Ubuntu `state/current`, GitHub `PRODUCTION_RELEASE_SHA`, active service digests, and any hotfix/digest drift. This worktree's `origin` points to the separate `brandpoilotsourcearchive` history and must not be used as the production main baseline. If the operating sources no longer share the expected baseline, stop and rebuild the candidate from the new confirmed main.
-- The single rollback baseline is the pre-release operating SHA and its existing service digests. Stop the new scheduler first, restore only changed API/UI/scheduler components, never drop migration 091, and never delete, reassign, or backfill customer reservations automatically.
+- The single rollback baseline is the pre-release operating SHA and its existing service digests. Stop the new scheduler first, restore only changed API/UI/scheduler components, never drop migration 092, and never delete, reassign, or backfill customer reservations automatically.
 
 ## Integrated acceptance
 
@@ -37,9 +37,9 @@ All three workstreams use the current isolated branch and are combined into one 
 
 ## Open approval gate
 
-The current `publish_calendar_settings.slot_times time[]` column cannot represent a weekday. A normalized Monday-Sunday schedule therefore needs migration 091. Do not start implementation until one of these two outcomes is explicitly confirmed:
+The current `publish_calendar_settings.slot_times time[]` column cannot represent a weekday. A normalized Monday-Sunday schedule therefore needs migration 092. Do not start implementation until one of these two outcomes is explicitly confirmed:
 
-1. Approve additive migration 091. This preserves the full weekly requirement and does not alter or delete existing reservations.
+1. Approve additive migration 092. This preserves the full weekly requirement and does not alter or delete existing reservations.
 2. Keep the no-migration constraint. In that case, remove weekday-specific recurring schedules from this release; do not encode weekdays into `time[]`, reuse dated slots as templates, or hide schedule data in an unrelated JSON column.
 
 ## What already exists
@@ -64,7 +64,7 @@ one merged main SHA
         +--> Vercel: build STAGED customer UI, no production-domain assignment yet
                          |
                          v
-[migration 091 approval] -> migrate -> API canary -> staged UI against canary
+[migration 092 approval] -> migrate -> API canary -> staged UI against canary
                                               |
                                               v
                                   promote API primary
@@ -194,5 +194,5 @@ All new branches above require the named test before implementation is marked co
 | Design Review | `/plan-design-review` | UI/UX gaps | 0 | NOT RUN | Repository/browser UX findings are already incorporated, but no formal design review is logged. |
 | DX Review | `/plan-devex-review` | Developer experience gaps | 0 | NOT RUN | — |
 
-- **UNRESOLVED:** 1, explicit approval or rejection of additive migration 091.
+- **UNRESOLVED:** 1, explicit approval or rejection of additive migration 092.
 - **VERDICT:** ENG NOT CLEARED. Do not implement Workstream 2 or deploy until the migration decision is made.

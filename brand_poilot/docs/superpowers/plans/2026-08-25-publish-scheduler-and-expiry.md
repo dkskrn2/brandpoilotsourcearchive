@@ -174,11 +174,11 @@ Run: `npm run test:deployment`
 
 Run: `npm run test:migrations`
 
-- [ ] **Step 2: Create one cumulative PR** containing Workstreams 1–3: publish API/UI, migration 091, the new scheduler worker, exact Compose/release keys, deployment contracts, and related docs. No Caddy, DM, Wiki, provider adapter, automatic-response setting, or unrelated worker change is allowed.
+- [ ] **Step 2: Create one cumulative PR** containing Workstreams 1–3: publish API/UI, migration 092, the new scheduler worker, exact Compose/release keys, deployment contracts, and related docs. No Caddy, DM, Wiki, provider adapter, automatic-response setting, or unrelated worker change is allowed.
 
 - [ ] **Step 3: Run one server-image CI/CD release build** from the merged main SHA. Confirm API and scheduler images carry that SHA, every image is immutable, and the release bundle preserves unchanged service digests. Confirm Vercel created a staged UI build for the same SHA and did not auto-assign production domains; if auto-assignment is still enabled, stop because UI can become live before migration/API.
 
-- [ ] **Step 4: Apply the single release in a fixed order.** Reconfirm the production baseline and zero unexpected hotfix/digest drift, apply explicitly approved migration 091, deploy API canary, verify `/health`, `/ready`, allocation/due previews and no mutation, and test the staged UI against canary. Promote API primary, then promote the already-built UI deployment to the production domain without rebuilding it.
+- [ ] **Step 4: Apply the single release in a fixed order.** Reconfirm the production baseline and zero unexpected hotfix/digest drift, apply explicitly approved migration 092, deploy API canary, verify `/health`, `/ready`, allocation/due previews and no mutation, and test the staged UI against canary. Promote API primary, then promote the already-built UI deployment to the production domain without rebuilding it.
 
 - [ ] **Step 5: Verify UI before activation.** Confirm status truth, reservation change, bounded list, content picker, responsive agenda, master OFF, channel controls, and weekly settings read/write. Deploy the scheduler digest from the same release but keep its profile stopped.
 
@@ -186,4 +186,4 @@ Run: `npm run test:migrations`
 
 - [ ] **Step 7: Start exactly one scheduler.** Observe three successful ticks, heartbeat age, zero overlap, provider attempts, recent errors, and API restart count. Verify future work stays `게시 예정`, same-day waiting work is orange `게시 지연`, successful work is green, and expired unstarted work becomes gray with the 23:59 reason.
 
-- [ ] **Step 8: Respect actual release-state semantics.** Existing `promote.sh` atomically writes `state/current` when API primary is promoted, before scheduler activation. Verify that write immediately. Update GitHub `PRODUCTION_RELEASE_SHA` only after scheduler and customer checks pass. If a later gate fails, stop scheduler first, roll back the UI alias and API primary so existing tooling restores `state/current`, preserve migration 091, and never delete or rewrite a customer reservation.
+- [ ] **Step 8: Respect actual release-state semantics.** Existing `promote.sh` atomically writes `state/current` when API primary is promoted, before scheduler activation. Verify that write immediately. Update GitHub `PRODUCTION_RELEASE_SHA` only after scheduler and customer checks pass. If a later gate fails, stop scheduler first, roll back the UI alias and API primary so existing tooling restores `state/current`, preserve migration 092, and never delete or rewrite a customer reservation.

@@ -4,7 +4,7 @@ import test from "node:test";
 import { Client } from "pg";
 import * as migrationRunner from "./migrationRunner.mjs";
 
-test("post-cutover schemas 077 through 091 are an ordered sealed schema plan", async () => {
+test("post-cutover schemas 077 through 092 are an ordered sealed schema plan", async () => {
   const migrations = await migrationRunner.loadMigrations();
   const migration077 = migrations.find(({ id }) => id === "077_content_suggestion_batches.sql");
   const migration078 = migrations.find(({ id }) => id === "078_faq_utterance_matching.sql");
@@ -21,6 +21,7 @@ test("post-cutover schemas 077 through 091 are an ordered sealed schema plan", a
   const migration089 = migrations.find(({ id }) => id === "089_free_subscription_plan.sql");
   const migration090 = migrations.find(({ id }) => id === "090_existing_brand_free_subscriptions.sql");
   const migration091 = migrations.find(({ id }) => id === "091_ai_content_prompt_lineage_v4.sql");
+  const migration092 = migrations.find(({ id }) => id === "092_publish_calendar_weekly_schedule.sql");
   assert.ok(migration077);
   assert.ok(migration078);
   assert.ok(migration079);
@@ -36,6 +37,7 @@ test("post-cutover schemas 077 through 091 are an ordered sealed schema plan", a
   assert.ok(migration089);
   assert.ok(migration090);
   assert.ok(migration091);
+  assert.ok(migration092);
   assert.equal(migrationRunner.validatePost075SchemaMigration(migration077), true);
   assert.equal(migrationRunner.validatePost075SchemaMigration(migration078), true);
   assert.equal(migrationRunner.validatePost075SchemaMigration(migration079), true);
@@ -51,8 +53,9 @@ test("post-cutover schemas 077 through 091 are an ordered sealed schema plan", a
   assert.equal(migrationRunner.validatePost075SchemaMigration(migration089), true);
   assert.equal(migrationRunner.validatePost075SchemaMigration(migration090), true);
   assert.equal(migrationRunner.validatePost075SchemaMigration(migration091), true);
+  assert.equal(migrationRunner.validatePost075SchemaMigration(migration092), true);
 
-  const pendingMigrations = [migration077, migration078, migration079, migration080, migration081, migration082, migration083, migration084, migration085, migration086, migration087, migration088, migration089, migration090, migration091];
+  const pendingMigrations = [migration077, migration078, migration079, migration080, migration081, migration082, migration083, migration084, migration085, migration086, migration087, migration088, migration089, migration090, migration091, migration092];
 
   const history = migrations
     .filter(({ id }) => !pendingMigrations.some((migration) => migration.id === id))
@@ -159,6 +162,7 @@ test("content suggestion schema runner accepts the exact managed provider sessio
   const migration089 = migrations.find(({ id }) => id === "089_free_subscription_plan.sql");
   const migration090 = migrations.find(({ id }) => id === "090_existing_brand_free_subscriptions.sql");
   const migration091 = migrations.find(({ id }) => id === "091_ai_content_prompt_lineage_v4.sql");
+  const migration092 = migrations.find(({ id }) => id === "092_publish_calendar_weekly_schedule.sql");
   assert.ok(migration077);
   assert.ok(migration078);
   assert.ok(migration079);
@@ -174,7 +178,8 @@ test("content suggestion schema runner accepts the exact managed provider sessio
   assert.ok(migration089);
   assert.ok(migration090);
   assert.ok(migration091);
-  const pendingMigrations = [migration077, migration078, migration079, migration080, migration081, migration082, migration083, migration084, migration085, migration086, migration087, migration088, migration089, migration090, migration091];
+  assert.ok(migration092);
+  const pendingMigrations = [migration077, migration078, migration079, migration080, migration081, migration082, migration083, migration084, migration085, migration086, migration087, migration088, migration089, migration090, migration091, migration092];
   const history = migrations
     .filter(({ id }) => !pendingMigrations.some((migration) => migration.id === id))
     .map(({ id, checksum }) => ({ id, checksum }));
@@ -522,6 +527,7 @@ test("content suggestion schema runner rejects a non-normal DDL guard before mut
   const migration089 = migrations.find(({ id }) => id === "089_free_subscription_plan.sql");
   const migration090 = migrations.find(({ id }) => id === "090_existing_brand_free_subscriptions.sql");
   const migration091 = migrations.find(({ id }) => id === "091_ai_content_prompt_lineage_v4.sql");
+  const migration092 = migrations.find(({ id }) => id === "092_publish_calendar_weekly_schedule.sql");
   assert.ok(migration077);
   assert.ok(migration078);
   assert.ok(migration079);
@@ -537,7 +543,8 @@ test("content suggestion schema runner rejects a non-normal DDL guard before mut
   assert.ok(migration089);
   assert.ok(migration090);
   assert.ok(migration091);
-  const pendingMigrations = [migration077, migration078, migration079, migration080, migration081, migration082, migration083, migration084, migration085, migration086, migration087, migration088, migration089, migration090, migration091];
+  assert.ok(migration092);
+  const pendingMigrations = [migration077, migration078, migration079, migration080, migration081, migration082, migration083, migration084, migration085, migration086, migration087, migration088, migration089, migration090, migration091, migration092];
   const history = migrations
     .filter(({ id }) => !pendingMigrations.some((migration) => migration.id === id))
     .map(({ id, checksum }) => ({ id, checksum }));
@@ -576,7 +583,7 @@ test("content suggestion schema runner rejects a non-normal DDL guard before mut
   assert.equal(calls.includes("begin"), false);
 });
 
-test("ordered 077 through 091 schemas apply and replay against PostgreSQL 16", {
+test("ordered 077 through 092 schemas apply and replay against PostgreSQL 16", {
   skip: process.env.RUN_FAQ_SCHEMA_POSTGRES_INTEGRATION !== "1",
   timeout: 300_000,
 }, async () => {
@@ -655,6 +662,7 @@ test("ordered 077 through 091 schemas apply and replay against PostgreSQL 16", {
       "089_free_subscription_plan.sql",
       "090_existing_brand_free_subscriptions.sql",
       "091_ai_content_prompt_lineage_v4.sql",
+      "092_publish_calendar_weekly_schedule.sql",
     ]);
     const topicScope = await client.query(
       `select relation.relname as relation_name,constraint_row.conname,
