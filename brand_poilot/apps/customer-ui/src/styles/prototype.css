@@ -2307,6 +2307,47 @@ details.panel > summary.panel-head::-webkit-details-marker {
 .auto-publish-channel small { color: var(--muted); }
 .auto-publish-format-grid { display: flex; gap: 14px; }
 .auto-publish-format-grid label { display: inline-flex; align-items: center; gap: 5px; color: var(--text); }
+.auto-publish-header-control { display: grid; min-width: 0; gap: 5px; }
+.auto-publish-header-control__main { display: flex; align-items: center; justify-content: flex-end; gap: 8px; }
+.auto-publish-header-control__label { font-size: 13px; font-weight: 800; white-space: nowrap; }
+.auto-publish-header-control__switch { display: inline-flex; min-width: 68px; min-height: 36px; align-items: center; justify-content: space-between; gap: 6px; padding: 4px 9px 4px 5px; border: 1px solid var(--line); border-radius: 999px; color: var(--muted); background: var(--surface-alt); font: inherit; font-size: 11px; font-weight: 800; cursor: pointer; }
+.auto-publish-header-control__switch.is-on { border-color: color-mix(in srgb, var(--primary) 52%, var(--line)); color: var(--primary); background: var(--info-bg); }
+.auto-publish-header-control__switch-knob { width: 24px; height: 24px; border-radius: 50%; background: var(--muted); box-shadow: 0 1px 2px rgb(15 23 42 / 16%); }
+.auto-publish-header-control__switch.is-on .auto-publish-header-control__switch-knob { background: var(--primary); }
+.auto-publish-header-control > small { max-width: 330px; color: var(--muted); font-size: 11px; line-height: 1.4; text-align: right; }
+.auto-publish-header-control > [role="alert"] { max-width: 360px; margin: 0; color: var(--danger); font-size: 11px; line-height: 1.4; text-align: right; }
+.weekly-auto-publish-dialog { display: grid; grid-template-rows: auto minmax(0, 1fr) auto; width: min(920px, calc(100vw - 32px)); max-width: 100%; max-height: min(860px, calc(100vh - 32px)); overflow: hidden; }
+.weekly-auto-publish-dialog__header, .weekly-auto-publish-dialog__footer { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 18px 20px; }
+.weekly-auto-publish-dialog__header { border-bottom: 1px solid var(--line); }
+.weekly-auto-publish-dialog__header > div, .weekly-auto-publish-dialog__section-heading > div { min-width: 0; }
+.weekly-auto-publish-dialog__header h2 { margin: 4px 0; }
+.weekly-auto-publish-dialog__header p, .weekly-auto-publish-dialog__section-heading p { margin: 0; color: var(--muted); }
+.weekly-auto-publish-dialog__body { display: grid; min-width: 0; gap: 16px; padding: 18px 20px; overflow: auto; overscroll-behavior: contain; }
+.weekly-auto-publish-dialog__section { display: grid; min-width: 0; gap: 12px; padding: 16px; border: 1px solid var(--line); border-radius: 9px; background: var(--surface-alt); }
+.weekly-auto-publish-dialog__section-heading { display: flex; min-width: 0; align-items: end; justify-content: space-between; gap: 12px; }
+.weekly-auto-publish-dialog__section-heading h3 { margin: 0 0 3px; font-size: 15px; }
+.weekly-auto-publish-dialog__section-heading p { font-size: 12px; }
+.weekly-auto-publish-dialog__channels { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); min-width: 0; gap: 8px; }
+.weekly-auto-publish-channel { display: grid; grid-template-columns: auto auto minmax(0, 1fr); align-items: center; gap: 9px; min-width: 0; padding: 11px 12px; border: 1px solid var(--line); border-radius: 7px; color: var(--text); background: var(--surface); }
+.weekly-auto-publish-channel > span { display: grid; min-width: 0; gap: 2px; }
+.weekly-auto-publish-channel small { overflow-wrap: anywhere; color: var(--muted); font-size: 11px; }
+.weekly-auto-publish-channel.is-unavailable { color: var(--muted); background: color-mix(in srgb, var(--surface-alt) 82%, var(--line)); }
+.weekly-auto-publish-dialog__formats { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.weekly-auto-publish-dialog__formats label { display: grid; min-width: 0; gap: 6px; color: var(--muted); font-size: 12px; }
+.weekly-auto-publish-dialog__formats select, .weekly-auto-publish-row input { width: 100%; min-width: 0; min-height: 38px; box-sizing: border-box; border: 1px solid var(--line); border-radius: 6px; padding: 0 9px; color: var(--text); background: var(--surface); font: inherit; }
+.weekly-auto-publish-dialog__week { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); min-width: 0; gap: 9px; }
+.weekly-auto-publish-day { display: grid; min-width: 0; align-content: start; gap: 8px; margin: 0; padding: 12px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface); }
+.weekly-auto-publish-day legend { display: flex; align-items: baseline; gap: 7px; padding: 0 4px; color: var(--text); font-weight: 800; }
+.weekly-auto-publish-day legend small { color: var(--muted); font-size: 11px; font-weight: 500; }
+.weekly-auto-publish-day__rows { display: grid; min-width: 0; gap: 7px; }
+.weekly-auto-publish-row { display: grid; grid-template-columns: minmax(104px, 1fr) auto; min-width: 0; align-items: center; gap: 7px; }
+.weekly-auto-publish-row label { min-width: 0; }
+.weekly-auto-publish-row__actions { display: flex; gap: 4px; }
+.weekly-auto-publish-row__actions .icon-button { width: 34px; min-width: 34px; height: 34px; min-height: 34px; padding: 0; }
+.weekly-auto-publish-day__add { width: 100%; min-height: 34px; border-style: dashed; }
+.weekly-auto-publish-dialog__notice { margin: 0; padding: 11px 12px; border-radius: 7px; color: var(--muted); background: var(--info-bg); font-size: 12px; line-height: 1.5; }
+.weekly-auto-publish-dialog__error { margin: 0; color: var(--danger); font-size: 12px; }
+.weekly-auto-publish-dialog__footer { justify-content: flex-end; border-top: 1px solid var(--line); background: var(--surface); }
 .sidebar-usage-summary small { color: #a9beb5; font-size: 11px; line-height: 1.4; }
 .ai-content-filter { display: flex; flex-wrap: wrap; gap: 6px; }
 .ai-content-filter button { min-height: 34px; padding: 0 12px; border: 1px solid var(--line); border-radius: 6px; color: var(--muted); background: var(--surface); cursor: pointer; }
@@ -2629,6 +2670,13 @@ details.panel > summary.panel-head::-webkit-details-marker {
 
 @media (max-width: 720px) {
   .publish-calendar-toolbar, .publish-calendar-detail__header, .auto-publish-settings__footer { align-items: flex-start; flex-direction: column; }
+  .weekly-auto-publish-dialog { width: 100%; height: 100vh; max-height: 100vh; border: 0; border-radius: 0; }
+  .weekly-auto-publish-dialog__header { align-items: flex-start; padding: 16px; }
+  .weekly-auto-publish-dialog__header p { display: none; }
+  .weekly-auto-publish-dialog__body { padding: 14px 16px; }
+  .weekly-auto-publish-dialog__section { padding: 13px; }
+  .weekly-auto-publish-dialog__formats, .weekly-auto-publish-dialog__week { grid-template-columns: 1fr; }
+  .weekly-auto-publish-dialog__footer { padding: 12px 16px; }
   .publish-calendar-weekdays, .publish-calendar-grid { min-width: 640px; }
   .publish-calendar-cell { min-height: 96px; }
   .skeleton-metric-grid, .skeleton-card-grid { grid-template-columns: 1fr; }
@@ -2698,6 +2746,12 @@ details.panel > summary.panel-head::-webkit-details-marker {
 @media (max-width: 639px) {
   .publish-calendar-layout, .publish-calendar-card, .publish-calendar-detail, .publish-content-picker, .publish-schedule-panel { min-width: 0; max-width: 100%; }
   .publish-calendar-toolbar .actions { width: 100%; }
+  .publish-calendar-toolbar .actions .auto-publish-header-control { flex: 1 1 100%; width: 100%; }
+  .auto-publish-header-control__main { justify-content: flex-start; flex-wrap: wrap; }
+  .auto-publish-header-control > small, .auto-publish-header-control > [role="alert"] { max-width: none; text-align: left; }
+  .weekly-auto-publish-dialog__channels { grid-template-columns: 1fr; }
+  .weekly-auto-publish-row { grid-template-columns: minmax(0, 1fr) auto; }
+  .weekly-auto-publish-row__actions .icon-button { width: 32px; min-width: 32px; }
   .publish-calendar-toolbar .actions > .button:first-child { flex: 1; }
   .publish-calendar-detail__list, .publish-calendar-slot-detail, .publish-content-picker__header, .publish-content-picker__tabs, .publish-content-picker__body, .publish-content-picker__footer { min-width: 0; }
   .publish-content-picker__tabs .button { flex: 0 0 auto; }

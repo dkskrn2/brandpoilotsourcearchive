@@ -301,13 +301,18 @@ async function installFixture(page: Page) {
     if (path.endsWith("/channel-connection-request")) return json(route, {
       id: "request-1", brandId, status: "draft", requestedChannels: [], note: "", createdAt: null, updatedAt: null,
     });
+    if (path.endsWith("/publish-calendar/settings/weekly")) return json(route, {
+      brandId, enabled: false, channels: ["instagram"], informationalFormat: "card_news", trendFormat: "reel",
+      weeklySchedule: [{ id: "40000000-0000-4000-8000-000000000001", dayOfWeek: 1, time: "11:17", sortOrder: 0 }],
+      updatedAt: "2026-08-25T00:00:00.000Z",
+    });
     if (path.endsWith("/publish-calendar/settings")) return json(route, {
       brandId, enabled: true, channels: ["instagram"], informationalFormat: "card_news", trendFormat: "reel", slotTimes: ["11:30"], updatedAt: null,
     });
     if (path.endsWith("/publish-calendar/usage")) return json(route, {
       startsAt: "2026-08-24T00:00:00.000Z", endsAt: "2026-08-31T00:00:00.000Z",
       generation: { limit: 10, succeeded: 1, reserved: 0, remaining: 9, additionalAvailable: 9 },
-      publishing: { limit: 7, succeeded: 1, reserved: 2, remaining: 6, additionalAvailable: 4 },
+      publishing: { limit: 30, succeeded: 1, reserved: 2, remaining: 29, additionalAvailable: 27 },
     });
     if (path.endsWith("/publish-calendar/manual-options")) return json(route, {
       purposes: [{ value: "informational", label: "정보성" }],
@@ -588,6 +593,32 @@ test("publish filters, responsive calendar, and content submit controls remain r
     await expectNoSeriousOrCriticalViolations(page, `publish picker ${viewport.width}x${viewport.height}`);
     await newContentPicker.getByRole("button", { name: "닫기" }).click();
   }
+});
+
+test("weekly automatic settings stacks without overflow and keeps keyboard focus contained", async ({ page }) => {
+  await page.clock.install({ time: publishFixtureNow });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto("/publish-queue", { waitUntil: "domcontentloaded" });
+  await page.getByRole("tab", { name: "캘린더" }).click();
+  const edit = page.getByRole("button", { name: "자동 게시 수정" });
+  await expect(edit).toBeVisible();
+  await edit.click();
+
+  const dialog = page.getByRole("dialog", { name: "주간 자동 게시 설정" });
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByRole("heading", { name: "주간 자동 게시 설정" })).toBeFocused();
+  await expect.poll(() => dialog.evaluate((element) => element.scrollWidth <= element.clientWidth + 1), {
+    message: "weekly automatic settings dialog must not overflow horizontally",
+  }).toBe(true);
+  await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1), {
+    message: "weekly automatic settings page must not overflow horizontally",
+  }).toBe(true);
+
+  await page.keyboard.press("Shift+Tab");
+  await expect(dialog.getByRole("button", { name: "설정 저장" })).toBeFocused();
+  await page.keyboard.press("Escape");
+  await expect(dialog).toHaveCount(0);
+  await expect(edit).toBeFocused();
 });
 
 test("reduced motion removes transitions, animations, and smooth scrolling", async ({ page }) => {

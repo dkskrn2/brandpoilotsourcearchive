@@ -26,6 +26,27 @@ const manualOptions = {
   },
 };
 
+const weeklySettings = {
+  brandId: "brand-1",
+  enabled: false,
+  channels: ["instagram" as const],
+  informationalFormat: "card_news" as const,
+  trendFormat: "reel" as const,
+  weeklySchedule: [{ id: "40000000-0000-4000-8000-000000000001", dayOfWeek: 1 as const, time: "11:17", sortOrder: 0 }],
+  updatedAt: "2026-08-26T00:00:00.000Z",
+};
+
+const connectedInstagram = {
+  type: "instagram" as const,
+  label: "Instagram",
+  enabled: true,
+  oauthState: "connected" as const,
+  status: "connected" as const,
+  accountLabel: "@brand",
+  lastHealthyAt: "2026-08-26T00:00:00.000Z",
+  lastPublishedAt: "",
+};
+
 function target(overrides: Partial<PublishItemTarget> = {}): PublishItemTarget {
   return {
     queueId: "queue-1", channelOutputId: "channel-output-1", channel: "instagram", status: "scheduled",
@@ -81,6 +102,11 @@ async function renderPage(
   const api = {
     listPublishItems: vi.fn(async () => [] as PublishItem[]),
     listChannels: vi.fn(async () => []),
+    getChannelCapabilities: vi.fn(async () => [{ channel: "instagram" as const, catalogStatus: "available" as const, enabled: true, connectionStatus: "connected" as const, canGenerate: true, generationFormats: ["card_news" as const], exportModes: ["image" as const], publishModes: ["instagram_feed_carousel" as const], readiness: "ready" as const, reasonCode: null }]),
+    getPublishCalendarWeeklySettings: vi.fn(async () => null),
+    savePublishCalendarWeeklySettings: vi.fn(async (_brandId: string, payload: Record<string, unknown>) => ({ ...weeklySettings, ...payload })),
+    setPublishCalendarEnabled: vi.fn(async (_brandId: string, enabled: boolean) => ({ ...weeklySettings, enabled })),
+    getPublishCalendarUsage: vi.fn(async () => manualOptions.usage),
     getPublishCalendarSettings: vi.fn(async () => ({ brandId: "brand-1", enabled: false, channels: [], informationalFormat: "card_news", trendFormat: "reel", slotTimes: ["11:30"], updatedAt: null })),
     getPublishCalendarManualOptions: vi.fn(async () => { throw new Error("not_configured"); }),
     listPublishCalendarContentCandidates: vi.fn(async () => ({ items: [] })),
@@ -352,10 +378,112 @@ describe("PublishQueuePage canonical collection", () => {
     const api = await renderPage({ listPublishItems: vi.fn(async () => [item()]) });
     await screen.findByRole("article", { name: "예약된 SNS 마케팅" });
     expect(api.listChannels).not.toHaveBeenCalled();
+    expect(api.getChannelCapabilities).not.toHaveBeenCalled();
+    expect(api.getPublishCalendarWeeklySettings).not.toHaveBeenCalled();
     expect(api.getPublishCalendarSettings).not.toHaveBeenCalled();
     await userEvent.click(screen.getByRole("tab", { name: "캘린더" }));
     await waitFor(() => expect(api.listChannels).toHaveBeenCalledWith("brand-1"));
+    expect(api.getChannelCapabilities).toHaveBeenCalledWith("brand-1");
+    expect(api.getPublishCalendarWeeklySettings).toHaveBeenCalledWith("brand-1");
     expect(api.getPublishCalendarSettings).toHaveBeenCalledWith("brand-1");
+  });
+
+  it("uses the weekly read, dedicated confirmed toggle, usage, and weekly save without touching legacy writes", async () => {
+    const getPublishCalendarSettings = vi.fn(async () => ({ brandId: "brand-1", enabled: false, channels: [], informationalFormat: "card_news" as const, trendFormat: "reel" as const, slotTimes: ["11:30"], updatedAt: null }));
+    const savePublishCalendarSettings = vi.fn();
+    const setPublishCalendarEnabled = vi.fn(async (_brandId: string, enabled: boolean) => ({ ...weeklySettings, enabled }));
+    const savePublishCalendarWeeklySettings = vi.fn(async (_brandId: string, payload: Record<string, unknown>) => ({ ...weeklySettings, ...payload }));
+    const api = await renderPage({
+      listChannels: vi.fn(async () => [connectedInstagram]),
+      getPublishCalendarWeeklySettings: vi.fn(async () => weeklySettings),
+      getPublishCalendarSettings,
+      getPublishCalendarUsage: vi.fn(async () => manualOptions.usage),
+      setPublishCalendarEnabled,
+      savePublishCalendarWeeklySettings,
+      savePublishCalendarSettings,
+    });
+
+    await userEvent.click(await screen.findByRole("tab", { name: "캘린더" }));
+    const offSwitch = await screen.findByRole("switch", { name: "자동 게시 OFF" });
+    expect(offSwitch).toHaveAttribute("aria-checked", "false");
+    expect(getPublishCalendarSettings).not.toHaveBeenCalled();
+    expect(api.getPublishCalendarUsage).toHaveBeenCalledWith("brand-1");
+
+    await userEvent.click(offSwitch);
+    await waitFor(() => expect(screen.getByRole("switch", { name: "자동 게시 ON" })).toHaveAttribute("aria-checked", "true"));
+    expect(setPublishCalendarEnabled).toHaveBeenCalledWith("brand-1", true);
+
+    await userEvent.click(screen.getByRole("button", { name: "자동 게시 수정" }));
+    const dialog = await screen.findByRole("dialog", { name: "주간 자동 게시 설정" });
+    expect(within(dialog).queryByRole("switch")).not.toBeInTheDocument();
+    await userEvent.clear(within(dialog).getByLabelText("월요일 1번째 게시 시간"));
+    await userEvent.type(within(dialog).getByLabelText("월요일 1번째 게시 시간"), "11:43");
+    await userEvent.click(within(dialog).getByRole("button", { name: "설정 저장" }));
+
+    await waitFor(() => expect(savePublishCalendarWeeklySettings).toHaveBeenCalledWith("brand-1", expect.objectContaining({
+      weeklySchedule: [expect.objectContaining({ time: "11:43" })],
+    })));
+    expect(savePublishCalendarWeeklySettings.mock.calls[0][1]).not.toHaveProperty("enabled");
+    expect(savePublishCalendarSettings).not.toHaveBeenCalled();
+  });
+
+  it("keeps the confirmed weekly state and reports a safe error when the dedicated toggle fails", async () => {
+    const setPublishCalendarEnabled = vi.fn(async () => { throw new Error("provider detail must stay private"); });
+    await renderPage({
+      listChannels: vi.fn(async () => [connectedInstagram]),
+      getPublishCalendarWeeklySettings: vi.fn(async () => weeklySettings),
+      getPublishCalendarUsage: vi.fn(async () => manualOptions.usage),
+      setPublishCalendarEnabled,
+    });
+
+    await userEvent.click(await screen.findByRole("tab", { name: "캘린더" }));
+    await userEvent.click(await screen.findByRole("switch", { name: "자동 게시 OFF" }));
+
+    expect(await screen.findByRole("switch", { name: "자동 게시 OFF" })).toHaveAttribute("aria-checked", "false");
+    expect(screen.getByRole("alert")).toHaveTextContent("자동 게시 상태를 변경하지 못했습니다. 잠시 후 다시 시도하세요.");
+    expect(screen.queryByText(/provider detail/)).not.toBeInTheDocument();
+  });
+
+  it("does not invent OFF after a weekly read failure and retries the strict weekly read", async () => {
+    const getPublishCalendarWeeklySettings = vi.fn()
+      .mockRejectedValueOnce(new Error("temporary read failure"))
+      .mockResolvedValueOnce({ ...weeklySettings, enabled: true });
+    await renderPage({
+      listChannels: vi.fn(async () => [connectedInstagram]),
+      getPublishCalendarWeeklySettings,
+      getPublishCalendarUsage: vi.fn(async () => manualOptions.usage),
+    });
+
+    await userEvent.click(await screen.findByRole("tab", { name: "캘린더" }));
+    expect(await screen.findByText("자동 게시 상태 확인 불가")).toBeVisible();
+    expect(screen.queryByRole("switch", { name: /자동 게시 (ON|OFF)/ })).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "자동 게시 다시 시도" }));
+    await waitFor(() => expect(screen.getByRole("switch", { name: "자동 게시 ON" })).toBeVisible());
+    expect(getPublishCalendarWeeklySettings).toHaveBeenCalledTimes(2);
+  });
+
+  it("renders the legacy settings path after weekly 404 and never performs a weekly write", async () => {
+    const savePublishCalendarWeeklySettings = vi.fn();
+    const setPublishCalendarEnabled = vi.fn();
+    const savePublishCalendarSettings = vi.fn(async (_brandId: string, payload: Record<string, unknown>) => ({ brandId: "brand-1", updatedAt: null, ...payload }));
+    await renderPage({
+      getPublishCalendarWeeklySettings: vi.fn(async () => null),
+      getPublishCalendarSettings: vi.fn(async () => ({ brandId: "brand-1", enabled: false, channels: [], informationalFormat: "card_news", trendFormat: "reel", slotTimes: ["11:30"], updatedAt: null })),
+      savePublishCalendarWeeklySettings,
+      setPublishCalendarEnabled,
+      savePublishCalendarSettings,
+    });
+
+    await userEvent.click(await screen.findByRole("tab", { name: "캘린더" }));
+    expect(await screen.findByRole("button", { name: "자동 게시 설정" })).toBeVisible();
+    expect(screen.queryByRole("switch", { name: /자동 게시 (ON|OFF)/ })).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "자동 게시 설정" }));
+    await userEvent.click(within(await screen.findByRole("dialog", { name: "자동 게시 설정" })).getByRole("button", { name: "설정 저장" }));
+
+    await waitFor(() => expect(savePublishCalendarSettings).toHaveBeenCalledTimes(1));
+    expect(savePublishCalendarWeeklySettings).not.toHaveBeenCalled();
+    expect(setPublishCalendarEnabled).not.toHaveBeenCalled();
   });
 
   it("opens the same fixed-source schedule panel lazily from the list", async () => {
