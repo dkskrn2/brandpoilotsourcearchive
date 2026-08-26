@@ -117,12 +117,12 @@ test("workflow does not apply database migrations automatically", () => {
   assert.doesNotMatch(workflow, /npm run db:migrate|node scripts\/migrate\.mjs|\bpsql\b/);
 });
 
-test("migration changes run both publish-calendar PostgreSQL contracts without a silent skip", () => {
+test("migration changes run all impacted PostgreSQL contracts without a silent skip", () => {
   const migrationGate = workflow.match(
     /- name: Verify migrations\n([\s\S]*?)(?=\n {6}- name:)/,
   )?.[1] ?? "";
   assert.match(migrationGate, /if: needs\.impact\.outputs\.migration_changed == 'true'/);
-  for (const migration of ["086", "091"]) {
+  for (const migration of ["086", "092"]) {
     assert.match(
       migrationGate,
       new RegExp(
@@ -132,36 +132,45 @@ test("migration changes run both publish-calendar PostgreSQL contracts without a
   }
   assert.doesNotMatch(
     migrationGate,
-    /publishCalendarMigration(?:086|091)\.postgres\.integration\.test\.ts[^\n]*(?:\|\|\s*true|--passWithNoTests)/,
+    /publishCalendarMigration(?:086|092)\.postgres\.integration\.test\.ts[^\n]*(?:\|\|\s*true|--passWithNoTests)/,
   );
 
-  const migration091Test = readFileSync(
+  assert.match(
+    migrationGate,
+    /npm exec --workspace @brand-pilot\/api -- vitest run src\/aiContentPromptVersionMigration091\.postgres\.integration\.test\.ts/,
+  );
+  assert.doesNotMatch(
+    migrationGate,
+    /aiContentPromptVersionMigration091\.postgres\.integration\.test\.ts[^\n]*(?:\|\|\s*true|--passWithNoTests)/,
+  );
+
+  const migration092Test = readFileSync(
     "apps/api/src/publishCalendarMigration092.postgres.integration.test.ts",
     "utf8",
   );
-  assert.doesNotMatch(migration091Test, /\b(?:describe|it|test)\.skip\s*\(|\bskip\s*:/);
+  assert.doesNotMatch(migration092Test, /\b(?:describe|it|test)\.skip\s*\(|\bskip\s*:/);
   assert.match(
-    migration091Test,
+    migration092Test,
     /import\s*\{\s*createPublishCalendarRepository\s*\}\s*from\s*"\.\/publishCalendarRepository\.js"/,
   );
   assert.match(
-    migration091Test,
+    migration092Test,
     /createPublishCalendarRepository\(application\)/,
   );
   assert.match(
-    migration091Test,
+    migration092Test,
     /createDatabasePublishCalendarAllocator\(application,\s*repository\)/,
   );
-  assert.match(migration091Test, /allocator\.allocateAll\s*\(/);
-  assert.match(migration091Test, /repository\.saveWeeklySettings\s*\(/);
-  assert.match(migration091Test, /repository\.saveWeeklyConfiguration\s*\(/);
-  assert.match(migration091Test, /repository\.setWeeklyEnabled\s*\(/);
+  assert.match(migration092Test, /allocator\.allocateAll\s*\(/);
+  assert.match(migration092Test, /repository\.saveWeeklySettings\s*\(/);
+  assert.match(migration092Test, /repository\.saveWeeklyConfiguration\s*\(/);
+  assert.match(migration092Test, /repository\.setWeeklyEnabled\s*\(/);
   assert.match(
-    migration091Test,
+    migration092Test,
     /Promise\.all\s*\(\s*\[[\s\S]*?repository\.setWeeklyEnabled\s*\([\s\S]*?repository\.saveWeeklyConfiguration\s*\(/,
   );
-  assert.match(migration091Test, /repository\.getWeeklySettings\s*\(/);
-  assert.match(migration091Test, /from pg_auth_members[\s\S]*where member\.rolname=current_user/);
+  assert.match(migration092Test, /repository\.getWeeklySettings\s*\(/);
+  assert.match(migration092Test, /from pg_auth_members[\s\S]*where member\.rolname=current_user/);
 
   const weeklyRepository = readFileSync("apps/api/src/publishCalendarRepository.ts", "utf8");
   assert.match(weeklyRepository, /saveWeeklyConfiguration\s*\(/);
