@@ -84,7 +84,10 @@ export interface PublishCalendarRepository {
     channels: Channel[];
     idempotencyKey: string;
     createdByUserId?: string | null;
-  }): Promise<PublishCalendarSlotDto>;
+  }): Promise<
+    | { status: "created" | "existing"; slot: PublishCalendarSlotDto }
+    | { status: "quota_exhausted"; slot: null }
+  >;
   assignSlot(input: BrandScope & {
     slotId: string;
     assignmentMode: AssignmentMode;
@@ -110,7 +113,7 @@ const MAX_WEEKLY_SCHEDULE_ENTRIES_PER_DAY = 24;
 const MAX_WEEKLY_SCHEDULE_ENTRIES = MAX_WEEKLY_SCHEDULE_ENTRIES_PER_DAY * 7;
 const MAX_POSTGRES_INTEGER = 2_147_483_647;
 const ACTIVE_RESERVATION_STATUSES = [
-  "proposal_assigned", "generation_pending", "content_assigned", "ready",
+  "open", "proposal_assigned", "generation_pending", "content_assigned", "ready",
   "scheduled", "publish_delayed", "quota_blocked",
 ];
 
@@ -1231,14 +1234,17 @@ export function createPublishCalendarRepository(
             for update`,
           [input.workspaceId, input.brandId, idempotencyKey],
         );
-        if (replay.rowCount) return mapSlot(replay.rows[0]);
+        if (replay.rowCount) return { status: "existing", slot: mapSlot(replay.rows[0]) };
         const future = await client.query(
           "select clock_timestamp() < $1::timestamptz as future",
           [input.scheduledFor],
         );
         if (future.rows[0]?.future !== true) throw new Error("publish_calendar_time_past");
         await assertConnectedChannels(client, input, channels);
-        await subscriptionAndPublishUsage(client, input, input.scheduledFor);
+        const { availability } = await subscriptionAndPublishUsage(client, input, input.scheduledFor);
+        if (availability.additionalAvailable < 1) {
+          return { status: "quota_exhausted", slot: null };
+        }
         const result = await client.query(
           `insert into publish_calendar_slots(
              workspace_id,brand_id,scheduled_for,assignment_mode,status,recommendation_kind,
@@ -1251,7 +1257,7 @@ export function createPublishCalendarRepository(
             input.recommendationKind, input.contentFormat, channels,
             input.createdByUserId ?? null, idempotencyKey],
         );
-        return mapSlot(result.rows[0]);
+        return { status: "created", slot: mapSlot(result.rows[0]) };
       });
     },
 

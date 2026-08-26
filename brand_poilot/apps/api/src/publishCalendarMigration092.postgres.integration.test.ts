@@ -3,7 +3,10 @@ import { resolve } from "node:path";
 import { PostgreSqlContainer, type StartedPostgreSqlContainer } from "@testcontainers/postgresql";
 import { Pool, type PoolClient } from "pg";
 import { expect, it } from "vitest";
-import { listEnabledAutomaticCalendarBrands } from "./publishCalendarAllocator.js";
+import {
+  createDatabasePublishCalendarAllocator,
+  listEnabledAutomaticCalendarBrands,
+} from "./publishCalendarAllocator.js";
 import { createPublishCalendarRepository } from "./publishCalendarRepository.js";
 
 const applicationPassword = "publish-calendar-weekly-application-test";
@@ -14,6 +17,13 @@ const quotedPublicRole = "PUBLIC";
 const workspaceId = "10000000-0000-4000-8000-000000000091";
 const brandId = "20000000-0000-4000-8000-000000000091";
 const foreignBrandId = "20000000-0000-4000-8000-000000000092";
+const categoryId = "30000000-0000-4000-8000-000000000091";
+const informationalSubcategoryId = "40000000-0000-4000-8000-000000000091";
+const trendSubcategoryId = "40000000-0000-4000-8000-000000000092";
+const profileId = "50000000-0000-4000-8000-000000000091";
+const suggestionBatchId = "60000000-0000-4000-8000-000000000091";
+const informationalSuggestionId = "70000000-0000-4000-8000-000000000091";
+const trendSuggestionId = "70000000-0000-4000-8000-000000000092";
 
 function connectionStringForRole(connectionString: string, roleName: string, password: string) {
   const value = new URL(connectionString);
@@ -93,18 +103,45 @@ async function bootstrapCalendarDependencies(client: PoolClient) {
     );
     create table app_users(id uuid primary key default gen_random_uuid());
     create table ai_content_proposals(
-      id uuid primary key default gen_random_uuid(),workspace_id uuid not null,brand_id uuid not null
+      id uuid primary key default gen_random_uuid(),workspace_id uuid not null,brand_id uuid not null,
+      generation_id uuid,proposal_json jsonb not null default '{}'::jsonb
     );
-    create table content_suggestions(id uuid primary key default gen_random_uuid());
+    create table content_categories(id uuid primary key,active boolean not null);
+    create table content_subcategories(
+      id uuid primary key,category_id uuid not null,sort_order integer not null,active boolean not null
+    );
+    create table brand_profiles(
+      id uuid primary key,workspace_id uuid not null,brand_id uuid not null,primary_category_id uuid not null
+    );
+    create table brand_profile_subcategories(
+      brand_profile_id uuid not null,subcategory_id uuid not null
+    );
+    create table content_suggestion_batches(
+      id uuid primary key,category_id uuid not null,generation_date date not null,published_at timestamptz not null
+    );
+    create table content_suggestions(
+      id uuid primary key,batch_id uuid not null,category_id uuid not null,subcategory_id uuid not null,
+      title text not null,intent text not null,position integer not null,created_at timestamptz not null
+    );
     create table ai_content_generations(
-      id uuid primary key default gen_random_uuid(),workspace_id uuid not null,brand_id uuid not null
+      id uuid primary key default gen_random_uuid(),workspace_id uuid not null,brand_id uuid not null,
+      title text,output_format text,status text
     );
     create table ai_content_generation_outputs(
       id uuid primary key default gen_random_uuid(),generation_id uuid not null,
-      workspace_id uuid not null,brand_id uuid not null
+      workspace_id uuid not null,brand_id uuid not null,title text,status text
     );
     create table topic_publish_groups(
       id uuid primary key default gen_random_uuid(),workspace_id uuid not null,brand_id uuid not null
+    );
+    create table channel_outputs(
+      id uuid primary key default gen_random_uuid(),workspace_id uuid not null,brand_id uuid not null,
+      ai_content_generation_output_id uuid,content_topic_id uuid,delivery_format text
+    );
+    create table publish_queue(
+      id uuid primary key default gen_random_uuid(),workspace_id uuid not null,brand_id uuid not null,
+      topic_publish_group_id uuid,channel_output_id uuid,channel text,status text not null,
+      published_at timestamptz,scheduled_for timestamptz,queued_at timestamptz not null default now()
     );
   `);
 }
@@ -217,7 +254,12 @@ it("runs the actual weekly settings repository transaction as the application ro
       );
       await owner.query(`revoke create on schema public from ${schemaOwnerRole}`);
       await owner.query(`grant usage on schema public to ${applicationRole}`);
-      await owner.query(`grant select on brands,brand_channels to ${applicationRole}`);
+      await owner.query(`grant select on
+        brands,brand_channels,content_categories,content_subcategories,
+        brand_profiles,brand_profile_subcategories,content_suggestion_batches,content_suggestions,
+        ai_content_proposals,ai_content_generations,ai_content_generation_outputs,
+        topic_publish_groups,channel_outputs,publish_queue
+        to ${applicationRole}`);
       await owner.query(`grant execute on function assert_ai_content_writable() to ${applicationRole}`);
     } finally {
       await owner.query("reset role").catch(() => undefined);
@@ -296,8 +338,11 @@ it("runs the actual weekly settings repository transaction as the application ro
            cross join lateral aclexplode(relation.relacl) acl
            left join pg_roles grantee on grantee.oid=acl.grantee
           where relation.oid='public.publish_calendar_weekly_schedule_entries'::regclass
+            and acl.grantee<>relation.relowner
           group by acl.grantee,grantee.rolname
-          order by grantee_role_name collate "C"`,
+          order by (
+            case acl.grantee when 0 then 'PUBLIC' else grantee.rolname::text end
+          ) collate "C"`,
       );
       expect(directAcl.rows).toEqual([{
         grantee_role_name: applicationRole,
@@ -445,6 +490,119 @@ it("runs the actual weekly settings repository transaction as the application ro
       })).rejects.toThrow("publish_calendar_weekly_schedule_id_invalid");
       await expect(repository.getWeeklySettings({ workspaceId, brandId })).resolves.toEqual(read);
 
+      const allocationNow = new Date();
+      const occurrence = new Date(allocationNow.getTime() + 2 * 60 * 60 * 1_000);
+      const occurrenceKst = new Date(occurrence.getTime() + 9 * 60 * 60 * 1_000);
+      const occurrenceDayOfWeek = (occurrenceKst.getUTCDay() || 7) as 1 | 2 | 3 | 4 | 5 | 6 | 7;
+      const occurrenceTime = `${String(occurrenceKst.getUTCHours()).padStart(2, "0")}:${String(
+        occurrenceKst.getUTCMinutes(),
+      ).padStart(2, "0")}`;
+      const allocatorSettings = await repository.saveWeeklySettings({
+        workspaceId,
+        brandId,
+        enabled: true,
+        channels: ["instagram"],
+        informationalFormat: "card_news",
+        trendFormat: "reel",
+        weeklySchedule: [
+          { id: null, dayOfWeek: occurrenceDayOfWeek, time: occurrenceTime, sortOrder: 0 },
+          { id: null, dayOfWeek: occurrenceDayOfWeek, time: occurrenceTime, sortOrder: 1 },
+          { id: null, dayOfWeek: occurrenceDayOfWeek, time: occurrenceTime, sortOrder: 2 },
+        ],
+      });
+      expect(new Set(allocatorSettings.weeklySchedule.map(({ id }) => id)).size).toBe(3);
+
+      await administrator.query(
+        `insert into content_categories(id,active) values($1,true)`,
+        [categoryId],
+      );
+      await administrator.query(
+        `insert into content_subcategories(id,category_id,sort_order,active)
+         values($1,$3,0,true),($2,$3,1,true)`,
+        [informationalSubcategoryId, trendSubcategoryId, categoryId],
+      );
+      await administrator.query(
+        `insert into brand_profiles(id,workspace_id,brand_id,primary_category_id)
+         values($1,$2,$3,$4)`,
+        [profileId, workspaceId, brandId, categoryId],
+      );
+      await administrator.query(
+        `insert into brand_profile_subcategories(brand_profile_id,subcategory_id)
+         values($1,$2),($1,$3)`,
+        [profileId, informationalSubcategoryId, trendSubcategoryId],
+      );
+      await administrator.query(
+        `insert into content_suggestion_batches(id,category_id,generation_date,published_at)
+         values($1,$2,$3::timestamptz at time zone 'Asia/Seoul',$3)`,
+        [suggestionBatchId, categoryId, occurrence],
+      );
+      await administrator.query(
+        `insert into content_suggestions(
+           id,batch_id,category_id,subcategory_id,title,intent,position,created_at
+         ) values
+           ($1,$3,$4,$5,'automatic informational','informational',0,$7),
+           ($2,$3,$4,$6,'automatic trend','trend',1,$7)`,
+        [informationalSuggestionId, trendSuggestionId, suggestionBatchId, categoryId,
+          informationalSubcategoryId, trendSubcategoryId, occurrence],
+      );
+      await administrator.query(
+        `update billing_plan_catalog set weekly_publish_limit=3 where code='free'`,
+      );
+      await administrator.query(
+        `insert into publish_calendar_slots(
+           workspace_id,brand_id,scheduled_for,assignment_mode,status,
+           recommendation_kind,content_format,channels
+         ) values($1,$2,$3,'manual','generation_pending',null,'card_news',array['instagram'])`,
+        [workspaceId, brandId, occurrence],
+      );
+
+      const allocator = createDatabasePublishCalendarAllocator(application, repository);
+      await expect(allocator.allocateAll(allocationNow)).resolves.toEqual({
+        brandsSelected: 1,
+        openSlotsCreated: 2,
+        proposalsAssigned: 2,
+        quotaBlocked: 1,
+        brandsFailed: 0,
+      });
+      const allocatedSlots = await client.query<{
+        assignment_mode: string;
+        status: string;
+        channels: string[];
+        content_suggestion_id: string | null;
+        scheduled_for: string;
+        idempotency_key: string | null;
+      }>(
+        `select assignment_mode,status,channels,content_suggestion_id,
+                scheduled_for::text,idempotency_key
+           from publish_calendar_slots
+          where workspace_id=$1 and brand_id=$2
+          order by assignment_mode,idempotency_key nulls first`,
+        [workspaceId, brandId],
+      );
+      const automaticSlots = allocatedSlots.rows.filter(({ assignment_mode }) => assignment_mode === "automatic");
+      expect(automaticSlots).toHaveLength(2);
+      expect(automaticSlots.every(({ status }) => status === "proposal_assigned")).toBe(true);
+      expect(automaticSlots.map(({ channels }) => channels)).toEqual([["instagram"], ["instagram"]]);
+      expect(new Set(automaticSlots.map(({ scheduled_for }) => scheduled_for)).size).toBe(1);
+      expect(new Set(automaticSlots.map(({ idempotency_key }) => idempotency_key)).size).toBe(2);
+      expect(new Set(automaticSlots.map(({ content_suggestion_id }) => content_suggestion_id))).toEqual(
+        new Set([informationalSuggestionId, trendSuggestionId]),
+      );
+      expect(allocatedSlots.rows.filter(({ assignment_mode }) => assignment_mode === "manual")).toHaveLength(1);
+
+      await expect(allocator.allocateAll(allocationNow)).resolves.toEqual({
+        brandsSelected: 1,
+        openSlotsCreated: 0,
+        proposalsAssigned: 0,
+        quotaBlocked: 1,
+        brandsFailed: 0,
+      });
+      await expect(client.query<{ count: number }>(
+        `select count(*)::integer count from publish_calendar_slots
+          where workspace_id=$1 and brand_id=$2`,
+        [workspaceId, brandId],
+      )).resolves.toMatchObject({ rows: [{ count: 3 }] });
+
       await administrator.query("update ai_content_maintenance_state set enabled=true where singleton");
       await expect(repository.saveWeeklySettings({
         workspaceId,
@@ -455,7 +613,7 @@ it("runs the actual weekly settings repository transaction as the application ro
         trendFormat: "reel",
         weeklySchedule: expectedSchedule,
       })).rejects.toThrow("ai_content_maintenance");
-      await expect(repository.getWeeklySettings({ workspaceId, brandId })).resolves.toEqual(read);
+      await expect(repository.getWeeklySettings({ workspaceId, brandId })).resolves.toEqual(allocatorSettings);
     } finally {
       client.release();
     }

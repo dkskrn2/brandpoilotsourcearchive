@@ -1,6 +1,5 @@
 import type { Pool } from "pg";
 import { automaticSlotKey } from "./publishCalendarIdempotency.js";
-import { reservePublicationUnit, type UsageAvailability } from "./publishCalendarQuota.js";
 import type { PublishCalendarRepository } from "./publishCalendarRepository.js";
 import type { Channel, PublishCalendarWeeklySettingsDto } from "./types.js";
 
@@ -23,7 +22,7 @@ export interface ScheduledRecommendation {
 
 export type PublishCalendarAllocatorDependencies = Pick<
   PublishCalendarRepository,
-  "listSlots" | "createSlot" | "assignSlot" | "getWeeklyUsage" | "applyDueSubscriptionRenewals"
+  "listSlots" | "createSlot" | "assignSlot" | "applyDueSubscriptionRenewals"
 > & {
   listEnabledBrands(at: Date): Promise<AutomaticCalendarBrand[]>;
   listUnassignedRecommendations(brand: AutomaticCalendarBrand): Promise<ScheduledRecommendation[]>;
@@ -80,6 +79,7 @@ export function createPublishCalendarAllocator(dependencies: PublishCalendarAllo
       idempotencyKey ? [idempotencyKey] : []
     )));
     let openSlotsCreated = 0;
+    let quotaBlocked = false;
     for (let day = 0; day < 7; day += 1) {
       const dayStart = new Date(startsAt.getTime() + day * DAY_MILLISECONDS);
       const entries = brand.settings.weeklySchedule
@@ -106,9 +106,13 @@ export function createPublishCalendarAllocator(dependencies: PublishCalendarAllo
           channels: brand.settings.channels,
           idempotencyKey,
         });
-        slots.push(created);
+        if (created.status === "quota_exhausted") {
+          quotaBlocked = true;
+          continue;
+        }
+        slots.push(created.slot);
         existingKeys.add(idempotencyKey);
-        openSlotsCreated += 1;
+        if (created.status === "created") openSlotsCreated += 1;
       }
     }
 
@@ -118,8 +122,6 @@ export function createPublishCalendarAllocator(dependencies: PublishCalendarAllo
       .sort((left, right) => left.scheduledFor.localeCompare(right.scheduledFor));
     const recommendations = await dependencies.listUnassignedRecommendations(brand);
     let proposalsAssigned = 0;
-    let quotaBlocked = false;
-    const quotaByWindow = new Map<string, UsageAvailability>();
     for (const recommendation of recommendations) {
       const kind = classifySuggestion(recommendation);
       const recommendationDate = kstDateKey(new Date(recommendation.createdAt));
@@ -128,17 +130,6 @@ export function createPublishCalendarAllocator(dependencies: PublishCalendarAllo
       ));
       if (index < 0) continue;
       const candidate = openSlots[index];
-      const usage = await dependencies.getWeeklyUsage({
-        workspaceId: brand.workspaceId, brandId: brand.brandId,
-        at: new Date(candidate.scheduledFor),
-      });
-      const windowKey = `${usage.startsAt}/${usage.endsAt}`;
-      const availability = quotaByWindow.get(windowKey) ?? usage.publishing;
-      const reserved = reservePublicationUnit(availability);
-      if (!reserved) {
-        quotaBlocked = true;
-        break;
-      }
       const assigned = await dependencies.assignSlot({
         workspaceId: brand.workspaceId,
         brandId: brand.brandId,
@@ -151,7 +142,6 @@ export function createPublishCalendarAllocator(dependencies: PublishCalendarAllo
         quotaBlocked = true;
         break;
       }
-      quotaByWindow.set(windowKey, reserved);
       openSlots.splice(index, 1);
       proposalsAssigned += 1;
     }

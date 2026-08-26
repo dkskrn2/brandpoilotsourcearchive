@@ -447,7 +447,7 @@ describe("publish calendar repository settings and slot validation", () => {
     expect(run.statements).toEqual([]);
   });
 
-  it("creates a future open slot under the brand lock without reserving exhausted quota", async () => {
+  it("returns quota_exhausted without creating a future automatic slot under the brand lock", async () => {
     const run = harness((sql) => {
       if (sql.includes("clock_timestamp()")) return { rows: [{ future: true }], rowCount: 1 };
       if (sql.includes("from brand_channels")) return { rows: [{ channel: "instagram" }], rowCount: 1 };
@@ -469,11 +469,16 @@ describe("publish calendar repository settings and slot validation", () => {
       contentFormat: "card_news",
       channels: ["instagram"],
       idempotencyKey: automaticKey("2099-08-15"),
-    })).resolves.toMatchObject({ status: "open", contentSuggestionId: null });
+    })).resolves.toEqual({ status: "quota_exhausted", slot: null });
 
     const sql = run.statements.map(({ sql }) => sql);
     expect(sql.findIndex((value) => value.includes("pg_advisory_xact_lock")))
       .toBeLessThan(sql.findIndex((value) => value.includes("from brand_subscriptions subscription")));
+    expect(sql.some((value) => value.startsWith("insert into publish_calendar_slots"))).toBe(false);
+    const usage = run.statements.find(({ sql: value }) => (
+      value.includes("calendar_usage") && value.includes("direct_publish_groups")
+    ));
+    expect(usage?.values[3]).toContain("open");
   });
 
   it("stores an internal automatic key without applying customer spacing", async () => {
@@ -503,7 +508,10 @@ describe("publish calendar repository settings and slot validation", () => {
       contentFormat: "reel",
       channels: ["instagram"],
       idempotencyKey,
-    })).resolves.toMatchObject({ idempotencyKey });
+    })).resolves.toEqual({
+      status: "created",
+      slot: expect.objectContaining({ idempotencyKey }),
+    });
 
     const insert = run.statements.find(({ sql }) => sql.startsWith("insert into publish_calendar_slots"));
     expect(insert?.sql).toContain("idempotency_key");
@@ -531,7 +539,13 @@ describe("publish calendar repository settings and slot validation", () => {
       contentFormat: "reel",
       channels: ["instagram"],
       idempotencyKey,
-    })).resolves.toMatchObject({ idempotencyKey, scheduledFor: "2000-01-01T02:30:00.000Z" });
+    })).resolves.toEqual({
+      status: "existing",
+      slot: expect.objectContaining({
+        idempotencyKey,
+        scheduledFor: "2000-01-01T02:30:00.000Z",
+      }),
+    });
 
     expect(run.statements.some(({ sql }) => sql.includes("clock_timestamp()"))).toBe(false);
     expect(run.statements.some(({ sql }) => sql.includes("from brand_channels"))).toBe(false);

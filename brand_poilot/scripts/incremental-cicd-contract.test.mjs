@@ -143,6 +143,11 @@ test("migration changes run both publish-calendar PostgreSQL contracts without a
     migration091Test,
     /createPublishCalendarRepository\(application\)/,
   );
+  assert.match(
+    migration091Test,
+    /createDatabasePublishCalendarAllocator\(application,\s*repository\)/,
+  );
+  assert.match(migration091Test, /allocator\.allocateAll\s*\(/);
   assert.match(migration091Test, /repository\.saveWeeklySettings\s*\(/);
   assert.match(migration091Test, /repository\.saveWeeklyConfiguration\s*\(/);
   assert.match(migration091Test, /repository\.setWeeklyEnabled\s*\(/);

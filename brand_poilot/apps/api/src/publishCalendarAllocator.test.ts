@@ -42,7 +42,7 @@ function dependencies(options: {
   selectedBrands?: AutomaticCalendarBrand[];
   existing?: Array<Record<string, unknown>>;
   recommendations?: ScheduledRecommendation[];
-  additionalAvailable?: number;
+  slotCreationLimit?: number;
   blockedOnAssign?: boolean;
 } = {}) {
   const slots: Array<Record<string, unknown>> = [...(options.existing ?? [])];
@@ -56,6 +56,10 @@ function dependencies(options: {
     }) as never[]
   ));
   const createSlot = vi.fn(async (input: Record<string, unknown>) => {
+    const automaticSlots = slots.filter(({ assignmentMode }) => assignmentMode === "automatic");
+    if (automaticSlots.length >= (options.slotCreationLimit ?? Number.POSITIVE_INFINITY)) {
+      return { status: "quota_exhausted", slot: null } as never;
+    }
     const created = {
       id: `slot-${slots.length + 1}`,
       ...input,
@@ -65,7 +69,7 @@ function dependencies(options: {
       title: null,
     };
     slots.push(created);
-    return created as never;
+    return { status: "created", slot: created } as never;
   });
   const listUnassignedRecommendations = vi.fn(async () => recommendations.filter((recommendation) => (
     !slots.some(({ status, contentSuggestionId }) => (
@@ -79,17 +83,7 @@ function dependencies(options: {
     if (!options.blockedOnAssign) assignments += 1;
     return slot as never;
   });
-  const getWeeklyUsage = vi.fn(async () => {
-    const initialAvailable = options.additionalAvailable ?? 30;
-    const reserved = 30 - initialAvailable + assignments;
-    const available = Math.max(0, 30 - reserved);
-    return {
-      startsAt: "2026-08-09T00:00:00+09:00",
-      endsAt: "2026-08-16T00:00:00+09:00",
-      generation: { limit: 30, succeeded: 0, reserved: 0, remaining: 30, additionalAvailable: 30 },
-      publishing: { limit: 30, succeeded: 0, reserved, remaining: 30, additionalAvailable: available },
-    };
-  });
+  const getWeeklyUsage = vi.fn();
   const applyDueSubscriptionRenewals = vi.fn(async () => []);
   return {
     slots,
@@ -251,7 +245,7 @@ describe("publish calendar allocator", () => {
     expect(deps.assignSlot).not.toHaveBeenCalled();
   });
 
-  it("counts duplicate rows separately but a multi-channel target set as one publication unit", async () => {
+  it("stops duplicate occurrence materialization at quota while a multi-channel slot counts once", async () => {
     const duplicateBrand: AutomaticCalendarBrand = {
       ...brand,
       settings: { ...brand.settings, channels: ["instagram", "threads"], weeklySchedule: [
@@ -259,14 +253,16 @@ describe("publish calendar allocator", () => {
         { id: entryIds.thursdayDuplicate, dayOfWeek: 4, time: "11:30", sortOrder: 1 },
       ] },
     };
-    const deps = dependencies({ additionalAvailable: 1 });
+    const deps = dependencies({ slotCreationLimit: 1 });
 
     const result = await createPublishCalendarAllocator(deps)
       .allocateBrand(duplicateBrand, new Date("2026-08-12T19:00:00.000Z"));
 
-    expect(result).toEqual({ openSlotsCreated: 2, proposalsAssigned: 1, quotaBlocked: true });
+    expect(result).toEqual({ openSlotsCreated: 1, proposalsAssigned: 1, quotaBlocked: true });
     expect(deps.assignSlot).toHaveBeenCalledTimes(1);
+    expect(deps.slots).toHaveLength(1);
     expect(deps.createSlot).toHaveBeenCalledWith(expect.objectContaining({ channels: ["instagram", "threads"] }));
+    expect(deps.getWeeklyUsage).not.toHaveBeenCalled();
   });
 
   it("attaches a late daily recommendation on an idempotent later run", async () => {
