@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { CalendarDays, Download, ExternalLink, List, RotateCcw, X } from "lucide-react";
 import { PageHeader } from "../components/layout/PageHeader";
 import { PublishArtifactPreview } from "../components/publish/PublishArtifactPreview";
@@ -49,6 +49,7 @@ const resultStatusMeta: Record<PublishResultChannel["status"], { label: string; 
 };
 
 type PublishView = "list" | "calendar";
+type AsyncLoadStatus = "idle" | "loading" | "ready" | "error";
 
 type PublishQueuePageProps = {
   generationGateway?: Pick<AiContentGateway, "listGenerations">;
@@ -333,14 +334,17 @@ export function PublishQueuePage({ generationGateway = aiContentApiGateway }: Pu
   const [calendarSettings, setCalendarSettings] = useState<PublishCalendarSettings | null>(null);
   const [calendarWeeklyCapability, setCalendarWeeklyCapability] = useState<boolean | null>(null);
   const [calendarWeeklySettings, setCalendarWeeklySettings] = useState<PublishCalendarWeeklySettings | null>(null);
+  const [calendarWeeklyStatus, setCalendarWeeklyStatus] = useState<AsyncLoadStatus>("idle");
   const [calendarWeeklyUsage, setCalendarWeeklyUsage] = useState<PublishCalendarWeeklyUsage | null>(null);
-  const [calendarWeeklyRetry, setCalendarWeeklyRetry] = useState(0);
+  const [calendarWeeklyUsageStatus, setCalendarWeeklyUsageStatus] = useState<AsyncLoadStatus>("idle");
   const [calendarManualOptions, setCalendarManualOptions] = useState<PublishCalendarManualOptions | null>(null);
   const [calendarManualOptionsError, setCalendarManualOptionsError] = useState<string | null>(null);
   const [calendarManualOptionsLoading, setCalendarManualOptionsLoading] = useState(false);
   const [calendarChannels, setCalendarChannels] = useState<ChannelType[]>([]);
   const [calendarChannelCatalog, setCalendarChannelCatalog] = useState<ChannelConnection[]>([]);
+  const [calendarChannelsStatus, setCalendarChannelsStatus] = useState<AsyncLoadStatus>("idle");
   const [calendarPublishableChannels, setCalendarPublishableChannels] = useState<ChannelType[]>([]);
+  const [calendarCapabilitiesStatus, setCalendarCapabilitiesStatus] = useState<AsyncLoadStatus>("idle");
   const [calendarSaving, setCalendarSaving] = useState(false);
   const [calendarSettingsError, setCalendarSettingsError] = useState<string | null>(null);
   const [publishItems, setPublishItems] = useState<PublishItem[]>([]);
@@ -362,6 +366,11 @@ export function PublishQueuePage({ generationGateway = aiContentApiGateway }: Pu
   const scheduleTriggerRef = useRef<HTMLButtonElement | null>(null);
   const scheduleFocusItemKeyRef = useRef<string | null>(null);
   const manualOptionsRequestRef = useRef(0);
+  const weeklySettingsRequestRef = useRef(0);
+  const channelsRequestRef = useRef(0);
+  const capabilitiesRequestRef = useRef(0);
+  const weeklyUsageRequestRef = useRef(0);
+  const calendarSupportStartedRef = useRef(false);
   const reviewingOutputIdsRef = useRef(new Set<string>());
   const generationPreviewRequestRef = useRef<string | null>(null);
   const [reviewingOutputIds, setReviewingOutputIds] = useState<Set<string>>(() => new Set());
@@ -466,62 +475,104 @@ export function PublishQueuePage({ generationGateway = aiContentApiGateway }: Pu
     };
   }, []);
 
-  useEffect(() => {
-    let ignore = false;
-    if (view !== "calendar") return () => { ignore = true; };
-    if (typeof api.listChannels === "function") {
-      void api.listChannels(DEMO_BRAND_ID)
-        .then((channels) => {
-          if (ignore) return;
-          setCalendarChannelCatalog(channels);
-          setCalendarChannels(channels.filter((channel) => channel.enabled && channel.status === "connected").map((channel) => channel.type));
-        })
-        .catch(() => { if (!ignore) { setCalendarChannels([]); setCalendarChannelCatalog([]); } });
+  const reloadChannels = useCallback(async () => {
+    const requestId = ++channelsRequestRef.current;
+    setCalendarChannelsStatus("loading");
+    try {
+      const channels = typeof api.listChannels === "function" ? await api.listChannels(DEMO_BRAND_ID) : [];
+      if (channelsRequestRef.current !== requestId) return;
+      setCalendarChannelCatalog(channels);
+      setCalendarChannels(channels.filter((channel) => channel.enabled && channel.status === "connected").map((channel) => channel.type));
+      setCalendarChannelsStatus("ready");
+    } catch {
+      if (channelsRequestRef.current === requestId) setCalendarChannelsStatus("error");
     }
-    void api.getChannelCapabilities(DEMO_BRAND_ID)
-      .then((capabilities) => {
-        if (!ignore) setCalendarPublishableChannels(capabilities
-          .filter((capability) => capability.catalogStatus === "available" && capability.readiness === "ready" && capability.publishModes.length > 0)
-          .map((capability) => capability.channel));
-      })
-      .catch(() => { if (!ignore) setCalendarPublishableChannels([]); });
-    void api.getPublishCalendarWeeklySettings(DEMO_BRAND_ID)
-      .then(async (weeklySettings) => {
-        if (ignore) return;
-        if (weeklySettings) {
-          setCalendarWeeklyCapability(true);
-          setCalendarWeeklySettings(weeklySettings);
+  }, []);
+
+  const reloadChannelCapabilities = useCallback(async () => {
+    const requestId = ++capabilitiesRequestRef.current;
+    setCalendarCapabilitiesStatus("loading");
+    try {
+      const capabilities = await api.getChannelCapabilities(DEMO_BRAND_ID);
+      if (capabilitiesRequestRef.current !== requestId) return;
+      setCalendarPublishableChannels(capabilities
+        .filter((capability) => capability.catalogStatus === "available" && capability.readiness === "ready" && capability.publishModes.length > 0)
+        .map((capability) => capability.channel));
+      setCalendarCapabilitiesStatus("ready");
+    } catch {
+      if (capabilitiesRequestRef.current === requestId) setCalendarCapabilitiesStatus("error");
+    }
+  }, []);
+
+  const reloadWeeklyUsage = useCallback(async () => {
+    const requestId = ++weeklyUsageRequestRef.current;
+    setCalendarWeeklyUsageStatus("loading");
+    try {
+      const usage = await api.getPublishCalendarUsage(DEMO_BRAND_ID);
+      if (weeklyUsageRequestRef.current !== requestId) return;
+      setCalendarWeeklyUsage(usage);
+      setCalendarWeeklyUsageStatus("ready");
+    } catch {
+      if (weeklyUsageRequestRef.current === requestId) setCalendarWeeklyUsageStatus("error");
+    }
+  }, []);
+
+  const reloadWeeklySettings = useCallback(async () => {
+    const requestId = ++weeklySettingsRequestRef.current;
+    setCalendarWeeklyStatus("loading");
+    setCalendarSettingsError(null);
+    try {
+      const weeklySettings = await api.getPublishCalendarWeeklySettings(DEMO_BRAND_ID);
+      if (weeklySettingsRequestRef.current !== requestId) return;
+      if (weeklySettings) {
+        setCalendarWeeklyCapability(true);
+        setCalendarWeeklySettings(weeklySettings);
+        setCalendarSettings(null);
+        setCalendarWeeklyStatus("ready");
+        return;
+      }
+      setCalendarWeeklyCapability(false);
+      setCalendarWeeklySettings(null);
+      weeklyUsageRequestRef.current += 1;
+      setCalendarWeeklyUsage(null);
+      setCalendarWeeklyUsageStatus("idle");
+      setCalendarWeeklyStatus("ready");
+      try {
+        const legacySettings = await api.getPublishCalendarSettings(DEMO_BRAND_ID);
+        if (weeklySettingsRequestRef.current === requestId) setCalendarSettings(legacySettings);
+      } catch {
+        if (weeklySettingsRequestRef.current === requestId) {
           setCalendarSettings(null);
-          setCalendarSettingsError(null);
-          try {
-            const usage = await api.getPublishCalendarUsage(DEMO_BRAND_ID);
-            if (!ignore) setCalendarWeeklyUsage(usage);
-          } catch {
-            if (!ignore) setCalendarWeeklyUsage(null);
-          }
-          return;
+          setCalendarSettingsError("자동 게시 설정을 불러오지 못했습니다.");
         }
-        setCalendarWeeklyCapability(false);
-        setCalendarWeeklySettings(null);
-        setCalendarWeeklyUsage(null);
-        try {
-          const legacySettings = await api.getPublishCalendarSettings(DEMO_BRAND_ID);
-          if (!ignore) { setCalendarSettings(legacySettings); setCalendarSettingsError(null); }
-        } catch {
-          if (!ignore) { setCalendarSettings(null); setCalendarSettingsError("자동 게시 설정을 불러오지 못했습니다."); }
-        }
-      })
-      .catch(() => {
-        if (!ignore) {
-          setCalendarWeeklyCapability(true);
-          setCalendarWeeklySettings(null);
-          setCalendarWeeklyUsage(null);
-          setCalendarSettings(null);
-          setCalendarSettingsError("주간 자동 게시 설정을 불러오지 못했습니다.");
-        }
-      });
-    return () => { ignore = true; };
-  }, [calendarMonth, calendarWeeklyRetry, view]);
+      }
+    } catch {
+      if (weeklySettingsRequestRef.current !== requestId) return;
+      setCalendarWeeklyCapability(true);
+      setCalendarWeeklyStatus("error");
+      setCalendarSettingsError("주간 자동 게시 설정을 불러오지 못했습니다.");
+    }
+  }, []);
+
+  const reloadWeeklySupport = useCallback(() => {
+    void reloadWeeklySettings();
+    void reloadChannels();
+    void reloadChannelCapabilities();
+    void reloadWeeklyUsage();
+  }, [reloadChannelCapabilities, reloadChannels, reloadWeeklySettings, reloadWeeklyUsage]);
+
+  useEffect(() => {
+    if (view !== "calendar" || calendarSupportStartedRef.current) return;
+    calendarSupportStartedRef.current = true;
+    reloadWeeklySupport();
+  }, [reloadWeeklySupport, view]);
+
+  useEffect(() => () => {
+    weeklySettingsRequestRef.current += 1;
+    channelsRequestRef.current += 1;
+    capabilitiesRequestRef.current += 1;
+    weeklyUsageRequestRef.current += 1;
+  }, []);
 
   useEffect(() => {
     if (view !== "calendar") return;
@@ -738,13 +789,16 @@ export function PublishQueuePage({ generationGateway = aiContentApiGateway }: Pu
 
   async function saveCalendarWeeklySettings(input: PublishCalendarWeeklySettingsInput) {
     if (calendarWeeklyCapability !== true) return { ok: false as const, message: "주간 자동 게시 설정을 사용할 수 없습니다." };
+    weeklySettingsRequestRef.current += 1;
     setCalendarSaving(true);
     try {
       const settings = await api.savePublishCalendarWeeklySettings(DEMO_BRAND_ID, input);
       setCalendarWeeklySettings(settings);
+      setCalendarWeeklyStatus("ready");
       setNotice("주간 자동 게시 설정을 저장했습니다. 기존 예약은 유지됩니다.");
       return { ok: true as const };
     } catch {
+      setCalendarWeeklyStatus("ready");
       return { ok: false as const, message: "주간 자동 게시 설정을 저장하지 못했습니다." };
     } finally {
       setCalendarSaving(false);
@@ -753,13 +807,16 @@ export function PublishQueuePage({ generationGateway = aiContentApiGateway }: Pu
 
   async function toggleCalendarWeekly(enabled: boolean) {
     if (calendarWeeklyCapability !== true) return { ok: false as const, message: "자동 게시 상태를 변경하지 못했습니다. 잠시 후 다시 시도하세요." };
+    weeklySettingsRequestRef.current += 1;
     setCalendarSaving(true);
     try {
       const settings = await api.setPublishCalendarEnabled(DEMO_BRAND_ID, enabled);
       setCalendarWeeklySettings(settings);
+      setCalendarWeeklyStatus("ready");
       setNotice(enabled ? "자동 게시를 켰습니다." : "자동 게시를 껐습니다. 기존 예약은 유지됩니다.");
       return { ok: true as const };
     } catch {
+      setCalendarWeeklyStatus("ready");
       return { ok: false as const, message: "자동 게시 상태를 변경하지 못했습니다. 잠시 후 다시 시도하세요." };
     } finally {
       setCalendarSaving(false);
@@ -881,7 +938,11 @@ export function PublishQueuePage({ generationGateway = aiContentApiGateway }: Pu
           settings={calendarSettings}
           weeklyCapability={calendarWeeklyCapability}
           weeklySettings={calendarWeeklySettings}
+          weeklyStatus={calendarWeeklyStatus}
           weeklyUsage={calendarWeeklyUsage}
+          weeklyUsageStatus={calendarWeeklyUsageStatus}
+          channelsStatus={calendarChannelsStatus}
+          capabilitiesStatus={calendarCapabilitiesStatus}
           manualOptions={calendarManualOptions}
           manualOptionsError={calendarManualOptionsError}
           manualOptionsLoading={calendarManualOptionsLoading}
@@ -914,7 +975,9 @@ export function PublishQueuePage({ generationGateway = aiContentApiGateway }: Pu
           onSaveSettings={saveCalendarSettings}
           onSaveWeeklySettings={saveCalendarWeeklySettings}
           onToggleWeekly={toggleCalendarWeekly}
-          onRetryWeekly={() => setCalendarWeeklyRetry((value) => value + 1)}
+          onRetryWeekly={() => void reloadWeeklySettings()}
+          onRetryWeeklyMetadata={reloadWeeklySupport}
+          onRetryWeeklyUsage={() => void reloadWeeklyUsage()}
         />
       ) : (
         <PublishManagementList

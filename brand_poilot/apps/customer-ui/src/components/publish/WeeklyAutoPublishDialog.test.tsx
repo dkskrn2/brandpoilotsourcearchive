@@ -70,6 +70,50 @@ describe("WeeklyAutoPublishDialog", () => {
     expect(screen.getByRole("checkbox", { name: "YouTube 미연결 · 저장된 선택 유지" })).toBeDisabled();
   });
 
+  it("keeps the saved channel draft neutral and blocks save while channel metadata is unavailable", async () => {
+    const onRetryMetadata = vi.fn();
+    const onSave = vi.fn(async () => ({ ok: true as const }));
+    renderDialog({
+      channels: [],
+      publishableChannels: [],
+      metadataStatus: "error",
+      onRetryMetadata,
+      onSave,
+    } as never);
+
+    expect(screen.getByRole("alert")).toHaveTextContent("게시 채널 정보를 확인하지 못했습니다.");
+    expect(screen.getByRole("checkbox", { name: "Instagram 채널 상태 확인 필요 · 저장된 선택 유지" })).toBeChecked();
+    expect(screen.queryByText(/자동 게시 미지원|미연결/)).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "설정 저장" })).toBeDisabled();
+
+    await userEvent.click(screen.getByRole("button", { name: "게시 채널 다시 시도" }));
+    expect(onRetryMetadata).toHaveBeenCalledTimes(1);
+    expect(onSave).not.toHaveBeenCalled();
+  });
+
+  it("keeps the server draft visible and blocks schedule mutations and save while usage is loading", () => {
+    renderDialog({ usage: null, usageStatus: "loading" } as never);
+
+    expect(screen.getByText("주간 게시 한도를 확인하는 중입니다.")).toBeVisible();
+    expect(screen.getByLabelText("월요일 1번째 게시 시간")).toHaveValue("11:17");
+    expect(screen.getByLabelText("월요일 1번째 게시 시간")).toBeDisabled();
+    expect(screen.getByRole("button", { name: "월요일 일정 추가" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "설정 저장" })).toBeDisabled();
+  });
+
+  it("preserves an edited draft across a usage failure retry", async () => {
+    const onRetryUsage = vi.fn();
+    renderDialog({ usage: null, usageStatus: "error", onRetryUsage } as never);
+
+    await userEvent.selectOptions(screen.getByRole("combobox", { name: "정보성 콘텐츠 형식" }), "reel");
+    expect(screen.getByRole("alert")).toHaveTextContent("주간 게시 한도를 확인하지 못했습니다.");
+    expect(screen.getByRole("button", { name: "설정 저장" })).toBeDisabled();
+
+    await userEvent.click(screen.getByRole("button", { name: "사용량 다시 시도" }));
+    expect(onRetryUsage).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole("combobox", { name: "정보성 콘텐츠 형식" })).toHaveValue("reel");
+  });
+
   it("renders Monday through Sunday with the actual dates of the current KST week", () => {
     renderDialog();
 
