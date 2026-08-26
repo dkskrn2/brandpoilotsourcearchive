@@ -324,6 +324,199 @@ require_worker_image_manifest() {
   done
 }
 
+require_publish_scheduler_image_manifest() {
+  for key in PUBLISH_SCHEDULER_IMAGE PUBLISH_SCHEDULER_SOURCE_SHA PUBLISH_SCHEDULER_CHANGED; do
+    [[ -v "RELEASE_MANIFEST[$key]" ]] || fail "publish_scheduler_image_manifest_missing"
+  done
+  require_digest_image "${RELEASE_MANIFEST[PUBLISH_SCHEDULER_IMAGE]}"
+  require_release_sha "${RELEASE_MANIFEST[PUBLISH_SCHEDULER_SOURCE_SHA]}"
+  [[ "${RELEASE_MANIFEST[PUBLISH_SCHEDULER_CHANGED]}" == "true" ||
+    "${RELEASE_MANIFEST[PUBLISH_SCHEDULER_CHANGED]}" == "false" ]] ||
+    fail "component_changed_invalid"
+  if [[ "${RELEASE_MANIFEST[PUBLISH_SCHEDULER_CHANGED]}" == "true" ]]; then
+    [[ "${RELEASE_MANIFEST[PUBLISH_SCHEDULER_SOURCE_SHA]}" == "${RELEASE_MANIFEST[RELEASE_SHA]}" ]] ||
+      fail "component_source_revision_mismatch"
+  fi
+}
+
+require_publish_scheduler_secret() {
+  local root="$1"
+  local api_env_file="$2"
+  local secret_directory="$root/shared/secrets"
+  local cron_secret_file="$secret_directory/cron-secret"
+  local cron_secret
+  local expected_digest
+  local actual_digest
+
+  [[ "$(grep -Ec '^CRON_SECRET=[A-Za-z0-9+/=_:.@%-]+$' "$api_env_file" || true)" == "1" ]] ||
+    fail "publish_scheduler_secret_invalid"
+  grep -Eq '^CRON_SECRET=required-at-deploy-time$' "$api_env_file" &&
+    fail "publish_scheduler_secret_missing"
+  cron_secret="$(grep -E '^CRON_SECRET=' "$api_env_file" | sed 's/^[^=]*=//')"
+  [[ -n "$cron_secret" ]] || fail "publish_scheduler_secret_missing"
+
+  if [[ ! -e "$secret_directory" && ! -L "$secret_directory" ]]; then
+    install -d -m 0700 "$secret_directory"
+  fi
+  [[ -d "$secret_directory" && ! -L "$secret_directory" ]] ||
+    fail "publish_scheduler_secret_directory_invalid"
+  [[ "$(stat -c '%a' -- "$secret_directory")" == "700" ]] ||
+    fail "publish_scheduler_secret_directory_invalid"
+
+  expected_digest="$(printf '%s\n' "$cron_secret" | sha256sum | awk '{print $1}')"
+  if [[ -e "$cron_secret_file" || -L "$cron_secret_file" ]]; then
+    require_file_mode_600 "$cron_secret_file" "bpdeploy"
+    actual_digest="$(sha256sum -- "$cron_secret_file" | awk '{print $1}')"
+    [[ "$actual_digest" == "$expected_digest" ]] || fail "publish_scheduler_secret_mismatch"
+  else
+    atomic_write "$cron_secret_file" "${cron_secret}"$'\n' 600
+    require_file_mode_600 "$cron_secret_file" "bpdeploy"
+  fi
+  printf '%s' "$cron_secret_file"
+}
+
+require_publish_scheduler_environment_file() {
+  local file="$1"
+  local index
+  local -a actual=()
+  local -a expected=(
+    "PRIMARY_API_INTERNAL_URL=http://api-primary:4000"
+    "CRON_SECRET_FILE=/run/secrets/cron-secret"
+    "PUBLISH_TICK_MS=60000"
+    "PUBLISH_TIMEOUT_MS=240000"
+  )
+  require_file_mode_600 "$file" "bpdeploy"
+  mapfile -t actual < "$file"
+  [[ "${#actual[@]}" -eq "${#expected[@]}" ]] ||
+    fail "publish_scheduler_environment_unknown_key"
+  for index in "${!expected[@]}"; do
+    [[ "${actual[$index]}" == "${expected[$index]}" ]] ||
+      fail "publish_scheduler_environment_unknown_key"
+  done
+}
+
+validate_publish_scheduler_against_primary() {
+  local current_sha="$1"
+  local scheduler_image="${RELEASE_MANIFEST[PUBLISH_SCHEDULER_IMAGE]:-}"
+  local scheduler_revision="${RELEASE_MANIFEST[PUBLISH_SCHEDULER_SOURCE_SHA]:-}"
+  local api_revision="${RELEASE_MANIFEST[API_SOURCE_SHA]:-}"
+
+  require_publish_scheduler_image_manifest
+  [[ "${RELEASE_MANIFEST[RELEASE_SHA]}" == "$current_sha" ]] ||
+    fail "publish_scheduler_release_sha_mismatch"
+  [[ "$scheduler_revision" == "$api_revision" ]] ||
+    fail "publish_scheduler_release_sha_mismatch"
+  local actual_revision
+  actual_revision="$(docker image inspect \
+    --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' \
+    "$scheduler_image" 2>/dev/null)" || fail "publish_scheduler_image_revision_mismatch"
+  [[ "$actual_revision" == "$scheduler_revision" ]] ||
+    fail "publish_scheduler_image_revision_mismatch"
+}
+
+export_release_compose_environment() {
+  export PRIMARY_API_IMAGE="${RELEASE_MANIFEST[API_IMAGE]}"
+  export CANDIDATE_API_IMAGE="${RELEASE_MANIFEST[API_IMAGE]}"
+  export CADDY_IMAGE="${RELEASE_MANIFEST[CADDY_IMAGE]}"
+  export CANARY_HOST="${RELEASE_MANIFEST[CANARY_HOST]}"
+  export PRIMARY_HOST="${RELEASE_MANIFEST[PRIMARY_HOST]}"
+  export ACME_EMAIL="${RELEASE_MANIFEST[ACME_EMAIL]}"
+  export API_ENV_FILE="${RELEASE_MANIFEST[API_ENV_FILE]}"
+  export PUBLISH_SCHEDULER_IMAGE="${RELEASE_MANIFEST[PUBLISH_SCHEDULER_IMAGE]}"
+  local worker_image_key
+  for worker_image_key in "${WORKER_IMAGE_KEYS[@]}"; do
+    export "$worker_image_key=${RELEASE_MANIFEST[$worker_image_key]}"
+  done
+}
+
+deploy_publish_scheduler_release() {
+  local root="$1"
+  local release_directory="$2"
+  local ready_timeout_seconds="${3:-120}"
+  local current_sha
+  local current_api_container
+  local running_api_image
+  local running_api_revision
+  local scheduler_revision
+  local -a scheduler_containers=()
+
+  load_required_state_sha "$root/state/current" current_sha
+  [[ "$(realpath -e -- "$release_directory")" == "$root/releases/$current_sha" ]] ||
+    fail "publish_scheduler_release_sha_mismatch"
+  validate_release_directory "$release_directory"
+  require_worker_image_manifest
+  require_publish_scheduler_image_manifest
+  [[ "${RELEASE_MANIFEST[RELEASE_SHA]}" == "$current_sha" ]] ||
+    fail "publish_scheduler_release_sha_mismatch"
+  [[ "${RELEASE_MANIFEST[PUBLISH_SCHEDULER_SOURCE_SHA]}" == "${RELEASE_MANIFEST[API_SOURCE_SHA]}" ]] ||
+    fail "publish_scheduler_release_sha_mismatch"
+
+  export_release_compose_environment
+  export PUBLISH_SCHEDULER_ENV_FILE="$root/shared/env/publish-scheduler.env"
+  require_publish_scheduler_environment_file "$PUBLISH_SCHEDULER_ENV_FILE"
+  export PUBLISH_SCHEDULER_CRON_SECRET_FILE
+  PUBLISH_SCHEDULER_CRON_SECRET_FILE="$(require_publish_scheduler_secret "$root" "${RELEASE_MANIFEST[API_ENV_FILE]}")"
+  require_file_mode_600 "$PUBLISH_SCHEDULER_CRON_SECRET_FILE" "bpdeploy"
+
+  local -a compose=(
+    docker compose -p brand-pilot
+    -f "$release_directory/compose.production.yml"
+    --env-file "$release_directory/release.env"
+    --profile publish-scheduler
+  )
+  "${compose[@]}" config --quiet >/dev/null
+  current_api_container="$("${compose[@]}" ps -q api-primary)"
+  [[ -n "$current_api_container" && "$current_api_container" != *$'\n'* ]] ||
+    fail "publish_scheduler_primary_container_invalid"
+  running_api_image="$(docker inspect --format '{{.Config.Image}}' "$current_api_container")" ||
+    fail "publish_scheduler_primary_container_invalid"
+  [[ "$running_api_image" == "${RELEASE_MANIFEST[API_IMAGE]}" ]] ||
+    fail "publish_scheduler_primary_image_mismatch"
+  running_api_revision="$(docker image inspect \
+    --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' \
+    "$running_api_image")" || fail "publish_scheduler_primary_image_mismatch"
+  [[ "$running_api_revision" == "${RELEASE_MANIFEST[API_SOURCE_SHA]}" ]] ||
+    fail "publish_scheduler_primary_image_mismatch"
+
+  "${compose[@]}" pull publish-scheduler-1
+  validate_publish_scheduler_against_primary "$current_sha"
+  scheduler_revision="$(docker image inspect \
+    --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' \
+    "${RELEASE_MANIFEST[PUBLISH_SCHEDULER_IMAGE]}")" ||
+    fail "publish_scheduler_image_revision_mismatch"
+  [[ "$scheduler_revision" == "$running_api_revision" ]] ||
+    fail "publish_scheduler_image_revision_mismatch"
+  "${compose[@]}" up -d --no-deps --pull never --force-recreate --wait \
+    --wait-timeout "$ready_timeout_seconds" publish-scheduler-1
+  mapfile -t scheduler_containers < <("${compose[@]}" ps -q publish-scheduler-1)
+  [[ "${#scheduler_containers[@]}" -eq 1 && -n "${scheduler_containers[0]}" ]] ||
+    fail "publish_scheduler_singleton_invalid"
+}
+
+disable_publish_scheduler_release() {
+  local root="$1"
+  local release_directory="$2"
+  local -a scheduler_containers=()
+
+  validate_release_directory "$release_directory"
+  require_publish_scheduler_image_manifest
+  export_release_compose_environment
+  export PUBLISH_SCHEDULER_ENV_FILE="$root/shared/env/publish-scheduler.env"
+  require_publish_scheduler_environment_file "$PUBLISH_SCHEDULER_ENV_FILE"
+  export PUBLISH_SCHEDULER_CRON_SECRET_FILE="$root/shared/secrets/cron-secret"
+  local -a compose=(
+    docker compose -p brand-pilot
+    -f "$release_directory/compose.production.yml"
+    --env-file "$release_directory/release.env"
+    --profile publish-scheduler
+  )
+  "${compose[@]}" config --quiet >/dev/null
+  "${compose[@]}" stop --timeout 30 publish-scheduler-1
+  "${compose[@]}" rm -f publish-scheduler-1
+  mapfile -t scheduler_containers < <("${compose[@]}" ps -a -q publish-scheduler-1)
+  [[ "${#scheduler_containers[@]}" -eq 0 ]] || fail "publish_scheduler_disable_failed"
+}
+
 verify_release_image_revision() {
   local image="$1"
   local expected_revision="$2"
@@ -430,6 +623,9 @@ parse_release_manifest() {
   done
   if [[ "$validation_role" == "candidate" ]]; then
     allowed_keys[MARKETING_RETIREMENT_SHA256]=1
+    allowed_keys[PUBLISH_SCHEDULER_IMAGE]=1
+    allowed_keys[PUBLISH_SCHEDULER_SOURCE_SHA]=1
+    allowed_keys[PUBLISH_SCHEDULER_CHANGED]=1
   fi
   for release_image_key in "${role_image_keys[@]}"; do
     prefix="$(component_manifest_prefix "$release_image_key")"
@@ -502,6 +698,11 @@ parse_release_manifest() {
           fail "component_source_revision_mismatch"
       fi
     done
+    if [[ -v "RELEASE_MANIFEST[PUBLISH_SCHEDULER_IMAGE]" ||
+      -v "RELEASE_MANIFEST[PUBLISH_SCHEDULER_SOURCE_SHA]" ||
+      -v "RELEASE_MANIFEST[PUBLISH_SCHEDULER_CHANGED]" ]]; then
+      require_publish_scheduler_image_manifest
+    fi
   else
     for release_image_key in "${role_image_keys[@]}"; do
       prefix="$(component_manifest_prefix "$release_image_key")"

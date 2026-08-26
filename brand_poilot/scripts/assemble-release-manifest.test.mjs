@@ -78,6 +78,37 @@ test("reuses unchanged digest and component source revision", () => {
   assert.equal(next.CARD_NEWS_WORKER_CHANGED, "false");
 });
 
+test("scheduler-only descendants preserve every unrelated image including disabled Wiki", () => {
+  const currentText = assembleReleaseManifest({
+    releaseSha: SHA_A,
+    currentManifest: null,
+    builtImages: allBuilt,
+    changedImageKeys: IMAGE_KEYS,
+    staticValues,
+  });
+  const current = parseReleaseManifest(currentText);
+  const scheduler = { image: image("PUBLISH_SCHEDULER_IMAGE", "e"), sourceSha: SHA_B };
+  const next = parseReleaseManifest(assembleReleaseManifest({
+    releaseSha: SHA_B,
+    currentManifest: currentText,
+    builtImages: { PUBLISH_SCHEDULER_IMAGE: scheduler },
+    changedImageKeys: ["PUBLISH_SCHEDULER_IMAGE"],
+    staticValues,
+  }));
+
+  assert.equal(IMAGE_KEYS.includes("PUBLISH_SCHEDULER_IMAGE"), true);
+  assert.equal(next.PUBLISH_SCHEDULER_IMAGE, scheduler.image);
+  assert.equal(next.PUBLISH_SCHEDULER_SOURCE_SHA, SHA_B);
+  assert.equal(next.PUBLISH_SCHEDULER_CHANGED, "true");
+  for (const key of IMAGE_KEYS.filter((key) => key !== "PUBLISH_SCHEDULER_IMAGE")) {
+    const prefix = key.slice(0, -"_IMAGE".length);
+    assert.equal(next[key], current[key], `${key} digest changed`);
+    assert.equal(next[`${prefix}_SOURCE_SHA`], current[`${prefix}_SOURCE_SHA`], `${prefix} source changed`);
+    assert.equal(next[`${prefix}_CHANGED`], "false", `${prefix} was marked changed`);
+  }
+  assert.equal(next.WIKI_WORKER_IMAGE, current.WIKI_WORKER_IMAGE);
+});
+
 test("API-only descendants preserve every non-API digest and source revision", () => {
   const currentText = assembleReleaseManifest({
     releaseSha: SHA_A,
@@ -181,6 +212,7 @@ test("CLI assembles the one-time schema-3 cutover from checksum-bound files", ()
   const outputPath = join(directory, "release.env");
   const cutoverKeys = [
     "API_IMAGE",
+    "PUBLISH_SCHEDULER_IMAGE",
     "CONTENT_PROPOSAL_WORKER_IMAGE",
     "IMAGE_WORKER_IMAGE",
     "CARD_NEWS_WORKER_IMAGE",

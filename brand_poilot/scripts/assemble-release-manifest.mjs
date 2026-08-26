@@ -5,6 +5,7 @@ import { pathToFileURL } from "node:url";
 
 export const IMAGE_KEYS = Object.freeze([
   "API_IMAGE",
+  "PUBLISH_SCHEDULER_IMAGE",
   "DM_WORKER_IMAGE",
   "WIKI_WORKER_IMAGE",
   "CONTENT_PROPOSAL_WORKER_IMAGE",
@@ -26,6 +27,7 @@ const STATIC_KEYS = Object.freeze([
 
 const CUTOVER_IMAGE_KEYS = Object.freeze([
   "API_IMAGE",
+  "PUBLISH_SCHEDULER_IMAGE",
   "CONTENT_PROPOSAL_WORKER_IMAGE",
   "IMAGE_WORKER_IMAGE",
   "CARD_NEWS_WORKER_IMAGE",

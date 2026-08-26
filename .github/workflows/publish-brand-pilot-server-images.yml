@@ -152,6 +152,7 @@ jobs:
           const impact = JSON.parse(process.env.IMPACT_JSON);
           const specs = [
             { component: "api", dockerfile: "apps/api/Dockerfile", imageKeys: ["API_IMAGE"], repositories: ["brand-pilot-api"] },
+            { component: "publishScheduler", dockerfile: "workers/brand-pilot-publish-scheduler/Dockerfile", imageKeys: ["PUBLISH_SCHEDULER_IMAGE"], repositories: ["brand-pilot-publish-scheduler"] },
             { component: "dmWikiWorker", dockerfile: "workers/brand-pilot-dm-worker/Dockerfile", imageKeys: ["DM_WORKER_IMAGE", "WIKI_WORKER_IMAGE"], repositories: ["brand-pilot-dm-worker", "brand-pilot-wiki-worker"] },
             { component: "contentProposalWorker", dockerfile: "workers/brand-pilot-content-proposal-worker/Dockerfile", imageKeys: ["CONTENT_PROPOSAL_WORKER_IMAGE"], repositories: ["brand-pilot-content-proposal-worker"] },
             { component: "brandIntelligenceWorker", dockerfile: "workers/brand-pilot-brand-intelligence-worker/Dockerfile", imageKeys: ["BRAND_INTELLIGENCE_WORKER_IMAGE"], repositories: ["brand-pilot-brand-intelligence-worker"] },
@@ -287,6 +288,10 @@ jobs:
         run: |
           npm run test --workspace @brand-pilot/customer-ui
           npm run build --workspace @brand-pilot/customer-ui
+      - name: Verify publish scheduler
+        if: fromJSON(needs.impact.outputs.components).publishScheduler
+        working-directory: brand_poilot
+        run: node --test workers/brand-pilot-publish-scheduler/src/scheduler.test.mjs
       - name: Verify DM and Wiki worker
         if: fromJSON(needs.impact.outputs.components).dmWikiWorker
         working-directory: brand_poilot

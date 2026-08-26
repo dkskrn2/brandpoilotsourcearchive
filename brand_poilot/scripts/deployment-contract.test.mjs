@@ -37,6 +37,7 @@ const deploymentArtifacts = [
   "workers/brand-pilot-card-news-worker/Dockerfile",
   "workers/brand-pilot-blog-worker/Dockerfile",
   "workers/brand-pilot-reel-worker/Dockerfile",
+  "workers/brand-pilot-publish-scheduler/Dockerfile",
   "deploy/compose.production.yml",
   "deploy/Caddyfile",
   "deploy/Caddyfile.canary",
@@ -51,6 +52,7 @@ const deploymentArtifacts = [
   "deploy/env/card-news-worker.env.example",
   "deploy/env/blog-worker.env.example",
   "deploy/env/reel-worker.env.example",
+  "deploy/env/publish-scheduler.env.example",
   "deploy/scripts/preflight.sh",
   "deploy/scripts/preflight-ai-content.sh",
   "deploy/scripts/stage-ai-content-release.sh",
@@ -1070,6 +1072,71 @@ test("production keeps publish scheduling external and every API local scheduler
       `${serviceName} must not define a local publish/calendar runner command`,
     );
   }
+});
+
+test("publish scheduler is an isolated hardened singleton profile with only its cron secret", () => {
+  const compose = read("deploy/compose.production.yml");
+  const services = assertComposeTopology(compose);
+  const scheduler = services.get("publish-scheduler-1")?.text ?? "";
+  const envExample = read("deploy/env/publish-scheduler.env.example");
+  const releaseExample = read("deploy/release.env.example");
+  const dockerfile = read("workers/brand-pilot-publish-scheduler/Dockerfile");
+
+  assert.match(scheduler, /^ {4}profiles:\s*\r?\n {6}- "publish-scheduler"$/m);
+  assert.equal(compose.match(/^ {2}publish-scheduler-\d+:$/gm)?.length, 1);
+  assert.match(scheduler, /image: \$\{PUBLISH_SCHEDULER_IMAGE:\?PUBLISH_SCHEDULER_IMAGE is required\}/);
+  assert.match(scheduler, /PRIMARY_API_INTERNAL_URL: http:\/\/api-primary:4000/);
+  assert.match(scheduler, /CRON_SECRET_FILE: \/run\/secrets\/cron-secret/);
+  assert.match(scheduler, /PUBLISH_TICK_MS: "60000"/);
+  assert.match(scheduler, /PUBLISH_TIMEOUT_MS: "240000"/);
+  assert.match(scheduler, /read_only: true/);
+  assert.match(scheduler, /cap_drop:\s*\r?\n\s+- ALL/);
+  assert.match(scheduler, /no-new-privileges:true/);
+  assert.match(scheduler, /tmpfs:\s*\r?\n\s+- \/tmp:/);
+  assert.match(scheduler, /restart: unless-stopped/);
+  assert.match(scheduler, /healthcheck:/);
+  assert.equal(scheduler.match(/\/run\/secrets\//g)?.length, 2, "only env and mount may name cron secret");
+  assert.match(scheduler, /\/opt\/brand-pilot\/shared\/secrets\/cron-secret\}:\/run\/secrets\/cron-secret:ro/);
+  assert.doesNotMatch(scheduler, /DATABASE|SUPABASE|META_|BLOB|CODEX_(?:HOME|ACCOUNT)|auth\.json/i);
+  assert.match(dockerfile, /^USER node$/m);
+  assert.match(envExample, /^PRIMARY_API_INTERNAL_URL=http:\/\/api-primary:4000$/m);
+  assert.match(envExample, /^CRON_SECRET_FILE=\/run\/secrets\/cron-secret$/m);
+  assert.match(envExample, /^PUBLISH_TICK_MS=60000$/m);
+  assert.match(envExample, /^PUBLISH_TIMEOUT_MS=240000$/m);
+  assert.doesNotMatch(envExample, /CRON_SECRET=|DATABASE|SUPABASE|META_|BLOB|CODEX/i);
+  assert.match(releaseExample, /^PUBLISH_SCHEDULER_IMAGE=required-at-deploy-time$/m);
+  assert.match(releaseExample, /^PUBLISH_SCHEDULER_SOURCE_SHA=required-at-deploy-time$/m);
+  assert.match(releaseExample, /^PUBLISH_SCHEDULER_CHANGED=true-or-false$/m);
+});
+
+test("scheduler release tooling provisions one 0600 secret and targets no unrelated service", () => {
+  const preflight = read("deploy/scripts/preflight.sh");
+  const deploy = read("deploy/scripts/deploy.sh");
+  const rollback = read("deploy/scripts/rollback.sh");
+  const lib = read("deploy/scripts/lib.sh");
+
+  assert.match(lib, /shared\/secrets\/cron-secret/);
+  assert.match(preflight, /require_publish_scheduler_secret/);
+  assert.match(preflight, /require_publish_scheduler_environment_file/);
+  assert.match(preflight, /require_file_mode_600[^\n]*CRON_SECRET_FILE/);
+  assert.match(preflight, /status_ok "publish_scheduler_secret"/);
+  assert.match(lib, /PUBLISH_SCHEDULER_IMAGE/);
+  assert.match(lib, /publish_scheduler_image_revision_mismatch/);
+  assert.match(lib, /publish_scheduler_release_sha_mismatch/);
+  assert.match(lib, /publish_scheduler_environment_unknown_key/);
+  assert.match(lib, /publish-scheduler-1/);
+  assert.match(deploy, /--component[\s\S]*publish-scheduler/);
+  assert.match(rollback, /--component[\s\S]*publish-scheduler/);
+  assert.match(lib, /pull publish-scheduler-1/);
+  assert.match(lib, /up -d --no-deps --pull never --force-recreate --wait[\s\S]*publish-scheduler-1/);
+  assert.match(lib, /stop --timeout 30 publish-scheduler-1/);
+  assert.match(lib, /rm -f publish-scheduler-1/);
+  const deployBranch = deploy.match(/if \[\[ "\$DEPLOY_MODE" == "publish-scheduler" \]\]; then([\s\S]*?)\nfi/)?.[1] ?? "";
+  const rollbackBranch = rollback.match(/if \[\[ "\$ROLLBACK_MODE" == "publish-scheduler" \]\]; then([\s\S]*?)\nfi/)?.[1] ?? "";
+  assert.doesNotMatch(deployBranch, /reconcile_transition|enforce_ai_content|api-primary|api-canary|caddy/);
+  assert.doesNotMatch(rollbackBranch, /reconcile_transition|enforce_ai_content|api-primary|api-canary|caddy/);
+  assert.match(deployBranch, /transition\.journal/);
+  assert.match(rollbackBranch, /transition\.journal/);
 });
 
 test("Instagram publication is enabled from shared API env with exact safe contracts", () => {
@@ -2733,6 +2800,7 @@ function writeReleaseManifest(directory, overrides = {}, extraLines = []) {
     RELEASE_SCHEMA: "3",
     RELEASE_SHA: "1".repeat(40),
     API_IMAGE: `ghcr.io/dkskrn2/brand-pilot-api@sha256:${digest}`,
+    PUBLISH_SCHEDULER_IMAGE: `ghcr.io/dkskrn2/brand-pilot-publish-scheduler@sha256:${digest}`,
     DM_WORKER_IMAGE: `ghcr.io/dkskrn2/brand-pilot-dm-worker@sha256:${digest}`,
     WIKI_WORKER_IMAGE: `ghcr.io/dkskrn2/brand-pilot-wiki-worker@sha256:${digest}`,
     CONTENT_PROPOSAL_WORKER_IMAGE: `ghcr.io/dkskrn2/brand-pilot-content-proposal-worker@sha256:${digest}`,
@@ -2752,6 +2820,7 @@ function writeReleaseManifest(directory, overrides = {}, extraLines = []) {
   if (values.RELEASE_SCHEMA === "2" || values.RELEASE_SCHEMA === "3") {
     for (const imageKey of [
       "API_IMAGE",
+      "PUBLISH_SCHEDULER_IMAGE",
       "DM_WORKER_IMAGE",
       "WIKI_WORKER_IMAGE",
       "CONTENT_PROPOSAL_WORKER_IMAGE",
@@ -2794,6 +2863,7 @@ function seedRelease(
   writeReleaseManifest(releaseDirectory, {
     RELEASE_SHA: sha,
     API_IMAGE: `ghcr.io/dkskrn2/brand-pilot-api@sha256:${digest}`,
+    PUBLISH_SCHEDULER_IMAGE: `ghcr.io/dkskrn2/brand-pilot-publish-scheduler@sha256:${digest}`,
     DM_WORKER_IMAGE: `ghcr.io/dkskrn2/brand-pilot-dm-worker@sha256:${digest}`,
     WIKI_WORKER_IMAGE: `ghcr.io/dkskrn2/brand-pilot-wiki-worker@sha256:${digest}`,
     CONTENT_PROPOSAL_WORKER_IMAGE: `ghcr.io/dkskrn2/brand-pilot-content-proposal-worker@sha256:${digest}`,

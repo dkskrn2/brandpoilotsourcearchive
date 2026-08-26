@@ -10,8 +10,11 @@ READY_TIMEOUT_SECONDS="${READY_TIMEOUT_SECONDS:-120}"
 TARGET_SHA=""
 TARGET_MODE=""
 PHASE=""
+ROLLBACK_MODE="api"
 
-if [[ $# -eq 3 && "$1" == "--previous" && "$2" == "--phase" ]]; then
+if [[ $# -eq 3 && "$1" == "--component" && "$2" == "publish-scheduler" && "$3" == "--disable" ]]; then
+  ROLLBACK_MODE="publish-scheduler"
+elif [[ $# -eq 3 && "$1" == "--previous" && "$2" == "--phase" ]]; then
   TARGET_MODE="previous"
   PHASE="$3"
 elif [[ $# -eq 4 && "$1" == "--release" && "$3" == "--phase" ]]; then
@@ -20,15 +23,27 @@ elif [[ $# -eq 4 && "$1" == "--release" && "$3" == "--phase" ]]; then
   require_release_sha "$TARGET_SHA"
   PHASE="$4"
 else
-  fail "usage_rollback_target_phase"
+  fail "usage_rollback_target_phase_or_component"
 fi
-[[ "$PHASE" == "canary" || "$PHASE" == "production" ]] || fail "deployment_phase_invalid"
+if [[ "$ROLLBACK_MODE" == "api" ]]; then
+  [[ "$PHASE" == "canary" || "$PHASE" == "production" ]] || fail "deployment_phase_invalid"
+fi
 
 for command_name in docker flock sync; do
   require_command "$command_name"
 done
 exec 9>"$ROOT/state/deploy.lock"
 flock -n 9 || fail "deploy_lock_busy"
+if [[ "$ROLLBACK_MODE" == "publish-scheduler" ]]; then
+  # publish-scheduler) disables publish-scheduler-1 only.
+  [[ ! -e "$ROOT/state/transition.journal" && ! -L "$ROOT/state/transition.journal" ]] ||
+    fail "deploy_transition_in_progress"
+  load_required_state_sha "$ROOT/state/current" TARGET_SHA
+  TARGET_DIR="$ROOT/releases/$TARGET_SHA"
+  disable_publish_scheduler_release "$ROOT" "$TARGET_DIR"
+  status_ok "publish_scheduler_rollback"
+  exit 0
+fi
 enforce_ai_content_roll_forward_floor "$ROOT"
 reconcile_transition_or_fail "$ROOT" "$READY_TIMEOUT_SECONDS"
 if [[ "$TARGET_MODE" == "previous" ]]; then

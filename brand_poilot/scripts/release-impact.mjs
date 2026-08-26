@@ -3,6 +3,7 @@ import { fileURLToPath } from "node:url";
 
 export const SERVER_COMPONENTS = Object.freeze([
   "api",
+  "publishScheduler",
   "dmWikiWorker",
   "contentProposalWorker",
   "brandIntelligenceWorker",
@@ -303,6 +304,7 @@ const MANUAL_BRAND_VISUAL_IMAGE_WORKER_PATHS = new Set([
 ]);
 
 const WORKER_PATHS = Object.freeze([
+  ["workers/brand-pilot-publish-scheduler/", "publishScheduler"],
   ["workers/brand-pilot-dm-worker/", "dmWikiWorker"],
   ["workers/brand-pilot-content-proposal-worker/", "contentProposalWorker"],
   ["workers/brand-pilot-brand-intelligence-worker/", "brandIntelligenceWorker"],
@@ -326,7 +328,9 @@ const normalizePath = (value) => {
 };
 
 const enableAllServer = (components) => {
-  for (const component of SERVER_COMPONENTS) components[component] = true;
+  for (const component of SERVER_COMPONENTS) {
+    if (component !== "publishScheduler") components[component] = true;
+  }
 };
 
 const enableAiContentCutoverServer = (components) => {

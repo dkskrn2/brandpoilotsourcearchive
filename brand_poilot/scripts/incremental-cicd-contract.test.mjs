@@ -106,6 +106,11 @@ test("deployment scripts inspect legacy cutover sources but normal rollback targ
   assert.match(example, /^API_CHANGED=/m);
   assert.match(example, /^CARD_NEWS_WORKER_SOURCE_SHA=/m);
   assert.match(example, /^CARD_NEWS_WORKER_CHANGED=/m);
+  assert.match(workflow, /component: "publishScheduler"[^\n]*dockerfile: "workers\/brand-pilot-publish-scheduler\/Dockerfile"[^\n]*imageKeys: \["PUBLISH_SCHEDULER_IMAGE"\]/);
+  assert.match(workflow, /if: fromJSON\(needs\.impact\.outputs\.components\)\.publishScheduler[\s\S]*node --test workers\/brand-pilot-publish-scheduler\/src\/scheduler\.test\.mjs/);
+  assert.match(example, /^PUBLISH_SCHEDULER_IMAGE=/m);
+  assert.match(example, /^PUBLISH_SCHEDULER_SOURCE_SHA=/m);
+  assert.match(example, /^PUBLISH_SCHEDULER_CHANGED=/m);
 });
 
 test("workflow does not apply database migrations automatically", () => {
