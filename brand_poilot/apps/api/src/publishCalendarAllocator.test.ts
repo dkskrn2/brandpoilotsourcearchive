@@ -71,6 +71,38 @@ function dependencies(options: {
     slots.push(created);
     return { status: "created", slot: created } as never;
   });
+  const provisionAutomaticOccurrences = vi.fn(async (input: {
+    occurrences: Array<Record<string, unknown>>;
+  }) => {
+    const results = [];
+    for (const occurrence of input.occurrences) {
+      const existing = slots.find(({ idempotencyKey }) => idempotencyKey === occurrence.idempotencyKey);
+      if (existing) {
+        results.push({ status: "existing", slot: existing });
+        continue;
+      }
+      const automaticSlots = slots.filter(({ assignmentMode }) => assignmentMode === "automatic");
+      if (automaticSlots.length >= (options.slotCreationLimit ?? Number.POSITIVE_INFINITY)) {
+        results.push({ status: "quota_exhausted", slot: null });
+        continue;
+      }
+      const recommendationKind = occurrence.recommendationKind as "informational" | "trend";
+      const created = {
+        id: `slot-${slots.length + 1}`,
+        ...occurrence,
+        assignmentMode: "automatic",
+        scheduledFor: (occurrence.scheduledFor as Date).toISOString(),
+        contentFormat: recommendationKind === "trend" ? "reel" : "card_news",
+        channels: ["instagram"],
+        status: "open",
+        contentSuggestionId: null,
+        title: null,
+      };
+      slots.push(created);
+      results.push({ status: "created", slot: created });
+    }
+    return results as never;
+  });
   const listUnassignedRecommendations = vi.fn(async () => recommendations.filter((recommendation) => (
     !slots.some(({ status, contentSuggestionId }) => (
       status !== "cancelled" && contentSuggestionId === recommendation.id
@@ -93,6 +125,7 @@ function dependencies(options: {
     listEnabledBrands,
     listSlots,
     createSlot,
+    provisionAutomaticOccurrences,
     listUnassignedRecommendations,
     assignSlot,
     getWeeklyUsage,
@@ -116,7 +149,8 @@ describe("publish calendar allocator", () => {
       startsAt: new Date("2026-08-12T15:00:00.000Z"),
       endsAt: new Date("2026-08-19T15:00:00.000Z"),
     }));
-    expect(deps.createSlot.mock.calls.map(([input]) => input.scheduledFor)).toEqual([
+    expect(deps.provisionAutomaticOccurrences.mock.calls[0]?.[0].occurrences
+      .map((input: Record<string, unknown>) => input.scheduledFor)).toEqual([
       new Date("2026-08-13T02:30:00.000Z"),
       new Date("2026-08-13T05:30:00.000Z"),
       new Date("2026-08-19T11:30:00.000Z"),
@@ -136,10 +170,12 @@ describe("publish calendar allocator", () => {
     await createPublishCalendarAllocator(deps)
       .allocateBrand(duplicateBrand, new Date("2026-08-12T19:00:00.000Z"));
 
-    expect(deps.createSlot).toHaveBeenCalledTimes(2);
-    expect(deps.createSlot.mock.calls.map(([input]) => input.scheduledFor))
+    expect(deps.provisionAutomaticOccurrences).toHaveBeenCalledTimes(1);
+    expect(deps.provisionAutomaticOccurrences.mock.calls[0]?.[0].occurrences
+      .map((input: Record<string, unknown>) => input.scheduledFor))
       .toEqual([new Date("2026-08-13T02:30:00.000Z"), new Date("2026-08-13T02:30:00.000Z")]);
-    expect(deps.createSlot.mock.calls.map(([input]) => input.idempotencyKey)).toEqual([
+    expect(deps.provisionAutomaticOccurrences.mock.calls[0]?.[0].occurrences
+      .map((input: Record<string, unknown>) => input.idempotencyKey)).toEqual([
       automaticSlotKey({ scheduleEntryId: entryIds.thursdayMorning, kstDate: "2026-08-13" }),
       automaticSlotKey({ scheduleEntryId: entryIds.thursdayDuplicate, kstDate: "2026-08-13" }),
     ]);
@@ -149,12 +185,12 @@ describe("publish calendar allocator", () => {
     const deps = dependencies({ recommendations: [] });
     const allocator = createPublishCalendarAllocator(deps);
     await allocator.allocateBrand(brand, new Date("2026-08-12T19:00:00.000Z"));
-    deps.createSlot.mockClear();
+    deps.provisionAutomaticOccurrences.mockClear();
 
     const replay = await allocator.allocateBrand(brand, new Date("2026-08-12T19:00:00.000Z"));
 
     expect(replay).toEqual({ openSlotsCreated: 0, proposalsAssigned: 0, quotaBlocked: false });
-    expect(deps.createSlot).not.toHaveBeenCalled();
+    expect(deps.provisionAutomaticOccurrences).toHaveBeenCalledTimes(1);
   });
 
   it("does not alter existing future slots after master OFF or all selected targets disconnect", async () => {
@@ -182,7 +218,7 @@ describe("publish calendar allocator", () => {
 
     expect(existing).toMatchObject({ status: "open", channels: ["instagram"] });
     expect(deps.listSlots).not.toHaveBeenCalled();
-    expect(deps.createSlot).not.toHaveBeenCalled();
+    expect(deps.provisionAutomaticOccurrences).not.toHaveBeenCalled();
     expect(deps.assignSlot).not.toHaveBeenCalled();
   });
 
@@ -195,7 +231,7 @@ describe("publish calendar allocator", () => {
     const allocator = createPublishCalendarAllocator(deps);
     await allocator.allocateBrand(oneRowBrand, new Date("2026-08-12T19:00:00.000Z"));
     const existing = deps.slots[0]!;
-    deps.createSlot.mockClear();
+    deps.provisionAutomaticOccurrences.mockClear();
 
     await allocator.allocateBrand(
       { ...oneRowBrand, settings: { ...oneRowBrand.settings, weeklySchedule: [] } },
@@ -203,7 +239,7 @@ describe("publish calendar allocator", () => {
     );
 
     expect(existing).toMatchObject({ status: "open", scheduledFor: "2026-08-13T02:30:00.000Z" });
-    expect(deps.createSlot).not.toHaveBeenCalled();
+    expect(deps.provisionAutomaticOccurrences).toHaveBeenCalledTimes(1);
   });
 
   it("assigns the two daily recommendations to matching KST-date slots and leaves extras open", async () => {
@@ -261,21 +297,31 @@ describe("publish calendar allocator", () => {
     expect(result).toEqual({ openSlotsCreated: 1, proposalsAssigned: 1, quotaBlocked: true });
     expect(deps.assignSlot).toHaveBeenCalledTimes(1);
     expect(deps.slots).toHaveLength(1);
-    expect(deps.createSlot).toHaveBeenCalledWith(expect.objectContaining({ channels: ["instagram", "threads"] }));
+    expect(deps.provisionAutomaticOccurrences).toHaveBeenCalledTimes(1);
     expect(deps.getWeeklyUsage).not.toHaveBeenCalled();
+  });
+
+  it("provisions all missing occurrences in one repository batch instead of createSlot per occurrence", async () => {
+    const deps = dependencies({ recommendations: [] });
+
+    await createPublishCalendarAllocator(deps as never)
+      .allocateBrand(brand, new Date("2026-08-12T19:00:00.000Z"));
+
+    expect(deps.provisionAutomaticOccurrences).toHaveBeenCalledTimes(1);
+    expect(deps.createSlot).not.toHaveBeenCalled();
   });
 
   it("attaches a late daily recommendation on an idempotent later run", async () => {
     const deps = dependencies({ recommendations: [] });
     const allocator = createPublishCalendarAllocator(deps);
     await allocator.allocateBrand(brand, new Date("2026-08-12T19:00:00.000Z"));
-    deps.createSlot.mockClear();
+    deps.provisionAutomaticOccurrences.mockClear();
     deps.setRecommendations([{ ...dailyRecommendations[0]!, createdAt: "2026-08-12T20:30:00.000Z" }]);
 
     const catchUp = await allocator.allocateBrand(brand, new Date("2026-08-12T20:00:00.000Z"));
 
     expect(catchUp).toEqual({ openSlotsCreated: 0, proposalsAssigned: 1, quotaBlocked: false });
-    expect(deps.createSlot).not.toHaveBeenCalled();
+    expect(deps.provisionAutomaticOccurrences).toHaveBeenCalledTimes(1);
     expect(deps.assignSlot).toHaveBeenCalledTimes(1);
     expect(deps.assignSlot).toHaveBeenCalledWith(expect.objectContaining({ contentSuggestionId: "suggestion-info" }));
   });
@@ -310,7 +356,9 @@ describe("publish calendar allocator", () => {
     expect(selectionSql).toContain("channel.enabled");
     expect(selectionSql).toContain("channel.deleted_at is null");
     expect(selectionSql).not.toContain("slot_times");
-    expect(repository.createSlot).toHaveBeenCalledWith(expect.objectContaining({ channels: ["instagram"] }));
+    expect(repository.provisionAutomaticOccurrences).toHaveBeenCalledWith(expect.objectContaining({
+      occurrences: [expect.objectContaining({ scheduleEntryId: entryIds.thursdayMorning })],
+    }));
   });
 
   it("does no work when the database selection returns no enabled brands", async () => {
@@ -322,7 +370,7 @@ describe("publish calendar allocator", () => {
       brandsSelected: 0, openSlotsCreated: 0, proposalsAssigned: 0,
       quotaBlocked: 0, brandsFailed: 0,
     });
-    expect(deps.createSlot).not.toHaveBeenCalled();
+    expect(deps.provisionAutomaticOccurrences).not.toHaveBeenCalled();
   });
 
   it("renews due periods before selection and isolates each brand failure", async () => {
@@ -335,7 +383,7 @@ describe("publish calendar allocator", () => {
       .allocateAll(new Date("2026-08-12T19:00:00.000Z"));
 
     expect(result.brandsFailed).toBe(1);
-    expect(deps.createSlot).toHaveBeenCalled();
+    expect(deps.provisionAutomaticOccurrences).toHaveBeenCalled();
     expect(deps.applyDueSubscriptionRenewals.mock.invocationCallOrder[0])
       .toBeLessThan(deps.listEnabledBrands.mock.invocationCallOrder[0]);
   });
@@ -352,7 +400,7 @@ describe("publish calendar allocator", () => {
 
     expect(result.brandsFailed).toBe(1);
     expect(result.brandsSelected).toBe(1);
-    expect(deps.createSlot).toHaveBeenCalled();
+    expect(deps.provisionAutomaticOccurrences).toHaveBeenCalled();
   });
 
   it("retains a race-lost assignment as quota_blocked and stops the brand", async () => {

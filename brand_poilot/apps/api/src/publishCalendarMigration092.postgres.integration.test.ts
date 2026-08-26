@@ -7,6 +7,7 @@ import {
   createDatabasePublishCalendarAllocator,
   listEnabledAutomaticCalendarBrands,
 } from "./publishCalendarAllocator.js";
+import { automaticSlotKey } from "./publishCalendarIdempotency.js";
 import { createPublishCalendarRepository } from "./publishCalendarRepository.js";
 
 const applicationPassword = "publish-calendar-weekly-application-test";
@@ -491,12 +492,23 @@ it("runs the actual weekly settings repository transaction as the application ro
       await expect(repository.getWeeklySettings({ workspaceId, brandId })).resolves.toEqual(read);
 
       const allocationNow = new Date();
-      const occurrence = new Date(allocationNow.getTime() + 2 * 60 * 60 * 1_000);
+      const occurrence = new Date(Math.ceil(
+        (allocationNow.getTime() + 2 * 60 * 60 * 1_000) / 60_000,
+      ) * 60_000);
+      const cancellationBoundary = new Date(occurrence.getTime() + 60_000);
       const occurrenceKst = new Date(occurrence.getTime() + 9 * 60 * 60 * 1_000);
+      const boundaryKst = new Date(cancellationBoundary.getTime() + 9 * 60 * 60 * 1_000);
       const occurrenceDayOfWeek = (occurrenceKst.getUTCDay() || 7) as 1 | 2 | 3 | 4 | 5 | 6 | 7;
+      const boundaryDayOfWeek = (boundaryKst.getUTCDay() || 7) as 1 | 2 | 3 | 4 | 5 | 6 | 7;
       const occurrenceTime = `${String(occurrenceKst.getUTCHours()).padStart(2, "0")}:${String(
         occurrenceKst.getUTCMinutes(),
       ).padStart(2, "0")}`;
+      const boundaryTime = `${String(boundaryKst.getUTCHours()).padStart(2, "0")}:${String(
+        boundaryKst.getUTCMinutes(),
+      ).padStart(2, "0")}`;
+      await administrator.query(
+        `update billing_plan_catalog set weekly_publish_limit=4 where code='free'`,
+      );
       const allocatorSettings = await repository.saveWeeklySettings({
         workspaceId,
         brandId,
@@ -508,9 +520,22 @@ it("runs the actual weekly settings repository transaction as the application ro
           { id: null, dayOfWeek: occurrenceDayOfWeek, time: occurrenceTime, sortOrder: 0 },
           { id: null, dayOfWeek: occurrenceDayOfWeek, time: occurrenceTime, sortOrder: 1 },
           { id: null, dayOfWeek: occurrenceDayOfWeek, time: occurrenceTime, sortOrder: 2 },
+          { id: null, dayOfWeek: boundaryDayOfWeek, time: boundaryTime, sortOrder: 3 },
         ],
       });
-      expect(new Set(allocatorSettings.weeklySchedule.map(({ id }) => id)).size).toBe(3);
+      expect(new Set(allocatorSettings.weeklySchedule.map(({ id }) => id)).size).toBe(4);
+      const boundaryScheduleEntry = allocatorSettings.weeklySchedule.find((entry) => (
+        entry.dayOfWeek === boundaryDayOfWeek && entry.time === boundaryTime && entry.sortOrder === 3
+      ))!;
+      const boundaryKstDate = [
+        boundaryKst.getUTCFullYear(),
+        String(boundaryKst.getUTCMonth() + 1).padStart(2, "0"),
+        String(boundaryKst.getUTCDate()).padStart(2, "0"),
+      ].join("-");
+      const boundaryIdempotencyKey = automaticSlotKey({
+        scheduleEntryId: boundaryScheduleEntry.id,
+        kstDate: boundaryKstDate,
+      });
 
       await administrator.query(
         `insert into content_categories(id,active) values($1,true)`,
@@ -549,6 +574,12 @@ it("runs the actual weekly settings repository transaction as the application ro
         `update billing_plan_catalog set weekly_publish_limit=3 where code='free'`,
       );
       await administrator.query(
+        `update brand_subscriptions
+            set status='cancel_scheduled',cancel_at_period_end=true,current_period_end=$2
+          where brand_id=$1`,
+        [brandId, cancellationBoundary],
+      );
+      await administrator.query(
         `insert into publish_calendar_slots(
            workspace_id,brand_id,scheduled_for,assignment_mode,status,
            recommendation_kind,content_format,channels
@@ -585,6 +616,7 @@ it("runs the actual weekly settings repository transaction as the application ro
       expect(automaticSlots.map(({ channels }) => channels)).toEqual([["instagram"], ["instagram"]]);
       expect(new Set(automaticSlots.map(({ scheduled_for }) => scheduled_for)).size).toBe(1);
       expect(new Set(automaticSlots.map(({ idempotency_key }) => idempotency_key)).size).toBe(2);
+      expect(automaticSlots.some(({ idempotency_key }) => idempotency_key === boundaryIdempotencyKey)).toBe(false);
       expect(new Set(automaticSlots.map(({ content_suggestion_id }) => content_suggestion_id))).toEqual(
         new Set([informationalSuggestionId, trendSuggestionId]),
       );
@@ -603,6 +635,21 @@ it("runs the actual weekly settings repository transaction as the application ro
         [workspaceId, brandId],
       )).resolves.toMatchObject({ rows: [{ count: 3 }] });
 
+      await repository.setWeeklyEnabled({ workspaceId, brandId, enabled: false });
+      await expect(allocator.allocateAll(allocationNow)).resolves.toEqual({
+        brandsSelected: 0,
+        openSlotsCreated: 0,
+        proposalsAssigned: 0,
+        quotaBlocked: 0,
+        brandsFailed: 0,
+      });
+      await expect(client.query<{ count: number }>(
+        `select count(*)::integer count from publish_calendar_slots
+          where workspace_id=$1 and brand_id=$2`,
+        [workspaceId, brandId],
+      )).resolves.toMatchObject({ rows: [{ count: 3 }] });
+      await repository.setWeeklyEnabled({ workspaceId, brandId, enabled: true });
+
       await administrator.query("update ai_content_maintenance_state set enabled=true where singleton");
       await expect(repository.saveWeeklySettings({
         workspaceId,
@@ -613,7 +660,10 @@ it("runs the actual weekly settings repository transaction as the application ro
         trendFormat: "reel",
         weeklySchedule: expectedSchedule,
       })).rejects.toThrow("ai_content_maintenance");
-      await expect(repository.getWeeklySettings({ workspaceId, brandId })).resolves.toEqual(allocatorSettings);
+      await expect(repository.getWeeklySettings({ workspaceId, brandId })).resolves.toMatchObject({
+        ...allocatorSettings,
+        updatedAt: expect.any(String),
+      });
     } finally {
       client.release();
     }

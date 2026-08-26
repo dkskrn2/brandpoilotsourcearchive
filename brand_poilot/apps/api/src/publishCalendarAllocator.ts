@@ -1,6 +1,9 @@
 import type { Pool } from "pg";
 import { automaticSlotKey } from "./publishCalendarIdempotency.js";
-import type { PublishCalendarRepository } from "./publishCalendarRepository.js";
+import type {
+  AutomaticOccurrenceInput,
+  PublishCalendarRepository,
+} from "./publishCalendarRepository.js";
 import type { Channel, PublishCalendarWeeklySettingsDto } from "./types.js";
 
 const KST_OFFSET_MILLISECONDS = 9 * 60 * 60 * 1_000;
@@ -22,7 +25,7 @@ export interface ScheduledRecommendation {
 
 export type PublishCalendarAllocatorDependencies = Pick<
   PublishCalendarRepository,
-  "listSlots" | "createSlot" | "assignSlot" | "applyDueSubscriptionRenewals"
+  "listSlots" | "provisionAutomaticOccurrences" | "assignSlot" | "applyDueSubscriptionRenewals"
 > & {
   listEnabledBrands(at: Date): Promise<AutomaticCalendarBrand[]>;
   listUnassignedRecommendations(brand: AutomaticCalendarBrand): Promise<ScheduledRecommendation[]>;
@@ -75,11 +78,7 @@ export function createPublishCalendarAllocator(dependencies: PublishCalendarAllo
       startsAt,
       endsAt,
     });
-    const existingKeys = new Set(slots.flatMap(({ idempotencyKey }) => (
-      idempotencyKey ? [idempotencyKey] : []
-    )));
-    let openSlotsCreated = 0;
-    let quotaBlocked = false;
+    const occurrences: AutomaticOccurrenceInput[] = [];
     for (let day = 0; day < 7; day += 1) {
       const dayStart = new Date(startsAt.getTime() + day * DAY_MILLISECONDS);
       const entries = brand.settings.weeklySchedule
@@ -93,27 +92,35 @@ export function createPublishCalendarAllocator(dependencies: PublishCalendarAllo
           kstDate: kstDateKey(scheduledFor),
         });
         const recommendationKind = index % 2 === 0 ? "informational" : "trend";
-        if (scheduledFor <= now || existingKeys.has(idempotencyKey)) continue;
-        const created = await dependencies.createSlot({
-          workspaceId: brand.workspaceId,
-          brandId: brand.brandId,
+        if (scheduledFor <= now) continue;
+        occurrences.push({
+          scheduleEntryId: entry.id,
           scheduledFor,
-          assignmentMode: "automatic",
           recommendationKind,
-          contentFormat: recommendationKind === "trend"
-            ? brand.settings.trendFormat
-            : brand.settings.informationalFormat,
-          channels: brand.settings.channels,
           idempotencyKey,
         });
-        if (created.status === "quota_exhausted") {
-          quotaBlocked = true;
-          continue;
-        }
-        slots.push(created.slot);
-        existingKeys.add(idempotencyKey);
-        if (created.status === "created") openSlotsCreated += 1;
       }
+    }
+    const provisioned = await dependencies.provisionAutomaticOccurrences({
+      workspaceId: brand.workspaceId,
+      brandId: brand.brandId,
+      occurrences,
+    });
+    let openSlotsCreated = 0;
+    let quotaBlocked = false;
+    const knownSlotIds = new Set(slots.map(({ id }) => id));
+    for (const result of provisioned) {
+      if (result.status === "quota_exhausted") {
+        quotaBlocked = true;
+        continue;
+      }
+      if (result.status === "subscription_ineligible") continue;
+      if (!result.slot) continue;
+      if (!knownSlotIds.has(result.slot.id)) {
+        slots.push(result.slot);
+        knownSlotIds.add(result.slot.id);
+      }
+      if (result.status === "created") openSlotsCreated += 1;
     }
 
     const openSlots = slots
