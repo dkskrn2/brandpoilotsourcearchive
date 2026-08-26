@@ -3213,7 +3213,7 @@ function runDeployFixture({
       DOCKER_FAIL_UP_TIMES: "1",
       RELEASE_SHA_FOR_TEST: "1".repeat(40),
       AI_CONTENT_POST_075_PROVIDER_DATABASE_URL_FILE: bashPath(providerDatabaseUrlFile),
-      POST_075_SCHEMA_SHA_FOR_TEST: "05696c55ee959cd80ef7cdf30fcb07e93e0579da515042ebd8e8aafb9cde5e10",
+      POST_075_SCHEMA_SHA_FOR_TEST: "c1bf905666ce4dabac137c0522fa0dc0300f574eda6d1e9648283f00b2af4d2b",
     },
   });
   return { fixture, root, dockerLog, preflightLog, result, candidateSha: "1".repeat(40) };
