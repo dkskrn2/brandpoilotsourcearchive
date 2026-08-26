@@ -58,4 +58,3 @@
 2. Create deterministic contact sheets for review; do not use them as substitutes for individual operating artifacts.
 3. Compare the accepted ON text against the existing OFF text for hook, progression, evidence fidelity, subject/brand identity, CTA use, and final payoff.
 4. State clearly that this is an operating-container test without API/DB queueing or deployment, and distinguish production-normalized card dimensions from optional vertical review copies.
-
