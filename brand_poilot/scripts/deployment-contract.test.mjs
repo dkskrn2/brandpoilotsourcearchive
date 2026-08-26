@@ -1137,6 +1137,42 @@ test("scheduler release tooling provisions one 0600 secret and targets no unrela
   assert.doesNotMatch(rollbackBranch, /reconcile_transition|enforce_ai_content|api-primary|api-canary|caddy/);
   assert.match(deployBranch, /transition\.journal/);
   assert.match(rollbackBranch, /transition\.journal/);
+  assert.match(lib, /publish-scheduler-transition\.journal/);
+  assert.match(lib, /publish-scheduler-previous/);
+  assert.match(lib, /PRIOR_ACTIVE/);
+  assert.match(lib, /PRIOR_IMAGE/);
+  assert.match(lib, /PRIOR_REVISION/);
+  assert.match(lib, /restore_publish_scheduler_snapshot/);
+  assert.match(lib, /publish_scheduler_transition_stale/);
+  assert.match(lib, /trap [^\n]*publish_scheduler/);
+  assert.doesNotMatch(rollback, /disable_publish_scheduler_release/);
+  assert.match(rollback, /--component[^\n]*publish-scheduler[^\n]*--previous/);
+  assert.match(rollback, /rollback_publish_scheduler_release/);
+});
+
+test("scheduler transition contract preserves disabled and active snapshots without unrelated mutations", () => {
+  const lib = read("deploy/scripts/lib.sh");
+  const section = (start, end) => lib.slice(lib.indexOf(`${start}() {`), lib.indexOf(`${end}() {`));
+  const deployFunction = section("deploy_publish_scheduler_release", "rollback_publish_scheduler_release");
+  const rollbackFunction = section("rollback_publish_scheduler_release", "verify_release_image_revision");
+  const applyFunction = section("apply_publish_scheduler_snapshot", "restore_publish_scheduler_snapshot");
+
+  assert.match(deployFunction, /inspect_publish_scheduler_runtime/);
+  assert.match(deployFunction, /write_publish_scheduler_state[^\n]*deploy/);
+  assert.match(deployFunction, /restore_publish_scheduler_snapshot/);
+  assert.match(deployFunction, /remove_state_file "\$transition"/);
+  assert.match(rollbackFunction, /expected_active/);
+  assert.match(rollbackFunction, /expected_image/);
+  assert.match(rollbackFunction, /expected_revision/);
+  assert.match(rollbackFunction, /restore_publish_scheduler_snapshot/);
+  assert.match(rollbackFunction, /remove_state_file "\$previous"/);
+  assert.match(applyFunction, /if \[\[ "\$active" == "true" \]\]/);
+  assert.match(applyFunction, /PUBLISH_SCHEDULER_IMAGE="\$image"/);
+  assert.match(applyFunction, /stop --timeout 30 publish-scheduler-1/);
+  assert.match(applyFunction, /rm -f publish-scheduler-1/);
+  for (const source of [deployFunction, rollbackFunction, applyFunction]) {
+    assert.doesNotMatch(source, /\b(?:api-canary|caddy|dm-worker|wiki-worker)\b.*(?:up|stop|rm|restart)/);
+  }
 });
 
 test("Instagram publication is enabled from shared API env with exact safe contracts", () => {

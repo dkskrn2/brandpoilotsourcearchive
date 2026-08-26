@@ -12,7 +12,7 @@ TARGET_MODE=""
 PHASE=""
 ROLLBACK_MODE="api"
 
-if [[ $# -eq 3 && "$1" == "--component" && "$2" == "publish-scheduler" && "$3" == "--disable" ]]; then
+if [[ $# -eq 3 && "$1" == "--component" && "$2" == "publish-scheduler" && "$3" == "--previous" ]]; then
   ROLLBACK_MODE="publish-scheduler"
 elif [[ $# -eq 3 && "$1" == "--previous" && "$2" == "--phase" ]]; then
   TARGET_MODE="previous"
@@ -35,12 +35,12 @@ done
 exec 9>"$ROOT/state/deploy.lock"
 flock -n 9 || fail "deploy_lock_busy"
 if [[ "$ROLLBACK_MODE" == "publish-scheduler" ]]; then
-  # publish-scheduler) disables publish-scheduler-1 only.
+  # publish-scheduler) restores only the scheduler snapshot captured by its last deploy.
   [[ ! -e "$ROOT/state/transition.journal" && ! -L "$ROOT/state/transition.journal" ]] ||
     fail "deploy_transition_in_progress"
   load_required_state_sha "$ROOT/state/current" TARGET_SHA
   TARGET_DIR="$ROOT/releases/$TARGET_SHA"
-  disable_publish_scheduler_release "$ROOT" "$TARGET_DIR"
+  rollback_publish_scheduler_release "$ROOT" "$TARGET_DIR" "$READY_TIMEOUT_SECONDS"
   status_ok "publish_scheduler_rollback"
   exit 0
 fi

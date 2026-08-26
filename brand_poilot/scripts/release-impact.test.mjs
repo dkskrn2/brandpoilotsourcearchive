@@ -42,6 +42,17 @@ test("classifies the dependency-free publish scheduler without widening other se
   }
 });
 
+test("rebuilds the scheduler for shared Docker context changes but not dependency graph changes", () => {
+  const dockerignore = classifyChangedPaths(["brand_poilot/.dockerignore"]);
+  assert.equal(dockerignore.components.publishScheduler, true);
+  assert.equal(dockerignore.buildAllServer, true);
+
+  for (const path of ["brand_poilot/package.json", "brand_poilot/package-lock.json"]) {
+    const dependency = classifyChangedPaths([path]);
+    assert.equal(dependency.components.publishScheduler, false, path);
+  }
+});
+
 test("builds the shared DM and Wiki image once for DM worker changes", () => {
   const impact = classifyChangedPaths(["brand_poilot/workers/brand-pilot-dm-worker/src/worker.ts"]);
   assert.deepEqual(enabled(impact), ["dmWikiWorker"]);

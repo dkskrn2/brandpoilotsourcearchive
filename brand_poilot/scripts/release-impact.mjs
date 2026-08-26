@@ -775,6 +775,7 @@ export function classifyChangedPaths(values, options = {}) {
     if (path === "package.json" || path === "package-lock.json" || path === ".dockerignore" || path.startsWith("workers/brand-pilot-worker-runtime/")) {
       buildAllServer = true;
       enableAllServer(components);
+      if (path === ".dockerignore") components.publishScheduler = true;
       if (path === "package.json" || path === "package-lock.json") components.customerUi = true;
       continue;
     }
