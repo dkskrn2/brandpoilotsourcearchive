@@ -68,18 +68,23 @@ function request(contentInstruction: string | null = null): ContentOrchestration
   };
 }
 
-function resolved(requestValue: ContentOrchestrationV2 = request()) {
+function resolved(
+  requestValue: ContentOrchestrationV2 = request(),
+  withResearchSourceAcquisition = false,
+) {
   return {
     request: requestValue,
     sourceSnapshots: [],
-    researchSourceAcquisition: {
-      contractVersion: "research-source-acquisition.v1" as const,
-      status: "not_applicable" as const,
-      requestedUrl: null,
-      canonicalUrl: null,
-      contentHash: null,
-      capturedAt: "2026-08-05T00:00:00.000Z",
-    },
+    ...(withResearchSourceAcquisition ? {
+      researchSourceAcquisition: {
+        contractVersion: "research-source-acquisition.v1" as const,
+        status: "not_applicable" as const,
+        requestedUrl: null,
+        canonicalUrl: null,
+        contentHash: null,
+        capturedAt: "2026-08-05T00:00:00.000Z",
+      },
+    } : {}),
     baseInput: {
       contractVersion: "proposal-base-input.v2" as const,
       brandCore: {
@@ -235,7 +240,10 @@ describe.skipIf(process.env.RUN_POSTGRES_INTEGRATION !== "true")(
       const service = createAiContentProposalV2Service({
         ...repository,
         assertReady: async () => undefined,
-        resolve: async (command) => resolved(command.source === "performance_experiment" ? request() : command.request),
+        resolve: async (command) => resolved(
+          command.source === "performance_experiment" ? request() : command.request,
+          command.source !== "performance_experiment",
+        ),
       });
       const command = {
         source: "manual" as const,
@@ -378,7 +386,7 @@ describe.skipIf(process.env.RUN_POSTGRES_INTEGRATION !== "true")(
       const service = createAiContentProposalV2Service({
         ...creationRepository,
         assertReady: async () => undefined,
-        resolve: async () => resolved(),
+        resolve: async () => resolved(request(), true),
       });
       return service.create({
         source: "manual",
