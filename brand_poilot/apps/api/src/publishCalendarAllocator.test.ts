@@ -117,6 +117,14 @@ function dependencies(options: {
   });
   const getWeeklyUsage = vi.fn();
   const applyDueSubscriptionRenewals = vi.fn(async () => []);
+  const previewDueSubscriptionRenewals = vi.fn(async () => [{ brandId: "brand-renewal" }]);
+  const previewAutomaticOccurrences = vi.fn(async (input: {
+    occurrences: Array<Record<string, unknown>>;
+  }) => input.occurrences.map((occurrence, index) => ({
+    idempotencyKey: String(occurrence.idempotencyKey),
+    status: index === 0 ? "create" as const : "quota_blocked" as const,
+    slot: null,
+  })) as never);
   return {
     slots,
     setRecommendations(value: ScheduledRecommendation[]) {
@@ -130,10 +138,39 @@ function dependencies(options: {
     assignSlot,
     getWeeklyUsage,
     applyDueSubscriptionRenewals,
+    previewDueSubscriptionRenewals,
+    previewAutomaticOccurrences,
   };
 }
 
 describe("publish calendar allocator", () => {
+  it("previews exact occurrence, recommendation, quota, and renewal candidates without mutations", async () => {
+    const deps = dependencies();
+    const allocator = createPublishCalendarAllocator(deps as never);
+
+    await expect(allocator.previewAll(new Date("2026-08-12T19:00:00.000Z"))).resolves.toEqual({
+      observedAt: "2026-08-12T19:00:00.000Z",
+      renewalDueBrandIds: ["brand-renewal"],
+      brandsSelected: 1,
+      counts: { renewalsDue: 1, occurrences: 3, recommendations: 1, quotaBlockedBrands: 1 },
+      occurrences: [
+        expect.objectContaining({ brandId: brand.brandId, status: "create" }),
+        expect.objectContaining({ brandId: brand.brandId, status: "quota_blocked" }),
+        expect.objectContaining({ brandId: brand.brandId, status: "quota_blocked" }),
+      ],
+      recommendationAssignments: [expect.objectContaining({
+        brandId: brand.brandId,
+        recommendationId: "suggestion-info",
+      })],
+      quotaBlockedBrandIds: [brand.brandId],
+    });
+    expect(deps.previewDueSubscriptionRenewals).toHaveBeenCalledTimes(1);
+    expect(deps.previewAutomaticOccurrences).toHaveBeenCalledTimes(1);
+    expect(deps.applyDueSubscriptionRenewals).not.toHaveBeenCalled();
+    expect(deps.provisionAutomaticOccurrences).not.toHaveBeenCalled();
+    expect(deps.assignSlot).not.toHaveBeenCalled();
+  });
+
   it("uses the stored informational or trend intent without synthesizing content", () => {
     expect(classifySuggestion({ intent: "trend" })).toBe("trend");
     expect(classifySuggestion({ intent: "informational" })).toBe("informational");

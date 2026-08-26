@@ -1,5 +1,5 @@
 import type { Pool, PoolClient } from "pg";
-import type { PublishDueRunResult } from "./types.js";
+import type { PublishDuePreviewResult, PublishDueRunResult } from "./types.js";
 
 const KST_OFFSET_MS = 9 * 60 * 60 * 1000;
 const DEFAULT_BATCH_SIZE = 50;
@@ -20,6 +20,12 @@ export interface RunPublishDueInput<TContext = unknown> {
     queueId: string,
   ) => Promise<PublishDueClaim<TContext> | null>;
   dispatchClaim: (claim: PublishDueClaim<TContext>) => Promise<{ status?: string } | void>;
+}
+
+export interface PreviewPublishDueInput {
+  pool: Pick<Pool, "query">;
+  now?: Date;
+  batchSize?: number;
 }
 
 const zeroCounts = (): Omit<PublishDueRunResult, "acquired"> => ({
@@ -62,6 +68,49 @@ export function canAutoRetryCalendarPublish(scheduledFor: Date | null, now: Date
   return scheduledKstDate === nowKstDate && !hasReachedKstReservationExpiry(scheduledFor, now);
 }
 
+const recoveredQueuePredicate = `queue.status='publishing'
+       and exists (
+         select 1 from publish_attempts attempt
+          where attempt.publish_queue_id=queue.id and attempt.status='succeeded'
+       )`;
+const resultUnknownQueuePredicate = `queue.status='publishing'
+       and queue.publishing_started_at < $1::timestamptz-interval '30 minutes'
+       and not exists (
+         select 1 from publish_attempts attempt
+          where attempt.publish_queue_id=queue.id and attempt.status='succeeded'
+       )`;
+const expiredSlotPredicate = `slot.status not in ('published','cancelled')
+       and $1::timestamptz >= (
+         date_trunc('day',slot.scheduled_for at time zone 'Asia/Seoul')
+         + interval '23 hours 59 minutes'
+       ) at time zone 'Asia/Seoul'`;
+const expirableTargetPredicate = `queue.status in ('queued','scheduled','deferred','failed')
+       and queue.publishing_started_at is null
+       and queue.published_at is null
+       and queue.last_error is distinct from 'publish_delivery_unknown'
+       and not exists (
+         select 1 from publish_attempts attempt where attempt.publish_queue_id=queue.id
+       )`;
+const calendarReadyPredicate = `slot.status in ('content_assigned','ready','publish_delayed','quota_blocked')
+       and publish_group.status in ('waiting','ready')
+       and exists (
+         select 1 from publish_queue queue
+          where queue.topic_publish_group_id=publish_group.id and queue.status='queued'
+       )
+       and not exists (
+         select 1 from publish_queue queue
+          where queue.topic_publish_group_id=publish_group.id and queue.status<>'queued'
+       )
+       and $1::timestamptz < (
+         date_trunc('day',slot.scheduled_for at time zone 'Asia/Seoul')
+         + interval '23 hours 59 minutes'
+       ) at time zone 'Asia/Seoul'`;
+const dueQueuePredicate = `brand.status='active' and brand.deleted_at is null
+       and (
+         (queue.status='scheduled' and queue.scheduled_for<=$1::timestamptz)
+         or (queue.status='deferred' and queue.deferred_until<=$1::timestamptz)
+       )`;
+
 const expirySql = `/* publish_due_expire */
   with recovered as (
     update publish_queue queue
@@ -74,11 +123,7 @@ const expirySql = `/* publish_due_expire */
              $1::timestamptz
            ),
            last_error=null,updated_at=$1::timestamptz
-     where queue.status='publishing'
-       and exists (
-         select 1 from publish_attempts attempt
-          where attempt.publish_queue_id=queue.id and attempt.status='succeeded'
-       )
+     where ${recoveredQueuePredicate}
     returning queue.id,queue.workspace_id,queue.brand_id,queue.channel,queue.topic_publish_group_id
   ), recovered_channels as (
     update brand_channels channel
@@ -114,12 +159,7 @@ const expirySql = `/* publish_due_expire */
     update publish_queue queue
        set status='failed',failed_at=$1::timestamptz,
            last_error='publish_delivery_unknown',updated_at=$1::timestamptz
-     where queue.status='publishing'
-       and queue.publishing_started_at < $1::timestamptz-interval '30 minutes'
-       and not exists (
-         select 1 from publish_attempts attempt
-          where attempt.publish_queue_id=queue.id and attempt.status='succeeded'
-       )
+     where ${resultUnknownQueuePredicate}
        and queue.id not in (select recovered_queue.id from recovered recovered_queue)
     returning queue.id,queue.topic_publish_group_id
   ), result_unknown_attempts as (
@@ -139,11 +179,7 @@ const expirySql = `/* publish_due_expire */
   ), expired_slot_candidates as (
     select slot.id,slot.topic_publish_group_id
       from publish_calendar_slots slot
-     where slot.status not in ('published','cancelled')
-       and $1::timestamptz >= (
-         date_trunc('day',slot.scheduled_for at time zone 'Asia/Seoul')
-         + interval '23 hours 59 minutes'
-       ) at time zone 'Asia/Seoul'
+     where ${expiredSlotPredicate}
      for update of slot
   ), expired_targets as (
     update publish_queue queue
@@ -151,13 +187,7 @@ const expirySql = `/* publish_due_expire */
            last_error='reservation_expired_at_2359_kst',updated_at=$1::timestamptz
       from expired_slot_candidates candidate
      where queue.topic_publish_group_id=candidate.topic_publish_group_id
-       and queue.status in ('queued','scheduled','deferred','failed')
-       and queue.publishing_started_at is null
-       and queue.published_at is null
-       and queue.last_error is distinct from 'publish_delivery_unknown'
-       and not exists (
-         select 1 from publish_attempts attempt where attempt.publish_queue_id=queue.id
-       )
+       and ${expirableTargetPredicate}
     returning queue.id,queue.topic_publish_group_id
   ), wholly_unstarted_groups as (
     select distinct candidate.topic_publish_group_id
@@ -197,20 +227,7 @@ const queueDelayedSql = `/* publish_due_queue_delayed */
         on publish_group.id=slot.topic_publish_group_id
        and publish_group.workspace_id=slot.workspace_id
        and publish_group.brand_id=slot.brand_id
-     where slot.status in ('content_assigned','ready','publish_delayed','quota_blocked')
-       and publish_group.status in ('waiting','ready')
-       and exists (
-         select 1 from publish_queue queue
-          where queue.topic_publish_group_id=publish_group.id and queue.status='queued'
-       )
-       and not exists (
-         select 1 from publish_queue queue
-          where queue.topic_publish_group_id=publish_group.id and queue.status<>'queued'
-       )
-       and $1::timestamptz < (
-         date_trunc('day',slot.scheduled_for at time zone 'Asia/Seoul')
-         + interval '23 hours 59 minutes'
-       ) at time zone 'Asia/Seoul'
+     where ${calendarReadyPredicate}
      order by slot.scheduled_for,slot.brand_id,slot.id
      for update of slot,publish_group
   ), scheduled_groups as (
@@ -256,11 +273,7 @@ const dueCandidatesSql = `/* publish_due_candidates */
            ) as brand_rank
       from publish_queue queue
       join brands brand on brand.id=queue.brand_id and brand.workspace_id=queue.workspace_id
-     where brand.status='active' and brand.deleted_at is null
-       and (
-         (queue.status='scheduled' and queue.scheduled_for<=$1::timestamptz)
-         or (queue.status='deferred' and queue.deferred_until<=$1::timestamptz)
-       )
+     where ${dueQueuePredicate}
   ), selected_due as (
     select queue.id,queue.brand_id,ranked_due.brand_rank,ranked_due.effective_at,ranked_due.queued_at
       from ranked_due
@@ -352,3 +365,134 @@ export async function runPublishDue<TContext = unknown>(
 }
 
 export const runPublishDueRun = runPublishDue;
+
+const previewSql = `/* publish_due_preview */
+  with recovered as (
+    select queue.id,queue.topic_publish_group_id
+      from publish_queue queue
+     where ${recoveredQueuePredicate}
+  ), result_unknown as (
+    select queue.id,queue.topic_publish_group_id
+      from publish_queue queue
+     where ${resultUnknownQueuePredicate}
+       and queue.id not in (select id from recovered)
+  ), expired_slot_candidates as (
+    select slot.id,slot.topic_publish_group_id
+      from publish_calendar_slots slot
+     where ${expiredSlotPredicate}
+  ), expired_targets as (
+    select queue.id,queue.topic_publish_group_id
+      from publish_queue queue
+      join expired_slot_candidates candidate
+        on candidate.topic_publish_group_id=queue.topic_publish_group_id
+     where ${expirableTargetPredicate}
+  ), wholly_unstarted_groups as (
+    select distinct candidate.topic_publish_group_id
+      from expired_slot_candidates candidate
+     where not exists (
+       select 1 from publish_queue target
+        where target.topic_publish_group_id=candidate.topic_publish_group_id
+          and target.status<>'cancelled'
+          and not exists (
+            select 1 from expired_targets expired_target where expired_target.id=target.id
+          )
+     )
+  ), expired_slots as (
+    select slot.id
+      from publish_calendar_slots slot
+      join wholly_unstarted_groups expired_group
+        on expired_group.topic_publish_group_id=slot.topic_publish_group_id
+  ), calendar_ready as (
+    select slot.topic_publish_group_id,slot.scheduled_for
+      from publish_calendar_slots slot
+      join topic_publish_groups publish_group
+        on publish_group.id=slot.topic_publish_group_id
+       and publish_group.workspace_id=slot.workspace_id
+       and publish_group.brand_id=slot.brand_id
+     where ${calendarReadyPredicate}
+  ), delayed_targets as (
+    select queue.id,queue.brand_id,queue.queued_at,
+           case when calendar_ready.scheduled_for<=$1::timestamptz
+             then $1::timestamptz else calendar_ready.scheduled_for end as effective_at
+      from calendar_ready
+      join publish_queue queue on queue.topic_publish_group_id=calendar_ready.topic_publish_group_id
+     where queue.status='queued'
+  ), effective_due as (
+    select queue.id,queue.brand_id,queue.queued_at,
+           coalesce(queue.deferred_until,queue.scheduled_for,queue.queued_at) as effective_at
+      from publish_queue queue
+      join brands brand on brand.id=queue.brand_id and brand.workspace_id=queue.workspace_id
+     where ${dueQueuePredicate}
+       and queue.id not in (select id from recovered)
+       and queue.id not in (select id from result_unknown)
+       and queue.id not in (select id from expired_targets)
+    union all
+    select delayed.id,delayed.brand_id,delayed.queued_at,delayed.effective_at
+      from delayed_targets delayed
+      join brands brand on brand.id=delayed.brand_id
+     where brand.status='active' and brand.deleted_at is null
+       and delayed.effective_at<=$1::timestamptz
+  ), ranked_due as (
+    select due.*,
+           row_number() over (
+             partition by due.brand_id order by due.effective_at,due.queued_at,due.id
+           ) as brand_rank
+      from effective_due due
+  ), selected_due as (
+    select id from ranked_due
+     order by brand_rank,effective_at,queued_at,id
+     limit $2::integer
+  )
+  select
+    coalesce((select array_agg(id::text order by id) from recovered),array[]::text[])
+      as recovered_queue_ids,
+    coalesce((select array_agg(id::text order by id) from result_unknown),array[]::text[])
+      as result_unknown_queue_ids,
+    coalesce((select array_agg(id::text order by id) from expired_targets),array[]::text[])
+      as expired_target_queue_ids,
+    coalesce((select array_agg(id::text order by id) from expired_slots),array[]::text[])
+      as expired_slot_ids,
+    coalesce((select array_agg(id::text order by id) from delayed_targets),array[]::text[])
+      as delayed_queue_ids,
+    coalesce((select array_agg(id::text order by id) from selected_due),array[]::text[])
+      as provider_candidate_queue_ids`;
+
+function stringIds(value: unknown): string[] {
+  return Array.isArray(value) ? value.map(String) : [];
+}
+
+export async function previewPublishDue(
+  input: PreviewPublishDueInput,
+): Promise<PublishDuePreviewResult> {
+  const now = input.now ?? new Date();
+  const batchSize = boundedPositiveInteger(input.batchSize, DEFAULT_BATCH_SIZE, 500);
+  const preview = await input.pool.query(previewSql, [now, batchSize]);
+  const row = preview.rows[0] ?? {};
+  const publishedQueueIds = stringIds(row.recovered_queue_ids);
+  const resultUnknownQueueIds = stringIds(row.result_unknown_queue_ids);
+  const targetQueueIds = stringIds(row.expired_target_queue_ids);
+  const slotIds = stringIds(row.expired_slot_ids);
+  const delayedQueueIds = stringIds(row.delayed_queue_ids);
+  const providerCandidateQueueIds = stringIds(row.provider_candidate_queue_ids);
+  return {
+    observedAt: now.toISOString(),
+    counts: {
+      recoveredPublished: publishedQueueIds.length,
+      resultUnknown: resultUnknownQueueIds.length,
+      expiredTargets: targetQueueIds.length,
+      expiredSlots: slotIds.length,
+      delayedQueued: delayedQueueIds.length,
+      providerCandidates: providerCandidateQueueIds.length,
+    },
+    recovery: {
+      publishedQueueIds,
+      resultUnknownQueueIds,
+    },
+    expiry: {
+      targetQueueIds,
+      slotIds,
+    },
+    delayedQueueIds,
+    providerCandidateQueueIds,
+  };
+}

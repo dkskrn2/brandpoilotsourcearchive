@@ -4,7 +4,7 @@ import type {
   AutomaticOccurrenceInput,
   PublishCalendarRepository,
 } from "./publishCalendarRepository.js";
-import type { Channel, PublishCalendarWeeklySettingsDto } from "./types.js";
+import type { Channel, PublishCalendarAllocationPreviewResult, PublishCalendarWeeklySettingsDto } from "./types.js";
 
 const KST_OFFSET_MILLISECONDS = 9 * 60 * 60 * 1_000;
 const DAY_MILLISECONDS = 24 * 60 * 60 * 1_000;
@@ -25,11 +25,39 @@ export interface ScheduledRecommendation {
 
 export type PublishCalendarAllocatorDependencies = Pick<
   PublishCalendarRepository,
-  "listSlots" | "provisionAutomaticOccurrences" | "assignSlot" | "applyDueSubscriptionRenewals"
+  "listSlots" | "provisionAutomaticOccurrences" | "previewAutomaticOccurrences" | "assignSlot"
+    | "applyDueSubscriptionRenewals" | "previewDueSubscriptionRenewals"
 > & {
   listEnabledBrands(at: Date): Promise<AutomaticCalendarBrand[]>;
   listUnassignedRecommendations(brand: AutomaticCalendarBrand): Promise<ScheduledRecommendation[]>;
 };
+
+function buildAutomaticOccurrences(brand: AutomaticCalendarBrand, now: Date) {
+  const startsAt = kstDayStart(now);
+  const endsAt = new Date(startsAt.getTime() + 7 * DAY_MILLISECONDS);
+  const occurrences: AutomaticOccurrenceInput[] = [];
+  for (let day = 0; day < 7; day += 1) {
+    const dayStart = new Date(startsAt.getTime() + day * DAY_MILLISECONDS);
+    const entries = brand.settings.weeklySchedule
+      .filter(({ dayOfWeek }) => dayOfWeek === kstIsoWeekday(dayStart))
+      .sort((left, right) => left.time.localeCompare(right.time)
+        || left.sortOrder - right.sortOrder || left.id.localeCompare(right.id));
+    for (const [index, entry] of entries.entries()) {
+      const scheduledFor = scheduledInstant(startsAt, day, entry.time);
+      if (scheduledFor <= now) continue;
+      occurrences.push({
+        scheduleEntryId: entry.id,
+        scheduledFor,
+        recommendationKind: index % 2 === 0 ? "informational" : "trend",
+        idempotencyKey: automaticSlotKey({
+          scheduleEntryId: entry.id,
+          kstDate: kstDateKey(scheduledFor),
+        }),
+      });
+    }
+  }
+  return { startsAt, endsAt, occurrences };
+}
 
 export function classifySuggestion(
   suggestion: Pick<ScheduledRecommendation, "intent">,
@@ -70,37 +98,13 @@ export function createPublishCalendarAllocator(dependencies: PublishCalendarAllo
     if (!brand.settings.enabled || brand.settings.channels.length === 0) {
       return { openSlotsCreated: 0, proposalsAssigned: 0, quotaBlocked: false };
     }
-    const startsAt = kstDayStart(now);
-    const endsAt = new Date(startsAt.getTime() + 7 * DAY_MILLISECONDS);
+    const { startsAt, endsAt, occurrences } = buildAutomaticOccurrences(brand, now);
     const slots = await dependencies.listSlots({
       workspaceId: brand.workspaceId,
       brandId: brand.brandId,
       startsAt,
       endsAt,
     });
-    const occurrences: AutomaticOccurrenceInput[] = [];
-    for (let day = 0; day < 7; day += 1) {
-      const dayStart = new Date(startsAt.getTime() + day * DAY_MILLISECONDS);
-      const entries = brand.settings.weeklySchedule
-        .filter(({ dayOfWeek }) => dayOfWeek === kstIsoWeekday(dayStart))
-        .sort((left, right) => left.time.localeCompare(right.time)
-          || left.sortOrder - right.sortOrder || left.id.localeCompare(right.id));
-      for (const [index, entry] of entries.entries()) {
-        const scheduledFor = scheduledInstant(startsAt, day, entry.time);
-        const idempotencyKey = automaticSlotKey({
-          scheduleEntryId: entry.id,
-          kstDate: kstDateKey(scheduledFor),
-        });
-        const recommendationKind = index % 2 === 0 ? "informational" : "trend";
-        if (scheduledFor <= now) continue;
-        occurrences.push({
-          scheduleEntryId: entry.id,
-          scheduledFor,
-          recommendationKind,
-          idempotencyKey,
-        });
-      }
-    }
     const provisioned = await dependencies.provisionAutomaticOccurrences({
       workspaceId: brand.workspaceId,
       brandId: brand.brandId,
@@ -157,6 +161,90 @@ export function createPublishCalendarAllocator(dependencies: PublishCalendarAllo
 
   return {
     allocateBrand,
+    async previewAll(now = new Date()): Promise<PublishCalendarAllocationPreviewResult> {
+      const renewals = await dependencies.previewDueSubscriptionRenewals(now);
+      const brands = await dependencies.listEnabledBrands(now);
+      const result: PublishCalendarAllocationPreviewResult = {
+        observedAt: now.toISOString(),
+        renewalDueBrandIds: renewals.map(({ brandId }) => brandId),
+        brandsSelected: brands.length,
+        counts: { renewalsDue: renewals.length, occurrences: 0, recommendations: 0, quotaBlockedBrands: 0 },
+        occurrences: [],
+        recommendationAssignments: [],
+        quotaBlockedBrandIds: [],
+      };
+      for (const brand of brands) {
+        const { startsAt, endsAt, occurrences } = buildAutomaticOccurrences(brand, now);
+        const [slots, occurrenceResults, recommendations] = await Promise.all([
+          dependencies.listSlots({
+            workspaceId: brand.workspaceId,
+            brandId: brand.brandId,
+            startsAt,
+            endsAt,
+          }),
+          dependencies.previewAutomaticOccurrences({
+            workspaceId: brand.workspaceId,
+            brandId: brand.brandId,
+            occurrences,
+          }),
+          dependencies.listUnassignedRecommendations(brand),
+        ]);
+        const occurrenceByKey = new Map(occurrences.map((occurrence) => [occurrence.idempotencyKey, occurrence]));
+        for (const preview of occurrenceResults) {
+          result.occurrences.push({
+            brandId: brand.brandId,
+            idempotencyKey: preview.idempotencyKey,
+            status: preview.status,
+          });
+        }
+        if (occurrenceResults.some(({ status }) => status === "quota_blocked")) {
+          result.quotaBlockedBrandIds.push(brand.brandId);
+        }
+        const openCandidates: Array<{
+          slotId: string | null;
+          idempotencyKey: string | null;
+          recommendationKind: "informational" | "trend";
+          scheduledFor: string;
+        }> = slots.filter((slot) => slot.assignmentMode === "automatic" && slot.status === "open"
+          && new Date(slot.scheduledFor) > now).map((slot) => ({
+          slotId: slot.id,
+          idempotencyKey: slot.idempotencyKey,
+          recommendationKind: slot.recommendationKind!,
+          scheduledFor: slot.scheduledFor,
+        }));
+        for (const preview of occurrenceResults) {
+          if (preview.status !== "create") continue;
+          const occurrence = occurrenceByKey.get(preview.idempotencyKey);
+          if (!occurrence) continue;
+          openCandidates.push({
+            slotId: null,
+            idempotencyKey: occurrence.idempotencyKey,
+            recommendationKind: occurrence.recommendationKind,
+            scheduledFor: occurrence.scheduledFor.toISOString(),
+          });
+        }
+        openCandidates.sort((left, right) => left.scheduledFor.localeCompare(right.scheduledFor)
+          || String(left.slotId ?? left.idempotencyKey).localeCompare(String(right.slotId ?? right.idempotencyKey)));
+        for (const recommendation of recommendations) {
+          const candidateIndex = openCandidates.findIndex((candidate) => (
+            candidate.recommendationKind === classifySuggestion(recommendation)
+            && kstDateKey(new Date(candidate.scheduledFor)) === kstDateKey(new Date(recommendation.createdAt))
+          ));
+          if (candidateIndex < 0) continue;
+          const candidate = openCandidates.splice(candidateIndex, 1)[0]!;
+          result.recommendationAssignments.push({
+            brandId: brand.brandId,
+            recommendationId: recommendation.id,
+            slotId: candidate.slotId,
+            idempotencyKey: candidate.idempotencyKey,
+          });
+        }
+      }
+      result.counts.occurrences = result.occurrences.length;
+      result.counts.recommendations = result.recommendationAssignments.length;
+      result.counts.quotaBlockedBrands = result.quotaBlockedBrandIds.length;
+      return result;
+    },
     async allocateAll(now = new Date()) {
       const renewals = await dependencies.applyDueSubscriptionRenewals(now);
       const brands = await dependencies.listEnabledBrands(now);

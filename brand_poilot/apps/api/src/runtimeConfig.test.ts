@@ -11,6 +11,7 @@ function validProductionEnv(): NodeJS.ProcessEnv {
     CONTENT_PROPOSAL_WORKER_API_TOKEN: "content-proposal-worker-secret",
     ADMIN_SERVICE_TOKEN: "admin-secret",
     CRON_SECRET: "cron-secret",
+    API_INSTANCE_ROLE: "primary",
     CREDENTIAL_ENCRYPTION_KEY: "credential-secret-that-is-long-enough",
     KAKAO_REST_API_KEY: "kakao-key",
     KAKAO_CLIENT_SECRET: "kakao-secret",
@@ -39,6 +40,19 @@ function validProductionEnv(): NodeJS.ProcessEnv {
 }
 
 describe("loadApiRuntimeConfig", () => {
+  it("parses explicit scheduler instance roles and fails closed when the role is absent", () => {
+    expect(loadApiRuntimeConfig({ API_INSTANCE_ROLE: "primary" }).instanceRole).toBe("primary");
+    expect(loadApiRuntimeConfig({ API_INSTANCE_ROLE: "canary" }).instanceRole).toBe("canary");
+    expect(loadApiRuntimeConfig({}).instanceRole).toBe("unassigned");
+  });
+
+  it.each(["PRIMARY", "preview", "", "worker"])(
+    "rejects invalid API_INSTANCE_ROLE=%s",
+    (value) => {
+      expect(() => loadApiRuntimeConfig({ API_INSTANCE_ROLE: value })).toThrow("API_INSTANCE_ROLE");
+    },
+  );
+
   it("requires the dedicated AI-content database secret in production", () => {
     const env = validProductionEnv();
     delete env.AI_CONTENT_DATABASE_URL_FILE;

@@ -226,6 +226,32 @@ it("uses the production claim and recovery lifecycle as the PostgreSQL applicati
 
     const role = await application.query("select current_user,session_user");
     expect(role.rows[0]).toEqual({ current_user: applicationRole, session_user: applicationRole });
+    const beforePreview = await application.query<{ snapshot: unknown }>(
+      `select jsonb_build_object(
+         'queue',(select jsonb_agg(to_jsonb(queue) order by queue.id) from publish_queue queue),
+         'attempts',(select jsonb_agg(to_jsonb(attempt) order by attempt.id) from publish_attempts attempt),
+         'groups',(select jsonb_agg(to_jsonb(publish_group) order by publish_group.id) from topic_publish_groups publish_group),
+         'slots',(select jsonb_agg(to_jsonb(slot) order by slot.id) from publish_calendar_slots slot),
+         'channels',(select jsonb_agg(to_jsonb(channel) order by channel.id) from brand_channels channel)
+       ) snapshot`,
+    );
+    await expect(repository.previewDuePublishing!(new Date("2026-08-26T12:00:00+09:00")))
+      .resolves.toMatchObject({
+        observedAt: "2026-08-26T03:00:00.000Z",
+        providerCandidateQueueIds: [dueTarget.queueId],
+        recovery: { publishedQueueIds: [], resultUnknownQueueIds: [] },
+        expiry: { targetQueueIds: [], slotIds: [] },
+      });
+    const afterPreview = await application.query<{ snapshot: unknown }>(
+      `select jsonb_build_object(
+         'queue',(select jsonb_agg(to_jsonb(queue) order by queue.id) from publish_queue queue),
+         'attempts',(select jsonb_agg(to_jsonb(attempt) order by attempt.id) from publish_attempts attempt),
+         'groups',(select jsonb_agg(to_jsonb(publish_group) order by publish_group.id) from topic_publish_groups publish_group),
+         'slots',(select jsonb_agg(to_jsonb(slot) order by slot.id) from publish_calendar_slots slot),
+         'channels',(select jsonb_agg(to_jsonb(channel) order by channel.id) from brand_channels channel)
+       ) snapshot`,
+    );
+    expect(afterPreview.rows[0]?.snapshot).toEqual(beforePreview.rows[0]?.snapshot);
     await expect(repository.runDuePublishing(new Date("2026-08-26T12:00:00+09:00"))).resolves.toMatchObject({
       acquired: true,
       dueQueued: 1,

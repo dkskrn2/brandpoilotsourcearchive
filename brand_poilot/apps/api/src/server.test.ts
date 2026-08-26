@@ -1060,18 +1060,102 @@ describe("API server", () => {
 
   it("runs daily generation and due publishing only with the cron secret", async () => {
     const repository = createRepository();
-    const app = createServer({ repository, cronSecret: "cron-secret", logger: false });
+    const app = createServer({ repository, cronSecret: "cron-secret", instanceRole: "primary", logger: false });
 
     expect((await app.inject({ method: "GET", url: "/internal/cron/daily-generation" })).statusCode).toBe(401);
-    expect((await app.inject({ method: "GET", url: "/internal/cron/publish-due" })).statusCode).toBe(401);
+    expect((await app.inject({ method: "POST", url: "/internal/cron/publish-due" })).statusCode).toBe(401);
 
     const daily = await app.inject({ method: "GET", url: "/internal/cron/daily-generation", headers: { authorization: "Bearer cron-secret" } });
-    const publish = await app.inject({ method: "GET", url: "/internal/cron/publish-due", headers: { authorization: "Bearer cron-secret" } });
+    const publish = await app.inject({ method: "POST", url: "/internal/cron/publish-due", headers: { authorization: "Bearer cron-secret" } });
 
     expect(daily.statusCode).toBe(200);
     expect(publish.statusCode).toBe(200);
     expect(repository.runDailyGeneration).toHaveBeenCalledTimes(1);
     expect(repository.runDuePublishing).toHaveBeenCalledTimes(1);
+  });
+
+  it("removes mutation-by-GET and exposes authenticated read-only scheduler previews", async () => {
+    const repository = createRepository();
+    const previewDuePublishing = vi.fn(async () => ({
+      observedAt: "2026-08-26T03:00:00.000Z",
+      counts: { recoveredPublished: 1, resultUnknown: 1, expiredTargets: 1, expiredSlots: 1, delayedQueued: 1, providerCandidates: 1 },
+      recovery: { publishedQueueIds: ["recovered-1"], resultUnknownQueueIds: ["unknown-1"] },
+      expiry: { targetQueueIds: ["expired-1"], slotIds: ["slot-expired-1"] },
+      delayedQueueIds: ["delayed-1"],
+      providerCandidateQueueIds: ["due-1"],
+    }));
+    const previewPublishCalendarAllocation = vi.fn(async () => ({
+      observedAt: "2026-08-26T03:00:00.000Z",
+      renewalDueBrandIds: ["brand-renewal"],
+      brandsSelected: 1,
+      counts: { renewalsDue: 1, occurrences: 1, recommendations: 1, quotaBlockedBrands: 0 },
+      occurrences: [{ brandId: "brand-1", idempotencyKey: "key-1", status: "create" as const }],
+      recommendationAssignments: [{ brandId: "brand-1", recommendationId: "suggestion-1", slotId: null, idempotencyKey: "key-1" }],
+      quotaBlockedBrandIds: [],
+    }));
+    Object.assign(repository, { previewDuePublishing, previewPublishCalendarAllocation });
+    const app = createServer({ repository, cronSecret: "cron-secret", instanceRole: "canary", logger: false });
+
+    expect((await app.inject({
+      method: "GET", url: "/internal/cron/publish-due", headers: { authorization: "Bearer cron-secret" },
+    })).statusCode).toBe(404);
+    expect((await app.inject({ method: "GET", url: "/internal/cron/publish-due/preview" })).statusCode).toBe(401);
+    expect((await app.inject({ method: "GET", url: "/internal/cron/publish-calendar-allocate/preview" })).statusCode).toBe(401);
+
+    const due = await app.inject({
+      method: "GET", url: "/internal/cron/publish-due/preview", headers: { authorization: "Bearer cron-secret" },
+    });
+    const allocation = await app.inject({
+      method: "GET", url: "/internal/cron/publish-calendar-allocate/preview", headers: { authorization: "Bearer cron-secret" },
+    });
+    expect(due.statusCode).toBe(200);
+    expect(due.json()).toMatchObject({ observedAt: "2026-08-26T03:00:00.000Z", providerCandidateQueueIds: ["due-1"] });
+    expect(allocation.statusCode).toBe(200);
+    expect(allocation.json()).toMatchObject({ brandsSelected: 1, renewalDueBrandIds: ["brand-renewal"] });
+    expect(previewDuePublishing).toHaveBeenCalledTimes(1);
+    expect(previewPublishCalendarAllocation).toHaveBeenCalledTimes(1);
+    expect(repository.runDuePublishing).not.toHaveBeenCalled();
+  });
+
+  it.each(["canary", "unassigned"] as const)(
+    "authenticates before fencing %s scheduler mutations",
+    async (instanceRole) => {
+      const repository = createRepository();
+      const allocatePublishCalendar = vi.fn(async () => ({
+        brandsSelected: 0, openSlotsCreated: 0, proposalsAssigned: 0, quotaBlocked: 0, brandsFailed: 0,
+      }));
+      Object.assign(repository, { allocatePublishCalendar });
+      const app = createServer({ repository, cronSecret: "cron-secret", instanceRole, logger: false });
+
+      for (const url of ["/internal/cron/publish-due", "/internal/cron/publish-calendar-allocate"]) {
+        const unauthorized = await app.inject({ method: "POST", url });
+        expect(unauthorized.statusCode).toBe(401);
+        expect(unauthorized.json()).toEqual({ error: "cron_unauthorized" });
+        const fenced = await app.inject({ method: "POST", url, headers: { authorization: "Bearer cron-secret" } });
+        expect(fenced.statusCode).toBe(409);
+        expect(fenced.json()).toEqual({ error: "publish_scheduler_primary_only" });
+      }
+      expect(repository.runDuePublishing).not.toHaveBeenCalled();
+      expect(allocatePublishCalendar).not.toHaveBeenCalled();
+    },
+  );
+
+  it("rejects unauthenticated allocation before consulting maintenance or instance role state", async () => {
+    const repository = createRepository();
+    const assertAiContentWritable = vi.fn(async () => undefined);
+    Object.assign(repository, {
+      assertAiContentWritable,
+      allocatePublishCalendar: vi.fn(async () => ({
+        brandsSelected: 0, openSlotsCreated: 0, proposalsAssigned: 0, quotaBlocked: 0, brandsFailed: 0,
+      })),
+    });
+    const app = createServer({ repository, cronSecret: "cron-secret", instanceRole: "canary", logger: false });
+
+    const response = await app.inject({ method: "POST", url: "/internal/cron/publish-calendar-allocate" });
+
+    expect(response.statusCode).toBe(401);
+    expect(response.json()).toEqual({ error: "cron_unauthorized" });
+    expect(assertAiContentWritable).not.toHaveBeenCalled();
   });
 
   it("runs calendar allocation only through the authenticated POST cron route", async () => {
@@ -1085,7 +1169,7 @@ describe("API server", () => {
     }));
     (repository as ApiRepository & { allocatePublishCalendar: typeof allocatePublishCalendar })
       .allocatePublishCalendar = allocatePublishCalendar;
-    const app = createServer({ repository, cronSecret: "cron-secret", logger: false });
+    const app = createServer({ repository, cronSecret: "cron-secret", instanceRole: "primary", logger: false });
 
     expect((await app.inject({ method: "POST", url: "/internal/cron/publish-calendar-allocate" })).statusCode)
       .toBe(401);
@@ -1112,7 +1196,7 @@ describe("API server", () => {
     vi.mocked(repository.schedulePublishQueue).mockRejectedValue(new Error("publishing_disabled"));
     vi.mocked(repository.retryPublishQueueItem).mockRejectedValue(new Error("publishing_disabled"));
     vi.mocked(repository.runDuePublishing).mockResolvedValue({ acquired: false, expiredTargets: 0, expiredSlots: 0, dueQueued: 0, published: 0, failed: 0, resultUnknown: 0 });
-    const app = createServer({ repository, cronSecret: "cron-secret", logger: false });
+    const app = createServer({ repository, cronSecret: "cron-secret", instanceRole: "primary", logger: false });
 
     const schedule = await app.inject({
       method: "POST",
@@ -1127,7 +1211,7 @@ describe("API server", () => {
       url: "/publish-queue/queue-1/retry"
     });
     const duePublish = await app.inject({
-      method: "GET",
+      method: "POST",
       url: "/internal/cron/publish-due",
       headers: { authorization: "Bearer cron-secret" }
     });

@@ -56,6 +56,9 @@ export type AutomaticOccurrenceInput = {
 export type AutomaticOccurrenceResult =
   | { idempotencyKey: string; status: "created" | "existing"; slot: PublishCalendarSlotDto }
   | { idempotencyKey: string; status: "quota_exhausted" | "subscription_ineligible"; slot: null };
+export type AutomaticOccurrencePreviewResult =
+  | { idempotencyKey: string; status: "existing"; slot: PublishCalendarSlotDto }
+  | { idempotencyKey: string; status: "create" | "quota_blocked" | "subscription_ineligible"; slot: null };
 
 type PublishCalendarRepositoryOptions = {
   afterManualSlotProvisioned?: (input: BrandScope & {
@@ -105,6 +108,9 @@ export interface PublishCalendarRepository {
   provisionAutomaticOccurrences(input: BrandScope & {
     occurrences: AutomaticOccurrenceInput[];
   }): Promise<AutomaticOccurrenceResult[]>;
+  previewAutomaticOccurrences(input: BrandScope & {
+    occurrences: AutomaticOccurrenceInput[];
+  }): Promise<AutomaticOccurrencePreviewResult[]>;
   assignSlot(input: BrandScope & {
     slotId: string;
     assignmentMode: AssignmentMode;
@@ -122,6 +128,7 @@ export interface PublishCalendarRepository {
   cancelSlot(input: BrandScope & { slotId: string }): Promise<PublishCalendarSlotDto>;
   getWeeklyUsage(input: BrandScope & { at?: Date }): Promise<PublishCalendarWeeklyUsageDto>;
   applyDueSubscriptionRenewals(now?: Date): Promise<AppliedSubscriptionRenewal[]>;
+  previewDueSubscriptionRenewals(now?: Date): Promise<Array<{ brandId: string }>>;
 }
 
 const DEFAULT_SLOT_TIMES = ["11:30", "14:30", "17:30", "20:30"];
@@ -336,6 +343,151 @@ async function transaction<T>(pool: Pool, action: (client: PoolClient) => Promis
 
 async function lockBrand(client: Pick<PoolClient, "query">, brandId: string): Promise<void> {
   await client.query("select pg_advisory_xact_lock(hashtext($1))", [`publish-calendar:${brandId}`]);
+}
+
+type NormalizedAutomaticOccurrence = AutomaticOccurrenceInput & { inputOrder: number };
+
+function normalizeAutomaticOccurrences(
+  input: AutomaticOccurrenceInput[],
+): NormalizedAutomaticOccurrence[] {
+  const seenKeys = new Set<string>();
+  return input.map((occurrence, inputOrder) => {
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+      .test(occurrence.scheduleEntryId)
+      || !/^[0-9a-f]{64}$/.test(occurrence.idempotencyKey)
+      || seenKeys.has(occurrence.idempotencyKey)) {
+      throw new Error("publish_calendar_idempotency_key_invalid");
+    }
+    if (!Number.isFinite(occurrence.scheduledFor.getTime())) {
+      throw new Error("publish_calendar_time_invalid");
+    }
+    if (occurrence.recommendationKind !== "informational"
+      && occurrence.recommendationKind !== "trend") {
+      throw new Error("publish_calendar_recommendation_kind_invalid");
+    }
+    seenKeys.add(occurrence.idempotencyKey);
+    return { ...occurrence, inputOrder };
+  });
+}
+
+async function evaluateAutomaticOccurrences(
+  queryable: Pick<PoolClient, "query">,
+  input: BrandScope,
+  occurrences: NormalizedAutomaticOccurrence[],
+  lockRows: boolean,
+) {
+  const lock = lockRows ? " for update" : "";
+  const settings = await queryable.query(
+    `select settings.enabled,settings.channels,settings.informational_format,
+            settings.trend_format
+       from publish_calendar_settings settings
+      where settings.brand_id=$1::uuid and settings.workspace_id=$2::uuid${lock}`,
+    [input.brandId, input.workspaceId],
+  );
+  const schedule = await queryable.query(
+    `select id,day_of_week,slot_time,sort_order
+       from publish_calendar_weekly_schedule_entries
+      where brand_id=$1::uuid and workspace_id=$2::uuid
+      order by day_of_week,sort_order,id${lock}`,
+    [input.brandId, input.workspaceId],
+  );
+  const subscription = await queryable.query(
+    `select subscription.status,subscription.started_at,
+            subscription.current_period_start,subscription.current_period_end,
+            plan.weekly_generation_limit,plan.weekly_publish_limit
+       from brand_subscriptions subscription
+       join brands brand on brand.id=subscription.brand_id and brand.workspace_id=$2::uuid
+       join billing_plan_catalog plan on plan.code=subscription.plan_code and plan.active
+      where subscription.brand_id=$1::uuid${lockRows ? " for update of subscription" : ""}`,
+    [input.brandId, input.workspaceId],
+  );
+  const existing = await queryable.query(
+    `select slot.* from publish_calendar_slots slot
+      where slot.workspace_id=$1::uuid and slot.brand_id=$2::uuid
+        and slot.idempotency_key=any($3::text[])${lock}`,
+    [input.workspaceId, input.brandId, occurrences.map(({ idempotencyKey }) => idempotencyKey)],
+  );
+  const existingByKey = new Map(existing.rows.map((row) => [String(row.idempotency_key), mapSlot(row)]));
+  const scheduleById = new Map(schedule.rows.map((row) => [String(row.id), row]));
+  const ordered = [...occurrences].sort((left, right) => {
+    const instant = left.scheduledFor.getTime() - right.scheduledFor.getTime();
+    if (instant !== 0) return instant;
+    const leftSchedule = scheduleById.get(left.scheduleEntryId);
+    const rightSchedule = scheduleById.get(right.scheduleEntryId);
+    const day = Number(leftSchedule?.day_of_week ?? 8) - Number(rightSchedule?.day_of_week ?? 8);
+    if (day !== 0) return day;
+    const sort = Number(leftSchedule?.sort_order ?? MAX_POSTGRES_INTEGER)
+      - Number(rightSchedule?.sort_order ?? MAX_POSTGRES_INTEGER);
+    if (sort !== 0) return sort;
+    return left.scheduleEntryId.localeCompare(right.scheduleEntryId) || left.inputOrder - right.inputOrder;
+  });
+  const databaseClock = await queryable.query("select clock_timestamp() as now");
+  const now = new Date(databaseClock.rows[0]?.now ?? Date.now());
+  const settingsRow = settings.rows[0];
+  const subscriptionRow = subscription.rows[0];
+  const selectedChannels = settingsRow
+    ? validateChannels((settingsRow.channels ?? []) as Channel[]).filter((channel) => SUPPORTED_CHANNELS.has(channel))
+    : [];
+  const connected = selectedChannels.length > 0
+    ? await connectedCalendarChannels(queryable, input, selectedChannels)
+    : new Set<Channel>();
+  const channels = selectedChannels.filter((channel) => connected.has(channel));
+  const currentSubscriptionEligible = Boolean(subscriptionRow)
+    && ["active", "cancel_scheduled"].includes(String(subscriptionRow.status))
+    && new Date(subscriptionRow.current_period_start).getTime() <= now.getTime()
+    && now.getTime() < new Date(subscriptionRow.current_period_end).getTime();
+  const missingEntitled = ordered.filter((occurrence) => {
+    if (existingByKey.has(occurrence.idempotencyKey)) return false;
+    const scheduleRow = scheduleById.get(occurrence.scheduleEntryId);
+    const occurrenceParts = occurrenceKstParts(occurrence.scheduledFor);
+    const scheduleMatches = Boolean(scheduleRow)
+      && Number(scheduleRow.day_of_week) === occurrenceParts.dayOfWeek
+      && time(scheduleRow.slot_time) === occurrenceParts.time;
+    const beforeCancellation = subscriptionRow?.status !== "cancel_scheduled"
+      || occurrence.scheduledFor.getTime() < new Date(subscriptionRow.current_period_end).getTime();
+    return settingsRow?.enabled === true && channels.length > 0 && currentSubscriptionEligible
+      && scheduleMatches && beforeCancellation && occurrence.scheduledFor.getTime() > now.getTime();
+  });
+  const windowsByKey = new Map<string, { startsAt: Date; endsAt: Date }>();
+  const occurrenceWindowKey = new Map<string, string>();
+  if (subscriptionRow) {
+    for (const occurrence of missingEntitled) {
+      const window = subscriptionWeekWindow({
+        subscriptionStartedAt: new Date(subscriptionRow.started_at),
+        now: occurrence.scheduledFor,
+      });
+      const key = window.startsAt.toISOString();
+      windowsByKey.set(key, window);
+      occurrenceWindowKey.set(occurrence.idempotencyKey, key);
+    }
+  }
+  const availability = await publishUsageForWindows(
+    queryable,
+    input,
+    [...windowsByKey.values()],
+    Number(subscriptionRow?.weekly_publish_limit ?? 0),
+  );
+  return { ordered, existingByKey, occurrenceWindowKey, availability, settingsRow, channels };
+}
+
+function planAutomaticOccurrences(
+  evaluated: Awaited<ReturnType<typeof evaluateAutomaticOccurrences>>,
+) {
+  return evaluated.ordered.map((occurrence) => {
+    const replay = evaluated.existingByKey.get(occurrence.idempotencyKey);
+    if (replay) return { occurrence, status: "existing" as const, slot: replay, contentFormat: null };
+    const windowKey = evaluated.occurrenceWindowKey.get(occurrence.idempotencyKey);
+    if (!windowKey) {
+      return { occurrence, status: "subscription_ineligible" as const, slot: null, contentFormat: null };
+    }
+    const reserved = reservePublicationUnit(evaluated.availability.get(windowKey)!);
+    if (!reserved) return { occurrence, status: "quota_blocked" as const, slot: null, contentFormat: null };
+    evaluated.availability.set(windowKey, reserved);
+    const contentFormat = occurrence.recommendationKind === "trend"
+      ? evaluated.settingsRow.trend_format as ContentFormat
+      : evaluated.settingsRow.informational_format as ContentFormat;
+    return { occurrence, status: "create" as const, slot: null, contentFormat };
+  });
 }
 
 async function assertConnectedChannels(
@@ -1428,150 +1580,38 @@ export function createPublishCalendarRepository(
     },
 
     async provisionAutomaticOccurrences(input) {
-      const seenKeys = new Set<string>();
-      const occurrences = input.occurrences.map((occurrence, inputOrder) => {
-        if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
-          .test(occurrence.scheduleEntryId)
-          || !/^[0-9a-f]{64}$/.test(occurrence.idempotencyKey)
-          || seenKeys.has(occurrence.idempotencyKey)) {
-          throw new Error("publish_calendar_idempotency_key_invalid");
-        }
-        if (!Number.isFinite(occurrence.scheduledFor.getTime())) {
-          throw new Error("publish_calendar_time_invalid");
-        }
-        if (occurrence.recommendationKind !== "informational"
-          && occurrence.recommendationKind !== "trend") {
-          throw new Error("publish_calendar_recommendation_kind_invalid");
-        }
-        seenKeys.add(occurrence.idempotencyKey);
-        return { ...occurrence, inputOrder };
-      });
+      const occurrences = normalizeAutomaticOccurrences(input.occurrences);
       if (occurrences.length === 0) return [];
-
       return transaction(fencedPool, async (client) => {
         await lockBrand(client, input.brandId);
-        const settings = await client.query(
-          `select settings.enabled,settings.channels,settings.informational_format,
-                  settings.trend_format
-             from publish_calendar_settings settings
-            where settings.brand_id=$1::uuid and settings.workspace_id=$2::uuid
-            for update`,
-          [input.brandId, input.workspaceId],
-        );
-        const schedule = await client.query(
-          `select id,day_of_week,slot_time,sort_order
-             from publish_calendar_weekly_schedule_entries
-            where brand_id=$1::uuid and workspace_id=$2::uuid
-            order by day_of_week,sort_order,id
-            for update`,
-          [input.brandId, input.workspaceId],
-        );
-        const subscription = await client.query(
-          `select subscription.status,subscription.started_at,
-                  subscription.current_period_start,subscription.current_period_end,
-                  plan.weekly_generation_limit,plan.weekly_publish_limit
-             from brand_subscriptions subscription
-             join brands brand on brand.id=subscription.brand_id and brand.workspace_id=$2::uuid
-             join billing_plan_catalog plan on plan.code=subscription.plan_code and plan.active
-            where subscription.brand_id=$1::uuid
-            for update of subscription`,
-          [input.brandId, input.workspaceId],
-        );
-        const existing = await client.query(
-          `select slot.* from publish_calendar_slots slot
-            where slot.workspace_id=$1::uuid and slot.brand_id=$2::uuid
-              and slot.idempotency_key=any($3::text[])
-            for update`,
-          [input.workspaceId, input.brandId, occurrences.map(({ idempotencyKey }) => idempotencyKey)],
-        );
-        const existingByKey = new Map(existing.rows.map((row) => [String(row.idempotency_key), mapSlot(row)]));
-        const scheduleById = new Map(schedule.rows.map((row) => [String(row.id), row]));
-        const ordered = [...occurrences].sort((left, right) => {
-          const instant = left.scheduledFor.getTime() - right.scheduledFor.getTime();
-          if (instant !== 0) return instant;
-          const leftSchedule = scheduleById.get(left.scheduleEntryId);
-          const rightSchedule = scheduleById.get(right.scheduleEntryId);
-          const day = Number(leftSchedule?.day_of_week ?? 8) - Number(rightSchedule?.day_of_week ?? 8);
-          if (day !== 0) return day;
-          const sort = Number(leftSchedule?.sort_order ?? MAX_POSTGRES_INTEGER)
-            - Number(rightSchedule?.sort_order ?? MAX_POSTGRES_INTEGER);
-          if (sort !== 0) return sort;
-          const id = left.scheduleEntryId.localeCompare(right.scheduleEntryId);
-          return id || left.inputOrder - right.inputOrder;
-        });
-        const databaseClock = await client.query("select clock_timestamp() as now");
-        const now = new Date(databaseClock.rows[0]?.now ?? Date.now());
-        const settingsRow = settings.rows[0];
-        const subscriptionRow = subscription.rows[0];
-        const selectedChannels = settingsRow
-          ? validateChannels((settingsRow.channels ?? []) as Channel[]).filter((channel) => SUPPORTED_CHANNELS.has(channel))
-          : [];
-        const connected = selectedChannels.length > 0
-          ? await connectedCalendarChannels(client, input, selectedChannels)
-          : new Set<Channel>();
-        const channels = selectedChannels.filter((channel) => connected.has(channel));
-        const currentSubscriptionEligible = Boolean(subscriptionRow)
-          && ["active", "cancel_scheduled"].includes(String(subscriptionRow.status))
-          && new Date(subscriptionRow.current_period_start).getTime() <= now.getTime()
-          && now.getTime() < new Date(subscriptionRow.current_period_end).getTime();
-        const currentSettingsEligible = settingsRow?.enabled === true && channels.length > 0;
-        const missingEntitled = ordered.filter((occurrence) => {
-          if (existingByKey.has(occurrence.idempotencyKey)) return false;
-          const scheduleRow = scheduleById.get(occurrence.scheduleEntryId);
-          const occurrenceParts = occurrenceKstParts(occurrence.scheduledFor);
-          const scheduleMatches = Boolean(scheduleRow)
-            && Number(scheduleRow.day_of_week) === occurrenceParts.dayOfWeek
-            && time(scheduleRow.slot_time) === occurrenceParts.time;
-          const beforeCancellation = subscriptionRow?.status !== "cancel_scheduled"
-            || occurrence.scheduledFor.getTime() < new Date(subscriptionRow.current_period_end).getTime();
-          return currentSettingsEligible && currentSubscriptionEligible && scheduleMatches
-            && beforeCancellation && occurrence.scheduledFor.getTime() > now.getTime();
-        });
-        const startedAt = subscriptionRow ? new Date(subscriptionRow.started_at) : null;
-        const windowsByKey = new Map<string, { startsAt: Date; endsAt: Date }>();
-        const occurrenceWindowKey = new Map<string, string>();
-        if (startedAt) {
-          for (const occurrence of missingEntitled) {
-            const window = subscriptionWeekWindow({
-              subscriptionStartedAt: startedAt,
-              now: occurrence.scheduledFor,
-            });
-            const key = window.startsAt.toISOString();
-            windowsByKey.set(key, window);
-            occurrenceWindowKey.set(occurrence.idempotencyKey, key);
-          }
-        }
-        const availability = await publishUsageForWindows(
-          client,
-          input,
-          [...windowsByKey.values()],
-          Number(subscriptionRow?.weekly_publish_limit ?? 0),
-        );
-
+        const evaluated = await evaluateAutomaticOccurrences(client, input, occurrences, true);
+        const planned = planAutomaticOccurrences(evaluated);
         const results: AutomaticOccurrenceResult[] = [];
-        for (const occurrence of ordered) {
-          const replay = existingByKey.get(occurrence.idempotencyKey);
-          if (replay) {
-            results.push({ idempotencyKey: occurrence.idempotencyKey, status: "existing", slot: replay });
+        for (const item of planned) {
+          if (item.status === "existing") {
+            results.push({
+              idempotencyKey: item.occurrence.idempotencyKey,
+              status: "existing",
+              slot: item.slot,
+            });
             continue;
           }
-          const windowKey = occurrenceWindowKey.get(occurrence.idempotencyKey);
-          if (!windowKey) {
+          if (item.status === "subscription_ineligible") {
             results.push({
-              idempotencyKey: occurrence.idempotencyKey,
+              idempotencyKey: item.occurrence.idempotencyKey,
               status: "subscription_ineligible",
               slot: null,
             });
             continue;
           }
-          const reserved = reservePublicationUnit(availability.get(windowKey)!);
-          if (!reserved) {
-            results.push({ idempotencyKey: occurrence.idempotencyKey, status: "quota_exhausted", slot: null });
+          if (item.status === "quota_blocked") {
+            results.push({
+              idempotencyKey: item.occurrence.idempotencyKey,
+              status: "quota_exhausted",
+              slot: null,
+            });
             continue;
           }
-          const contentFormat = occurrence.recommendationKind === "trend"
-            ? settingsRow.trend_format as ContentFormat
-            : settingsRow.informational_format as ContentFormat;
           const inserted = await client.query(
             `insert into publish_calendar_slots(
                workspace_id,brand_id,scheduled_for,assignment_mode,status,recommendation_kind,
@@ -1580,17 +1620,33 @@ export function createPublishCalendarRepository(
              on conflict(brand_id,idempotency_key) where idempotency_key is not null
              do update set updated_at=publish_calendar_slots.updated_at
              returning *`,
-            [input.workspaceId, input.brandId, occurrence.scheduledFor,
-              occurrence.recommendationKind, contentFormat, channels, occurrence.idempotencyKey],
+            [input.workspaceId, input.brandId, item.occurrence.scheduledFor,
+              item.occurrence.recommendationKind, item.contentFormat,
+              evaluated.channels, item.occurrence.idempotencyKey],
           );
-          availability.set(windowKey, reserved);
           results.push({
-            idempotencyKey: occurrence.idempotencyKey,
+            idempotencyKey: item.occurrence.idempotencyKey,
             status: "created",
             slot: mapSlot(inserted.rows[0]),
           });
         }
         return results;
+      });
+    },
+
+    async previewAutomaticOccurrences(input) {
+      const occurrences = normalizeAutomaticOccurrences(input.occurrences);
+      if (occurrences.length === 0) return [];
+      const evaluated = await evaluateAutomaticOccurrences(pool, input, occurrences, false);
+      return planAutomaticOccurrences(evaluated).map((item): AutomaticOccurrencePreviewResult => {
+        if (item.status === "existing") {
+          return { idempotencyKey: item.occurrence.idempotencyKey, status: "existing", slot: item.slot };
+        }
+        return {
+          idempotencyKey: item.occurrence.idempotencyKey,
+          status: item.status,
+          slot: null,
+        };
       });
     },
 
@@ -1991,6 +2047,20 @@ export function createPublishCalendarRepository(
         }
         return renewals;
       });
+    },
+
+    async previewDueSubscriptionRenewals(now = new Date()) {
+      if (!Number.isFinite(now.getTime())) throw new Error("subscription_renewal_date_invalid");
+      const due = await pool.query(
+        `select subscription.brand_id
+           from brand_subscriptions subscription
+           join billing_plan_catalog current_plan on current_plan.code=subscription.plan_code
+          where subscription.current_period_end<=$1::timestamptz
+            and subscription.status in ('active','cancel_scheduled')
+          order by subscription.brand_id`,
+        [now],
+      );
+      return due.rows.map((row) => ({ brandId: String(row.brand_id) }));
     },
   };
 }

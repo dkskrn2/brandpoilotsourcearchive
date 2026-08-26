@@ -588,6 +588,39 @@ it("runs the actual weekly settings repository transaction as the application ro
       );
 
       const allocator = createDatabasePublishCalendarAllocator(application, repository);
+      const stateBeforePreview = await client.query<{ snapshot: unknown }>(
+        `select jsonb_build_object(
+           'settings',(select jsonb_agg(to_jsonb(settings) order by settings.brand_id) from publish_calendar_settings settings),
+           'schedule',(select jsonb_agg(to_jsonb(schedule) order by schedule.id) from publish_calendar_weekly_schedule_entries schedule),
+           'slots',(select jsonb_agg(to_jsonb(slot) order by slot.id) from publish_calendar_slots slot),
+           'subscriptions',(select jsonb_agg(to_jsonb(subscription) order by subscription.brand_id) from brand_subscriptions subscription)
+         ) snapshot`,
+      );
+      await expect(allocator.previewAll(allocationNow)).resolves.toMatchObject({
+        observedAt: allocationNow.toISOString(),
+        renewalDueBrandIds: [],
+        brandsSelected: 1,
+        occurrences: [
+          expect.objectContaining({ brandId, status: "create" }),
+          expect.objectContaining({ brandId, status: "create" }),
+          expect.objectContaining({ brandId, status: "quota_blocked" }),
+          expect.objectContaining({ brandId, status: "subscription_ineligible" }),
+        ],
+        recommendationAssignments: [
+          expect.objectContaining({ brandId, recommendationId: informationalSuggestionId }),
+          expect.objectContaining({ brandId, recommendationId: trendSuggestionId }),
+        ],
+        quotaBlockedBrandIds: [brandId],
+      });
+      const stateAfterPreview = await client.query<{ snapshot: unknown }>(
+        `select jsonb_build_object(
+           'settings',(select jsonb_agg(to_jsonb(settings) order by settings.brand_id) from publish_calendar_settings settings),
+           'schedule',(select jsonb_agg(to_jsonb(schedule) order by schedule.id) from publish_calendar_weekly_schedule_entries schedule),
+           'slots',(select jsonb_agg(to_jsonb(slot) order by slot.id) from publish_calendar_slots slot),
+           'subscriptions',(select jsonb_agg(to_jsonb(subscription) order by subscription.brand_id) from brand_subscriptions subscription)
+         ) snapshot`,
+      );
+      expect(stateAfterPreview.rows[0]?.snapshot).toEqual(stateBeforePreview.rows[0]?.snapshot);
       await expect(allocator.allocateAll(allocationNow)).resolves.toEqual({
         brandsSelected: 1,
         openSlotsCreated: 2,

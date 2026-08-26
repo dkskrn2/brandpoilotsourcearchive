@@ -295,6 +295,7 @@ const serverOptions: Parameters<typeof createServer>[0] & {
     workerApiToken: process.env.WORKER_API_TOKEN,
     contentProposalWorkerApiToken: process.env.CONTENT_PROPOSAL_WORKER_API_TOKEN,
     cronSecret: process.env.CRON_SECRET,
+    instanceRole: runtimeConfig.instanceRole,
     kakaoAuth: createKakaoAuthStore(pool),
     kakao: {
       restApiKey: process.env.KAKAO_REST_API_KEY ?? "",

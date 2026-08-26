@@ -34,7 +34,7 @@ import { createAiContentSubjectRepository } from "./aiContentSubjectRepository.j
 import { createPublishCalendarRepository } from "./publishCalendarRepository.js";
 import { createDatabasePublishCalendarAllocator } from "./publishCalendarAllocator.js";
 import { createPublishItemsRepository } from "./publishItemsRepository.js";
-import { canAutoRetryCalendarPublish, runPublishDue, type PublishDueClaim } from "./publishDueRun.js";
+import { canAutoRetryCalendarPublish, previewPublishDue, runPublishDue, type PublishDueClaim } from "./publishDueRun.js";
 import { enqueueAutomatedCardNews } from "./automatedCardNews.js";
 import { createBrandIntelligenceRepository } from "./brandIntelligenceRepository.js";
 import { createBrandIntelligenceProvider } from "./brandIntelligenceProvider.js";
@@ -2263,6 +2263,7 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
     ...publishCalendar,
     ...publishItems,
     allocatePublishCalendar: (now) => publishCalendarAllocator.allocateAll(now),
+    previewPublishCalendarAllocation: (now) => publishCalendarAllocator.previewAll(now),
     async getFaqCapabilities(brandId) {
       return faqPolicyForBrand(brandId);
     },
@@ -5548,6 +5549,14 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
         concurrency: options.publishDueConcurrency ?? Number(process.env.PUBLISH_DUE_CONCURRENCY ?? "4"),
         claimQueueItem: claimPublishQueueItemInternal,
         dispatchClaim: async (claim) => publishQueueItemInternal(claim.queueId, claim),
+      });
+    },
+
+    async previewDuePublishing(now = new Date()) {
+      return previewPublishDue({
+        pool,
+        now,
+        batchSize: options.publishDueBatchSize ?? Number(process.env.PUBLISH_DUE_BATCH_SIZE ?? "50"),
       });
     },
 

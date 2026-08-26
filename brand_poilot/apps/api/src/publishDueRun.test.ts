@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   canAutoRetryCalendarPublish,
   hasReachedKstReservationExpiry,
+  previewPublishDue,
   runPublishDue,
   type PublishDueClaim,
 } from "./publishDueRun.js";
@@ -64,6 +65,37 @@ function dueHarness(input: {
 }
 
 describe("publish due run", () => {
+  it("previews every due lifecycle category without transaction, lock, mutation, or provider calls", async () => {
+    const rows = [{
+      recovered_queue_ids: ["recovered-1"],
+      result_unknown_queue_ids: ["unknown-1"],
+      expired_target_queue_ids: ["expired-1"],
+      expired_slot_ids: ["slot-expired-1"],
+      delayed_queue_ids: ["delayed-1"],
+      provider_candidate_queue_ids: ["due-1", "delayed-1"],
+    }];
+    const query = vi.fn(async (sql: string) => {
+      expect(sql).toContain("publish_due_preview");
+      expect(sql).not.toMatch(/\b(update|insert|delete)\b/i);
+      expect(sql).not.toContain("pg_try_advisory");
+      return { rows, rowCount: 1 };
+    });
+
+    await expect(previewPublishDue({
+      pool: { query } as any,
+      now: new Date("2026-08-26T20:00:00+09:00"),
+      batchSize: 2,
+    })).resolves.toEqual({
+      observedAt: "2026-08-26T11:00:00.000Z",
+      counts: { recoveredPublished: 1, resultUnknown: 1, expiredTargets: 1, expiredSlots: 1, delayedQueued: 1, providerCandidates: 2 },
+      recovery: { publishedQueueIds: ["recovered-1"], resultUnknownQueueIds: ["unknown-1"] },
+      expiry: { targetQueueIds: ["expired-1"], slotIds: ["slot-expired-1"] },
+      delayedQueueIds: ["delayed-1"],
+      providerCandidateQueueIds: ["due-1", "delayed-1"],
+    });
+    expect(query).toHaveBeenCalledTimes(1);
+  });
+
   it("keeps 23:58:59.999 KST publishable and expires at exactly 23:59:00.000 KST", () => {
     const scheduledFor = new Date("2026-08-26T11:30:00+09:00");
 

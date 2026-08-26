@@ -1037,6 +1037,16 @@ test("production keeps publish scheduling external and every API local scheduler
       `${serviceName} must explicitly disable its local scheduler`,
     );
   }
+  assert.equal(
+    services.get("api-primary").text.match(/^\s+API_INSTANCE_ROLE:\s+primary\s*$/gm)?.length,
+    1,
+    "api-primary must have the explicit primary scheduler role",
+  );
+  assert.equal(
+    services.get("api-canary").text.match(/^\s+API_INSTANCE_ROLE:\s+canary\s*$/gm)?.length,
+    1,
+    "api-canary must have the explicit canary scheduler role",
+  );
   for (const [serviceName, service] of services) {
     assert.doesNotMatch(
       service.text,

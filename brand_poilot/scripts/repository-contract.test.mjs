@@ -1055,7 +1055,7 @@ test("자동 크롤링은 지원하지 않는 Vercel Cron 대신 외부 또는 �
   assert.match(envExample, /^LOCAL_SCHEDULER_ENABLED=false$/m);
 });
 
-test("게시 실행은 인증된 GET cron 경로를 유지하고 로컬 runner로 대체되지 않는다", async () => {
+test("게시 실행은 인증된 primary-only POST와 read-only GET preview를 사용한다", async () => {
   const [httpServer, index, envExample] = await Promise.all([
     readFile("apps/api/src/httpServer.ts", "utf8"),
     readFile("apps/api/src/index.ts", "utf8"),
@@ -1073,32 +1073,30 @@ test("게시 실행은 인증된 GET cron 경로를 유지하고 로컬 runner�
     1,
     "no additional local publishing runner may replace the managed cron caller",
   );
-  const routeStart = httpServer.search(/app\.get\(\s*["']\/internal\/cron\/publish-due["']/);
-  assert.notEqual(routeStart, -1, "GET /internal/cron/publish-due must remain registered");
+  assert.doesNotMatch(httpServer, /app\.get\(\s*["']\/internal\/cron\/publish-due["']/);
+  assert.match(httpServer, /app\.get\(\s*["']\/internal\/cron\/publish-due\/preview["']/);
+  const routeStart = httpServer.search(/app\.post\(\s*["']\/internal\/cron\/publish-due["']/);
+  assert.notEqual(routeStart, -1, "POST /internal/cron/publish-due must be registered");
   const sourceAfterRouteStart = httpServer.slice(routeStart + 1);
   const nextRouteOffset = sourceAfterRouteStart.search(
     /\n\s*app\.(?:get|post|put|patch|delete)\b/,
   );
   assert.notEqual(nextRouteOffset, -1, "publish-due handler must be bounded by the next route");
   const routeHandler = httpServer.slice(routeStart, routeStart + 1 + nextRouteOffset);
-  const authenticationIndex = routeHandler.indexOf("matchesBearerSecret(");
-  const unauthorizedIndex = routeHandler.indexOf("reply.code(401)");
+  const authenticationIndex = routeHandler.indexOf("authenticateScheduler(");
+  const roleIndex = routeHandler.indexOf("allowSchedulerMutation(");
   const publishingIndex = routeHandler.indexOf("repository.runDuePublishing(");
 
   assert.notEqual(authenticationIndex, -1, "publish-due must check the cron bearer secret");
   assert.ok(
-    unauthorizedIndex > authenticationIndex && unauthorizedIndex < publishingIndex,
-    "publish-due must return 401 on failed authentication before publishing",
+    roleIndex > authenticationIndex && roleIndex < publishingIndex,
+    "publish-due must authenticate before revealing or applying instance-role fencing",
   );
   assert.ok(
     publishingIndex > authenticationIndex,
     "publish-due must authenticate before running due publishing",
   );
-  assert.equal(
-    /app\.post\(\s*["']\/internal\/cron\/publish-due["']/.test(httpServer),
-    false,
-    "publish-due must not be replaced with a POST trigger",
-  );
+  assert.match(httpServer, /instanceRole\s*!==\s*["']primary["'][\s\S]*publish_scheduler_primary_only/);
 });
 
 test("legacy 콘텐츠 smoke는 제거된 V1 경로를 호출하지 않고 fail-closed 한다", async () => {

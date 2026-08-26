@@ -228,13 +228,13 @@ Webflow는 지원 채널이 아닙니다. 마이그레이션 `035_remove_webflow
 
 성과 수집은 Vercel Cron 작업이 아닙니다. `.env.example`의 안전한 예제 기본값은 `LOCAL_SCHEDULER_ENABLED=false`입니다. 매일 03:00 KST 성과 수집 작업을 실행하려면 실제 로컬 중앙 API 환경(`apps/api/.env` 또는 프로세스 환경 변수)에 `LOCAL_SCHEDULER_ENABLED=true`를 설정하고 하나 이상의 API 프로세스를 지속 실행해야 합니다. 스케줄러는 매분 성과 수집 진입점을 호출하고, 저장소가 03:00 KST 이전 요청과 당일 중복 실행을 처리합니다. 03:00에 프로세스가 중단돼 있었더라도 재시작 후 다음 틱에서 당일 작업을 보충 실행합니다. Vercel 인스턴스에서는 `VERCEL` 환경 분기로 로컬 스케줄러가 시작되지 않습니다.
 
-기존 `/internal/cron/source-crawl`, `/internal/cron/daily-generation`, `/internal/cron/publish-due` 엔드포인트는 Vercel Cron에서 계속 호출할 수 있으며 `CRON_SECRET` 인증이 필요합니다. 게시 캘린더 자동 배정은 별도 `POST /internal/cron/publish-calendar-allocate`를 사용합니다. 이 호출은 콘텐츠 추천 배치가 완료된 뒤 매일 05:20 KST에 등록하며, 운영 API의 로컬 스케줄러를 켜지 않습니다. 캘린더 자동 설정의 DB 기본값은 꺼짐이므로 migration/API 배포만으로 기존 브랜드에 슬롯이나 게시가 생성되지 않습니다.
+기존 `/internal/cron/source-crawl`, `/internal/cron/daily-generation`과 게시 스케줄러 엔드포인트는 `CRON_SECRET` 인증이 필요합니다. 게시 실행은 primary API의 `POST /internal/cron/publish-due`, 게시 캘린더 자동 배정은 primary API의 `POST /internal/cron/publish-calendar-allocate`를 사용합니다. 두 작업의 canary 사전 검증은 각각 인증된 read-only `GET .../preview`를 사용하며, 기존 mutating `GET /internal/cron/publish-due`는 제거되었습니다. 캘린더 자동 설정의 DB 기본값은 꺼짐이므로 API 배포만으로 기존 브랜드에 슬롯이나 게시가 생성되지 않습니다.
 
 자동 운영을 배포 환경에서 사용하려면 다음 순서를 따르세요.
 
 1. `npm run db:migrate`로 Supabase 적용 이력을 확인하고 pending 마이그레이션을 적용합니다.
-2. Vercel Production 환경에 충분히 긴 임의의 `CRON_SECRET`을 등록합니다.
-3. API를 배포하고 `source-crawl`, `daily-generation`, `publish-due` Cron 호출을 확인합니다. 게시 캘린더를 활성화하는 릴리스에서는 추천 작업 뒤의 `publish-calendar-allocate` POST 호출도 별도로 확인합니다.
+2. 운영 API 환경에 충분히 긴 임의의 `CRON_SECRET`을 등록하고 Compose의 `API_INSTANCE_ROLE`이 primary/canary에 명시됐는지 확인합니다.
+3. API를 배포하고 read-only preview를 먼저 확인한 뒤 primary POST 실행 경로를 확인합니다.
 
 코드 변경만으로 운영 DB 마이그레이션이나 Vercel 배포가 자동 수행되지는 않습니다.
 

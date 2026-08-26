@@ -1020,6 +1020,52 @@ export interface PublishDueRunResult {
   resultUnknown: number;
 }
 
+export interface PublishDuePreviewResult {
+  observedAt: string;
+  counts: {
+    recoveredPublished: number;
+    resultUnknown: number;
+    expiredTargets: number;
+    expiredSlots: number;
+    delayedQueued: number;
+    providerCandidates: number;
+  };
+  recovery: {
+    publishedQueueIds: string[];
+    resultUnknownQueueIds: string[];
+  };
+  expiry: {
+    targetQueueIds: string[];
+    slotIds: string[];
+  };
+  delayedQueueIds: string[];
+  providerCandidateQueueIds: string[];
+}
+
+export interface PublishCalendarAllocationPreviewResult {
+  observedAt: string;
+  renewalDueBrandIds: string[];
+  brandsSelected: number;
+  counts: {
+    renewalsDue: number;
+    occurrences: number;
+    recommendations: number;
+    quotaBlockedBrands: number;
+  };
+  occurrences: Array<{
+    brandId: string;
+    idempotencyKey: string;
+    status: "existing" | "create" | "quota_blocked" | "subscription_ineligible";
+  }>;
+  recommendationAssignments: Array<{
+    brandId: string;
+    recommendationId: string;
+    slotId: string | null;
+    idempotencyKey: string | null;
+  }>;
+  quotaBlockedBrandIds: string[];
+}
+
 export interface DailyGenerationRunResult extends PipelineRunResult {
   brandsSelected: number;
   runsStarted: number;
@@ -1510,11 +1556,13 @@ export interface ApiRepository
     quotaBlocked: number;
     brandsFailed: number;
   }>;
+  previewPublishCalendarAllocation?(now?: Date): Promise<PublishCalendarAllocationPreviewResult>;
   runDailyPerformanceSync(now?: Date): Promise<PerformanceSyncSummaryDto>;
   getDashboard(brandId: string): Promise<DashboardDto>;
   getPerformanceInsights?(brandId: string): Promise<PerformanceInsightsDto>;
   schedulePublishQueue(brandId: string, now?: Date): Promise<PipelineRunResult>;
   runDuePublishing(now?: Date): Promise<PublishDueRunResult>;
+  previewDuePublishing?(now?: Date): Promise<PublishDuePreviewResult>;
   runDueAiContentPublishing?(): Promise<PipelineRunResult>;
   publishQueueItem(queueId: string): Promise<{ id: string; status: string; publishedUrl: string | null }>;
   retryPublishQueueItem(queueId: string): Promise<{ id: string; status: "queued" | "scheduled" }>;

@@ -260,6 +260,7 @@ interface CreateServerOptions {
   workerApiToken?: string;
   contentProposalWorkerApiToken?: string;
   cronSecret?: string;
+  instanceRole?: "primary" | "canary" | "unassigned";
   kakaoAuth?: ReturnType<typeof createKakaoAuthStore>;
   kakao?: { restApiKey: string; clientSecret?: string; redirectUri: string; frontendUrl: string };
   instagramLogin?: { appId: string; appSecret: string; redirectUri: string; frontendUrl: string };
@@ -940,7 +941,7 @@ export function createFastifyOptions(logger?: boolean | FastifyLoggerOptions) {
 }
 
 export function createServer(
-  { repository, contentSuggestions, aiContentProposalV2, onboardingContent, workerApiToken, contentProposalWorkerApiToken, cronSecret, kakaoAuth, kakao, instagramLogin, facebookLogin, metaWebhook, brandLogoService, aiContentUpload, aiContentAttachmentGc, assetLibraryUpload, aiContentLimits, subjectAnalysis, brandIntelligenceRepository, brandAnalysisUpload, runtimePolicy, readinessPolicy, logger }: CreateServerOptions,
+  { repository, contentSuggestions, aiContentProposalV2, onboardingContent, workerApiToken, contentProposalWorkerApiToken, cronSecret, instanceRole = "unassigned", kakaoAuth, kakao, instagramLogin, facebookLogin, metaWebhook, brandLogoService, aiContentUpload, aiContentAttachmentGc, assetLibraryUpload, aiContentLimits, subjectAnalysis, brandIntelligenceRepository, brandAnalysisUpload, runtimePolicy, readinessPolicy, logger }: CreateServerOptions,
   app: FastifyInstance = Fastify(createFastifyOptions(logger))
 ) {
   const aiContentAttachmentRepository = aiContentUpload
@@ -1532,8 +1533,8 @@ export function createServer(
       (["POST", "PUT", "PATCH", "DELETE"].includes(method) && route.includes("/ai-content"))
       || (method === "POST" && route === "/brands/:brandId/content-generation/run")
       || (method === "GET" && route === "/internal/cron/daily-generation")
-      || (method === "POST" && route === "/internal/cron/publish-calendar-allocate")
-      || (["POST", "PUT", "PATCH", "DELETE"].includes(method) && route.includes("/publish-calendar"))
+      || (["POST", "PUT", "PATCH", "DELETE"].includes(method)
+        && route.startsWith("/brands/") && route.includes("/publish-calendar"))
       || (method === "POST" && route === "/internal/cron/ai-content-attachment-gc")
       || (method === "GET" && (
         route === "/brands/:brandId/ai-content/outputs/:outputId/download"
@@ -1685,19 +1686,44 @@ export function createServer(
     return repository.runDailyGeneration(new Date());
   });
 
-  app.get("/internal/cron/publish-due", async (request, reply) => {
-    if (!matchesBearerSecret(request.headers.authorization, cronSecret)) {
-      reply.code(401);
-      return { error: "cron_unauthorized" };
+  const authenticateScheduler = (authorization: string | undefined, reply: FastifyReply) => {
+    if (!matchesBearerSecret(authorization, cronSecret)) {
+      reply.code(401).send({ error: "cron_unauthorized" });
+      return false;
     }
+    return true;
+  };
+  const allowSchedulerMutation = (reply: FastifyReply) => {
+    if (instanceRole !== "primary") {
+      reply.code(409).send({ error: "publish_scheduler_primary_only" });
+      return false;
+    }
+    return true;
+  };
+
+  app.get("/internal/cron/publish-due/preview", async (request, reply) => {
+    if (!authenticateScheduler(request.headers.authorization, reply)) return reply;
+    if (!repository.previewDuePublishing) throw new Error("publish_due_preview_not_configured");
+    return repository.previewDuePublishing(new Date());
+  });
+
+  app.post("/internal/cron/publish-due", async (request, reply) => {
+    if (!authenticateScheduler(request.headers.authorization, reply)) return reply;
+    if (!allowSchedulerMutation(reply)) return reply;
     return repository.runDuePublishing(new Date());
   });
 
-  app.post("/internal/cron/publish-calendar-allocate", async (request, reply) => {
-    if (!matchesBearerSecret(request.headers.authorization, cronSecret)) {
-      reply.code(401);
-      return { error: "cron_unauthorized" };
+  app.get("/internal/cron/publish-calendar-allocate/preview", async (request, reply) => {
+    if (!authenticateScheduler(request.headers.authorization, reply)) return reply;
+    if (!repository.previewPublishCalendarAllocation) {
+      throw new Error("publish_calendar_preview_not_configured");
     }
+    return repository.previewPublishCalendarAllocation(new Date());
+  });
+
+  app.post("/internal/cron/publish-calendar-allocate", async (request, reply) => {
+    if (!authenticateScheduler(request.headers.authorization, reply)) return reply;
+    if (!allowSchedulerMutation(reply)) return reply;
     if (!repository.allocatePublishCalendar) throw new Error("publish_calendar_not_configured");
     return repository.allocatePublishCalendar(new Date());
   });
