@@ -1180,22 +1180,19 @@ test("scheduler transition contract preserves disabled and active snapshots with
 });
 
 test("scheduler ps failures propagate before disabled-state mutation", () => {
-  const libPath = resolve("deploy/scripts/lib.sh").replaceAll("\\", "/");
-  const bash = "C:/Program Files/Git/bin/bash.exe";
+  const libPath = bashPath("deploy/scripts/lib.sh");
+  const bash = findBash();
   const common = `source '${libPath}'\n` +
-    `docker() { printf '%s\\n' "$*" >>"$DOCKER_LOG"; if [[ "$1" == compose && "$*" == *" ps "* ]]; then return 23; fi; return 0; }\n`;
+    `docker() { printf 'docker-call=%s\\n' "$*" >&2; if [[ "$1" == compose && "$*" == *" ps "* ]]; then return 23; fi; return 0; }\n`;
   for (const invocation of [
     `inspect_publish_scheduler_runtime /release`,
     `apply_publish_scheduler_snapshot /release 10 false NONE NONE`,
   ]) {
-    const fixture = mkdtempSync(join(tmpdir(), "publish-scheduler-ps-"));
-    const log = join(fixture, "docker.log").replaceAll("\\", "/");
-    const result = spawnSync(bash, ["-lc", `export DOCKER_LOG='${log}'\n${common}${invocation}`], { encoding: "utf8" });
+    const result = spawnSync(bash, ["-lc", `${common}${invocation}`], { encoding: "utf8" });
     assert.notEqual(result.status, 0, invocation);
-    const calls = existsSync(log) ? readFileSync(log, "utf8") : "";
+    const calls = result.stderr;
     assert.match(calls, / ps /);
     assert.doesNotMatch(calls, / (?:up|stop|rm|restart) /);
-    rmSync(fixture, { recursive: true, force: true });
   }
 });
 
