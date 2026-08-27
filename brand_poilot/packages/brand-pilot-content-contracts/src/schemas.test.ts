@@ -30,6 +30,10 @@ import {
   parseReelPlanV2,
 } from "./plans.js";
 import { parseAiContentManifestV3 } from "./manifest.js";
+import {
+  parseBrandRulesContent,
+  parseBrandRulesContentV2,
+} from "./snapshots.js";
 
 const UUIDS = {
   brand: "00000000-0000-4000-8000-000000000001",
@@ -430,7 +434,7 @@ describe("canonical content schemas", () => {
       .toThrow("reel_plan_v2_invalid");
   });
 
-  it("requires an exact approved brand-rules.v1 snapshot in generation V3", () => {
+  it("requires an exact approved brand-rules snapshot in generation V3", () => {
     expect(parseContentGenerationInputV3(generationInput()).brandRules).toEqual(brandRules);
     const { brandRules: _missing, ...withoutRules } = generationInput();
     expect(() => parseContentGenerationInputV3(withoutRules)).toThrow("content_generation_input_v3_invalid");
@@ -438,6 +442,27 @@ describe("canonical content schemas", () => {
       ...generationInput(),
       brandRules: { ...brandRules, legacyRules: true },
     })).toThrow("content_generation_input_v3_invalid");
+  });
+
+  it("accepts brand-rules.v2 without inventing designRules and keeps V1 historical reads", () => {
+    const contentV2 = {
+      contractVersion: "brand-rules.v2",
+      requiredPhrases: ["정확한 정보"],
+      forbiddenPhrases: ["무조건"],
+      exaggerationRules: ["검증되지 않은 최상급 금지"],
+      ctaRules: { defaultCta: "", allowed: [] },
+      channelRules: { instagram: ["짧은 문장"] },
+      autoApprovalRules: { enabled: false, conditions: [] },
+    };
+    expect(parseBrandRulesContentV2(contentV2)).toEqual(contentV2);
+    expect(parseBrandRulesContent(contentV2)).toEqual(contentV2);
+    expect(parseBrandRulesContent(brandRules.content)).toEqual(brandRules.content);
+    expect(() => parseBrandRulesContentV2({ ...contentV2, designRules: {} }))
+      .toThrow("brand_rules_content_v2_invalid");
+    expect(parseContentGenerationInputV3({
+      ...generationInput(),
+      brandRules: { ...brandRules, content: contentV2 },
+    }).brandRules.content).toEqual(contentV2);
   });
 
   it.each([

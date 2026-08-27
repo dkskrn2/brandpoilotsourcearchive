@@ -29,6 +29,7 @@ import {
   ProposalInputSnapshotV2Schema,
 } from "./proposal.js";
 import { ResearchEvidenceSnapshotV1Schema } from "./snapshots.js";
+import { DesignStyleAnalysisV1Schema } from "./designStyle.js";
 
 const SOURCE_DIRECTORY = dirname(fileURLToPath(import.meta.url));
 const DEFAULT_OUTPUT_DIRECTORY = resolve(SOURCE_DIRECTORY, "../generated");
@@ -108,6 +109,7 @@ const SCHEMAS = {
   "reel-plan-v2.schema.json": ReelPlanV2Schema,
   "ai-content-v3.schema.json": AiContentManifestV3Schema,
   "content-prompt-binding-v1.schema.json": ContentPromptBindingSchema,
+  "design-style-analysis-v1.schema.json": DesignStyleAnalysisV1Schema,
 } as const satisfies Record<string, TSchema>;
 
 type SchemaFilename = keyof typeof SCHEMAS;
@@ -138,6 +140,7 @@ export async function generateArtifactSet(sourceDirectory = SOURCE_DIRECTORY): P
   const reelPlanV2 = leafFor("reel-plan-v2.schema.json");
   const aiContentV3 = leafFor("ai-content-v3.schema.json");
   const contentPromptBindingV1 = leafFor("content-prompt-binding-v1.schema.json");
+  const designStyleAnalysisV1 = leafFor("design-style-analysis-v1.schema.json");
 
   const contractSourceHash = computeContractSourceHash(sourceDirectory);
   const catalog = {
@@ -182,6 +185,7 @@ export async function generateArtifactSet(sourceDirectory = SOURCE_DIRECTORY): P
       plans: { card_news: cardNewsPlanV2, blog: blogPlanV2, reel: reelPlanV2 },
       aiContentV3,
       contentPromptBindingV1,
+      designStyleAnalysisV1,
     },
     proposalContracts: {
       requestVersion: CONTENT_PROPOSAL_CONTRACT_VERSIONS.request,

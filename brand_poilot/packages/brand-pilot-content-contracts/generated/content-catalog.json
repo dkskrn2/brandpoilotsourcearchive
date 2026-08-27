@@ -5,7 +5,7 @@
     "card_news": "card_news",
     "reel": "reel"
   },
-  "contractSourceHash": "e607bbb891af3723dc4620a0319382e83ee29006ed547aae620086b9809f248d",
+  "contractSourceHash": "d33b38af2768c8eb96643856be43deef3f242cd601a028e8744e1ded728e0086",
   "formats": [
     "card_news",
     "blog",
@@ -62,7 +62,7 @@
     },
     "contentGenerationInputV3": {
       "filename": "content-generation-input-v3.schema.json",
-      "sha256": "5f0123a5649ff04b93c49f5ec8a4e3a8cf501f5442ca915adcf1dd3fd64b6b00"
+      "sha256": "eb3122f9fdb141a0c842542c5dd2899b884978a0c888fbe31514bd893c7dc7b4"
     },
     "contentOrchestrationV2": {
       "filename": "content-orchestration-v2.schema.json",
@@ -79,6 +79,10 @@
     "contentProposalV2": {
       "filename": "content-proposal-v2.schema.json",
       "sha256": "54bf063cf32926874af6b098272df08d41a9e7d7f578ee6560debe44428cf5f3"
+    },
+    "designStyleAnalysisV1": {
+      "filename": "design-style-analysis-v1.schema.json",
+      "sha256": "707bb156255f4dc5d8d42674cc6c63b8b652fde6bb273c6f1fd986720affffa7"
     },
     "imageGenerationPackageV1": {
       "filename": "image-generation-package-v1.schema.json",

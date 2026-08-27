@@ -56,23 +56,29 @@ export const ApprovedBrandCoreSnapshotV2Schema = Type.Object({
 }, { additionalProperties: false });
 export type ApprovedBrandCoreSnapshotV2 = Static<typeof ApprovedBrandCoreSnapshotV2Schema>;
 
-const BrandRuleTextSchema = Type.String({ maxLength: 500 });
-const BrandRuleTextListSchema = Type.Array(BrandRuleTextSchema, { maxItems: 20 });
+export const BrandRuleTextSchema = Type.String({ maxLength: 500 });
+export const BrandRuleTextListSchema = Type.Array(BrandRuleTextSchema, { maxItems: 20 });
+export const CtaRulesSchema = Type.Object({
+  defaultCta: Type.String({ maxLength: 500 }),
+  allowed: BrandRuleTextListSchema,
+}, { additionalProperties: false });
+export const ChannelRulesSchema = Type.Record(
+  Type.String({ minLength: 1, maxLength: 50 }),
+  BrandRuleTextListSchema,
+  { additionalProperties: false, maxProperties: 20 },
+);
+export const AutoApprovalRulesSchema = Type.Object({
+  enabled: Type.Boolean(),
+  conditions: BrandRuleTextListSchema,
+}, { additionalProperties: false });
 
 export const BrandRulesContentV1Schema = Type.Object({
   contractVersion: Type.Literal("brand-rules.v1"),
   requiredPhrases: BrandRuleTextListSchema,
   forbiddenPhrases: BrandRuleTextListSchema,
   exaggerationRules: BrandRuleTextListSchema,
-  ctaRules: Type.Object({
-    defaultCta: Type.String({ maxLength: 500 }),
-    allowed: BrandRuleTextListSchema,
-  }, { additionalProperties: false }),
-  channelRules: Type.Record(
-    Type.String({ minLength: 1, maxLength: 50 }),
-    BrandRuleTextListSchema,
-    { additionalProperties: false, maxProperties: 20 },
-  ),
+  ctaRules: CtaRulesSchema,
+  channelRules: ChannelRulesSchema,
   designRules: Type.Object({
     colors: BrandRuleTextListSchema,
     fonts: BrandRuleTextListSchema,
@@ -83,22 +89,45 @@ export const BrandRulesContentV1Schema = Type.Object({
       tags: Type.Array(Type.String({ maxLength: 40 }), { maxItems: 10 }),
     }, { additionalProperties: false }), { maxItems: 5 }),
   }, { additionalProperties: false }),
-  autoApprovalRules: Type.Object({
-    enabled: Type.Boolean(),
-    conditions: BrandRuleTextListSchema,
-  }, { additionalProperties: false }),
+  autoApprovalRules: AutoApprovalRulesSchema,
 }, { additionalProperties: false });
 export type BrandRulesContentV1 = Static<typeof BrandRulesContentV1Schema>;
+
+export const BrandRulesContentV2Schema = Type.Object({
+  contractVersion: Type.Literal("brand-rules.v2"),
+  requiredPhrases: BrandRuleTextListSchema,
+  forbiddenPhrases: BrandRuleTextListSchema,
+  exaggerationRules: BrandRuleTextListSchema,
+  ctaRules: CtaRulesSchema,
+  channelRules: ChannelRulesSchema,
+  autoApprovalRules: AutoApprovalRulesSchema,
+}, { additionalProperties: false });
+export type BrandRulesContentV2 = Static<typeof BrandRulesContentV2Schema>;
+export const BrandRulesContentSchema = Type.Union([
+  BrandRulesContentV1Schema,
+  BrandRulesContentV2Schema,
+]);
+export type BrandRulesContent = Static<typeof BrandRulesContentSchema>;
 
 export function parseBrandRulesContentV1(value: unknown): BrandRulesContentV1 {
   if (!Value.Check(BrandRulesContentV1Schema, value)) throw new Error("brand_rules_content_v1_invalid");
   return value as BrandRulesContentV1;
 }
 
+export function parseBrandRulesContentV2(value: unknown): BrandRulesContentV2 {
+  if (!Value.Check(BrandRulesContentV2Schema, value)) throw new Error("brand_rules_content_v2_invalid");
+  return structuredClone(value as BrandRulesContentV2);
+}
+
+export function parseBrandRulesContent(value: unknown): BrandRulesContent {
+  if (!Value.Check(BrandRulesContentSchema, value)) throw new Error("brand_rules_content_invalid");
+  return structuredClone(value as BrandRulesContent);
+}
+
 export const ApprovedBrandRulesSnapshotV1Schema = Type.Object({
   versionId: UuidSchema,
   version: Type.Integer({ minimum: 1 }),
-  content: BrandRulesContentV1Schema,
+  content: BrandRulesContentSchema,
   contentSha256: LowercaseSha256Schema,
 }, { additionalProperties: false });
 export type ApprovedBrandRulesSnapshotV1 = Static<typeof ApprovedBrandRulesSnapshotV1Schema>;
