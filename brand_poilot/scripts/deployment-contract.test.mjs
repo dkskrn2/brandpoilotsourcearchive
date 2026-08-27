@@ -372,7 +372,7 @@ test("cutover API image contains both ordered migrations in an actual no-network
   try {
     const script = [
       "const fs=require('node:fs');",
-      "const required=['/app/db/migrations/074_ai_content_maintenance_write_fence.sql','/app/db/migrations/075_ai_content_three_format_cutover.sql','/app/db/migrations/076_manual_content_generation_brand_rules.sql','/app/db/migrations/077_content_suggestion_batches.sql','/app/db/migrations/078_faq_utterance_matching.sql','/app/db/migrations/079_publish_calendar_runtime.sql','/app/db/migrations/080_reference_channel_archive.sql','/app/db/migrations/081_meta_ad_library_references.sql','/app/db/migrations/082_manual_brand_visual_assets.sql','/app/db/migrations/083_manual_visual_selection_write_fence_invoker.sql','/app/db/migrations/084_ai_content_usage_reversal_identity_invoker.sql','/app/db/migrations/085_publish_calendar_idempotency_expand.sql','/app/db/migrations/086_publish_calendar_same_time_contract.sql','/app/db/migrations/087_ai_content_prompt_lineage_v3.sql','/app/db/migrations/088_onboarding_product_image_imports.sql','/app/db/migrations/089_free_subscription_plan.sql','/app/db/migrations/090_existing_brand_free_subscriptions.sql','/app/db/migrations/091_ai_content_prompt_lineage_v4.sql','/app/db/migrations/092_publish_calendar_weekly_schedule.sql','/app/scripts/migrationRunner.mjs','/app/scripts/migrate.mjs','/app/scripts/databaseTls.mjs'];",
+      "const required=['/app/db/migrations/074_ai_content_maintenance_write_fence.sql','/app/db/migrations/075_ai_content_three_format_cutover.sql','/app/db/migrations/076_manual_content_generation_brand_rules.sql','/app/db/migrations/077_content_suggestion_batches.sql','/app/db/migrations/078_faq_utterance_matching.sql','/app/db/migrations/079_publish_calendar_runtime.sql','/app/db/migrations/080_reference_channel_archive.sql','/app/db/migrations/081_meta_ad_library_references.sql','/app/db/migrations/082_manual_brand_visual_assets.sql','/app/db/migrations/083_manual_visual_selection_write_fence_invoker.sql','/app/db/migrations/084_ai_content_usage_reversal_identity_invoker.sql','/app/db/migrations/085_publish_calendar_idempotency_expand.sql','/app/db/migrations/086_publish_calendar_same_time_contract.sql','/app/db/migrations/087_ai_content_prompt_lineage_v3.sql','/app/db/migrations/088_onboarding_product_image_imports.sql','/app/db/migrations/089_free_subscription_plan.sql','/app/db/migrations/090_existing_brand_free_subscriptions.sql','/app/db/migrations/091_ai_content_prompt_lineage_v4.sql','/app/db/migrations/092_publish_calendar_weekly_schedule.sql','/app/db/migrations/093_design_style_analysis_visual_presets.sql','/app/db/migrations/094_ai_content_prompt_lineage_v5.sql','/app/scripts/migrationRunner.mjs','/app/scripts/migrate.mjs','/app/scripts/databaseTls.mjs'];",
       "for(const path of required)if(!fs.existsSync(path))throw new Error('missing:'+path);",
     ].join("");
     const inspect = spawnSync("docker", ["run", "--rm", "--network", "none", "--entrypoint", "node", tag, "-e", script], {
@@ -383,6 +383,24 @@ test("cutover API image contains both ordered migrations in an actual no-network
   } finally {
     spawnSync("docker", ["image", "rm", "--force", tag], { encoding: "utf8", timeout: 60_000 });
   }
+});
+
+test("design style and Proposal v5 cutover reuses existing services and is documented as development-only", () => {
+  const compose = read("deploy/compose.production.yml");
+  const releaseExample = read("deploy/release.env.example");
+  const runbook = read("docs/operations/DEVELOPMENT_AND_RELEASE_FLOW.md");
+  const publishWorkflow = read(publishWorkflowPath);
+
+  assert.doesNotMatch(`${compose}\n${releaseExample}`, /STYLE_ANALYSIS_WORKER_(?:IMAGE|ENV_FILE)/);
+  assert.match(compose, /brand-intelligence-worker-1:[\s\S]*\$\{BRAND_INTELLIGENCE_WORKER_IMAGE/);
+  assert.equal(
+    publishWorkflow.match(/--profile design-style-preset-editorial-cutover/g)?.length,
+    2,
+    "both pull-request and main release impact selection must try the dedicated cutover profile",
+  );
+  assert.match(runbook, /### 디자인 스타일 분석·프리셋 및 Proposal v5 개발 전환 순서/);
+  assert.match(runbook, /migration 093[\s\S]*migration 094/i);
+  assert.match(runbook, /Production[^\n]*승인/i);
 });
 
 test("Task 10 canary is read-only, authenticated, and proves safe feature flags", () => {
@@ -1312,6 +1330,50 @@ test("Proposal prompt cutover mode admits only the coordinated kill-switch state
   }
 });
 
+test("design-style cutover mode admits only a disabled Brand Center mutation gate", () => {
+  const bash = findBash();
+  assert.ok(bash, "Bash is required for the design-style cutover flag contract");
+  const preflight = read("deploy/scripts/preflight.sh");
+  const caseBlock = preflight.match(
+    /case "\$\{DESIGN_STYLE_PRESET_CUTOVER_MODE:-false\}" in[\s\S]*?^esac$/m,
+  )?.[0];
+  assert.ok(caseBlock, "preflight must define the design-style cutover mode branch");
+
+  const fixture = mkdtempSync(join(tmpdir(), "brand-pilot-design-style-cutover-"));
+  const apiEnv = join(fixture, "api.env");
+  const harness = join(fixture, "design-style-cutover.sh");
+  writeFileSync(harness, [
+    "#!/usr/bin/env bash",
+    "set -Eeuo pipefail",
+    'source "$1"',
+    'API_ENV_FILE="$2"',
+    caseBlock,
+    "",
+  ].join("\n"), { mode: 0o700 });
+
+  const run = ({ mode, enabled }) => {
+    writeFileSync(apiEnv, `BRAND_CENTER_MUTATIONS_ENABLED=${enabled}\n`, { mode: 0o600 });
+    const env = { ...process.env };
+    delete env.DESIGN_STYLE_PRESET_CUTOVER_MODE;
+    if (mode !== undefined) env.DESIGN_STYLE_PRESET_CUTOVER_MODE = mode;
+    return spawnSync(bash, [bashPath(harness), bashPath("deploy/scripts/lib.sh"), bashPath(apiEnv)], {
+      cwd: process.cwd(), encoding: "utf8", env,
+    });
+  };
+
+  try {
+    assert.equal(run({ enabled: "true" }).status, 0);
+    assert.notEqual(run({ enabled: "false" }).status, 0);
+    assert.equal(run({ mode: "true", enabled: "false" }).status, 0);
+    assert.notEqual(run({ mode: "true", enabled: "true" }).status, 0);
+    const invalidMode = run({ mode: "other", enabled: "false" });
+    assert.notEqual(invalidMode.status, 0);
+    assert.match(invalidMode.stderr, /error=design_style_preset_cutover_mode_invalid/);
+  } finally {
+    rmSync(fixture, { recursive: true, force: true });
+  }
+});
+
 test("optional workers use dedicated profiles, identities, env files, and hardened containers", () => {
   const compose = read("deploy/compose.production.yml");
   const services = assertComposeTopology(compose);
@@ -1413,6 +1475,7 @@ test("worker env examples keep service credentials separate and rollout flags fa
   const apiEnv = read("deploy/env/api.env.example");
   assert.match(apiEnv, /^AUTOMATED_CONTENT_ENABLED=false$/m);
   assert.match(apiEnv, /^CONTENT_PROPOSALS_ENABLED=true$/m);
+  assert.match(apiEnv, /^BRAND_CENTER_MUTATIONS_ENABLED=true$/m);
 
   const dmEnv = read("deploy/env/dm-worker.env.example");
   const wikiEnv = read("deploy/env/wiki-worker.env.example");

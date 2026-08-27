@@ -74,6 +74,7 @@ require_exact_boolean "AI_CONTENT_ATTACHMENT_UPLOAD_SESSIONS_ENABLED" "true" "$A
 require_exact_boolean "AUTOMATED_CONTENT_ENABLED" "false" "$API_ENV_FILE"
 require_exact_boolean "LOCAL_SCHEDULER_ENABLED" "false" "$API_ENV_FILE"
 require_exact_boolean "CONTENT_PROPOSALS_ENABLED" "true" "$API_ENV_FILE"
+require_exact_boolean "BRAND_CENTER_MUTATIONS_ENABLED" "true" "$API_ENV_FILE"
 require_matching_env_secret \
   "CONTENT_PROPOSAL_WORKER_API_TOKEN" \
   "$API_ENV_FILE" \

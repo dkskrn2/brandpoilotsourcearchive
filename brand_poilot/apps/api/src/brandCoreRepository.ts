@@ -15,8 +15,8 @@ import {
 } from "./brandCoreContracts.js";
 import {
   ensureActiveApprovedBrandRules,
-  normalizeBrandRulesV2,
 } from "./brandRulesReadiness.js";
+import { parseCompatibleBrandRulesContentV2 } from "@brand-pilot/content-contracts";
 
 export interface BrandScope {
   workspaceId: string;
@@ -171,11 +171,7 @@ function mapHistoricalRule(row: Record<string, unknown>): BrandRuleSet {
   } catch {
     return mapRule({
       ...row,
-      rules_json: normalizeBrandRulesV2(json(row.rules_json, {}), {
-        forbiddenTerms: [],
-        defaultCta: "",
-        autoApprovalEnabled: false,
-      }),
+      rules_json: parseCompatibleBrandRulesContentV2(json(row.rules_json, {})),
     });
   }
 }
@@ -552,7 +548,7 @@ export function createBrandCoreRepository(pool: Pool): BrandCoreRepository {
             and rules.status = 'approved'`,
         [scope.workspaceId, scope.brandId],
       );
-      return result.rowCount ? mapRule(result.rows[0] as Record<string, unknown>) : null;
+      return result.rowCount ? mapHistoricalRule(result.rows[0] as Record<string, unknown>) : null;
     },
 
     async listRuleSets(scope) {

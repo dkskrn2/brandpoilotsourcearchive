@@ -101,7 +101,7 @@ test("092 weekly schedule storage is the checksum-pinned migration after prompt 
   );
 });
 
-test("093 migrates referenced legacy presets, queues analysis, and removes designRules", async () => {
+test("093 expands legacy presets without breaking the old preset or brand-rules readers", async () => {
   const migrations = await loadMigrations();
   const migration075 = migrations.find(
     (migration) => migration.id === "075_ai_content_three_format_cutover.sql",
@@ -217,17 +217,41 @@ test("093 migrates referenced legacy presets, queues analysis, and removes desig
       reference_count: 1,
       job_count: 1,
     }]);
-    assert.equal(
-      (await database.query("select to_regclass('public.brand_style_preset_references') relation"))
-        .rows[0].relation,
-      null,
+    const legacyReader = await database.query(
+      `select preset.description,preset.visual_tokens_json,
+              array_agg(reference.reference_item_id order by reference.position) reference_item_ids
+         from brand_style_presets preset
+         join brand_style_preset_references reference on reference.preset_id=preset.id
+        where preset.id=$1
+        group by preset.id`,
+      [presetId],
     );
+    assert.deepEqual(legacyReader.rows, [{
+      description: "legacy description",
+      visual_tokens_json: { colors: ["violet"], fonts: [], notes: [] },
+      reference_item_ids: [referenceItemId],
+    }]);
     const rules = await database.query(
       "select rules_json from brand_rule_sets where workspace_id=$1 and brand_id=$2",
       [workspaceId, brandId],
     );
-    assert.equal(rules.rows[0].rules_json.contractVersion, "brand-rules.v2");
-    assert.equal(Object.hasOwn(rules.rows[0].rules_json, "designRules"), false);
+    assert.equal(rules.rows[0].rules_json.contractVersion, "brand-rules.v1");
+    assert.equal(Object.hasOwn(rules.rows[0].rules_json, "designRules"), true);
+    assert.equal(
+      (await database.query("select verify_ai_content_write_fence_catalog() verified")).rows[0].verified,
+      true,
+    );
+    const fence = await database.query(
+      `select trigger.tgname
+         from pg_trigger trigger
+        where trigger.tgrelid='brand_design_style_analysis_jobs'::regclass
+          and not trigger.tgisinternal`,
+    );
+    assert.equal(
+      fence.rows.some(({ tgname }) => tgname
+        === "ai_content_fence_brand_design_style_analysis_jo_56d4d72c7a1a"),
+      true,
+    );
   });
 });
 

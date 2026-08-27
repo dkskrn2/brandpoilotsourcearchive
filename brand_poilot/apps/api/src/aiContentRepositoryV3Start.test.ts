@@ -46,9 +46,8 @@ const brandCore = {
 const brandRules = {
   versionId: id.rules, version: 1,
   content: {
-    contractVersion: "brand-rules.v1", requiredPhrases: [], forbiddenPhrases: [], exaggerationRules: [],
+    contractVersion: "brand-rules.v2", requiredPhrases: [], forbiddenPhrases: [], exaggerationRules: [],
     ctaRules: { defaultCta: "확인", allowed: ["확인"] }, channelRules: { instagram: [] },
-    designRules: { colors: [], fonts: [], notes: [], referenceImages: [] },
     autoApprovalRules: { enabled: false, conditions: [] },
   },
   contentSha256: HASH,
@@ -120,12 +119,12 @@ const finalization = {
   userImageInstruction: null, attachmentIds: [],
 };
 const manualVisualSelection = {
-  contractVersion: "manual-visual-selection.v1",
-  product: null, stylePreset: null, avatar: null,
+  contractVersion: "manual-visual-selection.v2",
+  product: null, preset: null,
 } as const;
 const frozenManualVisualSelection = {
-  contractVersion: "manual-visual-selection-frozen.v1",
-  product: null, stylePreset: null, avatar: null,
+  contractVersion: "manual-visual-selection-frozen.v2",
+  product: null, preset: null,
 } as const;
 
 async function binding() {
@@ -155,8 +154,8 @@ function harness(options: {
   rulesMissing?: boolean;
   malformedFinalization?: boolean;
   unavailableAttachment?: boolean;
-  styleReference?: boolean;
   onboarding?: boolean;
+  storedRulesContent?: unknown;
 } = {}) {
   const statements: Array<{ sql: string; params: unknown[] }> = [];
   let replayBinding: Awaited<ReturnType<typeof binding>>;
@@ -217,23 +216,9 @@ function harness(options: {
         id: id.rules,
         version: 1,
         status: "approved",
-        rules_json: options.styleReference ? {
-          ...brandRules.content,
-          designRules: {
-            ...brandRules.content.designRules,
-            referenceImages: [{ referenceItemId: id.style, description: "Editorial", tags: ["soft"] }],
-          },
-        } : brandRules.content,
+        rules_json: options.storedRulesContent ?? brandRules.content,
       }], rowCount: 1 };
-      if (sql.includes("jsonb_array_elements")) return options.styleReference ? { rows: [{
-        reference_item_id: id.style,
-        description: "Editorial",
-        tags: ["soft"],
-        storage_url: "https://blob.example/original.webp",
-        storage_path: "brand/original.webp",
-        mime_type: "image/webp",
-        checksum: "7".repeat(64),
-      }], rowCount: 1 } : { rows: [], rowCount: 0 };
+      if (sql.includes("jsonb_array_elements")) return { rows: [], rowCount: 0 };
       if (sql.includes("from brand_subscriptions subscription")) {
         return options.subscriptionInactive
           ? { rows: [], rowCount: 0 }
@@ -410,6 +395,40 @@ describe("V3 generation start transaction", () => {
     expect(run.statements.at(-1)?.sql).toBe("ROLLBACK");
   });
 
+  it("accepts exact legacy V1 Brand Rules and strips their retired design fields", async () => {
+    const promptBinding = await binding();
+    assembler.assemble.mockImplementationOnce((source) => {
+      expect(source.approvedBrandRules.content).toEqual(expect.objectContaining({
+        contractVersion: "brand-rules.v2",
+      }));
+      expect(source.approvedBrandRules.content).not.toHaveProperty("designRules");
+      return { input: frozenInput, canonicalJson: JSON.stringify(frozenInput), contentHash: proposalSha256(frozenInput), binding: promptBinding, provenance: { selectedProposalId: id.proposal, proposalJobId: id.job, proposalContractId: id.contract, successfulModelAttemptId: id.attempt } };
+    });
+    const run = harness({
+      storedRulesContent: {
+        ...brandRules.content,
+        contractVersion: "brand-rules.v1",
+        designRules: { colors: [], fonts: [], notes: [], referenceImages: [] },
+      },
+    });
+
+    await run.repository.startAiContentGenerationV3(run.command as never, {} as never, () => new Date(NOW));
+    expect(run.statements.at(-1)?.sql).toBe("COMMIT");
+  });
+
+  it.each([
+    { ...brandRules.content, ctaRules: { defaultCta: 123, allowed: [] } },
+    { ...brandRules.content, contractVersion: "brand-rules.v99" },
+  ])("rejects malformed or unknown stored Brand Rules before writes", async (storedRulesContent) => {
+    const run = harness({ storedRulesContent });
+
+    await expect(run.repository.startAiContentGenerationV3(run.command as never, {} as never, () => new Date(NOW)))
+      .rejects.toThrow(/^ai_content_brand_rules_required$/);
+    expect(run.statements.map(({ sql }) => sql).filter((sql) => /^(?:insert|update|delete)\b/i.test(sql.trim())))
+      .toEqual([]);
+    expect(run.statements.at(-1)?.sql).toBe("ROLLBACK");
+  });
+
   it("holds every mutable frozen-resource row through the start transaction", () => {
     const repository = readFileSync(new URL("./aiContentRepository.ts", import.meta.url), "utf8");
     const migration = readFileSync(new URL(
@@ -454,7 +473,7 @@ describe("V3 generation start transaction", () => {
     expect(run.statements.map(({ sql }) => sql).join("\n")).not.toContain("brand_analysis_runs");
   });
 
-  it("freezes approved style image bytes through the snapshot repository before sealing V3 input", async () => {
+  it("does not load hidden style images from Brand Rules after the preset cutover", async () => {
     const frozenStyle = {
       referenceItemId: id.style,
       description: "Editorial",
@@ -466,7 +485,7 @@ describe("V3 generation start transaction", () => {
     };
     const promptBinding = await binding();
     assembler.assemble.mockImplementationOnce((source) => {
-      expect(source.brandStyleImages).toEqual([expect.objectContaining({ snapshot: frozenStyle })]);
+      expect(source.brandStyleImages).toEqual([]);
       return {
         input: frozenInput,
         canonicalJson: JSON.stringify(frozenInput),
@@ -480,16 +499,13 @@ describe("V3 generation start transaction", () => {
         },
       };
     });
-    const run = harness({ styleReference: true });
+    const run = harness();
     const loadApprovedStyleImages = vi.fn().mockResolvedValue([frozenStyle]);
 
     await run.repository.startAiContentGenerationV3(run.command as never, {
       loadApprovedStyleImages,
     } as never, () => new Date(NOW));
 
-    expect(loadApprovedStyleImages).toHaveBeenCalledWith({
-      workspaceId: id.workspace,
-      brandId: id.brand,
-    }, run.client);
+    expect(loadApprovedStyleImages).not.toHaveBeenCalled();
   });
 });

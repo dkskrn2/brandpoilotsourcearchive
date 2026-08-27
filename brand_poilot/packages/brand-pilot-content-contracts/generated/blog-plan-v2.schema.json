@@ -295,7 +295,7 @@
                 ],
                 "type": "object"
               },
-              "maxItems": 5,
+              "maxItems": 10,
               "type": "array"
             },
             "channelTargets": {

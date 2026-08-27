@@ -698,11 +698,23 @@ function classifyDesignStylePresetEditorialCutoverPath(path, components) {
     components.api = true;
     return { known: true, migration: true, deployBundle: true };
   }
-  if (path === "scripts/migrationRunner.test.mjs"
+  if (path === "scripts/ai-content-database-catalog.mjs"
+    || path === "scripts/ai-content-database-roles.mjs") {
+    components.api = true;
+    return { known: true };
+  }
+  if (path === "scripts/ai-content-database-catalog.test.mjs"
+    || path === "scripts/migrations.integration.test.mjs"
+    || path === "scripts/migrationRunner.test.mjs"
     || path === "scripts/repository-contract.test.mjs"
     || path === "scripts/deployment-contract.test.mjs"
-    || path === "scripts/release-impact.test.mjs") {
+    || path === "scripts/release-impact.test.mjs"
+    || path === "scripts/worker-cli-only-contract.test.mjs") {
     return { known: true };
+  }
+  if (path === ".github/workflows/publish-brand-pilot-server-images.yml"
+    || path === "../.github/workflows/publish-brand-pilot-server-images.yml") {
+    return { known: true, deployBundle: true };
   }
   if (path === "scripts/release-impact.mjs") {
     return { known: true, deployBundle: true };

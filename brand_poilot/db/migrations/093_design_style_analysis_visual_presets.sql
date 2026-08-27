@@ -202,36 +202,41 @@ alter table brand_style_presets
     foreign key (avatar_id,workspace_id,brand_id)
     references brand_avatars(id,workspace_id,brand_id) on delete restrict;
 
-alter table brand_style_presets
-  drop column description,
-  drop column visual_tokens_json;
-
-drop table brand_style_preset_references;
-
 alter table manual_ai_content_visual_selections
   drop constraint manual_ai_content_visual_selections_contract_version_check,
   add constraint manual_ai_content_visual_selections_contract_version_check
     check (contract_version in ('manual-visual-selection.v1','manual-visual-selection.v2'));
 
-update brand_rule_sets
-   set rules_json=jsonb_set(
-     rules_json - 'designRules',
-     '{contractVersion}',
-     '"brand-rules.v2"'::jsonb
-   );
+create function enforce_design_style_analysis_write_fence()
+returns trigger
+language plpgsql
+security invoker
+set search_path=pg_catalog,public
+as $$
+begin
+  perform public.assert_ai_content_writable();
+  if tg_op='DELETE' then return old; end if;
+  return new;
+end;
+$$;
 
-insert into ai_content_write_fence_catalog(relation_name,relation_class,row_classifier)
-values ('brand_design_style_analysis_jobs','customer_execution','whole_relation')
-on conflict (relation_name) do update
-set relation_class=excluded.relation_class,
-    row_classifier=excluded.row_classifier,
-    reviewed_at=now();
+revoke all on function enforce_design_style_analysis_write_fence() from public;
 
-create trigger brand_design_style_analysis_jobs_write_fence
-before insert or update or delete on brand_design_style_analysis_jobs
-for each row execute function enforce_ai_content_write_fence();
-alter table brand_design_style_analysis_jobs
-  enable always trigger brand_design_style_analysis_jobs_write_fence;
+do $$
+declare
+  trigger_name text;
+begin
+  trigger_name:=public.ai_content_fence_trigger_name('brand_design_style_analysis_jobs');
+  execute format(
+    'create trigger %I before insert or update or delete on brand_design_style_analysis_jobs for each row execute function enforce_design_style_analysis_write_fence()',
+    trigger_name
+  );
+  execute format(
+    'alter table brand_design_style_analysis_jobs enable always trigger %I',
+    trigger_name
+  );
+end;
+$$;
 
 do $$
 declare
@@ -285,6 +290,11 @@ begin
       end if;
     end loop;
   end loop;
+
+  execute format(
+    'alter function public.enforce_design_style_analysis_write_fence() owner to %I',
+    schema_owner_role_name
+  );
 
   execute format(
     'grant select,insert,update on table public.brand_design_styles to %I',

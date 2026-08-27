@@ -36,6 +36,7 @@ function validProductionEnv(): NodeJS.ProcessEnv {
     INSTAGRAM_PUBLISH_ENABLED: "false",
     AUTOMATED_CONTENT_ENABLED: "false",
     CONTENT_PROPOSALS_ENABLED: "false",
+    BRAND_CENTER_MUTATIONS_ENABLED: "true",
   };
 }
 
@@ -164,6 +165,7 @@ describe("loadApiRuntimeConfig", () => {
 
     expect(loadApiRuntimeConfig(env).http).toEqual({
       cookieSecure: true,
+      brandCenterMutationsEnabled: true,
       corsAllowedOrigins: [
         "https://app.danbammsg.co.kr",
         "https://www.danbammsg.co.kr",
@@ -211,6 +213,7 @@ describe("loadApiRuntimeConfig", () => {
     expect(config.aiContentAttachmentUploadSessionsEnabled).toBe(false);
     expect(config.automatedContentEnabled).toBe(false);
     expect(config.contentProposalsEnabled).toBe(false);
+    expect(config.http.brandCenterMutationsEnabled).toBe(false);
     expect(config.readiness).toEqual({
       schedulerEnabled: false,
       publishingEnabled: false,
@@ -285,6 +288,18 @@ describe("loadApiRuntimeConfig", () => {
       automatedContentEnabled: true,
       readiness: { contentProposalsEnabled: false },
     });
+  });
+
+  it("loads the brand-center mutation cutover gate from an exact boolean", () => {
+    expect(loadApiRuntimeConfig({
+      BRAND_CENTER_MUTATIONS_ENABLED: "true",
+    }).http.brandCenterMutationsEnabled).toBe(true);
+    expect(loadApiRuntimeConfig({
+      BRAND_CENTER_MUTATIONS_ENABLED: "false",
+    }).http.brandCenterMutationsEnabled).toBe(false);
+    expect(() => loadApiRuntimeConfig({
+      BRAND_CENTER_MUTATIONS_ENABLED: "1",
+    })).toThrow("BRAND_CENTER_MUTATIONS_ENABLED");
   });
 
   it.each(["yes", "1", "TRUE", ""])(
@@ -364,6 +379,7 @@ describe("loadApiRuntimeConfig", () => {
     const config = loadApiRuntimeConfig(validProductionEnv());
     expect(config.http).toEqual({
       cookieSecure: true,
+      brandCenterMutationsEnabled: true,
       corsAllowedOrigins: [
         "https://app.danbammsg.co.kr",
         "https://www.danbammsg.co.kr",

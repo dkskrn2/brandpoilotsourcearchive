@@ -237,6 +237,7 @@ export function BrandCenterPage() {
   const [confirmedAnalysis, setConfirmedAnalysis] = useState<BrandAnalysis | null>(null);
   const [workflow, setWorkflow] = useState<BrandAnalysis | null>(null);
   const [intelligenceLoadFailed, setIntelligenceLoadFailed] = useState(false);
+  const [visualLibraryRevision, setVisualLibraryRevision] = useState(0);
 
   const visibleVersion = useMemo(() => {
     if (!workspace) return null;
@@ -892,9 +893,22 @@ export function BrandCenterPage() {
         ) : null}
         {tab === "style" ? (
           <>
-            <DesignStylePanel brandId={DEMO_BRAND_ID} gateway={libraryGateway} />
-            <AvatarLibraryPanel brandId={DEMO_BRAND_ID} gateway={libraryGateway} showDefaultControl={false} />
-            <VisualPresetPanel brandId={DEMO_BRAND_ID} gateway={libraryGateway} />
+            <DesignStylePanel
+              brandId={DEMO_BRAND_ID}
+              gateway={libraryGateway}
+              onLibraryChanged={() => setVisualLibraryRevision((value) => value + 1)}
+            />
+            <AvatarLibraryPanel
+              brandId={DEMO_BRAND_ID}
+              gateway={libraryGateway}
+              showDefaultControl={false}
+              onLibraryChanged={() => setVisualLibraryRevision((value) => value + 1)}
+            />
+            <VisualPresetPanel
+              brandId={DEMO_BRAND_ID}
+              gateway={libraryGateway}
+              libraryRevision={visualLibraryRevision}
+            />
           </>
         ) : null}
       </div>

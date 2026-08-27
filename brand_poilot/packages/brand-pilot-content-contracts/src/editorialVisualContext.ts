@@ -60,5 +60,10 @@ export function projectManualEditorialVisualInputs(
       designStyle: selection.preset.designStyle.analysis,
       hasAvatar: selection.preset.avatar !== null,
     } : null,
+    avatar: selection.preset?.avatar ? {
+      name: selection.preset.avatar.name,
+      description: selection.preset.avatar.description,
+      imageAssetIds: selection.preset.avatar.imageAssetIds,
+    } : null,
   };
 }

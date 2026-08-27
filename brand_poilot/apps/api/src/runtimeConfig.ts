@@ -2,6 +2,7 @@ export interface ApiHttpRuntimePolicy {
   cookieSecure: boolean;
   corsAllowedOrigins: readonly string[];
   devAuthEnabled: boolean;
+  brandCenterMutationsEnabled?: boolean;
   previewFrontendOrigin?: string;
 }
 
@@ -52,6 +53,7 @@ const productionRequiredKeys = [
   "AUTH_FRONTEND_URL",
   "WORKER_API_TOKEN",
   "CONTENT_PROPOSAL_WORKER_API_TOKEN",
+  "BRAND_CENTER_MUTATIONS_ENABLED",
   "ADMIN_SERVICE_TOKEN",
   "CRON_SECRET",
   "CREDENTIAL_ENCRYPTION_KEY",
@@ -241,6 +243,10 @@ export function loadApiRuntimeConfig(
     env.CONTENT_PROPOSALS_ENABLED,
     "CONTENT_PROPOSALS_ENABLED",
   );
+  const brandCenterMutationsEnabled = parseBoolean(
+    env.BRAND_CENTER_MUTATIONS_ENABLED,
+    "BRAND_CENTER_MUTATIONS_ENABLED",
+  );
   const dmWorkersEnabled = parseBoolean(env.DM_WORKERS_ENABLED, "DM_WORKERS_ENABLED");
   const faqMatching: FaqMatchingRuntimePolicy = {
     suggestionsEnabled: parseBoolean(
@@ -346,6 +352,7 @@ export function loadApiRuntimeConfig(
       cookieSecure,
       corsAllowedOrigins,
       devAuthEnabled,
+      brandCenterMutationsEnabled,
       ...(previewFrontendOrigin ? { previewFrontendOrigin } : {}),
     },
     db: {

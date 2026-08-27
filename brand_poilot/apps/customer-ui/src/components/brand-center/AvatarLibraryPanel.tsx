@@ -19,6 +19,7 @@ interface Props {
   gateway?: LibraryGateway;
   draftReferences?: Pick<AiContentGateway, "listDraftReferences">;
   showDefaultControl?: boolean;
+  onLibraryChanged?: () => void;
 }
 
 export function AvatarLibraryPanel({
@@ -27,6 +28,7 @@ export function AvatarLibraryPanel({
   gateway = libraryGateway,
   draftReferences = aiContentApiGateway,
   showDefaultControl = true,
+  onLibraryChanged,
 }: Props) {
   const [items, setItems] = useState<Avatar[]>([]);
   const [loading, setLoading] = useState(true);
@@ -74,6 +76,7 @@ export function AvatarLibraryPanel({
         ...candidate,
         isDefault: candidate.id === saved.id,
       })));
+      onLibraryChanged?.();
     } catch {
       if (mounted.current) setActionError("기본 아바타를 변경하지 못했습니다.");
     }
@@ -107,6 +110,7 @@ export function AvatarLibraryPanel({
     try {
       await gateway.archiveAvatar(brandId, pendingArchive.id);
       if (mounted.current) setItems((current) => current.filter((candidate) => candidate.id !== pendingArchive.id));
+      onLibraryChanged?.();
       closeArchive();
     } catch {
       if (mounted.current) setActionError("아바타를 보관 처리하지 못했습니다.");
@@ -195,6 +199,7 @@ export function AvatarLibraryPanel({
           onClose={() => setCreating(false)}
           onSaved={(saved) => {
             setItems((current) => [saved, ...current.filter((item) => item.id !== saved.id)]);
+            onLibraryChanged?.();
           }}
         />
       ) : null}

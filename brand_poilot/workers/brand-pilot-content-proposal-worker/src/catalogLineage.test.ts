@@ -5,6 +5,11 @@ afterEach(() => {
   vi.resetModules();
 });
 
+it("accepts the exact generated Proposal catalog", async () => {
+  const contracts = await import("./contracts.js");
+  expect(contracts.CONTENT_PROPOSAL_OUTPUT_SCHEMA_SHA256).toMatch(/^[0-9a-f]{64}$/);
+}, 20_000);
+
 it("fails closed when the generated Proposal catalog has a different tuple and file hash", async () => {
   vi.doMock("node:fs", async () => {
     const actual = await vi.importActual<typeof import("node:fs")>("node:fs");

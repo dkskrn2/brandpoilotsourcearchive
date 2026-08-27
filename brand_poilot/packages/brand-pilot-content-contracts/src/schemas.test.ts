@@ -444,6 +444,37 @@ describe("canonical content schemas", () => {
     })).toThrow("content_generation_input_v3_invalid");
   });
 
+  it("accepts five design references plus five avatar references and rejects an eleventh style image", () => {
+    const styleImages = Array.from({ length: 11 }, (_, index) => ({
+      referenceItemId: `00000000-0000-4000-8000-${String(index + 100).padStart(12, "0")}`,
+      description: `스타일 이미지 ${index + 1}`,
+      tags: index < 5 ? ["design-style"] : ["avatar"],
+      storageUrl: `https://example.com/style-${index + 1}.png`,
+      storagePath: `style-${index + 1}.png`,
+      mimeType: "image/png",
+      checksum: String(index).repeat(64).slice(0, 64),
+    }));
+    const input = generationInput();
+    const image = imagePackage();
+
+    expect(parseContentGenerationInputV3({
+      ...input,
+      references: { ...input.references, brandStyleImages: styleImages.slice(0, 10) },
+    })).toBeTruthy();
+    expect(parseImageGenerationPackageV1({
+      ...image,
+      brandStyleImages: styleImages.slice(0, 10),
+    })).toBeTruthy();
+    expect(() => parseContentGenerationInputV3({
+      ...input,
+      references: { ...input.references, brandStyleImages: styleImages },
+    })).toThrow("content_generation_input_v3_invalid");
+    expect(() => parseImageGenerationPackageV1({
+      ...image,
+      brandStyleImages: styleImages,
+    })).toThrow("image_generation_package_v1_invalid");
+  });
+
   it("accepts brand-rules.v2 without inventing designRules and keeps V1 historical reads", () => {
     const contentV2 = {
       contractVersion: "brand-rules.v2",

@@ -15,7 +15,7 @@ alter table public.ai_content_proposal_job_contracts
       (proposal_prompt_version = 'proposal.writer.v2' and contract_source_sha256 = '02760a1e006eb5920980a4b9c5b268cf53b3595543c5f909f2d66be53393c660' and catalog_sha256 = '41ac04e76adf0fd9746ea7535b36f6c1ea314ec4890253a2cd56a9f215f7cdbe')
       or (proposal_prompt_version = 'proposal.writer.v3' and contract_source_sha256 = 'ecada3861313486b50e0a1475d89284f13fe4a74018207d11f205613deefb550' and catalog_sha256 = '415ca40b3dc3616affab6642b437ecd6b148bf70f017638640e2a4f858aaf808')
       or (proposal_prompt_version = 'proposal.writer.v4' and contract_source_sha256 = 'e607bbb891af3723dc4620a0319382e83ee29006ed547aae620086b9809f248d' and catalog_sha256 = '6d983b25c51debb7588650165494f6cceffd1b2a921301e8cb79afb38543c9a9')
-      or (proposal_prompt_version = 'proposal.writer.v5' and contract_source_sha256 = 'e3ed513595242c4f79c1e5f50856d7df9ec16f722bb009c14c0fdc927710e727' and catalog_sha256 = '065400eafd2521fb096f36b8709da842b91823876c7fca11ba276a8283b7265f')
+      or (proposal_prompt_version = 'proposal.writer.v5' and contract_source_sha256 = '0d9878e198f50d4ddede2eb374827831461c5d72c9e88b3472712883bcabf8ab' and catalog_sha256 = '916a1cabefa2aa6791d4a26b28957c3252d37107ec0c287500ea38208be2316c')
     )
   ) not valid;
 alter table public.ai_content_proposal_job_contracts validate constraint ai_content_proposal_job_contracts_versions_v5_check;
@@ -28,7 +28,7 @@ alter table public.ai_content_generation_prompt_bindings
     (proposal_prompt_version = 'proposal.writer.v2' and contract_source_hash = '02760a1e006eb5920980a4b9c5b268cf53b3595543c5f909f2d66be53393c660')
     or (proposal_prompt_version = 'proposal.writer.v3' and contract_source_hash = 'ecada3861313486b50e0a1475d89284f13fe4a74018207d11f205613deefb550')
     or (proposal_prompt_version = 'proposal.writer.v4' and contract_source_hash = 'e607bbb891af3723dc4620a0319382e83ee29006ed547aae620086b9809f248d')
-    or (proposal_prompt_version = 'proposal.writer.v5' and contract_source_hash = 'e3ed513595242c4f79c1e5f50856d7df9ec16f722bb009c14c0fdc927710e727')
+    or (proposal_prompt_version = 'proposal.writer.v5' and contract_source_hash = '0d9878e198f50d4ddede2eb374827831461c5d72c9e88b3472712883bcabf8ab')
   ) not valid;
 alter table public.ai_content_generation_prompt_bindings validate constraint ai_content_generation_prompt_bindings_proposal_lineage_v5_check;
 alter table public.ai_content_generation_prompt_bindings drop constraint ai_content_generation_prompt_bindings_proposal_lineage_check;

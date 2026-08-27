@@ -101,28 +101,18 @@ describe("brand center gateway", () => {
     expect(requestJson).toHaveBeenCalledTimes(2);
   });
 
-  it("strictly parses approved Brand Rules style image metadata", async () => {
+  it("strictly parses approved Brand Rules V2 without retired design fields", async () => {
     const active = {
       id: "rules-1",
       version: 1,
       status: "approved",
       rules: {
-        contractVersion: "brand-rules.v1",
+        contractVersion: "brand-rules.v2",
         requiredPhrases: [],
         forbiddenPhrases: [],
         exaggerationRules: [],
         ctaRules: { defaultCta: "", allowed: [] },
         channelRules: {},
-        designRules: {
-          colors: [],
-          fonts: [],
-          notes: [],
-          referenceImages: [{
-            referenceItemId: "11111111-1111-4111-8111-111111111111",
-            description: "차분한 편집 스타일",
-            tags: ["차분함"],
-          }],
-        },
         autoApprovalRules: { enabled: false, conditions: [] },
       },
       approvedAt: "2026-08-01T00:00:00.000Z",

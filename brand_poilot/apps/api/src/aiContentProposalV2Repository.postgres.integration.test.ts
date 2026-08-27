@@ -24,8 +24,8 @@ const ids = {
 };
 const proposalV3SourceHash = "ecada3861313486b50e0a1475d89284f13fe4a74018207d11f205613deefb550";
 const proposalV3CatalogHash = "415ca40b3dc3616affab6642b437ecd6b148bf70f017638640e2a4f858aaf808";
-const proposalV5SourceHash = "e3ed513595242c4f79c1e5f50856d7df9ec16f722bb009c14c0fdc927710e727";
-const proposalV5CatalogHash = "065400eafd2521fb096f36b8709da842b91823876c7fca11ba276a8283b7265f";
+const proposalV5SourceHash = "0d9878e198f50d4ddede2eb374827831461c5d72c9e88b3472712883bcabf8ab";
+const proposalV5CatalogHash = "916a1cabefa2aa6791d4a26b28957c3252d37107ec0c287500ea38208be2316c";
 
 async function applyMigrationsThrough075(pool: Pool) {
   const directory = resolve(process.cwd(), "../../db/migrations");
@@ -193,6 +193,7 @@ describe.skipIf(process.env.RUN_POSTGRES_INTEGRATION !== "true")(
       for (const migration of [
         "087_ai_content_prompt_lineage_v3.sql",
         "091_ai_content_prompt_lineage_v4.sql",
+        "094_ai_content_prompt_lineage_v5.sql",
       ]) {
         await pool.query(await readFile(
           resolve(process.cwd(), `../../db/migrations/${migration}`),
@@ -421,7 +422,22 @@ describe.skipIf(process.env.RUN_POSTGRES_INTEGRATION !== "true")(
       return { created, jobs, research, seal, model };
     }
 
-    it("drains a stored v3 proposal through current claim and completion while new jobs use v4", async () => {
+    async function mutateFixture(sql: string, parameters: unknown[]) {
+      const client = await pool.connect();
+      try {
+        await client.query("begin");
+        await client.query("set local session_replication_role=replica");
+        await client.query(sql, parameters);
+        await client.query("commit");
+      } catch (error) {
+        await client.query("rollback");
+        throw error;
+      } finally {
+        client.release();
+      }
+    }
+
+    it("drains a stored v3 proposal through current claim and completion while new jobs use v5", async () => {
       const created = await enqueueManualProposal("proposal-v3-drain");
       const stored = await pool.query<{
         job_id: string;
@@ -690,6 +706,10 @@ describe.skipIf(process.env.RUN_POSTGRES_INTEGRATION !== "true")(
         leaseToken: fixture.model.leaseToken, modelAttemptId: fixture.model.modelAttemptId,
         invocationOrdinal: 2,
       });
+      await mutateFixture(
+        "update ai_content_proposal_jobs set max_attempts=attempt_count where id=$1",
+        [fixture.model.id],
+      );
       await expect(fixture.jobs.recordContentProposalInvocationTerminal({
         jobId: fixture.model.id, workerId: fixture.model.workerId,
         leaseToken: fixture.model.leaseToken, modelAttemptId: fixture.model.modelAttemptId,
@@ -774,7 +794,10 @@ describe.skipIf(process.env.RUN_POSTGRES_INTEGRATION !== "true")(
       };
       await fixture.jobs.recordContentProposalInvocationTerminal(invalid);
       await pool.query(
-        "update ai_content_proposal_jobs set lease_expires_at=clock_timestamp()-interval '1 second' where id=$1",
+        `update ai_content_proposal_jobs
+            set lease_started_at=clock_timestamp()-interval '2 seconds',
+                lease_expires_at=clock_timestamp()-interval '1 second'
+          where id=$1`,
         [fixture.model.id],
       );
 
@@ -816,7 +839,10 @@ describe.skipIf(process.env.RUN_POSTGRES_INTEGRATION !== "true")(
     it("serializes worker failure against expiry reclaim with one pre-invocation terminal", async () => {
       const fixture = await claimThroughComposition("proposal-worker-fail-reclaim-race");
       await pool.query(
-        "update ai_content_proposal_jobs set lease_expires_at=clock_timestamp()-interval '1 second' where id=$1",
+        `update ai_content_proposal_jobs
+            set lease_started_at=clock_timestamp()-interval '2 seconds',
+                lease_expires_at=clock_timestamp()-interval '1 second'
+          where id=$1`,
         [fixture.model.id],
       );
 
@@ -860,7 +886,10 @@ describe.skipIf(process.env.RUN_POSTGRES_INTEGRATION !== "true")(
         workerId: "expired-research-retry", leaseSeconds: 180,
       }) as ContentProposalResearchClaim;
       await pool.query(
-        "update ai_content_proposal_jobs set lease_expires_at=clock_timestamp()-interval '1 second' where id=$1",
+        `update ai_content_proposal_jobs
+            set lease_started_at=clock_timestamp()-interval '2 seconds',
+                lease_expires_at=clock_timestamp()-interval '1 second'
+          where id=$1`,
         [retry.id],
       );
       await expect(jobs.claimContentProposalJob({ workerId: "research-reclaimer", leaseSeconds: 180 }))
@@ -870,12 +899,15 @@ describe.skipIf(process.env.RUN_POSTGRES_INTEGRATION !== "true")(
       const final = await jobs.claimContentProposalJob({
         workerId: "expired-research-final", leaseSeconds: 180,
       }) as ContentProposalResearchClaim;
-      await pool.query(
+      await mutateFixture(
         "update ai_content_proposal_research_attempts set attempt_number=3 where id=$1",
         [final.researchAttemptId],
       );
       await pool.query(
-        "update ai_content_proposal_jobs set lease_expires_at=clock_timestamp()-interval '1 second' where id=$1",
+        `update ai_content_proposal_jobs
+            set lease_started_at=clock_timestamp()-interval '2 seconds',
+                lease_expires_at=clock_timestamp()-interval '1 second'
+          where id=$1`,
         [final.id],
       );
       await expect(jobs.claimContentProposalJob({ workerId: "research-final-reclaimer", leaseSeconds: 180 }))
@@ -904,19 +936,23 @@ describe.skipIf(process.env.RUN_POSTGRES_INTEGRATION !== "true")(
     it("records bounded zero-event model expiry evidence for nonfinal and final attempts", async () => {
       const retry = await claimThroughComposition("proposal-worker-expired-model-retry");
       await pool.query(
-        "update ai_content_proposal_jobs set lease_expires_at=clock_timestamp()-interval '1 second' where id=$1",
+        `update ai_content_proposal_jobs
+            set lease_started_at=clock_timestamp()-interval '2 seconds',
+                lease_expires_at=clock_timestamp()-interval '1 second'
+          where id=$1`,
         [retry.model.id],
       );
       await expect(retry.jobs.claimContentProposalJob({ workerId: "model-reclaimer", leaseSeconds: 180 }))
         .resolves.toBeNull();
 
       const final = await claimThroughComposition("proposal-worker-expired-model-final");
-      await pool.query(
+      await mutateFixture(
         "update ai_content_proposal_model_attempts set attempt_number=3 where id=$1",
         [final.model.modelAttemptId],
       );
       await pool.query(
         `update ai_content_proposal_jobs set attempt_count=max_attempts,
+           lease_started_at=clock_timestamp()-interval '2 seconds',
            lease_expires_at=clock_timestamp()-interval '1 second' where id=$1`,
         [final.model.id],
       );
@@ -957,7 +993,10 @@ describe.skipIf(process.env.RUN_POSTGRES_INTEGRATION !== "true")(
         parserSha256: "3".repeat(64), parserValid: false,
       });
       await pool.query(
-        "update ai_content_proposal_jobs set lease_expires_at=clock_timestamp()-interval '1 second' where id=$1",
+        `update ai_content_proposal_jobs
+            set lease_started_at=clock_timestamp()-interval '2 seconds',
+                lease_expires_at=clock_timestamp()-interval '1 second'
+          where id=$1`,
         [invalid.model.id],
       );
       await expect(invalid.jobs.claimContentProposalJob({ workerId: "invalid-reclaimer", leaseSeconds: 180 }))
@@ -978,7 +1017,10 @@ describe.skipIf(process.env.RUN_POSTGRES_INTEGRATION !== "true")(
         [valid.model.modelAttemptId, valid.model.leaseToken, "4".repeat(64), "5".repeat(64), "6".repeat(64)],
       );
       await pool.query(
-        "update ai_content_proposal_jobs set lease_expires_at=clock_timestamp()-interval '1 second' where id=$1",
+        `update ai_content_proposal_jobs
+            set lease_started_at=clock_timestamp()-interval '2 seconds',
+                lease_expires_at=clock_timestamp()-interval '1 second'
+          where id=$1`,
         [valid.model.id],
       );
       await expect(valid.jobs.claimContentProposalJob({ workerId: "valid-reclaimer", leaseSeconds: 180 }))
@@ -1046,7 +1088,10 @@ describe.skipIf(process.env.RUN_POSTGRES_INTEGRATION !== "true")(
     it("fences late heartbeat and invocation start while reclaiming an expired lease", async () => {
       const fixture = await claimThroughComposition("proposal-worker-reclaim-race");
       await pool.query(
-        "update ai_content_proposal_jobs set lease_expires_at=clock_timestamp()-interval '1 second' where id=$1",
+        `update ai_content_proposal_jobs
+            set lease_started_at=clock_timestamp()-interval '2 seconds',
+                lease_expires_at=clock_timestamp()-interval '1 second'
+          where id=$1`,
         [fixture.model.id],
       );
       const [reclaim, heartbeat, start] = await Promise.allSettled([
@@ -1119,6 +1164,10 @@ describe.skipIf(process.env.RUN_POSTGRES_INTEGRATION !== "true")(
       await pool.query(
         "update ai_content_proposal_jobs set attempt_count=max_attempts where id=$1",
         [fixture.model.id],
+      );
+      await mutateFixture(
+        "update ai_content_proposal_model_attempts set attempt_number=3 where id=$1",
+        [fixture.model.modelAttemptId],
       );
 
       await expect(fixture.jobs.failContentProposalJob({

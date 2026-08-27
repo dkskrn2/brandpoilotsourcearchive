@@ -7,8 +7,17 @@ type Gateway = Pick<LibraryGateway,
   "listDesignStyles" | "listAvatars" | "listVisualPresets" | "createVisualPreset" | "updateVisualPreset" | "setDefaultVisualPreset"
 >;
 const reason = { style_analyzing: "스타일 분석 중", style_analysis_failed: "스타일 분석 실패", avatar_unavailable: "아바타 사용 불가" } as const;
+const analysisStatusLabel = { queued: "분석 대기", processing: "분석 중", ready: "사용 가능", failed: "분석 실패" } as const;
 
-export function VisualPresetPanel({ brandId, gateway }: { brandId: string; gateway: Gateway }) {
+export function VisualPresetPanel({
+  brandId,
+  gateway,
+  libraryRevision = 0,
+}: {
+  brandId: string;
+  gateway: Gateway;
+  libraryRevision?: number;
+}) {
   const [styles, setStyles] = useState<DesignStyle[]>([]);
   const [avatars, setAvatars] = useState<Avatar[]>([]);
   const [presets, setPresets] = useState<VisualPreset[]>([]);
@@ -27,7 +36,7 @@ export function VisualPresetPanel({ brandId, gateway }: { brandId: string; gatew
       setStyles(nextStyles); setAvatars(nextAvatars.filter(({ status }) => status === "active")); setPresets(nextPresets); setError(null);
     } catch { setError("프리셋 정보를 불러오지 못했습니다."); }
   }
-  useEffect(() => { void load(); }, [brandId]);
+  useEffect(() => { void load(); }, [brandId, libraryRevision]);
   const analysisPending = styles.some(({ analysisStatus }) => analysisStatus === "queued" || analysisStatus === "processing")
     || presets.some(({ usability }) => usability.reason === "style_analyzing");
   useEffect(() => {
@@ -68,7 +77,7 @@ export function VisualPresetPanel({ brandId, gateway }: { brandId: string; gatew
       </article>)}</aside>
       <div className="library-form">
         <label>프리셋 이름<input aria-label="프리셋 이름" value={name} onChange={(event) => setName(event.target.value)} /></label>
-        <label>디자인 스타일<select aria-label="디자인 스타일 선택" value={designStyleId} onChange={(event) => setDesignStyleId(event.target.value)}><option value="">선택</option>{styles.map((item) => <option key={item.id} value={item.id}>{item.name} · {item.analysisStatus === "ready" ? "사용 가능" : "분석 중"}</option>)}</select></label>
+        <label>디자인 스타일<select aria-label="디자인 스타일 선택" value={designStyleId} onChange={(event) => setDesignStyleId(event.target.value)}><option value="">선택</option>{styles.map((item) => <option key={item.id} value={item.id}>{item.name} · {analysisStatusLabel[item.analysisStatus]}</option>)}</select></label>
         <label>아바타 (선택)<select aria-label="아바타 선택" value={avatarId ?? ""} onChange={(event) => setAvatarId(event.target.value || null)}><option value="">사용 안 함</option>{avatars.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
         <div className="form-actions is-wide"><button className="button primary" type="button" disabled={busy} onClick={() => void save()}>{busy ? <InlineSpinner label="프리셋 저장 중" /> : null}프리셋 저장</button></div>
       </div></div>

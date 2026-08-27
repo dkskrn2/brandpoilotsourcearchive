@@ -10,7 +10,15 @@ const statusLabel = {
   queued: "분석 대기 중", processing: "분석 중", ready: "사용 가능", failed: "분석 실패",
 } as const;
 
-export function DesignStylePanel({ brandId, gateway }: { brandId: string; gateway: Gateway }) {
+export function DesignStylePanel({
+  brandId,
+  gateway,
+  onLibraryChanged,
+}: {
+  brandId: string;
+  gateway: Gateway;
+  onLibraryChanged?: () => void;
+}) {
   const [items, setItems] = useState<DesignStyle[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [name, setName] = useState("");
@@ -53,6 +61,7 @@ export function DesignStylePanel({ brandId, gateway }: { brandId: string; gatewa
         : await gateway.createDesignStyle(brandId, input);
       setItems((value) => [saved, ...value.filter(({ id }) => id !== saved.id)]);
       setSelectedId(saved.id); setName(saved.name); setFiles([]);
+      onLibraryChanged?.();
     } catch { setError("디자인 스타일을 저장하지 못했습니다. 이미지 형식과 상태를 확인해 주세요."); }
     finally { setBusy(false); }
   }
@@ -61,6 +70,7 @@ export function DesignStylePanel({ brandId, gateway }: { brandId: string; gatewa
     try {
       const saved = await gateway.retryDesignStyle(brandId, item.id);
       setItems((value) => value.map((candidate) => candidate.id === saved.id ? saved : candidate));
+      onLibraryChanged?.();
     } catch { setError("스타일 분석을 다시 시작하지 못했습니다."); }
     finally { setBusy(false); }
   }

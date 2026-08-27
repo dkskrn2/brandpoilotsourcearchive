@@ -1,7 +1,7 @@
 # 디자인 스타일 분석·비주얼 프리셋 설계
 
-**승인일:** 2026-08-27  
-**기준 소스:** `codex-deploy/main` at `a77e83abe3c8478ffa78ea70119ea56b31f54658`  
+**승인일:** 2026-08-27
+**기준 소스:** `codex-deploy/main` at `a77e83abe3c8478ffa78ea70119ea56b31f54658`
 **상태:** 사용자 승인 완료
 
 ## 목표
@@ -174,7 +174,7 @@ type VisualPreset = {
 
 기존 `brand_style_presets` 테이블은 비주얼 프리셋 역할로 전환한다. 기존 행마다 디자인 스타일을 하나 만들고 참고 이미지를 복사한 뒤 분석 작업을 큐에 넣는다. 기존 프리셋은 분석이 끝날 때까지 새 생성에서 비활성화된다.
 
-현재 기능은 운영 사용자 데이터가 아니라 개발 단계이므로 미동결 `manual-visual-selection.v1` 개발 초안을 위한 호환 저장 구조는 만들지 않는다. 기존 preset의 설명·수동 visual token·reference junction은 디자인 스타일로 필요한 이미지와 이름을 이관한 뒤 제거한다. 이미 job payload에 완전히 동결된 V1은 재시도 회귀를 위해 읽을 수 있지만, V1 초안을 새로 저장하거나 현재 preset 테이블에서 다시 동결하지 않는다.
+현재 기능은 운영 사용자 데이터가 아니라 개발 단계이므로 미동결 `manual-visual-selection.v1` 개발 초안을 위한 신규 호환 저장 구조는 만들지 않는다. 다만 migration 093은 롤링 배포 중 직전 API의 읽기 계약을 깨지 않도록 기존 preset의 설명·수동 visual token·reference junction을 읽기 전용 호환 데이터로 보존한다. 새 API와 UI는 이 필드를 쓰거나 노출하지 않으며, 후속 계약 migration에서 구 API가 완전히 제거된 것을 확인한 뒤 정리한다. 이미 job payload에 완전히 동결된 V1은 재시도 회귀를 위해 읽을 수 있지만, V1 초안을 새로 저장하거나 현재 preset 테이블에서 다시 동결하지 않는다.
 
 ### 생성 시점 동결
 

@@ -18,7 +18,8 @@ describe("DesignStylePanel", () => {
       createDesignStyle: vi.fn(async () => saved),
       updateDesignStyle: vi.fn(), retryDesignStyle: vi.fn(),
     };
-    render(<DesignStylePanel brandId="brand-1" gateway={gateway as never} />);
+    const onLibraryChanged = vi.fn();
+    render(<DesignStylePanel brandId="brand-1" gateway={gateway as never} onLibraryChanged={onLibraryChanged} />);
 
     await waitFor(() => expect(gateway.listDesignStyles).toHaveBeenCalledWith("brand-1"));
     expect(screen.queryByLabelText("대표 색상")).not.toBeInTheDocument();
@@ -33,5 +34,6 @@ describe("DesignStylePanel", () => {
       contractVersion: "design-style-input.v1", name: "비교 카드", referenceItemIds: ["reference-1"],
     }));
     expect(await screen.findByText(/분석 대기 중/)).toBeVisible();
+    expect(onLibraryChanged).toHaveBeenCalledOnce();
   });
 });

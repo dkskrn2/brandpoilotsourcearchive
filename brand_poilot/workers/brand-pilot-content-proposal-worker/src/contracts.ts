@@ -34,7 +34,7 @@ export type {
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const SHA256 = /^[0-9a-f]{64}$/;
-const EXPECTED_CATALOG_SHA256 = "065400eafd2521fb096f36b8709da842b91823876c7fca11ba276a8283b7265f";
+const EXPECTED_CATALOG_SHA256 = "916a1cabefa2aa6791d4a26b28957c3252d37107ec0c287500ea38208be2316c";
 
 export const CONTENT_PROPOSAL_OUTPUT_SCHEMA_PATH = fileURLToPath(import.meta.resolve(
   "@brand-pilot/content-contracts/generated/content-proposal-v2.schema.json",

@@ -83,6 +83,7 @@ import { compileReelStoryboardDraftV2, parseReelStoryboardV2 } from "@brand-pilo
 import { reelStoryboardV2Sha256 } from "@brand-pilot/content-contracts/reel-storyboard/node";
 import { subscriptionWeekWindow } from "./publishCalendarQuota.js";
 import { kstDateKey } from "./publishSchedule.js";
+import { parseCompatibleBrandRulesContentV2 } from "@brand-pilot/content-contracts";
 import {
   assembleAiContentFixedInput,
   type AiContentFixedInputSource,
@@ -725,7 +726,7 @@ function rebindStoredPlanToGeneration(
   return parseContentPlanResultV2(rebound, finalInput, supplementalResearch);
 }
 
-const EXPECTED_PROPOSAL_CATALOG_SHA256 = "065400eafd2521fb096f36b8709da842b91823876c7fca11ba276a8283b7265f";
+const EXPECTED_PROPOSAL_CATALOG_SHA256 = "916a1cabefa2aa6791d4a26b28957c3252d37107ec0c287500ea38208be2316c";
 const PROPOSAL_MODEL_ID = "gpt-5.6-terra";
 
 function loadProposalCatalog(): VerifiedGeneratedContentCatalog {
@@ -737,7 +738,7 @@ function loadProposalCatalog(): VerifiedGeneratedContentCatalog {
   }
   const catalog = JSON.parse(bytes.toString("utf8")) as VerifiedGeneratedContentCatalog;
   if (
-    catalog.contractSourceHash !== "e3ed513595242c4f79c1e5f50856d7df9ec16f722bb009c14c0fdc927710e727"
+    catalog.contractSourceHash !== "0d9878e198f50d4ddede2eb374827831461c5d72c9e88b3472712883bcabf8ab"
     || catalog.proposalContracts.requestVersion !== "content-proposal-request.v2"
     || catalog.proposalContracts.baseInputVersion !== "proposal-base-input.v2"
     || catalog.proposalContracts.outputVersion !== "content-proposal.v2"
@@ -2129,7 +2130,9 @@ async function loadAiContentFixedInputSource(input: {
       status: "provisional",
       rules_json: brandContextAuthority.brandRules.content,
     };
-    canonicalRules = parseBrandRulesContentV2(brandContextAuthority.brandRules.content);
+    try {
+      canonicalRules = parseBrandRulesContentV2(brandContextAuthority.brandRules.content);
+    } catch { throw new Error("ai_content_brand_rules_required"); }
     styleImages = [];
   } else {
     const rulesResult = await client.query(
@@ -2145,10 +2148,8 @@ async function loadAiContentFixedInputSource(input: {
     if (rulesResult.rows.length !== 1) throw new Error("ai_content_brand_rules_required");
     rules = rulesResult.rows[0] as Record<string, unknown>;
     try {
-      canonicalRules = parseBrandRulesContentV2(rules.rules_json);
-    } catch {
-      throw new Error("ai_content_brand_rules_required");
-    }
+      canonicalRules = parseCompatibleBrandRulesContentV2(rules.rules_json);
+    } catch { throw new Error("ai_content_brand_rules_required"); }
     styleImages = [];
   }
 

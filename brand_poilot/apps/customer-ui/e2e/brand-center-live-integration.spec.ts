@@ -54,22 +54,12 @@ const baseCore = {
 };
 
 const baseRules = {
-  contractVersion: "brand-rules.v1",
+  contractVersion: "brand-rules.v2",
   requiredPhrases: [],
   forbiddenPhrases: [],
   exaggerationRules: [],
   ctaRules: { defaultCta: "", allowed: [] },
   channelRules: {},
-  designRules: {
-    colors: ["#174A3A"],
-    fonts: ["산세리프"],
-    notes: ["제품 중심"],
-    referenceImages: [{
-      referenceItemId: referenceId,
-      description: "차분한 자연광",
-      tags: ["차분함"],
-    }],
-  },
   autoApprovalRules: { enabled: false, conditions: [] },
 };
 
@@ -204,6 +194,69 @@ async function installFixture(page: Page) {
     activeVersion: productVersion,
     draft: null as typeof productVersion | null,
   };
+  let designStyles = [{
+    id: "style-1",
+    workspaceId: "workspace-1",
+    brandId,
+    name: "비교 카드",
+    revision: 1,
+    analysisStatus: "ready",
+    analysisContractVersion: "design-style-analysis.v1",
+    analysis: {},
+    analysisSha256: "a".repeat(64),
+    analysisErrorCode: null,
+    referenceItemIds: [referenceId],
+    createdAt: "2026-07-26T00:00:00.000Z",
+    updatedAt: "2026-07-26T00:00:00.000Z",
+  }];
+  const avatars = [{
+    id: "avatar-1",
+    workspaceId: "workspace-1",
+    brandId,
+    revision: 1,
+    name: "테스트 아바타",
+    description: "비교 카드에 사용하는 캐릭터",
+    isDefault: false,
+    status: "active",
+    createdByUserId: "user-1",
+    createdAt: "2026-07-26T00:00:00.000Z",
+    updatedAt: "2026-07-26T00:00:00.000Z",
+    images: [{
+      id: "avatar-image-1",
+      position: 0,
+      representative: true,
+      storagePath: "avatar.png",
+      storageUrl: "https://assets.example/avatar.png",
+      mimeType: "image/png",
+      sizeBytes: 68,
+      checksum: "b".repeat(64),
+    }],
+  }];
+  let visualPresets = [{
+    id: "preset-1",
+    workspaceId: "workspace-1",
+    brandId,
+    name: "기본 비교형",
+    designStyleId: "style-1",
+    avatarId: "avatar-1",
+    revision: 1,
+    isDefault: true,
+    usability: { usable: true, reason: null },
+    createdAt: "2026-07-26T00:00:00.000Z",
+    updatedAt: "2026-07-26T00:00:00.000Z",
+  }, {
+    id: "preset-2",
+    workspaceId: "workspace-1",
+    brandId,
+    name: "보조 비교형",
+    designStyleId: "style-1",
+    avatarId: null,
+    revision: 1,
+    isDefault: false,
+    usability: { usable: true, reason: null },
+    createdAt: "2026-07-26T00:00:00.000Z",
+    updatedAt: "2026-07-26T00:00:00.000Z",
+  }];
 
   await page.addInitScript((auth) => {
     const originalFetch = window.fetch.bind(window);
@@ -261,6 +314,12 @@ async function installFixture(page: Page) {
       newDownloadUsed: 0,
       newDownloadLimit: 20,
       resetsAt: "2026-07-31T00:00:00+09:00",
+    });
+    if (path.endsWith("/publish-calendar/usage")) return json(route, {
+      startsAt: "2026-07-27T00:00:00.000Z",
+      endsAt: "2026-08-03T00:00:00.000Z",
+      generation: { limit: 10, succeeded: 0, reserved: 0, remaining: 10, additionalAvailable: 0 },
+      publishing: { limit: 20, succeeded: 0, reserved: 0, remaining: 20, additionalAvailable: 0 },
     });
 
     if (path.endsWith("/brand-intelligence/analyses") && request.method() === "POST") {
@@ -381,6 +440,32 @@ async function installFixture(page: Page) {
       };
       return json(route, product);
     }
+    if (path.endsWith("/design-styles") && request.method() === "GET") {
+      return json(route, designStyles);
+    }
+    if (path.endsWith("/design-styles/style-1") && request.method() === "PATCH") {
+      designStyles = [{
+        ...designStyles[0],
+        ...request.postDataJSON(),
+        revision: designStyles[0].revision + 1,
+        updatedAt: "2026-07-30T00:04:00.000Z",
+      }];
+      return json(route, designStyles[0]);
+    }
+    if (path.endsWith("/avatars") && request.method() === "GET") {
+      return json(route, avatars);
+    }
+    if (path.endsWith("/visual-presets") && request.method() === "GET") {
+      return json(route, visualPresets);
+    }
+    if (path.endsWith("/visual-presets/preset-2/default") && request.method() === "POST") {
+      visualPresets = visualPresets.map((preset) => ({
+        ...preset,
+        isDefault: preset.id === "preset-2",
+        revision: preset.id === "preset-2" ? preset.revision + 1 : preset.revision,
+      }));
+      return json(route, visualPresets.find(({ id }) => id === "preset-2"));
+    }
     if (path.endsWith(`/references/${referenceId}`)) return json(route, {
       id: referenceId,
       workspaceId: "workspace-1",
@@ -444,7 +529,7 @@ test("live onboarding bounds progress and confirms the complete edited payload",
   expect(runtimeErrors).toEqual([]);
 });
 
-test("six-tab Brand Center preserves save, cancel, secondary controls, focus, and mobile width", async ({
+test("five-tab Brand Center preserves save, visual presets, focus, and mobile width", async ({
   page,
 }) => {
   const runtimeErrors = captureRuntimeErrors(page);
@@ -459,19 +544,18 @@ test("six-tab Brand Center preserves save, cancel, secondary controls, focus, an
   await expect(page).toHaveURL(/tab=core/);
   await expect(page.getByRole("tab")).toHaveText([
     "브랜드 코어",
-    "FAQ",
-    "이용 방법",
-    "가이드",
     "제품·서비스",
+    "FAQ",
+    "AI 자동응답 지식",
     "스타일",
   ]);
 
   await page.getByRole("button", { name: "브랜드 코어 수정" }).click();
-  await page.getByLabel("한 줄 소개").fill("취소할 브랜드 문장");
+  await page.getByLabel("기업 개요").fill("취소할 브랜드 문장");
   await page.getByRole("button", { name: "취소" }).click();
-  await expect(page.getByLabel("한 줄 소개")).toHaveValue("승인된 브랜드 문장");
+  await expect(page.getByLabel("기업 개요")).toHaveValue("승인된 브랜드 문장");
   await page.getByRole("button", { name: "브랜드 코어 수정" }).click();
-  await page.getByLabel("한 줄 소개").fill("저장된 브랜드 문장");
+  await page.getByLabel("기업 개요").fill("저장된 브랜드 문장");
   await page.getByRole("button", { name: "저장", exact: true }).click();
   await expect(page.getByText("브랜드 코어를 저장했습니다.")).toBeVisible();
 
@@ -483,14 +567,9 @@ test("six-tab Brand Center preserves save, cancel, secondary controls, focus, an
   await expect(page.getByLabel("내용")).toHaveValue("영업일 기준 2~3일입니다.");
   await page.getByRole("button", { name: "수정" }).click();
   await page.getByLabel("내용").fill("저장할 FAQ");
-  await page.getByRole("tab", { name: "가이드" }).click();
+  await page.getByRole("tab", { name: "AI 자동응답 지식" }).click();
   expect(dialogs).toEqual(["저장하지 않은 변경이 있습니다. 이동할까요?"]);
-  await expect(page.getByRole("group", { name: "가이드 보조 메뉴" })).toContainText("정책");
-  await expect(page.getByRole("group", { name: "가이드 보조 메뉴" })).toContainText("지식 개선함");
-
-  await page.getByRole("tab", { name: "이용 방법" }).click();
-  await expect(page.getByRole("tabpanel", { name: "이용 방법" })).toBeVisible();
-  await expect(page.getByRole("button", { name: /계정 연결 방법/ })).toBeVisible();
+  await expect(page.getByRole("tabpanel", { name: "AI 자동응답 지식" })).toBeVisible();
 
   await page.getByRole("tab", { name: "FAQ" }).click();
   await page.getByRole("button", { name: /배송은 얼마나 걸리나요/ }).click();
@@ -511,26 +590,29 @@ test("six-tab Brand Center preserves save, cancel, secondary controls, focus, an
   await expect(page.getByText(/보관함에 저장했습니다. 항목 ID: product-1/)).toBeVisible();
 
   await page.getByRole("tab", { name: "스타일" }).click();
-  const persistedImage = page.getByRole("img", { name: "차분한 자연광" });
-  await expect(persistedImage).toHaveAttribute("src", "https://assets.example/style.png");
-  await page.getByRole("button", { name: "스타일 이미지 수정" }).click();
-  await page.getByLabel("이미지 설명").fill("취소할 스타일");
-  await page.getByRole("button", { name: "변경 취소" }).click();
-  await expect(page.getByRole("img", { name: "차분한 자연광" })).toBeVisible();
-  await page.getByRole("button", { name: "스타일 이미지 수정" }).click();
-  await page.getByLabel("이미지 설명").fill("저장된 스타일");
-  await page.getByRole("button", { name: "변경사항 저장" }).click();
-  await expect(page.getByText("디자인 스타일을 저장했습니다.")).toBeVisible();
+  const designStylePanel = page.getByRole("region", { name: "디자인 스타일" });
+  await designStylePanel.getByRole("button", { name: /비교 카드/ }).click();
+  await expect(designStylePanel.getByLabel("스타일 이름")).toHaveValue("비교 카드");
+  await designStylePanel.getByLabel("스타일 이름").fill("저장된 비교 카드");
+  await designStylePanel.getByRole("button", { name: "스타일 저장" }).click();
+  await expect(designStylePanel.getByText(/저장된 비교 카드/)).toBeVisible();
+  await expect(page.getByRole("img", { name: "테스트 아바타 대표 이미지" }))
+    .toHaveAttribute("src", "https://assets.example/avatar.png");
+  const presetPanel = page.getByRole("region", { name: "프리셋" });
+  await expect(presetPanel.getByText(/기본 비교형/)).toBeVisible();
+  await presetPanel.getByRole("button", { name: "기본으로 설정" }).last().click();
+  await expect(presetPanel.getByText(/보조 비교형/)).toBeVisible();
   await page.reload();
   await expect(page.getByRole("tab", { name: "스타일" }))
     .toHaveAttribute("aria-selected", "true");
-  await expect(page.getByRole("img", { name: "저장된 스타일" })).toBeVisible();
+  await expect(page.getByText("저장된 비교 카드")).toBeVisible();
+  await expect(page.getByText(/보조 비교형/)).toBeVisible();
 
   await page.getByRole("tab", { name: "브랜드 코어" }).click();
   await page.getByRole("tab", { name: "브랜드 코어" }).focus();
   await page.keyboard.press("ArrowRight");
-  await expect(page.getByRole("tab", { name: "FAQ" })).toBeFocused();
-  await expect(page.getByRole("tab", { name: "FAQ" })).toHaveAttribute("aria-selected", "true");
+  await expect(page.getByRole("tab", { name: "제품·서비스" })).toBeFocused();
+  await expect(page.getByRole("tab", { name: "제품·서비스" })).toHaveAttribute("aria-selected", "true");
   await page.setViewportSize({ width: 320, height: 800 });
   expect(await page.evaluate(() =>
     document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);

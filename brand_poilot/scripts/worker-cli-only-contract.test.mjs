@@ -227,3 +227,18 @@ test("Codex worker images install bubblewrap for the pinned Linux sandbox", asyn
     `Codex worker image is missing bubblewrap:\n${violations.map((path) => `- ${path}`).join("\n")}`,
   );
 });
+
+test("design style analysis reuses the existing Brand Intelligence worker image and one Codex call", async () => {
+  const directory = join(workerRoot, "brand-pilot-brand-intelligence-worker");
+  const dockerfile = await readFile(join(directory, "Dockerfile"), "utf8");
+  const runner = await readFile(join(directory, "scripts", "run-codex-style-analysis.mjs"), "utf8");
+
+  assert.match(
+    dockerfile,
+    /COPY --from=build[^\n]*run-codex-style-analysis\.mjs[^\n]*run-codex-style-analysis\.mjs/,
+  );
+  assert.equal((runner.match(/\bspawn\(/g) ?? []).length, 1);
+  assert.match(runner, /\.\.\.images\.flatMap\(\(file\) => \["--image", file\]\)/);
+  assert.match(runner, /"--disable", "image_generation"/);
+  assert.match(runner, /"--output-schema", schemaFile/);
+});

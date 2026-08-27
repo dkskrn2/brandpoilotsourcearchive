@@ -58,6 +58,7 @@ const invalidRulesBrandId = "20000000-0000-4000-8000-000000000009";
 const validRulesBrandId = "20000000-0000-4000-8000-000000000010";
 const missingReferenceImagesBrandId = "20000000-0000-4000-8000-000000000011";
 const v6ReferenceRulesBrandId = "20000000-0000-4000-8000-000000000012";
+const legacyReadBrandId = "20000000-0000-4000-8000-000000000013";
 const ownerId = "30000000-0000-4000-8000-000000000003";
 const memberId = "30000000-0000-4000-8000-000000000004";
 
@@ -99,6 +100,7 @@ beforeAll(async () => {
       ('${validRulesBrandId}', '${workspaceId}', 'Valid Rules'),
       ('${missingReferenceImagesBrandId}', '${workspaceId}', 'Missing Reference Images'),
       ('${v6ReferenceRulesBrandId}', '${workspaceId}', 'V6 Reference Rules'),
+      ('${legacyReadBrandId}', '${workspaceId}', 'Legacy Read'),
       ('${foreignWorkspaceBrandId}', '${foreignWorkspaceId}', 'Foreign');
     insert into brand_profiles (workspace_id, brand_id) values
       ('${workspaceId}', '${brandId}'),
@@ -110,7 +112,8 @@ beforeAll(async () => {
       ('${workspaceId}', '${invalidRulesBrandId}'),
       ('${workspaceId}', '${validRulesBrandId}'),
       ('${workspaceId}', '${missingReferenceImagesBrandId}'),
-      ('${workspaceId}', '${v6ReferenceRulesBrandId}');
+      ('${workspaceId}', '${v6ReferenceRulesBrandId}'),
+      ('${workspaceId}', '${legacyReadBrandId}');
   `);
 }, 60_000);
 
@@ -119,6 +122,38 @@ afterAll(async () => {
 });
 
 describe("brand core repository", () => {
+  it("reads an active V1 rule set as V2 without mutating the stored legacy row", async () => {
+    const inserted = await database.query<{ id: string }>(
+      `insert into brand_rule_sets(
+         workspace_id,brand_id,version,status,rules_json,created_by,approved_at
+       ) values($1,$2,1,'approved','{
+         "contractVersion":"brand-rules.v1","requiredPhrases":["근거"],
+         "forbiddenPhrases":[],"exaggerationRules":[],
+         "ctaRules":{"defaultCta":"확인","allowed":[]},"channelRules":{},
+         "designRules":{"colors":["violet"],"fonts":[],"notes":[],"referenceImages":[]},
+         "autoApprovalRules":{"enabled":false,"conditions":[]}
+       }'::jsonb,'migration',now()) returning id`,
+      [workspaceId, legacyReadBrandId],
+    );
+    await database.query(
+      `update brand_profiles set active_brand_rule_set_id=$3
+        where workspace_id=$1 and brand_id=$2`,
+      [workspaceId, legacyReadBrandId, inserted.rows[0]!.id],
+    );
+    const repository = createBrandCoreRepository(pglitePool(database));
+
+    await expect(repository.getActiveRules({ workspaceId, brandId: legacyReadBrandId }))
+      .resolves.toMatchObject({
+        id: inserted.rows[0]!.id,
+        rules: { contractVersion: "brand-rules.v2", requiredPhrases: ["근거"] },
+      });
+    const stored = await database.query<{ contract_version: string }>(
+      `select rules_json->>'contractVersion' contract_version from brand_rule_sets where id=$1`,
+      [inserted.rows[0]!.id],
+    );
+    expect(stored.rows[0]!.contract_version).toBe("brand-rules.v1");
+  });
+
   async function approveCore(brand: string, label: string) {
     const repository = createBrandCoreRepository(pglitePool(database));
     const draft = await repository.createDraft(

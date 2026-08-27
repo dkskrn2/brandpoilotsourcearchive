@@ -119,6 +119,22 @@ export function parseBrandRulesContentV2(value: unknown): BrandRulesContentV2 {
   return structuredClone(value as BrandRulesContentV2);
 }
 
+export function parseCompatibleBrandRulesContentV2(value: unknown): BrandRulesContentV2 {
+  if (Value.Check(BrandRulesContentV2Schema, value)) {
+    return structuredClone(value as BrandRulesContentV2);
+  }
+  const legacy = parseBrandRulesContentV1(value);
+  return parseBrandRulesContentV2({
+    contractVersion: "brand-rules.v2",
+    requiredPhrases: legacy.requiredPhrases,
+    forbiddenPhrases: legacy.forbiddenPhrases,
+    exaggerationRules: legacy.exaggerationRules,
+    ctaRules: legacy.ctaRules,
+    channelRules: legacy.channelRules,
+    autoApprovalRules: legacy.autoApprovalRules,
+  });
+}
+
 export function parseBrandRulesContent(value: unknown): BrandRulesContent {
   if (!Value.Check(BrandRulesContentSchema, value)) throw new Error("brand_rules_content_invalid");
   return structuredClone(value as BrandRulesContent);

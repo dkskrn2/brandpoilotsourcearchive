@@ -2,7 +2,7 @@ import { PGlite } from "@electric-sql/pglite";
 import { pgcrypto } from "@electric-sql/pglite/contrib/pgcrypto";
 import type { Pool } from "pg";
 import { createHash } from "node:crypto";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { createDesignStyleRepository } from "./designStyleRepository.js";
 
 const ids = {
@@ -48,6 +48,15 @@ describe("design style repository", () => {
       insert into reference_items values('${ids.reference}','${ids.workspace}','${ids.brand}','${ids.artifact}',null);
     `);
   }, 30_000);
+  beforeEach(async () => {
+    await database.exec(`
+      delete from brand_style_presets;
+      delete from brand_design_style_analysis_jobs;
+      delete from brand_design_style_references;
+      delete from brand_design_styles;
+      update workspace_members set role='owner';
+    `);
+  });
   afterAll(async () => database.close());
 
   it("allows an analyzing preset but gates default until the exact style revision is ready", async () => {
@@ -89,5 +98,100 @@ describe("design style repository", () => {
       contractVersion: "visual-preset-input.v1", name: "비교형", designStyleId: style.id,
       avatarId: null, isDefault: false,
     })).rejects.toThrow("design_style_admin_required");
+  }, 30_000);
+
+  it("locks the brand before changing the default preset", async () => {
+    const styleId = "61000000-0000-4000-8000-000000000006";
+    const presetId = "62000000-0000-4000-8000-000000000006";
+    await database.query(
+      `insert into brand_design_styles(
+         id,workspace_id,brand_id,name,analysis_status,analysis_contract_version,
+         analysis_json,analysis_sha256,created_by_user_id
+       ) values($1,$2,$3,'Ready','ready','design-style-analysis.v1',$4::jsonb,$5,$6)`,
+      [styleId, ids.workspace, ids.brand, JSON.stringify(analysis), "a".repeat(64), ids.user],
+    );
+    await database.query(
+      `insert into brand_style_presets(
+         id,workspace_id,brand_id,name,design_style_id,revision,is_default,status,created_by_user_id
+       ) values($1,$2,$3,'Preset',$4,1,false,'active',$5)`,
+      [presetId, ids.workspace, ids.brand, styleId, ids.user],
+    );
+    const underlying = pool(database);
+    let brandLocked = false;
+    const guarded = {
+      query: underlying.query.bind(underlying),
+      connect: async () => {
+        const client = await underlying.connect();
+        return {
+          ...client,
+          query: async (sql: string, values: unknown[] = []) => {
+            if (/pg_advisory_xact_lock\(\s*hashtextextended/i.test(sql)) brandLocked = true;
+            if (/update brand_style_presets set is_default/i.test(sql) && !brandLocked) {
+              throw new Error("default_scope_not_locked");
+            }
+            return client.query(sql, values);
+          },
+        };
+      },
+    } as unknown as Pool;
+    const repository = createDesignStyleRepository(guarded);
+
+    await expect(repository.setDefaultVisualPreset({
+      workspaceId: ids.workspace, brandId: ids.brand, actorUserId: ids.user, presetId,
+    })).resolves.toMatchObject({ id: presetId, isDefault: true });
+    expect(brandLocked).toBe(true);
+  });
+
+  it("reclaims an expired processing analysis lease", async () => {
+    const repository = createDesignStyleRepository(pool(database));
+    const scope = { workspaceId: ids.workspace, brandId: ids.brand, actorUserId: ids.user };
+    await repository.createDesignStyle(scope, {
+      contractVersion: "design-style-input.v1", name: "임대 복구", referenceItemIds: [ids.reference],
+    });
+
+    const first = await repository.claimDesignStyleAnalysis("worker-1", 60);
+    await database.query(
+      "update brand_design_style_analysis_jobs set lease_expires_at=now()-interval '1 second' where id=$1",
+      [first!.jobId],
+    );
+    const reclaimed = await repository.claimDesignStyleAnalysis("worker-2", 60);
+    const state = await database.query(
+      "select status,attempt_count,leased_by from brand_design_style_analysis_jobs where id=$1",
+      [first!.jobId],
+    );
+
+    expect(reclaimed).toMatchObject({ jobId: first!.jobId });
+    expect(reclaimed!.leaseToken).not.toBe(first!.leaseToken);
+    expect(state.rows[0]).toMatchObject({ status: "processing", attempt_count: 2, leased_by: "worker-2" });
+  }, 30_000);
+
+  it("fails an expired analysis after its final attempt", async () => {
+    const repository = createDesignStyleRepository(pool(database));
+    const scope = { workspaceId: ids.workspace, brandId: ids.brand, actorUserId: ids.user };
+    const style = await repository.createDesignStyle(scope, {
+      contractVersion: "design-style-input.v1", name: "임대 소진", referenceItemIds: [ids.reference],
+    });
+
+    const claimed = await repository.claimDesignStyleAnalysis("worker-1", 60);
+    await database.query(
+      "update brand_design_style_analysis_jobs set attempt_count=max_attempts,lease_expires_at=now()-interval '1 second' where id=$1",
+      [claimed!.jobId],
+    );
+    expect(await repository.claimDesignStyleAnalysis("worker-2", 60)).toBeNull();
+    const job = await database.query(
+      "select status,error_code from brand_design_style_analysis_jobs where id=$1",
+      [claimed!.jobId],
+    );
+    const refreshedStyle = await database.query(
+      "select analysis_status,analysis_error_code from brand_design_styles where id=$1",
+      [style.id],
+    );
+
+    expect(job.rows[0]).toMatchObject({
+      status: "failed", error_code: "design_style_analysis_lease_expired",
+    });
+    expect(refreshedStyle.rows[0]).toMatchObject({
+      analysis_status: "failed", analysis_error_code: "design_style_analysis_lease_expired",
+    });
   }, 30_000);
 });

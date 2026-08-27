@@ -1051,7 +1051,7 @@ export function createServer(
 
   app.setErrorHandler((error, request, reply) => {
     const message = error instanceof Error ? error.message : "unknown_error";
-    if (message === "ai_content_maintenance") {
+    if (message === "ai_content_maintenance" || message === "brand_center_mutations_disabled") {
       reply.code(503).send({ error: message });
       return;
     }
@@ -3111,6 +3111,7 @@ export function createServer(
     brandIntelligenceRepository,
     scope: aiContentScope,
     actorUserId: aiContentActorUserId,
+    mutationsEnabled: httpPolicy.brandCenterMutationsEnabled ?? true,
     assetLibraryUpload,
   });
 

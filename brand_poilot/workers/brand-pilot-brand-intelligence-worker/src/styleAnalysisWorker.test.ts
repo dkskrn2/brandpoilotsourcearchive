@@ -13,4 +13,34 @@ describe("style analysis worker", () => {
     expect(client.completeStyleAnalysis).toHaveBeenCalledWith(job, "worker", analysis, expect.stringMatching(/^[a-f0-9]{64}$/));
     expect(client.failStyleAnalysis).not.toHaveBeenCalled();
   });
+
+  it("requeues a transient model failure", async () => {
+    const client = {
+      heartbeatStyleAnalysis: vi.fn(), completeStyleAnalysis: vi.fn(),
+      failStyleAnalysis: vi.fn(async () => true),
+    };
+    await expect(processStyleAnalysisJob({
+      client: client as never,
+      runner: { run: vi.fn(async () => { throw new Error("design_style_analysis_timeout"); }) },
+      job, workerId: "worker", leaseSeconds: 60, heartbeatMs: 60_000,
+    })).resolves.toEqual({ status: "failed", designStyleId: job.designStyleId });
+    expect(client.failStyleAnalysis).toHaveBeenCalledWith(
+      job, "worker", "design_style_analysis_timeout", true,
+    );
+  });
+
+  it("terminalizes an invalid analysis contract", async () => {
+    const client = {
+      heartbeatStyleAnalysis: vi.fn(), completeStyleAnalysis: vi.fn(),
+      failStyleAnalysis: vi.fn(async () => true),
+    };
+    await processStyleAnalysisJob({
+      client: client as never,
+      runner: { run: vi.fn(async () => { throw new Error("design_style_analysis_v1_invalid"); }) },
+      job, workerId: "worker", leaseSeconds: 60, heartbeatMs: 60_000,
+    });
+    expect(client.failStyleAnalysis).toHaveBeenCalledWith(
+      job, "worker", "design_style_analysis_v1_invalid", false,
+    );
+  });
 });

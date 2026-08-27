@@ -115,6 +115,26 @@ group by status order by status;
 
 어느 단계에서든 migration, API 승격, drain, worker rollout, heartbeat 또는 재활성화 검증이 실패하거나 작업이 중단되면 `CONTENT_PROPOSALS_ENABLED=false`를 유지합니다. v4 API+v4 Proposal worker 또는 모든 v4-bound job을 drain한 뒤의 v3 API+v3 Proposal worker처럼 호환되는 pair를 복구하고 검증하기 전에는 다시 활성화하지 않습니다. 스크립트가 종료됐다는 이유만으로 이 flag를 `true`로 되돌리지 않습니다. migration 091은 append-only이므로 설치된 상태로 유지합니다.
 
+### 디자인 스타일 분석·프리셋 및 Proposal v5 개발 전환 순서
+
+이 전환은 개발 환경에서 먼저 검증합니다. 스타일 분석은 새 서비스나 `STYLE_ANALYSIS_WORKER_IMAGE`를 만들지 않고 기존 Brand Intelligence Worker가 `design_style_analysis` 작업을 처리합니다. 변경 대상은 Customer UI, API, Brand Intelligence Worker, Content Proposal Worker, Card News Worker, Reel Worker, 호환 입력을 소비하는 Blog Worker와 Image Worker입니다.
+
+```powershell
+node scripts/release-impact.mjs --base <CURRENT_DEVELOPMENT_SHA> --head <RELEASE_SHA> --profile design-style-preset-editorial-cutover
+```
+
+개발 전환 순서는 다음과 같습니다.
+
+1. 원격 `main`, 개발 release SHA, dirty/hotfix 상태, 위 여덟 구성요소의 현재 digest·source SHA·restart count·health/ready·heartbeat와 서비스별 rollback digest를 기록합니다. 실행 중인 image가 예상 개발 release와 다르거나 별도 hotfix를 덮게 되면 mutation 전에 중단합니다.
+2. migration 전 스키마에서도 기동 가능한 새 API image를 먼저 `BRAND_CENTER_MUTATIONS_ENABLED=false`로 canary 검증한 뒤 모든 개발 API instance에 승격합니다. `DESIGN_STYLE_PRESET_CUTOVER_MODE=true`로 preflight를 실행하고, 운영규칙 draft/approve 및 디자인 스타일·프리셋 생성/수정/retry/default API가 실제로 `503 brand_center_mutations_disabled`를 반환하는지 확인합니다. 이때 브랜드센터의 다른 기능·운영규칙 조회와 이전 UI의 `/style-presets` 읽기 전용 호환 route는 유지하지만, 아직 093을 적용하지 않은 DB에서는 새 `/design-styles`·`/visual-presets` 조회를 점검 대상으로 사용하지 않습니다. Proposal 생성도 비활성화하고 `proposal.writer.v4`의 `queued`·`processing` job과 유효 lease가 모두 0이 될 때까지 기존 worker로 drain합니다. 기존 job의 version을 바꾸거나 재작성하지 않습니다.
+3. 개발 DB의 backup/PITR 상태와 dry-run을 확인하고 migration 093, 이어서 migration 094를 정확한 checksum으로 적용합니다. 적용 후 dry-run의 `applied`가 빈 배열인지 확인합니다. `093`의 legacy preset 사전조건이나 `094`의 lineage 제약 검증이 실패하면 다음 단계로 가지 않습니다.
+4. 정확한 release SHA에서 API와 일곱 worker image만 build/publish하고 digest와 embedded source revision을 확인합니다. API를 canary로 검증해 `/health`, `/ready`가 통과한 뒤 primary로 승격합니다.
+5. 기존 Brand Intelligence Worker와 Proposal/Card/Reel/Blog/Image worker 중 실제 실행 중인 서비스만 새 digest로 교체합니다. 별도 style-analysis worker를 시작하지 않습니다. running 상태, fresh heartbeat, restart count와 최근 오류 로그를 확인합니다.
+6. API와 Content Proposal Worker가 정확한 `proposal.writer.v5` source/catalog/schema tuple을 사용하는지 확인하고 새 API primary만 요청을 받는 것을 확인합니다. mutation gate는 아직 비활성 상태로 유지합니다.
+7. 동일 SHA의 Customer UI를 게시한 뒤 `BRAND_CENTER_MUTATIONS_ENABLED=true`로 원자적으로 복원하고 cutover mode 없이 일반 preflight를 실행해 모든 API instance를 재생성합니다. 규칙·스타일·프리셋 mutation의 정상 응답을 확인한 뒤 Proposal 생성도 다시 활성화합니다. 로그인된 개발 브라우저에서 스타일 업로드의 대기/분석/사용 가능 상태, 분석 중 프리셋 선택 차단, 구성안 선택 뒤 프리셋 노출, 정보성 Card/Reel과 마케팅 Card/Reel 생성을 검증합니다. 실패하거나 중단되면 두 mutation gate를 비활성 상태로 유지합니다.
+
+브라우저 결과에는 생성 ID, 스타일 분석 job ID·attempt, 장면별 이미지 호출, 적용된 preset/style/avatar snapshot, 각 서비스 digest와 rollback digest를 남깁니다. 이 개발 기능의 Production 배포는 통합 브라우저 결과에 대한 사용자 승인과 새로운 Production 영향도 확인 전까지 진행하지 않습니다.
+
 ### Ubuntu와 Tailscale
 
 Ubuntu에서는 Tailscale을 통한 `bpdeploy` SSH로 검증된 manifest를 받고, deploy script가 manifest의 digest를 pull합니다. `/opt/brand-pilot/shared/env/api.env`는 release directory 밖의 mode `600` 파일이며 Git checkout, manifest 교체, Docker image pull의 영향을 받지 않습니다.

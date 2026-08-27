@@ -201,8 +201,8 @@ describe("Proposal V2 repository on the final purpose/job-contract schema", () =
       proposal_prompt_version: "proposal.writer.v5",
       proposal_model_id: "gpt-5.6-terra",
       proposal_output_schema_sha256: "54bf063cf32926874af6b098272df08d41a9e7d7f578ee6560debe44428cf5f3",
-      contract_source_sha256: "e3ed513595242c4f79c1e5f50856d7df9ec16f722bb009c14c0fdc927710e727",
-      catalog_sha256: "065400eafd2521fb096f36b8709da842b91823876c7fca11ba276a8283b7265f",
+      contract_source_sha256: "0d9878e198f50d4ddede2eb374827831461c5d72c9e88b3472712883bcabf8ab",
+      catalog_sha256: "916a1cabefa2aa6791d4a26b28957c3252d37107ec0c287500ea38208be2316c",
     });
     expect(row).not.toHaveProperty("content_family");
     expect(row.request_json).toEqual(enqueueInput().workerRequest);

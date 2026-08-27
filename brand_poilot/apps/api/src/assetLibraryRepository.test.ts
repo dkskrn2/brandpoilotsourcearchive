@@ -1270,6 +1270,9 @@ describe("asset library repository", () => {
               || (sql.includes("join brand_rule_sets") && sql.includes("referenceImages"))) {
               return { rows: [], rowCount: 0 };
             }
+            if (sql.includes("from brand_design_style_references")) {
+              return { rows: [], rowCount: 0 };
+            }
             if (sql.includes("from instagram_trend_media media")) {
               return {
                 rows: [{

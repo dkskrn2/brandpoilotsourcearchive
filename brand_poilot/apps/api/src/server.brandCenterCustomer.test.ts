@@ -48,7 +48,10 @@ function version(status: "draft" | "approved" = "draft"): BrandCoreVersion {
   };
 }
 
-function setup(overrides: Partial<ApiRepository> = {}) {
+function setup(
+  overrides: Partial<ApiRepository> = {},
+  options: { brandCenterMutationsEnabled?: boolean } = {},
+) {
   const repository = {
     health: vi.fn(async () => ({ database: "ok" as const })),
     getActive: vi.fn(async () => null),
@@ -74,7 +77,20 @@ function setup(overrides: Partial<ApiRepository> = {}) {
     })),
     canAccessBrand: vi.fn(async () => true),
   } as never;
-  return { app: createServer({ repository, kakaoAuth, logger: false }), repository };
+  return {
+    app: createServer({
+      repository,
+      kakaoAuth,
+      logger: false,
+      runtimePolicy: {
+        cookieSecure: false,
+        corsAllowedOrigins: [],
+        devAuthEnabled: false,
+        brandCenterMutationsEnabled: options.brandCenterMutationsEnabled ?? true,
+      },
+    }),
+    repository,
+  };
 }
 
 describe("brand center customer routes", () => {
@@ -356,6 +372,48 @@ describe("brand center customer routes", () => {
       expect.objectContaining({ designStyleId: styleId, avatarId: null, isDefault: false }),
     );
 
+    await app.close();
+  });
+
+  it("keeps style reads available but blocks rule, style, and preset mutations during cutover", async () => {
+    const listDesignStyles = vi.fn(async () => []);
+    const listLegacyStylePresets = vi.fn(async () => []);
+    const saveRuleDraft = vi.fn();
+    const createVisualPreset = vi.fn();
+    const { app } = setup(
+      { listDesignStyles, listLegacyStylePresets, saveRuleDraft, createVisualPreset },
+      { brandCenterMutationsEnabled: false },
+    );
+
+    const styles = await app.inject({
+      method: "GET", url: `/brands/${brandId}/design-styles`, headers: auth,
+    });
+    expect(styles.statusCode).toBe(200);
+    const legacyStyles = await app.inject({
+      method: "GET", url: `/brands/${brandId}/style-presets`, headers: auth,
+    });
+    expect(legacyStyles.statusCode).toBe(200);
+    expect(listLegacyStylePresets).toHaveBeenCalledWith({ workspaceId, brandId }, false);
+
+    const rules = await app.inject({
+      method: "PUT",
+      url: `/brands/${brandId}/brand-rules/draft`,
+      headers: auth,
+      payload: {},
+    });
+    const preset = await app.inject({
+      method: "POST",
+      url: `/brands/${brandId}/visual-presets`,
+      headers: auth,
+      payload: {},
+    });
+
+    expect(rules.statusCode).toBe(503);
+    expect(rules.json()).toEqual({ error: "brand_center_mutations_disabled" });
+    expect(preset.statusCode).toBe(503);
+    expect(preset.json()).toEqual({ error: "brand_center_mutations_disabled" });
+    expect(saveRuleDraft).not.toHaveBeenCalled();
+    expect(createVisualPreset).not.toHaveBeenCalled();
     await app.close();
   });
 });

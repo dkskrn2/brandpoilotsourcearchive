@@ -145,18 +145,12 @@ function baseInput() {
 
 function brandRulesContent() {
   return {
-    contractVersion: "brand-rules.v1",
+    contractVersion: "brand-rules.v2",
     requiredPhrases: ["정확한 정보"],
     forbiddenPhrases: ["무조건"],
     exaggerationRules: ["검증되지 않은 최상급 금지"],
     ctaRules: { defaultCta: "더 알아보기", allowed: ["더 알아보기"] },
     channelRules: { instagram: ["짧은 문장"] },
-    designRules: {
-      colors: ["#ffffff"],
-      fonts: ["Pretendard"],
-      notes: ["충분한 여백"],
-      referenceImages: [{ referenceItemId: ids.style, description: "밝은 스타일", tags: ["clean"] }],
-    },
     autoApprovalRules: { enabled: false, conditions: [] },
   };
 }
@@ -224,8 +218,8 @@ function source() {
       outputFormat: "card_news",
       purpose: "informational",
       userImageInstruction: "밝은 배경",
-      brandStyleImageIds: [ids.style],
-      avatarStyleImageId: ids.style,
+      brandStyleImageIds: [],
+      avatarStyleImageId: null,
       attachmentIds: [ids.attachment],
     },
     batch: {
@@ -351,22 +345,7 @@ function source() {
       deletedAt: null,
       snapshot: referenceSnapshot(),
     }],
-    brandStyleImages: [{
-      workspaceId: ids.workspace,
-      brandId: ids.brand,
-      ruleSetVersionId: ids.rules,
-      status: "approved",
-      deletedAt: null,
-      snapshot: {
-        referenceItemId: ids.style,
-        description: "밝은 스타일",
-        tags: ["clean"],
-        storageUrl: "https://example.com/style.png",
-        storagePath: "style/style.png",
-        mimeType: "image/png",
-        checksum: "d".repeat(64),
-      },
-    }],
+    brandStyleImages: [],
     attachments: [{
       workspaceId: ids.workspace,
       brandId: ids.brand,
@@ -486,7 +465,15 @@ describe("assembleAiContentFixedInput", () => {
     ["brand rules content mutation", (value: any) => { value.approvedBrandRules.content.requiredPhrases[0] = "부정확한 정보"; }],
     ["brand rules hash mutation", (value: any) => { value.approvedBrandRules.contentSha256 = "f".repeat(64); }],
     ["unapproved brand rules", (value: any) => { value.approvedBrandRules.status = "draft"; }],
-    ["style image from another rule set", (value: any) => { value.brandStyleImages[0].ruleSetVersionId = "20000000-0000-4000-8000-000000000004"; }],
+    ["hidden Brand Rules style image", (value: any) => { value.brandStyleImages.push({
+      workspaceId: ids.workspace, brandId: ids.brand, ruleSetVersionId: ids.rules,
+      status: "approved", deletedAt: null,
+      snapshot: {
+        referenceItemId: ids.style, description: "legacy", tags: [],
+        storageUrl: "https://example.com/style.png", storagePath: "style/style.png",
+        mimeType: "image/png", checksum: "d".repeat(64),
+      },
+    }); }],
     ["missing selected lineage", (value: any) => { value.selection.successfulModelAttemptId = null; }],
     ["job contract lineage mismatch", (value: any) => { value.successfulAttempt.contractId = "20000000-0000-4000-8000-000000000005"; }],
     ["successful ordinal mismatch", (value: any) => { value.successEvent.invocationOrdinal = 2; }],

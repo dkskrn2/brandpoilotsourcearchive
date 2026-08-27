@@ -45,6 +45,7 @@ interface BrandCenterRouteOptions {
   brandIntelligenceRepository?: BrandIntelligenceRepository;
   scope(request: FastifyRequest, brandId: string): { workspaceId: string; brandId: string };
   actorUserId(request: FastifyRequest): string | null;
+  mutationsEnabled?: boolean;
   assetLibraryUpload?: {
     readWriteToken: string;
     generateClientToken?: Parameters<typeof issueAssetLibraryUploadToken>[1]["generateClientToken"];
@@ -52,6 +53,10 @@ interface BrandCenterRouteOptions {
     deleteBlob?: import("./assetLibraryUpload.js").AssetLibraryDeleteOptions["deleteBlob"];
     listBlobs?: import("./assetLibraryUpload.js").AssetLibraryDeleteOptions["listBlobs"];
   };
+}
+
+function requireMutationsEnabled(options: BrandCenterRouteOptions): void {
+  if (options.mutationsEnabled === false) throw new Error("brand_center_mutations_disabled");
 }
 
 function record(value: unknown, code = "brand_core_validation_failed:root"): Record<string, unknown> {
@@ -310,6 +315,7 @@ export function registerBrandCenterRoutes(
   app.put<{ Params: { brandId: string }; Body: unknown }>(
     "/brands/:brandId/brand-rules/draft",
     async (request) => {
+      requireMutationsEnabled(options);
       if (!repository.saveRuleDraft) throw new Error("brand_center_not_configured");
       const scope = options.scope(request, request.params.brandId);
       return repository.saveRuleDraft(
@@ -322,6 +328,7 @@ export function registerBrandCenterRoutes(
   app.post<{ Params: { brandId: string; ruleSetId: string } }>(
     "/brands/:brandId/brand-rules/:ruleSetId/approve",
     async (request) => {
+      requireMutationsEnabled(options);
       if (!repository.approveRules) throw new Error("brand_center_not_configured");
       const scope = options.scope(request, request.params.brandId);
       return repository.approveRules({
@@ -491,9 +498,22 @@ export function registerBrandCenterRoutes(
     },
   );
 
+  // Rolling-deploy read compatibility for the previous Customer UI. Legacy writes stay removed.
+  app.get<{ Params: { brandId: string }; Querystring: { include?: string } }>(
+    "/brands/:brandId/style-presets",
+    async (request) => {
+      if (!repository.listLegacyStylePresets) throw new Error("brand_style_preset_not_configured");
+      return repository.listLegacyStylePresets(
+        options.scope(request, request.params.brandId),
+        request.query.include?.split(",").includes("archived") ?? false,
+      );
+    },
+  );
+
   app.post<{ Params: { brandId: string }; Body: unknown }>(
     "/brands/:brandId/design-styles",
     async (request, reply) => {
+      requireMutationsEnabled(options);
       if (!repository.createDesignStyle) throw new Error("design_style_not_configured");
       const created = await repository.createDesignStyle(
         { ...options.scope(request, request.params.brandId), actorUserId: requireActor(options, request) },
@@ -507,6 +527,7 @@ export function registerBrandCenterRoutes(
   app.patch<{ Params: { brandId: string; styleId: string }; Body: unknown }>(
     "/brands/:brandId/design-styles/:styleId",
     async (request) => {
+      requireMutationsEnabled(options);
       if (!repository.updateDesignStyle) throw new Error("design_style_not_configured");
       const revisionHeader = request.headers["if-match"];
       const revision = Number(typeof revisionHeader === "string" ? revisionHeader.replace(/^W\//, "").replaceAll('"', "") : NaN);
@@ -524,6 +545,7 @@ export function registerBrandCenterRoutes(
   app.post<{ Params: { brandId: string; styleId: string } }>(
     "/brands/:brandId/design-styles/:styleId/retry",
     async (request) => {
+      requireMutationsEnabled(options);
       if (!repository.retryDesignStyleAnalysis) throw new Error("design_style_not_configured");
       return repository.retryDesignStyleAnalysis({
         ...options.scope(request, request.params.brandId), actorUserId: requireActor(options, request),
@@ -543,6 +565,7 @@ export function registerBrandCenterRoutes(
   app.post<{ Params: { brandId: string }; Body: unknown }>(
     "/brands/:brandId/visual-presets",
     async (request, reply) => {
+      requireMutationsEnabled(options);
       if (!repository.createVisualPreset) throw new Error("visual_preset_not_configured");
       const created = await repository.createVisualPreset(
         { ...options.scope(request, request.params.brandId), actorUserId: requireActor(options, request) },
@@ -556,6 +579,7 @@ export function registerBrandCenterRoutes(
   app.patch<{ Params: { brandId: string; presetId: string }; Body: unknown }>(
     "/brands/:brandId/visual-presets/:presetId",
     async (request) => {
+      requireMutationsEnabled(options);
       if (!repository.updateVisualPreset) throw new Error("visual_preset_not_configured");
       const revisionHeader = request.headers["if-match"];
       const revision = Number(typeof revisionHeader === "string" ? revisionHeader.replace(/^W\//, "").replaceAll('"', "") : NaN);
@@ -567,6 +591,7 @@ export function registerBrandCenterRoutes(
   app.post<{ Params: { brandId: string; presetId: string } }>(
     "/brands/:brandId/visual-presets/:presetId/default",
     async (request) => {
+      requireMutationsEnabled(options);
       if (!repository.setDefaultVisualPreset) throw new Error("visual_preset_not_configured");
       return repository.setDefaultVisualPreset({ ...options.scope(request, request.params.brandId), actorUserId: requireActor(options, request), presetId: request.params.presetId });
     },

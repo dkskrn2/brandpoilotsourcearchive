@@ -35,7 +35,7 @@ export type ContentGenerationOutputSettingsV3 = Static<typeof ContentGenerationO
 
 export const ContentGenerationReferencesV3Schema = Type.Object({
   selected: Type.Array(FrozenReferenceSnapshotV2Schema, { maxItems: 5 }),
-  brandStyleImages: Type.Array(FrozenStyleImageSnapshotV1Schema, { maxItems: 5 }),
+  brandStyleImages: Type.Array(FrozenStyleImageSnapshotV1Schema, { maxItems: 10 }),
   avatarStyleImageId: Type.Union([UuidSchema, Type.Null()]),
   attachments: Type.Array(FinalAttachmentSnapshotV1Schema, { maxItems: 20 }),
 }, { additionalProperties: false });
@@ -94,7 +94,7 @@ export const ImageGenerationPackageV1Schema = Type.Object({
   assets: Type.Array(ImageGenerationAssetV1Schema, { minItems: 1, maxItems: 5 }),
   product: Type.Union([ApprovedProductSnapshotV2Schema, Type.Null()]),
   references: Type.Array(FrozenReferenceSnapshotV2Schema, { maxItems: 5 }),
-  brandStyleImages: Type.Array(FrozenStyleImageSnapshotV1Schema, { maxItems: 5 }),
+  brandStyleImages: Type.Array(FrozenStyleImageSnapshotV1Schema, { maxItems: 10 }),
   avatarStyleImageId: Type.Union([UuidSchema, Type.Null()]),
   attachments: Type.Array(FinalAttachmentSnapshotV1Schema, { maxItems: 20 }),
   userImageInstruction: Type.Union([Type.String({ minLength: 1, maxLength: 4_000 }), Type.Null()]),

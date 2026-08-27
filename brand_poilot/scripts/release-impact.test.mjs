@@ -36,7 +36,13 @@ test("design style and editorial cutover selects only the eight changed runtime 
     "brand_poilot/workers/brand-pilot-blog-worker/src/promptBuilder.ts",
     "brand_poilot/workers/brand-pilot-image-worker/src/aiContentManualAssetPromptV2Common.ts",
     "brand_poilot/scripts/migrationRunner.mjs",
+    "brand_poilot/scripts/ai-content-database-catalog.mjs",
+    "brand_poilot/scripts/ai-content-database-catalog.test.mjs",
+    "brand_poilot/scripts/ai-content-database-roles.mjs",
+    "brand_poilot/scripts/migrations.integration.test.mjs",
     "brand_poilot/scripts/repository-contract.test.mjs",
+    "brand_poilot/scripts/worker-cli-only-contract.test.mjs",
+    ".github/workflows/publish-brand-pilot-server-images.yml",
     "brand_poilot/docs/superpowers/plans/2026-08-27-design-style-analysis-and-visual-presets.md",
   ], { profile: DESIGN_STYLE_PRESET_EDITORIAL_CUTOVER_PROFILE });
 

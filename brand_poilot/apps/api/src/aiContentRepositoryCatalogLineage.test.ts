@@ -6,6 +6,11 @@ afterEach(() => {
   vi.resetModules();
 });
 
+it("accepts the exact generated Proposal catalog", async () => {
+  const { createAiContentProposalV2Repository } = await import("./aiContentRepository.js");
+  expect(() => createAiContentProposalV2Repository({} as Pool)).not.toThrow();
+}, 20_000);
+
 it("fails closed when the generated Proposal catalog has a different tuple and file hash", async () => {
   vi.doMock("node:fs", async () => {
     const actual = await vi.importActual<typeof import("node:fs")>("node:fs");

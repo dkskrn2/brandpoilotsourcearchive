@@ -61,7 +61,7 @@ The full source-path matrix and excluded compatibility behavior are in `docs/sup
 
 ## File Structure
 
-- `db/migrations/093_design_style_analysis_visual_presets.sql`: design-style tables/jobs, preset conversion, rules V2 data migration, grants and fences.
+- `db/migrations/093_design_style_analysis_visual_presets.sql`: design-style tables/jobs, expand-only preset conversion, grants and maintenance fence.
 - `packages/brand-pilot-content-contracts/src/designStyle.ts`: closed analysis schema and parser.
 - `packages/brand-pilot-content-contracts/src/snapshots.ts`: `brand-rules.v2` and V1/V2 snapshot reading.
 - `packages/brand-pilot-content-contracts/src/manualVisualSelection.ts`: V2 selection/frozen contracts while retaining V1 readers.
@@ -149,13 +149,9 @@ unique(design_style_id,reference_item_id)
 unique(design_style_id,position)
 ```
 
-Assert `brand_style_presets` gains nullable-then-backfilled non-null `design_style_id`, nullable `avatar_id`, and keeps one active default per brand. Assert old preset reference rows are copied to design-style references, one queued analysis job is created per migrated active preset, and preset `description`/`visual_tokens_json` plus `brand_style_preset_references` are removed only after copy-count checks pass.
+Assert `brand_style_presets` gains nullable-then-backfilled non-null `design_style_id`, nullable `avatar_id`, and keeps one active default per brand. Assert old preset reference rows are copied to design-style references and one queued analysis job is created per migrated active preset. Preserve preset `description`/`visual_tokens_json` plus `brand_style_preset_references` as read-only rollout compatibility until a later contract migration; the new API and UI must not use them.
 
-Assert every `brand_rule_sets.rules_json` becomes:
-
-```sql
-jsonb_set(rules_json - 'designRules', '{contractVersion}', '"brand-rules.v2"'::jsonb)
-```
+Assert existing `brand_rule_sets.rules_json` rows are not rewritten by 093. New readers normalize V1 to V2 in memory, while all new rule writes remain V2 without `designRules`.
 
 Do not update `ai_content_*` frozen JSON columns.
 
@@ -169,7 +165,7 @@ Expected: missing migration, tables, fields, catalog and ACL registrations.
 
 - [ ] **Step 3: Implement migration with application-role grants**
 
-Use composite ownership foreign keys for every brand-owned relation, register the job table in the current maintenance write fence, and grant the application role only the operations used by the repository:
+Use composite ownership foreign keys for every brand-owned relation, install a canonical-name maintenance fence without mutating the sealed 075 fence catalog, and grant the application role only the operations used by the repository:
 
 ```sql
 grant select,insert,update on brand_design_styles to <application_role>;

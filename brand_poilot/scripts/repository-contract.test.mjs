@@ -449,11 +449,11 @@ test("093 migrates legacy style presets into analyzed design styles and visual p
   assert.match(migration, /add\s+column[\s\S]*avatar_id/i);
   assert.match(migration, /insert\s+into\s+brand_design_style_references/i);
   assert.match(migration, /insert\s+into\s+brand_design_style_analysis_jobs/i);
-  assert.match(migration, /drop\s+table\s+brand_style_preset_references/i);
-  assert.match(migration, /drop\s+column\s+description/i);
-  assert.match(migration, /drop\s+column\s+visual_tokens_json/i);
-  assert.match(migration, /rules_json\s*-\s*'designRules'/i);
-  assert.match(migration, /brand-rules\.v2/i);
+  assert.doesNotMatch(migration, /drop\s+table\s+brand_style_preset_references/i);
+  assert.doesNotMatch(migration, /drop\s+column\s+(description|visual_tokens_json)/i);
+  assert.doesNotMatch(migration, /update\s+brand_rule_sets/i);
+  assert.match(migration, /ai_content_fence_trigger_name\('brand_design_style_analysis_jobs'\)/i);
+  assert.match(migration, /enforce_design_style_analysis_write_fence/i);
   assert.doesNotMatch(migration, /update\s+manual_ai_content_visual_selections[\s\S]*frozen_json/i);
 });
 

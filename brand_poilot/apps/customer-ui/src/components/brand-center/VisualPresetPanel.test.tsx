@@ -4,6 +4,49 @@ import { describe, expect, it, vi } from "vitest";
 import { VisualPresetPanel } from "./VisualPresetPanel";
 
 describe("VisualPresetPanel", () => {
+  it("reloads styles and avatars when the shared library revision changes", async () => {
+    const firstStyle = {
+      id: "style-1", workspaceId: "workspace-1", brandId: "brand-1", name: "첫 스타일",
+      revision: 1, analysisStatus: "ready" as const, analysisContractVersion: "design-style-analysis.v1",
+      analysis: null, analysisSha256: "a".repeat(64), analysisErrorCode: null,
+      referenceItemIds: ["reference-1"], createdAt: "now", updatedAt: "now",
+    };
+    const secondStyle = { ...firstStyle, id: "style-2", name: "새 스타일" };
+    const gateway = {
+      listDesignStyles: vi.fn()
+        .mockResolvedValueOnce([firstStyle])
+        .mockResolvedValueOnce([firstStyle, secondStyle]),
+      listAvatars: vi.fn(async () => []), listVisualPresets: vi.fn(async () => []),
+      createVisualPreset: vi.fn(), updateVisualPreset: vi.fn(), setDefaultVisualPreset: vi.fn(),
+    };
+    const view = render(<VisualPresetPanel brandId="brand-1" gateway={gateway as never} libraryRevision={0} />);
+    expect(await screen.findByRole("option", { name: "첫 스타일 · 사용 가능" })).toBeVisible();
+
+    view.rerender(<VisualPresetPanel brandId="brand-1" gateway={gateway as never} libraryRevision={1} />);
+
+    expect(await screen.findByRole("option", { name: "새 스타일 · 사용 가능" })).toBeVisible();
+    expect(gateway.listDesignStyles).toHaveBeenCalledTimes(2);
+    expect(gateway.listAvatars).toHaveBeenCalledTimes(2);
+  });
+
+  it("labels a failed design style as failed instead of still analyzing", async () => {
+    const failedStyle = {
+      id: "style-failed", workspaceId: "workspace-1", brandId: "brand-1", name: "실패한 스타일",
+      revision: 1, analysisStatus: "failed" as const, analysisContractVersion: null,
+      analysis: null, analysisSha256: null, analysisErrorCode: "design_style_analysis_model_failed",
+      referenceItemIds: ["reference-1"], createdAt: "now", updatedAt: "now",
+    };
+    const gateway = {
+      listDesignStyles: vi.fn(async () => [failedStyle]), listAvatars: vi.fn(async () => []),
+      listVisualPresets: vi.fn(async () => []), createVisualPreset: vi.fn(), updateVisualPreset: vi.fn(),
+      setDefaultVisualPreset: vi.fn(),
+    };
+
+    render(<VisualPresetPanel brandId="brand-1" gateway={gateway as never} />);
+
+    expect(await screen.findByRole("option", { name: "실패한 스타일 · 분석 실패" })).toBeVisible();
+  });
+
   it("saves an analyzing style combination but prevents making it default", async () => {
     const user = userEvent.setup();
     const style = {

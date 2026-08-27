@@ -25,6 +25,12 @@ export interface VisualPreset extends BrandScope {
   revision: number; isDefault: boolean; usability: VisualPresetUsability;
   createdAt: string; updatedAt: string;
 }
+export interface LegacyBrandStylePreset extends BrandScope {
+  id: string; name: string; description: string;
+  visualTokens: { colors: string[]; fonts: string[]; notes: string[] };
+  referenceItemIds: string[]; isDefault: boolean; status: "active" | "archived";
+  revision: number; createdAt: string; updatedAt: string;
+}
 
 export interface DesignStyleAnalysisClaim {
   jobId: string; workspaceId: string; brandId: string; designStyleId: string; styleRevision: number;
@@ -33,6 +39,7 @@ export interface DesignStyleAnalysisClaim {
 }
 
 export interface DesignStyleRepository {
+  listLegacyStylePresets(scope: BrandScope, includeArchived?: boolean): Promise<LegacyBrandStylePreset[]>;
   listDesignStyles(scope: BrandScope): Promise<DesignStyle[]>;
   createDesignStyle(scope: BrandScope & { actorUserId: string }, input: DesignStyleInputV1): Promise<DesignStyle>;
   updateDesignStyle(scope: BrandScope & { actorUserId: string; styleId: string; expectedRevision: number }, input: DesignStyleInputV1): Promise<DesignStyle>;
@@ -77,6 +84,16 @@ function preset(row: Record<string, unknown>): VisualPreset {
     createdAt: iso(row.created_at), updatedAt: iso(row.updated_at),
   };
 }
+function legacyPreset(row: Record<string, unknown>): LegacyBrandStylePreset {
+  return {
+    id: String(row.id), workspaceId: String(row.workspace_id), brandId: String(row.brand_id),
+    name: String(row.name), description: String(row.description ?? ""),
+    visualTokens: json(row.visual_tokens_json ?? { colors: [], fonts: [], notes: [] }),
+    referenceItemIds: json<unknown[]>(row.reference_item_ids ?? []).map(String),
+    isDefault: Boolean(row.is_default), status: row.status as LegacyBrandStylePreset["status"],
+    revision: Number(row.revision), createdAt: iso(row.created_at), updatedAt: iso(row.updated_at),
+  };
+}
 async function tx<T>(pool: Pool, action: (client: PoolClient) => Promise<T>): Promise<T> {
   const client = await pool.connect();
   try { await client.query("begin"); const result = await action(client); await client.query("commit"); return result; }
@@ -104,6 +121,18 @@ async function validateReferences(client: Pick<PoolClient, "query">, scope: Bran
     [ids, scope.workspaceId, scope.brandId],
   );
   if (Number(result.rowCount ?? 0) !== ids.length) throw new Error("design_style_reference_invalid");
+}
+
+async function lockVisualPresetScope(
+  client: Pick<PoolClient, "query">,
+  scope: BrandScope,
+): Promise<void> {
+  await client.query(
+    `select pg_advisory_xact_lock(
+       hashtextextended($1::text || ':' || $2::text,0)
+     )`,
+    [scope.workspaceId, scope.brandId],
+  );
 }
 
 const styleSelect = `select style.*,
@@ -139,6 +168,22 @@ export function createDesignStyleRepository(pool: Pool): DesignStyleRepository {
     return String(result.rows[0].analysis_status);
   };
   return {
+    async listLegacyStylePresets(scope, includeArchived = false) {
+      const result = await pool.query(
+        `select preset.*,
+           coalesce(jsonb_agg(reference.reference_item_id order by reference.position)
+             filter(where reference.preset_id is not null),'[]'::jsonb) reference_item_ids
+           from brand_style_presets preset
+           left join brand_style_preset_references reference
+             on reference.preset_id=preset.id and reference.workspace_id=preset.workspace_id
+            and reference.brand_id=preset.brand_id
+          where preset.workspace_id=$1 and preset.brand_id=$2
+            ${includeArchived ? "" : "and preset.status='active'"}
+          group by preset.id order by preset.is_default desc,preset.updated_at desc`,
+        [scope.workspaceId, scope.brandId],
+      );
+      return result.rows.map((row) => legacyPreset(row as Record<string, unknown>));
+    },
     async listDesignStyles(scope) {
       const result = await pool.query(`${styleSelect} where style.workspace_id=$1 and style.brand_id=$2 group by style.id order by style.updated_at desc`, [scope.workspaceId, scope.brandId]);
       return result.rows.map((row) => style(row as Record<string, unknown>));
@@ -189,7 +234,11 @@ export function createDesignStyleRepository(pool: Pool): DesignStyleRepository {
       return tx(pool, async (client) => {
         await member(client, scope); const status = await validatePresetLinks(client, scope, input);
         if (input.isDefault && status !== "ready") throw new Error("visual_preset_not_usable");
-        if (input.isDefault) { await member(client, scope, true); await client.query(`update brand_style_presets set is_default=false where workspace_id=$1 and brand_id=$2 and is_default`, [scope.workspaceId, scope.brandId]); }
+        if (input.isDefault) {
+          await member(client, scope, true);
+          await lockVisualPresetScope(client, scope);
+          await client.query(`update brand_style_presets set is_default=false where workspace_id=$1 and brand_id=$2 and is_default`, [scope.workspaceId, scope.brandId]);
+        }
         const created = await client.query(`insert into brand_style_presets(workspace_id,brand_id,name,design_style_id,avatar_id,is_default,created_by_user_id) values($1,$2,$3,$4,$5,$6,$7) returning id`, [scope.workspaceId, scope.brandId, input.name, input.designStyleId, input.avatarId, input.isDefault, scope.actorUserId]);
         return (await getPreset({ ...scope, presetId: String(created.rows[0].id) }, client))!;
       });
@@ -198,6 +247,7 @@ export function createDesignStyleRepository(pool: Pool): DesignStyleRepository {
       const input = parseVisualPresetInput(raw);
       return tx(pool, async (client) => {
         await member(client, scope);
+        await lockVisualPresetScope(client, scope);
         const locked = await client.query(`select id,is_default,design_style_id from brand_style_presets where id=$1 and workspace_id=$2 and brand_id=$3 and revision=$4 and status='active' for update`, [scope.presetId, scope.workspaceId, scope.brandId, scope.expectedRevision]);
         if (!locked.rowCount) throw new Error("visual_preset_revision_stale");
         const currentDefault = Boolean(locked.rows[0].is_default);
@@ -215,7 +265,9 @@ export function createDesignStyleRepository(pool: Pool): DesignStyleRepository {
     },
     async setDefaultVisualPreset(scope) {
       return tx(pool, async (client) => {
-        await member(client, scope, true); const current = await getPreset(scope, client);
+        await member(client, scope, true);
+        await lockVisualPresetScope(client, scope);
+        const current = await getPreset(scope, client);
         if (!current) throw new Error("visual_preset_not_found");
         if (!current.usability.usable) throw new Error("visual_preset_not_usable");
         await client.query(`update brand_style_presets set is_default=false where workspace_id=$1 and brand_id=$2 and is_default`, [scope.workspaceId, scope.brandId]);
@@ -225,7 +277,11 @@ export function createDesignStyleRepository(pool: Pool): DesignStyleRepository {
     },
     async claimDesignStyleAnalysis(workerId, leaseSeconds) {
       return tx(pool, async (client) => {
-        const claimed = await client.query(`with candidate as (select id from brand_design_style_analysis_jobs where status='queued' and available_at<=now() order by available_at,created_at for update skip locked limit 1) update brand_design_style_analysis_jobs job set status='processing',attempt_count=attempt_count+1,leased_by=$1,lease_token=gen_random_uuid(),lease_expires_at=now()+($2||' seconds')::interval from candidate where job.id=candidate.id returning job.*`, [workerId, leaseSeconds]);
+        const exhausted = await client.query(`update brand_design_style_analysis_jobs set status='failed',leased_by=null,lease_token=null,lease_expires_at=null,error_code='design_style_analysis_lease_expired' where status='processing' and lease_expires_at<=now() and attempt_count>=max_attempts returning design_style_id,style_revision`);
+        for (const row of exhausted.rows) {
+          await client.query(`update brand_design_styles set analysis_status='failed',analysis_error_code='design_style_analysis_lease_expired' where id=$1 and revision=$2 and analysis_status='processing'`, [row.design_style_id, row.style_revision]);
+        }
+        const claimed = await client.query(`with candidate as (select id from brand_design_style_analysis_jobs where attempt_count<max_attempts and ((status='queued' and available_at<=now()) or (status='processing' and lease_expires_at<=now())) order by available_at,created_at for update skip locked limit 1) update brand_design_style_analysis_jobs job set status='processing',attempt_count=attempt_count+1,leased_by=$1,lease_token=gen_random_uuid(),lease_expires_at=now()+($2||' seconds')::interval,error_code=null from candidate where job.id=candidate.id returning job.*`, [workerId, leaseSeconds]);
         if (!claimed.rowCount) return null;
         const job = claimed.rows[0];
         await client.query(`update brand_design_styles set analysis_status='processing' where id=$1 and revision=$2 and analysis_status='queued'`, [job.design_style_id, job.style_revision]);

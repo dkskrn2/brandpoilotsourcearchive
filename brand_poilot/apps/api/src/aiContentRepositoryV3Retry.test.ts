@@ -50,7 +50,7 @@ const promptBinding = {
   imagePackageVersion: "image-generation-package.v1",
   imagePromptVersion: "image.reel.informational.v1",
   manifestVersion: "ai-content.v3",
-  contractSourceHash: "e3ed513595242c4f79c1e5f50856d7df9ec16f722bb009c14c0fdc927710e727",
+  contractSourceHash: "0d9878e198f50d4ddede2eb374827831461c5d72c9e88b3472712883bcabf8ab",
   model: "gpt-5.6-terra",
 } as const;
 

@@ -12,22 +12,20 @@ const autoResponsePanelPath = resolve(
   sourceRoot,
   "components/brand-center/AutoResponseKnowledgePanel.tsx",
 );
-const styleReferencePanelPath = resolve(
+const designStylePanelPath = resolve(
   sourceRoot,
-  "components/brand-center/StyleReferenceImageBoard.tsx",
+  "components/brand-center/DesignStylePanel.tsx",
 );
 
 describe("brand center visual contracts", () => {
-  it("uses the shared padded panel header on brand core and style tabs", async () => {
-    const [brandCorePanel, styleReferencePanel] = await Promise.all([
+  it("keeps padded panel headers on brand core and design style tabs", async () => {
+    const [brandCorePanel, designStylePanel] = await Promise.all([
       readFile(brandCorePanelPath, "utf8"),
-      readFile(styleReferencePanelPath, "utf8"),
+      readFile(designStylePanelPath, "utf8"),
     ]);
 
     expect(brandCorePanel).toContain('className="panel-head"');
-    expect(styleReferencePanel).toContain(
-      'className="panel-head style-reference-header"',
-    );
+    expect(designStylePanel).toContain('className="panel-header"');
   });
 
   it("gives brand core fields the same full-width bordered treatment as onboarding fields", async () => {
