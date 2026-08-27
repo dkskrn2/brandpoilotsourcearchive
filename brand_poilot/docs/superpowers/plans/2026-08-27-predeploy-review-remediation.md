@@ -157,4 +157,6 @@ Run the style-analysis tests and the full Brand Intelligence Worker suite serial
 
 - [x] Run content contracts, focused API and customer UI tests, affected worker tests, root and migration contracts, PostgreSQL application-role tests, builds, and `git diff --check`.
 - [x] Confirm the worktree contains only approved changes and no migration 095, new API version, new worker service, or production mutation.
-- [ ] Recheck PR status; do not deploy while GitHub Actions billing prevents required CI from running.
+- [x] Recheck PR status; do not deploy while GitHub Actions billing prevents required CI from running.
+
+PR #225 points at remediation commit `9981b787`, but the required `impact` job was not started because GitHub reported failed account payments or an exhausted spending limit. `verify`, `publish`, and `deploy` were therefore skipped.
