@@ -56,13 +56,19 @@ describe("manual visual assets repository", () => {
     const query = vi.fn(async (sql: string, params: unknown[] = []) => {
       if (sql === "begin" || sql === "commit") return { rows: [], rowCount: 0 };
       if (sql.includes("select member.role")) return { rows: [{ role: "member" }], rowCount: 1 };
-      if (sql.includes("where asset.id=$1") && sql.includes("for update")) {
+      if (sql.includes("select asset.product_service_version_id") && sql.includes("where asset.id=$1")) {
+        return { rows: [{ product_service_version_id: "version-1" }], rowCount: 1 };
+      }
+      if (sql.includes("select asset.id,asset.storage_artifact_id") && sql.includes("where asset.id=$1")) {
         return { rows: [{
           id: "image-1", storage_artifact_id: "artifact-1", product_service_version_id: "version-1",
           role: "hero", position: 1,
         }], rowCount: 1 };
       }
-      if (sql.includes("where asset.product_service_version_id=$1") && sql.includes("for update")) {
+      if (
+        sql.includes("select asset.id,asset.role,asset.position") &&
+        sql.includes("where asset.product_service_version_id=$1")
+      ) {
         return { rows: [
           { id: "image-1", role: "hero", position: 1 },
           { id: "image-2", role: "detail", position: 2 },
