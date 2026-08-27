@@ -4619,6 +4619,7 @@ test("an installation applied through 064 has every later migration pending", as
       "090_existing_brand_free_subscriptions.sql",
       "091_ai_content_prompt_lineage_v4.sql",
       "092_publish_calendar_weekly_schedule.sql",
+      "093_design_style_analysis_visual_presets.sql",
     ],
   );
 });
@@ -4821,6 +4822,21 @@ test("weekly publish schedule storage 092 follows prompt lineage 091 determinist
   );
 });
 
+test("design style analysis schema 093 follows weekly schedule 092 deterministically", async () => {
+  const loaded = await migrationRunner.loadMigrations();
+  const ids = loaded.map(({ id }) => id);
+  const migration093Index = ids.indexOf("093_design_style_analysis_visual_presets.sql");
+
+  assert.equal(
+    migration093Index,
+    ids.indexOf("092_publish_calendar_weekly_schedule.sql") + 1,
+  );
+  assert.equal(
+    loaded[migration093Index].checksum,
+    migrationRunner.post075SchemaMigrationChecksums["093_design_style_analysis_visual_presets.sql"],
+  );
+});
+
 const post076SchemaMigrationIdsForTests = [
   "077_content_suggestion_batches.sql",
   "078_faq_utterance_matching.sql",
@@ -4838,6 +4854,7 @@ const post076SchemaMigrationIdsForTests = [
   "090_existing_brand_free_subscriptions.sql",
   "091_ai_content_prompt_lineage_v4.sql",
   "092_publish_calendar_weekly_schedule.sql",
+  "093_design_style_analysis_visual_presets.sql",
 ];
 
 test("post-075 data migrations are a closed DML-only contract", async () => {

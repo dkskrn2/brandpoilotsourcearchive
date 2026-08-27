@@ -14,6 +14,7 @@ const REQUIRED_DATASET_KEYS = [
   "brands",
   "brand_core",
   "brand_rules",
+  "visual_styles",
   "users",
   "products",
   "product_versions",
@@ -45,6 +46,12 @@ test("preserved catalog declares every protected dataset and exact relation allo
   assert.deepEqual(PRESERVED_DATASETS.find(({ key }) => key === "products")?.relations, [
     "product_services",
     "product_service_legacy_mappings",
+  ]);
+  assert.deepEqual(PRESERVED_DATASETS.find(({ key }) => key === "visual_styles")?.relations, [
+    "brand_design_styles",
+    "brand_design_style_references",
+    "brand_design_style_analysis_jobs",
+    "brand_style_presets",
   ]);
   assert.deepEqual(PRESERVED_DATASETS.find(({ key }) => key === "product_versions")?.relations, [
     "product_service_versions",
@@ -459,8 +466,9 @@ test("content catalog collectors compile against a fresh 001-073 PGlite schema",
       release_sha: "893242d9a10b2a0af6b238297c124dcb666caf49",
       release_images: [{ component: "api", digest: `sha256:${"a".repeat(64)}` }],
     } });
-    const catalog = await collectPreservedDataCatalog(queryable);
+    const catalog = await collectPreservedDataCatalog(queryable, { failOnMissingRelations: false });
     assert.equal(catalog.datasets.users.relations.user_sessions.count, "0");
+    assert.equal(catalog.datasets.visual_styles.status, "incomplete");
     const exactKinds = (section) => new Set(evidence.incidents[0][section].data.map(({ json_text }) => JSON.parse(json_text).kind));
     const orchestrationKinds = exactKinds("orchestration");
     assert.deepEqual(

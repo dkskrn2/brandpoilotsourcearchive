@@ -24,6 +24,15 @@ export const PRESERVED_DATASETS = Object.freeze([
   Object.freeze({ key: "brand_core", relations: Object.freeze(["brand_core_versions"]) }),
   Object.freeze({ key: "brand_rules", relations: Object.freeze(["brand_rule_sets"]) }),
   Object.freeze({
+    key: "visual_styles",
+    relations: Object.freeze([
+      "brand_design_styles",
+      "brand_design_style_references",
+      "brand_design_style_analysis_jobs",
+      "brand_style_presets",
+    ]),
+  }),
+  Object.freeze({
     key: "users",
     relations: Object.freeze(["app_users", "user_identities", "user_sessions", "workspaces", "workspace_members"]),
   }),

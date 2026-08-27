@@ -101,6 +101,136 @@ test("092 weekly schedule storage is the checksum-pinned migration after prompt 
   );
 });
 
+test("093 migrates referenced legacy presets, queues analysis, and removes designRules", async () => {
+  const migrations = await loadMigrations();
+  const migration075 = migrations.find(
+    (migration) => migration.id === "075_ai_content_three_format_cutover.sql",
+  );
+  const migration093 = migrations.find(
+    (migration) => migration.id === "093_design_style_analysis_visual_presets.sql",
+  );
+  assert.ok(migration075);
+  assert.ok(migration093);
+
+  await withDatabase(async (database) => {
+    await runMigrationRange(
+      database,
+      migrations,
+      "001_initial_schema.sql",
+      "074_ai_content_maintenance_write_fence.sql",
+    );
+    await run075SchemaBodyForPglite(database, migration075);
+    const migration076 = migrations.find(
+      (migration) => migration.id === "076_manual_content_generation_brand_rules.sql",
+    );
+    const migration082 = migrations.find(
+      (migration) => migration.id === "082_manual_brand_visual_assets.sql",
+    );
+    assert.ok(migration076);
+    assert.ok(migration082);
+    await database.exec(migration076.sql);
+    const migration082AclStart = migration082.sql.lastIndexOf(
+      "do $$\ndeclare\n  schema_owner_role_name name;",
+    );
+    assert.ok(migration082AclStart > 0);
+    await database.exec(`${migration082.sql.slice(0, migration082AclStart)}commit;`);
+
+    const userId = randomUUID();
+    const workspaceId = randomUUID();
+    const brandId = randomUUID();
+    const sourceUrlId = randomUUID();
+    const referenceItemId = randomUUID();
+    const presetId = randomUUID();
+    await database.query(
+      "insert into app_users(id,email) values ($1,$2)",
+      [userId, `style-${userId}@example.test`],
+    );
+    await database.query(
+      "insert into workspaces(id,name,slug,created_by_user_id) values ($1,'Style migration',$2,$3)",
+      [workspaceId, `style-${workspaceId}`, userId],
+    );
+    await database.query(
+      "insert into workspace_members(workspace_id,user_id,role) values ($1,$2,'owner')",
+      [workspaceId, userId],
+    );
+    await database.query(
+      "insert into brands(id,workspace_id,name,created_by_user_id) values ($1,$2,'Style brand',$3)",
+      [brandId, workspaceId, userId],
+    );
+    await database.query(
+      `insert into source_urls(
+         id,workspace_id,brand_id,source_type,url,url_hash,content_purpose
+       ) values ($1,$2,$3,'reference','https://example.test/style','style-hash','both')`,
+      [sourceUrlId, workspaceId, brandId],
+    );
+    await database.query(
+      `insert into reference_items(
+         id,workspace_id,brand_id,kind,origin,title,source_url_id,created_by_user_id
+       ) values ($1,$2,$3,'external_url','upload','Style image',$4,$5)`,
+      [referenceItemId, workspaceId, brandId, sourceUrlId, userId],
+    );
+    await database.query(
+      `insert into brand_style_presets(
+         id,workspace_id,brand_id,name,description,visual_tokens_json,status,revision,is_default,created_by_user_id
+       ) values ($1,$2,$3,'Legacy style','legacy description',
+         '{"colors":["violet"],"fonts":[],"notes":[]}'::jsonb,'active',2,true,$4)`,
+      [presetId, workspaceId, brandId, userId],
+    );
+    await database.query(
+      `insert into brand_style_preset_references(
+         workspace_id,brand_id,preset_id,reference_item_id,position
+       ) values ($1,$2,$3,$4,1)`,
+      [workspaceId, brandId, presetId, referenceItemId],
+    );
+    await database.query(
+      `insert into brand_rule_sets(
+         workspace_id,brand_id,version,status,rules_json,created_by,created_by_user_id
+       ) values ($1,$2,1,'draft',
+         '{"contractVersion":"brand-rules.v1","requiredPhrases":[],"forbiddenPhrases":[],
+           "exaggerationRules":[],"ctaRules":{"defaultCta":"","allowed":[]},
+           "channelRules":{},"designRules":{"colors":["violet"]},
+           "autoApprovalRules":{"enabled":false,"conditions":[]}}'::jsonb,
+         'user',$3)`,
+      [workspaceId, brandId, userId],
+    );
+
+    await database.exec(migration093.sql);
+
+    const migrated = await database.query(
+      `select preset.design_style_id,preset.avatar_id,preset.is_default,
+              style.analysis_status,style.revision,
+              (select count(*)::integer from brand_design_style_references reference
+                where reference.design_style_id=style.id) reference_count,
+              (select count(*)::integer from brand_design_style_analysis_jobs job
+                where job.design_style_id=style.id and job.style_revision=style.revision) job_count
+         from brand_style_presets preset
+         join brand_design_styles style on style.id=preset.design_style_id
+        where preset.id=$1`,
+      [presetId],
+    );
+    assert.deepEqual(migrated.rows, [{
+      design_style_id: presetId,
+      avatar_id: null,
+      is_default: true,
+      analysis_status: "queued",
+      revision: 2,
+      reference_count: 1,
+      job_count: 1,
+    }]);
+    assert.equal(
+      (await database.query("select to_regclass('public.brand_style_preset_references') relation"))
+        .rows[0].relation,
+      null,
+    );
+    const rules = await database.query(
+      "select rules_json from brand_rule_sets where workspace_id=$1 and brand_id=$2",
+      [workspaceId, brandId],
+    );
+    assert.equal(rules.rows[0].rules_json.contractVersion, "brand-rules.v2");
+    assert.equal(Object.hasOwn(rules.rows[0].rules_json, "designRules"), false);
+  });
+});
+
 test("073a hardens exactly the legacy trigger function closure before 074", async () => {
   const migrations = await loadMigrations();
   assert.deepEqual(fullSourceMigrationIds, migrations.map(({ id }) => id));

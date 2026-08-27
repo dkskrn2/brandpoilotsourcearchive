@@ -417,12 +417,43 @@ test("데이터베이스 마이그레이션 registry는 게시 캘린더 079부�
     "090_existing_brand_free_subscriptions.sql",
     "091_ai_content_prompt_lineage_v4.sql",
     "092_publish_calendar_weekly_schedule.sql",
+    "093_design_style_analysis_visual_presets.sql",
   ]);
   assert.ok(reservedProgramMigrations.filter((file) => file.startsWith("059_")).length <= 1);
   assert.ok(reservedProgramMigrations.filter((file) => file.startsWith("060_")).length <= 1);
   if (reservedProgramMigrations.some((file) => file.startsWith("060_"))) {
     assert.ok(reservedProgramMigrations.includes("060_content_orchestration.sql"));
   }
+});
+
+test("093 migrates legacy style presets into analyzed design styles and visual presets", async () => {
+  const migration = await readFile(
+    "db/migrations/093_design_style_analysis_visual_presets.sql",
+    "utf8",
+  );
+
+  for (const table of [
+    "brand_design_styles",
+    "brand_design_style_references",
+    "brand_design_style_analysis_jobs",
+  ]) {
+    assert.match(migration, new RegExp(`create\\s+table\\s+${table}`, "i"));
+  }
+  assert.match(migration, /analysis_status[\s\S]*queued[\s\S]*processing[\s\S]*ready[\s\S]*failed/i);
+  assert.match(migration, /analysis_contract_version='design-style-analysis\.v1'/i);
+  assert.match(migration, /unique\s*\(design_style_id,style_revision\)/i);
+  assert.match(migration, /unique\s*\(design_style_id,reference_item_id\)/i);
+  assert.match(migration, /unique\s*\(design_style_id,position\)/i);
+  assert.match(migration, /alter\s+table\s+brand_style_presets[\s\S]*add\s+column[\s\S]*design_style_id/i);
+  assert.match(migration, /add\s+column[\s\S]*avatar_id/i);
+  assert.match(migration, /insert\s+into\s+brand_design_style_references/i);
+  assert.match(migration, /insert\s+into\s+brand_design_style_analysis_jobs/i);
+  assert.match(migration, /drop\s+table\s+brand_style_preset_references/i);
+  assert.match(migration, /drop\s+column\s+description/i);
+  assert.match(migration, /drop\s+column\s+visual_tokens_json/i);
+  assert.match(migration, /rules_json\s*-\s*'designRules'/i);
+  assert.match(migration, /brand-rules\.v2/i);
+  assert.doesNotMatch(migration, /update\s+manual_ai_content_visual_selections[\s\S]*frozen_json/i);
 });
 
 test("066 extends orchestration with immutable analyzed-subject snapshots", async () => {
