@@ -14,7 +14,7 @@ import {
   type ApprovedBrandCoreSnapshotV2,
   type ApprovedBrandRulesSnapshotV1,
   type ApprovedProductSnapshotV2,
-  type BrandRulesContentV1,
+  type BrandRulesContentV2,
   type ContentGenerationInputV3,
   type ContentPromptBinding,
   type ContentProposalRequestV2,
@@ -155,7 +155,7 @@ export interface AiContentFixedInputSource {
   approvedBrandRules: ScopedStatus & {
     versionId: string;
     version: number;
-    content: BrandRulesContentV1;
+    content: BrandRulesContentV2;
     contentSha256: string;
   };
   approvedProduct: (ScopedStatus & { snapshot: ApprovedProductSnapshotV2 }) | null;

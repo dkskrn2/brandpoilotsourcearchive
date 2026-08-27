@@ -24,8 +24,8 @@ const ids = {
 };
 const proposalV3SourceHash = "ecada3861313486b50e0a1475d89284f13fe4a74018207d11f205613deefb550";
 const proposalV3CatalogHash = "415ca40b3dc3616affab6642b437ecd6b148bf70f017638640e2a4f858aaf808";
-const proposalV4SourceHash = "e607bbb891af3723dc4620a0319382e83ee29006ed547aae620086b9809f248d";
-const proposalV4CatalogHash = "6d983b25c51debb7588650165494f6cceffd1b2a921301e8cb79afb38543c9a9";
+const proposalV5SourceHash = "e3ed513595242c4f79c1e5f50856d7df9ec16f722bb009c14c0fdc927710e727";
+const proposalV5CatalogHash = "065400eafd2521fb096f36b8709da842b91823876c7fca11ba276a8283b7265f";
 
 async function applyMigrationsThrough075(pool: Pool) {
   const directory = resolve(process.cwd(), "../../db/migrations");
@@ -526,16 +526,16 @@ describe.skipIf(process.env.RUN_POSTGRES_INTEGRATION !== "true")(
         enqueue_contract_sha256: enqueueContractSha256,
       });
 
-      const next = await enqueueManualProposal("proposal-v4-enqueue");
+      const next = await enqueueManualProposal("proposal-v5-enqueue");
       const nextContract = await pool.query(
         `select proposal_prompt_version,contract_source_sha256,catalog_sha256
            from ai_content_proposal_job_contracts where batch_id=$1`,
         [next.proposalBatchId],
       );
       expect(nextContract.rows[0]).toEqual({
-        proposal_prompt_version: "proposal.writer.v4",
-        contract_source_sha256: proposalV4SourceHash,
-        catalog_sha256: proposalV4CatalogHash,
+        proposal_prompt_version: "proposal.writer.v5",
+        contract_source_sha256: proposalV5SourceHash,
+        catalog_sha256: proposalV5CatalogHash,
       });
     }, 30_000);
 

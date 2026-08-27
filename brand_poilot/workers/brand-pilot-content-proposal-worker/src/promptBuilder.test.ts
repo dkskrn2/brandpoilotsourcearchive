@@ -125,8 +125,8 @@ describe("Proposal V2 prompt", () => {
 
       expect(instructions).toContain("독자 또는 고객 상황");
       expect(instructions).toContain("끝까지 보았을 때");
-      expect(instructions).toContain("전개 방식을 내부적으로 선택");
-      expect(instructions).toContain("새 출력 필드나 고정 장면 공식으로 만들지 마라");
+      expect(instructions).toContain("표현방식 하나와 강조 관점 하나를 내부적으로 선택");
+      expect(instructions).toContain("새 필드로 출력하지 마라");
       expect(instructions).toContain("같은 내용을 표현만 바꿔 반복하지 마라");
     },
   );

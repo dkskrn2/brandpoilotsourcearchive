@@ -1,6 +1,6 @@
 import type { PoolClient } from "pg";
-import { parseBrandRulesContentV1 } from "@brand-pilot/content-contracts";
-import type { BrandRulesV1 } from "./brandCoreContracts.js";
+import { parseBrandRulesContentV2 } from "@brand-pilot/content-contracts";
+import type { BrandRulesV2 } from "./brandCoreContracts.js";
 
 export interface EnsureActiveApprovedBrandRulesInput {
   workspaceId: string;
@@ -57,38 +57,16 @@ function normalizedChannelRules(value: unknown): Record<string, string[]> {
   return result;
 }
 
-const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-
-function normalizedReferenceImages(value: unknown): BrandRulesV1["designRules"]["referenceImages"] {
-  if (!Array.isArray(value)) return [];
-  const seen = new Set<string>();
-  const result: BrandRulesV1["designRules"]["referenceImages"] = [];
-  for (const rawImage of value) {
-    if (result.length >= 5) break;
-    const image = record(rawImage);
-    const referenceItemId = normalizedText(image.referenceItemId, 36);
-    if (!UUID_PATTERN.test(referenceItemId) || seen.has(referenceItemId)) continue;
-    seen.add(referenceItemId);
-    result.push({
-      referenceItemId,
-      description: normalizedText(image.description, 240),
-      tags: normalizedStringList(image.tags, { maxItems: 10, maxLength: 40 }),
-    });
-  }
-  return result;
-}
-
-export function normalizeBrandRulesV1(
+export function normalizeBrandRulesV2(
   value: unknown,
   legacyProfile: {
     forbiddenTerms: unknown;
     defaultCta: unknown;
     autoApprovalEnabled: unknown;
   },
-): BrandRulesV1 {
+): BrandRulesV2 {
   const source = record(databaseJson(value));
   const ctaRules = record(source.ctaRules);
-  const designRules = record(source.designRules);
   const autoApprovalRules = record(source.autoApprovalRules);
   const forbiddenPhrases = Array.isArray(source.forbiddenPhrases)
     ? normalizedStringList(source.forbiddenPhrases)
@@ -97,8 +75,8 @@ export function normalizeBrandRulesV1(
     ? normalizedText(ctaRules.defaultCta, 500)
     : normalizedText(legacyProfile.defaultCta, 500);
 
-  return parseBrandRulesContentV1({
-    contractVersion: "brand-rules.v1",
+  return parseBrandRulesContentV2({
+    contractVersion: "brand-rules.v2",
     requiredPhrases: normalizedStringList(source.requiredPhrases),
     forbiddenPhrases,
     exaggerationRules: normalizedStringList(source.exaggerationRules),
@@ -107,12 +85,6 @@ export function normalizeBrandRulesV1(
       allowed: normalizedStringList(ctaRules.allowed),
     },
     channelRules: normalizedChannelRules(source.channelRules),
-    designRules: {
-      colors: normalizedStringList(designRules.colors),
-      fonts: normalizedStringList(designRules.fonts),
-      notes: normalizedStringList(designRules.notes),
-      referenceImages: normalizedReferenceImages(designRules.referenceImages),
-    },
     autoApprovalRules: {
       enabled: typeof autoApprovalRules.enabled === "boolean"
         ? autoApprovalRules.enabled
@@ -125,7 +97,7 @@ export function normalizeBrandRulesV1(
 export async function ensureActiveApprovedBrandRules(
   client: Pick<PoolClient, "query">,
   input: EnsureActiveApprovedBrandRulesInput,
-): Promise<{ id: string; rules: BrandRulesV1; created: boolean }> {
+): Promise<{ id: string; rules: BrandRulesV2; created: boolean }> {
   const profile = await client.query(
     `select active_brand_rule_set_id, forbidden_terms, default_cta, auto_approval_enabled
        from brand_profiles
@@ -149,7 +121,7 @@ export async function ensureActiveApprovedBrandRules(
   if (approved.rowCount) {
     const row = approved.rows[0] as StoredRuleRow;
     try {
-      const rules = parseBrandRulesContentV1(databaseJson(row.rules_json));
+      const rules = parseBrandRulesContentV2(databaseJson(row.rules_json));
       const id = String(row.id);
       if (String(profileRow.active_brand_rule_set_id ?? "") !== id) {
         await client.query(
@@ -164,7 +136,7 @@ export async function ensureActiveApprovedBrandRules(
     }
   }
 
-  const rules = normalizeBrandRulesV1(invalidApproved?.rules_json ?? {}, {
+  const rules = normalizeBrandRulesV2(invalidApproved?.rules_json ?? {}, {
     forbiddenTerms: profileRow.forbidden_terms,
     defaultCta: profileRow.default_cta,
     autoApprovalEnabled: profileRow.auto_approval_enabled,

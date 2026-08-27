@@ -14,6 +14,7 @@ const ids = {
   version: "10000000-0000-4000-8000-000000000005",
   productImage: "10000000-0000-4000-8000-000000000006",
   preset: "10000000-0000-4000-8000-000000000007",
+  designStyle: "10000000-0000-4000-8000-00000000000c",
   reference: "10000000-0000-4000-8000-000000000008",
   reference2: "10000000-0000-4000-8000-00000000000b",
   avatar: "10000000-0000-4000-8000-000000000009",
@@ -22,22 +23,28 @@ const ids = {
 
 const scope = { workspaceId: ids.workspace, brandId: ids.brand, generationId: ids.generation };
 const selection = {
-  contractVersion: "manual-visual-selection.v1" as const,
+  contractVersion: "manual-visual-selection.v2" as const,
   product: { productServiceId: ids.product, versionId: ids.version },
-  stylePreset: { presetId: ids.preset, revision: 3 },
-  avatar: { avatarId: ids.avatar, revision: 2 },
+  preset: { presetId: ids.preset, revision: 3 },
+};
+
+const analysis = {
+  contractVersion: "design-style-analysis.v1" as const,
+  layout: { composition: [], hierarchy: [], spacing: [], alignment: [], recurringModules: [] },
+  typography: { families: [], weightHierarchy: [], scale: [], placement: [] },
+  color: { palette: [], contrast: [], background: [], accentUsage: [] },
+  graphics: { media: [], shapes: [], icons: [], texture: [] },
+  visualCues: { comparison: [], humor: [], practicality: [], empathy: [] },
+  promptGuidance: { use: [], avoid: [] },
 };
 
 function client(options: {
-  avatarRevision?: number;
-  avatarRevisionAfterImages?: number;
-  partialPresetReference?: boolean;
-  presetRevisionAfterReferences?: number;
+  presetRevision?: number;
+  analysisStatus?: "ready" | "processing" | "failed";
+  avatarStatus?: "active" | "archived";
   productSourceUrls?: string[];
 } = {}) {
   let stored: Record<string, unknown> | null = null;
-  let presetReads = 0;
-  let avatarReads = 0;
   const query = vi.fn(async (sql: string, params: unknown[] = []) => {
     if (sql.includes("from product_services item")) return { rows: [{
       id: ids.product, kind: "product", display_name: "차 세트", status: "active",
@@ -52,27 +59,18 @@ function client(options: {
     if (sql.includes("from product_service_assets")) return { rows: [{
       id: ids.productImage, role: "hero", position: 1,
     }], rowCount: 1 };
-    if (sql.includes("from brand_style_presets")) return { rows: [{
-      id: ids.preset,
-      revision: presetReads++ === 0 ? 3 : (options.presetRevisionAfterReferences ?? 3),
-      name: "에디토리얼", description: "선명한 정보 카드",
-      visual_tokens_json: { colors: ["red", "white"], fonts: ["sans"], notes: ["high contrast"] },
-      status: "active",
+    if (sql.includes("from brand_style_presets preset")) return { rows: [{
+      id: ids.preset, revision: options.presetRevision ?? 3, name: "에디토리얼",
+      design_style_id: ids.designStyle, avatar_id: ids.avatar,
+      style_revision: 4, analysis_status: options.analysisStatus ?? "ready",
+      analysis_json: options.analysisStatus === "processing" ? null : analysis,
     }], rowCount: 1 };
-    if (sql.includes("from brand_style_preset_references")) {
-      if (options.partialPresetReference && sql.includes("left join reference_items")) return { rows: [
-        { reference_item_id: ids.reference, available: true },
-        { reference_item_id: ids.reference2, available: false },
-      ], rowCount: 2 };
-      return { rows: [{ reference_item_id: ids.reference, available: true }], rowCount: 1 };
-    }
+    if (sql.includes("from brand_design_style_references")) return {
+      rows: [{ reference_item_id: ids.reference }], rowCount: 1,
+    };
     if (sql.includes("from brand_avatars")) return { rows: [{
-      id: ids.avatar,
-      revision: avatarReads++ === 0
-        ? (options.avatarRevision ?? 2)
-        : (options.avatarRevisionAfterImages ?? options.avatarRevision ?? 2),
-      name: "브랜드 모델",
-      description: "차를 설명하는 인물", status: "active",
+      id: ids.avatar, revision: 2, name: "브랜드 모델",
+      description: "차를 설명하는 인물", status: options.avatarStatus ?? "active",
     }], rowCount: 1 };
     if (sql.includes("from brand_avatar_images")) return { rows: [{
       id: ids.avatarImage, position: 1, is_representative: true,
@@ -103,7 +101,7 @@ describe("manual visual selection persistence", () => {
     const database = {
       query: vi.fn(async (sql: string, params: unknown[] = []) => {
         if (/\bfor share\b/i.test(sql)
-          && /(product_services|product_service_assets|brand_style_presets|brand_style_preset_references|brand_avatars|brand_avatar_images|reference_items|storage_artifacts)/i.test(sql)) {
+          && /(product_services|product_service_assets|brand_style_presets|brand_design_styles|brand_design_style_references|brand_avatars|brand_avatar_images|reference_items|storage_artifacts)/i.test(sql)) {
           throw Object.assign(new Error("permission denied for catalog relation"), { code: "42501" });
         }
         if (sql.includes("from product_service_assets asset")) return { rows: [{
@@ -138,10 +136,13 @@ describe("manual visual selection persistence", () => {
     await saveManualVisualSelection(database, scope, selection);
     const frozen = await freezeManualVisualSelection(database, scope);
     expect(frozen).toMatchObject({
-      contractVersion: "manual-visual-selection-frozen.v1",
+      contractVersion: "manual-visual-selection-frozen.v2",
       product: { name: "차 세트", description: "온도별 차 맛을 안내합니다.", images: [{ assetId: ids.productImage, role: "hero", position: 1 }] },
-      stylePreset: { presetId: ids.preset, revision: 3, referenceItemIds: [ids.reference] },
-      avatar: { avatarId: ids.avatar, revision: 2, imageAssetIds: [ids.avatarImage] },
+      preset: {
+        presetId: ids.preset, revision: 3,
+        designStyle: { designStyleId: ids.designStyle, revision: 4, referenceItemIds: [ids.reference] },
+        avatar: { avatarId: ids.avatar, revision: 2, imageAssetIds: [ids.avatarImage] },
+      },
     });
     expect(database.query.mock.calls.some(([sql]) => String(sql).startsWith("update manual_ai_content_visual_selections"))).toBe(true);
   });
@@ -181,28 +182,19 @@ describe("manual visual selection persistence", () => {
     })).resolves.toBeNull();
   });
 
-  it("rejects an avatar revision changed after the user selected it", async () => {
-    const database = client({ avatarRevision: 3 });
-    await expect(saveManualVisualSelection(database, scope, selection)).rejects.toThrow("manual_visual_selection_stale");
+  it("rejects a preset revision changed after the user selected it", async () => {
+    const database = client({ presetRevision: 4 });
+    await expect(saveManualVisualSelection(database, scope, selection)).rejects.toThrow("visual_preset_revision_stale");
   });
 
-  it("rejects a style preset changed while its reference images are being frozen", async () => {
-    const database = client({ presetRevisionAfterReferences: 4 });
-    await expect(saveManualVisualSelection(database, scope, selection)).rejects.toThrow(
-      "manual_visual_selection_stale",
-    );
+  it("rejects a preset while its design style is still being analyzed", async () => {
+    const database = client({ analysisStatus: "processing" });
+    await expect(saveManualVisualSelection(database, scope, selection)).rejects.toThrow("visual_preset_not_usable");
   });
 
-  it("rejects an avatar changed while its images are being frozen", async () => {
-    const database = client({ avatarRevisionAfterImages: 3 });
-    await expect(saveManualVisualSelection(database, scope, selection)).rejects.toThrow(
-      "manual_visual_selection_stale",
-    );
-  });
-
-  it("rejects a preset revision when any linked reference has become unavailable", async () => {
-    const database = client({ partialPresetReference: true });
-    await expect(saveManualVisualSelection(database, scope, selection)).rejects.toThrow("manual_visual_selection_unavailable");
+  it("rejects a preset whose optional avatar is no longer active", async () => {
+    const database = client({ avatarStatus: "archived" });
+    await expect(saveManualVisualSelection(database, scope, selection)).rejects.toThrow("visual_preset_not_usable");
   });
 
   it("materializes only the selected product, preset references, and avatar images for render input", async () => {

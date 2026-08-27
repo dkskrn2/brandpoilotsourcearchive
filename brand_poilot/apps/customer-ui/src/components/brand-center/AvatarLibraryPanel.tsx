@@ -18,6 +18,7 @@ interface Props {
   title?: string;
   gateway?: LibraryGateway;
   draftReferences?: Pick<AiContentGateway, "listDraftReferences">;
+  showDefaultControl?: boolean;
 }
 
 export function AvatarLibraryPanel({
@@ -25,6 +26,7 @@ export function AvatarLibraryPanel({
   title = "모델·아바타",
   gateway = libraryGateway,
   draftReferences = aiContentApiGateway,
+  showDefaultControl = true,
 }: Props) {
   const [items, setItems] = useState<Avatar[]>([]);
   const [loading, setLoading] = useState(true);
@@ -161,11 +163,11 @@ export function AvatarLibraryPanel({
                   </div>
                   {item.description ? <p>{item.description}</p> : null}
                   <div className="avatar-card-badges">
-                    {item.isDefault ? <strong>기본 아바타</strong> : null}
+                    {showDefaultControl && item.isDefault ? <strong>기본 아바타</strong> : null}
                     <span>이미지 {item.images.length}장</span>
                   </div>
                   <div className="avatar-card-actions">
-                    {!item.isDefault ? (
+                    {showDefaultControl && !item.isDefault ? (
                       <button
                         className="button"
                         type="button"

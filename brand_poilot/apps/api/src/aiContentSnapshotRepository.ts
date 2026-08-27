@@ -6,7 +6,7 @@ import type {
   FrozenStyleImageV2,
   GeneratedImageMimeTypeV2,
 } from "./aiContentContracts.js";
-import { parseBrandRulesContentV1 } from "@brand-pilot/content-contracts";
+import { parseBrandRulesContent } from "@brand-pilot/content-contracts";
 import type { AiContentSnapshotBlob } from "./aiContentSnapshotBlob.js";
 import type { BrandScope } from "./brandCoreRepository.js";
 
@@ -204,31 +204,11 @@ export function createAiContentSnapshotRepository(
       if (loaded.rows.length !== 1) brandRulesRequired();
       let rules;
       try {
-        rules = parseBrandRulesContentV1(loaded.rows[0]!.rules_json);
+        rules = parseBrandRulesContent(loaded.rows[0]!.rules_json);
       } catch {
         brandRulesRequired();
       }
-      const referenceIds = rules.designRules.referenceImages.map((image) => image.referenceItemId);
-      if (referenceIds.length === 0) return;
-      const styles = await database.query(
-        `select item.id
-           from unnest($3::uuid[]) with ordinality requested(id,position)
-           join reference_items item
-             on item.id=requested.id and item.workspace_id=$1 and item.brand_id=$2
-            and item.kind='upload' and item.archived_at is null
-           join storage_artifacts artifact
-             on artifact.id=item.storage_artifact_id and artifact.workspace_id=item.workspace_id
-            and artifact.brand_id=item.brand_id and artifact.deleted_at is null
-            and artifact.public_url is not null and artifact.path is not null
-            and artifact.checksum ~ '^[0-9a-f]{64}$'
-            and lower(artifact.mime_type) in ('image/png','image/jpeg','image/webp')
-          order by requested.position`,
-        [scope.workspaceId, scope.brandId, referenceIds],
-      );
-      if (styles.rows.length !== referenceIds.length
-        || styles.rows.some((row, index) => String(row.id) !== referenceIds[index])) {
-        brandStyleRequired();
-      }
+      void rules;
     },
 
     async loadApprovedCore(inputScope) {
@@ -436,61 +416,7 @@ export function createAiContentSnapshotRepository(
     },
 
     async loadApprovedStyleImages(inputScope, databaseOverride) {
-      const scope = validatedScope(inputScope);
-      const loaded = await (databaseOverride ?? database).query(
-        `select item.id as reference_item_id,
-                style.image->>'description' as description,
-                style.image->'tags' as tags,
-                artifact.path as storage_path,
-                artifact.mime_type,
-                artifact.checksum
-           from brand_profiles profile
-           join brand_rule_sets rules
-             on rules.id = profile.active_brand_rule_set_id
-            and rules.workspace_id = profile.workspace_id
-            and rules.brand_id = profile.brand_id
-            and rules.status = 'approved'
-           cross join lateral jsonb_array_elements(
-             coalesce(rules.rules_json #> '{designRules,referenceImages}', '[]'::jsonb)
-           ) with ordinality as style(image, position)
-           join reference_items item
-             on item.id::text = style.image->>'referenceItemId'
-            and item.workspace_id = profile.workspace_id
-            and item.brand_id = profile.brand_id
-            and item.kind = 'upload'
-            and item.archived_at is null
-           join storage_artifacts artifact
-             on artifact.id = item.storage_artifact_id
-            and artifact.workspace_id = item.workspace_id
-            and artifact.brand_id = item.brand_id
-            and artifact.deleted_at is null
-            and artifact.path is not null
-            and lower(artifact.mime_type) in ('image/png', 'image/jpeg', 'image/webp')
-          where profile.workspace_id = $1
-            and profile.brand_id = $2
-          order by style.position`,
-        [scope.workspaceId, scope.brandId],
-      );
-      const images: FrozenStyleImageSnapshotV1[] = [];
-      for (const row of loaded.rows) {
-        const sourceStoragePath = text(row.storage_path);
-        const mimeType = imageMime(row.mime_type);
-        if (!sourceStoragePath || !mimeType) continue;
-        const frozen = await blob.freezeOwnedImage({
-          brandId: scope.brandId,
-          sourceStoragePath,
-          mimeType,
-          expectedChecksum: sha256(row.checksum),
-        });
-        images.push({
-          referenceItemId: uuid(String(row.reference_item_id)),
-          description: text(row.description),
-          tags: texts(row.tags),
-          ...frozen,
-          mimeType,
-        });
-      }
-      return images;
+      void validatedScope(inputScope); void databaseOverride; return [];
     },
   };
 }

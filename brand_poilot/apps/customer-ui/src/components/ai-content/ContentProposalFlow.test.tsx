@@ -115,7 +115,7 @@ function renderFlow(options: {
   onSeedReferenceInvalid?: () => void;
   productResponses?: ProductServiceItem[][];
   productLoader?: (brandId: string) => Promise<ProductServiceItem[]>;
-  stylePresetLoader?: (brandId: string) => Promise<unknown[]>;
+  visualPresetLoader?: (brandId: string) => Promise<unknown[]>;
   strictMode?: boolean;
   abortFirstBatchLoad?: boolean;
   suggestionList?: ContentSuggestionList;
@@ -179,33 +179,23 @@ function renderFlow(options: {
       return responses[Math.min(productRequest++, responses.length - 1)];
     }),
     listWikiItems: vi.fn().mockResolvedValue([]),
-    listAvatars: vi.fn().mockResolvedValue([
-      {
-        id: "avatar-1", workspaceId: "workspace-1", brandId: "brand-demo", name: "브랜드 모델",
-        revision: 1,
-        description: "대표 모델", isDefault: true, status: "active", createdByUserId: "user-1",
-        createdAt: "2026-07-28T00:00:00.000Z", updatedAt: "2026-07-28T00:00:00.000Z",
-        images: [{ id: "image-1", position: 0, representative: true, storagePath: "avatar.jpg", storageUrl: "https://example.com/avatar.jpg", mimeType: "image/jpeg", sizeBytes: 1, checksum: "a" }],
-      },
-    ]),
+    listAvatars: vi.fn().mockResolvedValue([]),
   };
-  const defaultStylePreset = {
+  const defaultVisualPreset = {
     id: "style-preset-1",
     workspaceId: "workspace-1",
     brandId: "brand-demo",
     revision: 1,
     name: "차분한 스타일",
-    description: "정돈된 편집 디자인",
-    visualTokens: { colors: ["#143D2C"], fonts: ["Pretendard"], notes: ["차분한 여백 중심"] },
-    referenceItemIds: ["style-1"],
+    designStyleId: "design-style-1",
+    avatarId: "avatar-1",
     isDefault: true,
-    status: "active",
+    usability: { usable: true, reason: null },
     createdAt: "2026-08-01T00:00:00.000Z",
     updatedAt: "2026-08-01T00:00:00.000Z",
   } as const;
-  const listStylePresets = vi.fn().mockImplementation((requestedBrandId: string) =>
-    options.stylePresetLoader ? options.stylePresetLoader(requestedBrandId) : Promise.resolve([defaultStylePreset]));
-  const listAvatars = vi.fn().mockImplementation(libraries.listAvatars);
+  const listVisualPresets = vi.fn().mockImplementation((requestedBrandId: string) =>
+    options.visualPresetLoader ? options.visualPresetLoader(requestedBrandId) : Promise.resolve([defaultVisualPreset]));
   const listProductImages = vi.fn().mockResolvedValue([]);
   const channelCapabilities = createChannelCapabilityGateway(async () => capabilities);
   const referenceTrendGateway = {
@@ -239,7 +229,7 @@ function renderFlow(options: {
     suggestionGateway={suggestionGateway}
     onSeedReferenceInvalid={options.onSeedReferenceInvalid}
     referenceTrendGateway={referenceTrendGateway}
-    {...({ assetGateway: { listStylePresets, listAvatars, listProductImages } } as object)}
+    {...({ assetGateway: { listVisualPresets, listProductImages } } as object)}
   /></MemoryRouter>;
   const view = (brandId: string) => options.strictMode
     ? <StrictMode>{flow(brandId)}</StrictMode>
@@ -249,7 +239,7 @@ function renderFlow(options: {
     gateway, create, getBatch, listReferences, listReferenceSeeds, libraries,
     selectProposal, uploadAttachment,
     updateManualVisualSelection, updateFinalizationDraft, startGenerationV2,
-    listStylePresets, listAvatars, listProductImages, suggestionGateway,
+    listVisualPresets, listProductImages, suggestionGateway,
     rerenderBrand: (brandId: string) => rendered.rerender(view(brandId)),
   };
 }
@@ -430,7 +420,7 @@ describe("ContentProposalFlow", () => {
 
   it("serializes the selected reference before proposal creation and loads styles only after proposal selection", async () => {
     const user = userEvent.setup();
-    const { create, listReferences, listReferenceSeeds, listStylePresets } = renderFlow();
+    const { create, listReferences, listReferenceSeeds, listVisualPresets } = renderFlow();
 
     expect(screen.getByRole("heading", { name: "어떤 콘텐츠를 만들까요?" })).toBeVisible();
     expect(screen.getAllByRole("listitem").slice(0, 4).map((item) => item.textContent)).toEqual([
@@ -445,7 +435,7 @@ describe("ContentProposalFlow", () => {
     expect(screen.getByRole("button", { name: "3. 채널·형식" })).toBeVisible();
     expect(screen.queryByText(/Wiki/i)).not.toBeInTheDocument();
     expect(listReferences).not.toHaveBeenCalled();
-    expect(listStylePresets).not.toHaveBeenCalled();
+    expect(listVisualPresets).not.toHaveBeenCalled();
 
     await user.click(screen.getByRole("radio", { name: /^정보성/ }));
     await user.click(screen.getByRole("button", { name: "목적 완료" }));
@@ -491,7 +481,7 @@ describe("ContentProposalFlow", () => {
     await user.click(screen.getByRole("button", { name: "구성안 선택: 여름 피부 3단계 관리" }));
 
     expect(await screen.findByRole("heading", { name: "제품 정보와 스타일을 확인하세요" })).toBeVisible();
-    expect(listStylePresets).toHaveBeenCalledTimes(1);
+    expect(listVisualPresets).toHaveBeenCalledTimes(1);
     expect(screen.getByRole("radio", { name: /차분한 스타일/ })).toBeChecked();
     expect(listReferences).not.toHaveBeenCalled();
   });
@@ -726,14 +716,13 @@ describe("ContentProposalFlow", () => {
 
   it("seals the selected proposal before loading current visual selections", async () => {
     const user = userEvent.setup();
-    const { selectProposal, listStylePresets, listAvatars, listProductImages } = renderFlow({ initialBatchId: "batch-1" });
+    const { selectProposal, listVisualPresets, listProductImages } = renderFlow({ initialBatchId: "batch-1" });
 
     await user.click(await screen.findByRole("button", { name: "구성안 선택: 여름 피부 3단계 관리" }));
 
-    await waitFor(() => expect(listStylePresets).toHaveBeenCalledWith("brand-demo"));
+    await waitFor(() => expect(listVisualPresets).toHaveBeenCalledWith("brand-demo"));
     expect(selectProposal).toHaveBeenCalledWith("brand-demo", "proposal-1", expect.any(String));
-    expect(selectProposal.mock.invocationCallOrder[0]).toBeLessThan(listStylePresets.mock.invocationCallOrder[0]!);
-    expect(listAvatars).toHaveBeenCalledWith("brand-demo");
+    expect(selectProposal.mock.invocationCallOrder[0]).toBeLessThan(listVisualPresets.mock.invocationCallOrder[0]!);
     expect(listProductImages).not.toHaveBeenCalled();
     expect(screen.getByRole("radio", { name: /차분한 스타일/ })).toBeChecked();
     expect(screen.queryByText(/샘플 스타일/)).not.toBeInTheDocument();
@@ -782,21 +771,20 @@ describe("ContentProposalFlow", () => {
     expect(screen.getByRole("button", { name: "구성안 선택: 흔한 실수 체크리스트" })).toBeEnabled();
   });
 
-  it("excludes inactive named style presets from manual generation", async () => {
+  it("shows an unusable preset but prevents selecting it for generation", async () => {
     const user = userEvent.setup();
     renderFlow({
       initialBatchId: "batch-1",
-      stylePresetLoader: async (requestedBrandId) => [{
+      visualPresetLoader: async (requestedBrandId) => [{
         id: "archived-style",
         workspaceId: "workspace-1",
         brandId: requestedBrandId,
         revision: 2,
         name: "사용할 수 없는 스타일",
-        description: "보관됨",
-        visualTokens: { colors: [], fonts: [], notes: [] },
-        referenceItemIds: ["style-1"],
+        designStyleId: "design-style-1",
+        avatarId: null,
         isDefault: false,
-        status: "archived",
+        usability: { usable: false, reason: "style_analysis_failed" },
         createdAt: "2026-08-01T00:00:00.000Z",
         updatedAt: "2026-08-01T00:00:00.000Z",
       }],
@@ -804,8 +792,9 @@ describe("ContentProposalFlow", () => {
 
     await user.click(await screen.findByRole("button", { name: "구성안 선택: 여름 피부 3단계 관리" }));
 
-    expect(await screen.findByRole("radio", { name: "스타일 사용 안 함" })).toBeChecked();
-    expect(screen.queryByRole("radio", { name: /사용할 수 없는 스타일/ })).not.toBeInTheDocument();
+    expect(await screen.findByRole("radio", { name: "프리셋 사용 안 함" })).toBeChecked();
+    expect(screen.getByRole("radio", { name: /사용할 수 없는 스타일/ })).toBeDisabled();
+    expect(screen.getByText("스타일 분석 실패")).toBeVisible();
   });
 
   it("updates only the V2 finalization draft and starts one sealed package", async () => {
@@ -823,10 +812,9 @@ describe("ContentProposalFlow", () => {
       "brand-demo",
       expect.any(String),
       {
-        contractVersion: "manual-visual-selection.v1",
+        contractVersion: "manual-visual-selection.v2",
         product: null,
-        stylePreset: { presetId: "style-preset-1", revision: 1 },
-        avatar: { avatarId: "avatar-1", revision: 1 },
+        preset: { presetId: "style-preset-1", revision: 1 },
       },
     ));
 
@@ -847,9 +835,9 @@ describe("ContentProposalFlow", () => {
   it("shows and retries a real manual visual asset load failure", async () => {
     let attempts = 0;
     const user = userEvent.setup();
-    const { listStylePresets } = renderFlow({
+    const { listVisualPresets } = renderFlow({
       initialBatchId: "batch-1",
-      stylePresetLoader: async () => {
+      visualPresetLoader: async () => {
         attempts += 1;
         if (attempts === 1) throw new Error("style_presets_unavailable");
         return [];
@@ -857,11 +845,11 @@ describe("ContentProposalFlow", () => {
     });
 
     await user.click(await screen.findByRole("button", { name: "구성안 선택: 여름 피부 3단계 관리" }));
-    expect(await screen.findByText("브랜드 제품·스타일·아바타를 불러오지 못했습니다. 다시 시도해 주세요.")).toBeVisible();
+    expect(await screen.findByText("브랜드 제품과 프리셋을 불러오지 못했습니다. 다시 시도해 주세요.")).toBeVisible();
     expect(screen.getByRole("button", { name: "콘텐츠 생성 시작" })).toBeDisabled();
     await user.click(screen.getByRole("button", { name: "다시 시도" }));
 
-    await waitFor(() => expect(listStylePresets).toHaveBeenCalledTimes(2));
-    expect(await screen.findByRole("radio", { name: "스타일 사용 안 함" })).toBeChecked();
+    await waitFor(() => expect(listVisualPresets).toHaveBeenCalledTimes(2));
+    expect(await screen.findByRole("radio", { name: "프리셋 사용 안 함" })).toBeChecked();
   });
 });

@@ -57,7 +57,7 @@ const rules = {
     designRules: { colors: [], fonts: [], notes: [], referenceImages: [] },
     autoApprovalRules: { enabled: false, conditions: [] },
   },
-} as BrandRuleSet;
+  } as unknown as BrandRuleSet;
 
 function repository(activeCore: BrandCoreVersion | null, activeRules: BrandRuleSet | null) {
   return {

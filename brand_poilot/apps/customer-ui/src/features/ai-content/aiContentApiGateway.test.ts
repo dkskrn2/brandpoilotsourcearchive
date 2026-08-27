@@ -922,10 +922,9 @@ describe("createAiContentApiGateway", () => {
 
   it("reads and updates the closed manual visual selection sidecar", async () => {
     const selection = {
-      contractVersion: "manual-visual-selection.v1" as const,
+      contractVersion: "manual-visual-selection.v2" as const,
       product: null,
-      stylePreset: { presetId: "preset-1", revision: 3 },
-      avatar: { avatarId: "avatar-1", revision: 2 },
+      preset: { presetId: "preset-1", revision: 3 },
     };
     const requestJson = vi.fn().mockResolvedValue(selection);
     const gateway = createAiContentApiGateway(clientWith(requestJson));

@@ -1,10 +1,6 @@
 import type { Pool, PoolClient } from "pg";
 import { lockProductServiceAssetVersion } from "./productServiceAssetLock.js";
 import type { BrandScope } from "./brandCoreRepository.js";
-import {
-  parseBrandStylePresetInput,
-  type BrandStylePresetInputV1,
-} from "./manualVisualAssetsContracts.js";
 import type { ConfirmedAssetLibraryUpload } from "./assetLibraryUpload.js";
 
 export interface ProductServiceImageAsset extends BrandScope {
@@ -19,29 +15,7 @@ export interface ProductServiceImageAsset extends BrandScope {
   sizeBytes: number;
 }
 
-export interface BrandStylePreset extends BrandScope {
-  id: string;
-  name: string;
-  description: string;
-  visualTokens: BrandStylePresetInputV1["visualTokens"];
-  referenceItemIds: string[];
-  isDefault: boolean;
-  status: "active" | "archived";
-  revision: number;
-  createdAt: string;
-  updatedAt: string;
-}
-
-export interface ManualVisualAssetsRepository {
-  listBrandStylePresets(scope: BrandScope, includeArchived?: boolean): Promise<BrandStylePreset[]>;
-  getBrandStylePreset(scope: BrandScope & { presetId: string }): Promise<BrandStylePreset | null>;
-  createBrandStylePreset(scope: BrandScope & { actorUserId: string }, input: BrandStylePresetInputV1): Promise<BrandStylePreset>;
-  updateBrandStylePreset(
-    scope: BrandScope & { actorUserId: string; presetId: string; expectedRevision: number },
-    input: BrandStylePresetInputV1,
-  ): Promise<BrandStylePreset>;
-  setDefaultBrandStylePreset(scope: BrandScope & { actorUserId: string; presetId: string }): Promise<BrandStylePreset>;
-  archiveBrandStylePreset(scope: BrandScope & { actorUserId: string; presetId: string }): Promise<void>;
+export interface ProductServiceImageAssetsRepository {
   listProductServiceImageAssets(scope: BrandScope & { productServiceId: string; versionId: string }): Promise<ProductServiceImageAsset[]>;
   confirmProductServiceImageAsset(
     scope: BrandScope & {
@@ -58,20 +32,6 @@ export interface ManualVisualAssetsRepository {
   ): Promise<{ deleteBlob: boolean }>;
 }
 
-function parseJson<T>(value: unknown): T {
-  return (typeof value === "string" ? JSON.parse(value) : value) as T;
-}
-function preset(row: Record<string, unknown>): BrandStylePreset {
-  return {
-    id: String(row.id), workspaceId: String(row.workspace_id), brandId: String(row.brand_id),
-    name: String(row.name), description: String(row.description),
-    visualTokens: parseJson(row.visual_tokens_json),
-    referenceItemIds: parseJson<unknown[]>(row.reference_item_ids ?? []).map(String),
-    isDefault: Boolean(row.is_default), status: row.status as BrandStylePreset["status"],
-    revision: Number(row.revision), createdAt: new Date(row.created_at as string).toISOString(),
-    updatedAt: new Date(row.updated_at as string).toISOString(),
-  };
-}
 function productImage(row: Record<string, unknown>): ProductServiceImageAsset {
   return {
     id: String(row.id), workspaceId: String(row.workspace_id), brandId: String(row.brand_id),
@@ -81,14 +41,6 @@ function productImage(row: Record<string, unknown>): ProductServiceImageAsset {
     mimeType: String(row.mime_type), sizeBytes: Number(row.size_bytes),
   };
 }
-
-const selectPreset = `select preset.*,
-  coalesce(jsonb_agg(reference.reference_item_id order by reference.position)
-    filter(where reference.id is not null),'[]'::jsonb) reference_item_ids
-from brand_style_presets preset
-left join brand_style_preset_references reference
-  on reference.preset_id=preset.id and reference.workspace_id=preset.workspace_id
- and reference.brand_id=preset.brand_id`;
 
 async function transaction<T>(pool: Pool, action: (client: PoolClient) => Promise<T>): Promise<T> {
   const client = await pool.connect();
@@ -114,48 +66,13 @@ async function member(
         and exists(select 1 from brands where id=$3 and workspace_id=$1 and deleted_at is null)`,
     [scope.workspaceId, scope.actorUserId, scope.brandId],
   );
-  if (!result.rowCount) throw new Error("brand_style_preset_access_forbidden");
+  if (!result.rowCount) throw new Error("asset_library_access_forbidden");
   if (admin && !["owner", "admin"].includes(String(result.rows[0].role))) {
-    throw new Error("brand_style_preset_admin_required");
+    throw new Error("asset_library_admin_required");
   }
 }
 
-async function validateReferences(
-  client: Pick<PoolClient, "query">,
-  scope: BrandScope,
-  referenceItemIds: string[],
-): Promise<void> {
-  const result = await client.query(
-    `select item.id from reference_items item
-      join storage_artifacts artifact
-        on artifact.id=item.storage_artifact_id and artifact.workspace_id=item.workspace_id
-       and artifact.brand_id=item.brand_id and artifact.deleted_at is null
-       and artifact.public_url is not null and artifact.path is not null
-       and artifact.checksum ~ '^[0-9a-f]{64}$'
-       and lower(artifact.mime_type) in ('image/png','image/jpeg','image/webp')
-      where item.id=any($1::uuid[]) and item.workspace_id=$2 and item.brand_id=$3
-        and item.archived_at is null
-      for share of item,artifact`,
-    [referenceItemIds, scope.workspaceId, scope.brandId],
-  );
-  if (Number(result.rowCount ?? 0) !== referenceItemIds.length) {
-    throw new Error("brand_style_preset_reference_invalid");
-  }
-}
-
-export function createManualVisualAssetsRepository(pool: Pool): ManualVisualAssetsRepository {
-  async function get(
-    scope: BrandScope & { presetId: string },
-    client: Pick<Pool, "query"> = pool,
-  ): Promise<BrandStylePreset | null> {
-    const result = await client.query(
-      `${selectPreset}
-       where preset.id=$1 and preset.workspace_id=$2 and preset.brand_id=$3
-       group by preset.id`,
-      [scope.presetId, scope.workspaceId, scope.brandId],
-    );
-    return result.rowCount ? preset(result.rows[0] as Record<string, unknown>) : null;
-  }
+export function createProductServiceImageAssetsRepository(pool: Pool): ProductServiceImageAssetsRepository {
   async function getProductImage(
     scope: BrandScope & { productServiceId: string; imageId: string },
     client: Pick<Pool, "query"> = pool,
@@ -171,116 +88,6 @@ export function createManualVisualAssetsRepository(pool: Pool): ManualVisualAsse
       : null;
   }
   return {
-    async listBrandStylePresets(scope, includeArchived = false) {
-      const result = await pool.query(
-        `${selectPreset}
-         where preset.workspace_id=$1 and preset.brand_id=$2
-           ${includeArchived ? "" : "and preset.status='active'"}
-         group by preset.id order by preset.is_default desc,preset.updated_at desc`,
-        [scope.workspaceId, scope.brandId],
-      );
-      return result.rows.map((row) => preset(row as Record<string, unknown>));
-    },
-    getBrandStylePreset: get,
-    async createBrandStylePreset(scope, raw) {
-      const input = parseBrandStylePresetInput(raw);
-      return transaction(pool, async (client) => {
-        await member(client, scope);
-        await validateReferences(client, scope, input.referenceItemIds);
-        if (input.isDefault) {
-          await member(client, scope, true);
-          await client.query(
-            "update brand_style_presets set is_default=false where workspace_id=$1 and brand_id=$2 and is_default=true",
-            [scope.workspaceId, scope.brandId],
-          );
-        }
-        const created = await client.query(
-          `insert into brand_style_presets(
-             workspace_id,brand_id,name,description,visual_tokens_json,is_default,created_by_user_id
-           ) values($1,$2,$3,$4,$5::jsonb,$6,$7) returning id`,
-          [scope.workspaceId, scope.brandId, input.name, input.description,
-            JSON.stringify(input.visualTokens), input.isDefault, scope.actorUserId],
-        );
-        const presetId = String(created.rows[0].id);
-        for (const [index, referenceItemId] of input.referenceItemIds.entries()) {
-          await client.query(
-            `insert into brand_style_preset_references(
-               workspace_id,brand_id,preset_id,reference_item_id,position
-             ) values($1,$2,$3,$4,$5)`,
-            [scope.workspaceId, scope.brandId, presetId, referenceItemId, index + 1],
-          );
-        }
-        return (await get({ ...scope, presetId }, client))!;
-      });
-    },
-    async updateBrandStylePreset(scope, raw) {
-      const input = parseBrandStylePresetInput(raw);
-      return transaction(pool, async (client) => {
-        await member(client, scope);
-        await validateReferences(client, scope, input.referenceItemIds);
-        const locked = await client.query(
-          `select id,is_default from brand_style_presets preset
-            where preset.id=$1 and preset.workspace_id=$2 and preset.brand_id=$3
-              and preset.revision=$4 and preset.status='active' for update`,
-          [scope.presetId, scope.workspaceId, scope.brandId, scope.expectedRevision],
-        );
-        if (!locked.rowCount) throw new Error("brand_style_preset_version_conflict");
-        if (Boolean(locked.rows[0].is_default) !== input.isDefault) {
-          await member(client, scope, true);
-        }
-        if (input.isDefault) {
-          await client.query(
-            "update brand_style_presets set is_default=false where workspace_id=$1 and brand_id=$2 and id<>$3 and is_default=true",
-            [scope.workspaceId, scope.brandId, scope.presetId],
-          );
-        }
-        await client.query(
-          `update brand_style_presets set name=$1,description=$2,visual_tokens_json=$3::jsonb,
-             is_default=$4,revision=revision+1,updated_at=now()
-            where id=$5 and workspace_id=$6 and brand_id=$7`,
-          [input.name, input.description, JSON.stringify(input.visualTokens), input.isDefault,
-            scope.presetId, scope.workspaceId, scope.brandId],
-        );
-        await client.query(
-          "delete from brand_style_preset_references where preset_id=$1 and workspace_id=$2 and brand_id=$3",
-          [scope.presetId, scope.workspaceId, scope.brandId],
-        );
-        for (const [index, referenceItemId] of input.referenceItemIds.entries()) {
-          await client.query(
-            `insert into brand_style_preset_references(workspace_id,brand_id,preset_id,reference_item_id,position)
-             values($1,$2,$3,$4,$5)`,
-            [scope.workspaceId, scope.brandId, scope.presetId, referenceItemId, index + 1],
-          );
-        }
-        return (await get(scope, client))!;
-      });
-    },
-    async setDefaultBrandStylePreset(scope) {
-      return transaction(pool, async (client) => {
-        await member(client, scope, true);
-        const locked = await client.query(
-          "select id from brand_style_presets where id=$1 and workspace_id=$2 and brand_id=$3 and status='active' for update",
-          [scope.presetId, scope.workspaceId, scope.brandId],
-        );
-        if (!locked.rowCount) throw new Error("brand_style_preset_not_found");
-        await client.query(
-          "update brand_style_presets set is_default=(id=$3),revision=revision+case when is_default<>(id=$3) then 1 else 0 end where workspace_id=$1 and brand_id=$2 and status='active'",
-          [scope.workspaceId, scope.brandId, scope.presetId],
-        );
-        return (await get(scope, client))!;
-      });
-    },
-    async archiveBrandStylePreset(scope) {
-      await transaction(pool, async (client) => {
-        await member(client, scope, true);
-        const updated = await client.query(
-          `update brand_style_presets set status='archived',is_default=false,revision=revision+1,updated_at=now()
-            where id=$1 and workspace_id=$2 and brand_id=$3 and status='active'`,
-          [scope.presetId, scope.workspaceId, scope.brandId],
-        );
-        if (!updated.rowCount) throw new Error("brand_style_preset_not_found");
-      });
-    },
     async listProductServiceImageAssets(scope) {
       const result = await pool.query(
         `select asset.* from product_service_assets asset

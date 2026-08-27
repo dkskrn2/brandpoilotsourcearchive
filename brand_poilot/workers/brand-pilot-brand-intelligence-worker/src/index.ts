@@ -6,6 +6,7 @@ import {
   runBrandIntelligenceOnce,
   runBrandIntelligenceWatchIteration,
 } from "./worker.js";
+import { createCodexStyleAnalysisRunner } from "./styleAnalysisWorker.js";
 
 const required = (name: string) => {
   const value = process.env[name]?.trim();
@@ -24,8 +25,11 @@ async function main() {
   const runner = createCodexRunner({
     timeoutMs: codexProcessTimeoutMs(process.env.BRAND_INTELLIGENCE_CODEX_TIMEOUT_MS),
   });
+  const styleRunner = createCodexStyleAnalysisRunner({
+    timeoutMs: codexProcessTimeoutMs(process.env.BRAND_INTELLIGENCE_CODEX_TIMEOUT_MS),
+  });
   do {
-    const runOnce = () => runBrandIntelligenceOnce({ client, runner, workerId, leaseSeconds, pollMs });
+    const runOnce = () => runBrandIntelligenceOnce({ client, runner, styleRunner, workerId, leaseSeconds, pollMs });
     const result = mode === "once"
       ? await runOnce()
       : await runBrandIntelligenceWatchIteration({

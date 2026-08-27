@@ -83,22 +83,12 @@ export interface BrandCoreVersion {
 }
 
 export interface BrandRules {
-  contractVersion: "brand-rules.v1";
+  contractVersion: "brand-rules.v2";
   requiredPhrases: string[];
   forbiddenPhrases: string[];
   exaggerationRules: string[];
   ctaRules: { defaultCta: string; allowed: string[] };
   channelRules: Record<string, string[]>;
-  designRules: {
-    colors: string[];
-    fonts: string[];
-    notes: string[];
-    referenceImages: Array<{
-      referenceItemId: string;
-      description: string;
-      tags: string[];
-    }>;
-  };
   autoApprovalRules: { enabled: boolean; conditions: string[] };
 }
 

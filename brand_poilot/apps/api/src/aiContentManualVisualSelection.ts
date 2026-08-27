@@ -1,12 +1,19 @@
-import { createHash } from "node:crypto";
 import {
   type ApprovedProductSnapshotV2,
 } from "@brand-pilot/content-contracts";
 import {
+  parseFrozenManualVisualSelection,
   parseFrozenManualVisualSelectionV1,
+  parseFrozenManualVisualSelectionV2,
+  parseManualVisualSelection,
   parseManualVisualSelectionV1,
+  parseManualVisualSelectionV2,
+  type FrozenManualVisualSelection,
   type FrozenManualVisualSelectionV1,
+  type FrozenManualVisualSelectionV2,
+  type ManualVisualSelection,
   type ManualVisualSelectionV1,
+  type ManualVisualSelectionV2,
 } from "@brand-pilot/content-contracts/manual-visual-selection";
 import {
   parseProductVisualSourceSnapshotV1,
@@ -14,7 +21,7 @@ import {
 } from "@brand-pilot/content-contracts/product-visual-references";
 import type { FrozenStyleImageV2 } from "./aiContentContracts.js";
 import { parseProductServiceProfile } from "./productLibraryContracts.js";
-import { canonicalProposalJson, proposalSha256 } from "./aiContentProposalV2Service.js";
+import { proposalSha256 } from "./aiContentProposalV2Service.js";
 
 interface Queryable {
   query(sql: string, params?: unknown[]): Promise<{ rows: any[]; rowCount?: number | null }>;
@@ -27,7 +34,7 @@ export interface ManualVisualSelectionScope {
 }
 
 export interface PreparedManualVisualSelection {
-  frozen: FrozenManualVisualSelectionV1;
+  frozen: FrozenManualVisualSelection;
   selectionSha256: string;
   alreadyFrozen: boolean;
 }
@@ -56,9 +63,9 @@ function safeProductSourceUrls(sourceUrls: readonly string[]): string[] {
 export async function loadFrozenProductVisualSourceSnapshot(
   client: Queryable,
   scope: ManualVisualSelectionScope,
-  raw: FrozenManualVisualSelectionV1,
+  raw: FrozenManualVisualSelection,
 ): Promise<ProductVisualSourceSnapshotV1 | null> {
-  const selection = parseFrozenManualVisualSelectionV1(raw);
+  const selection = parseFrozenManualVisualSelection(raw);
   if (!selection.product) return null;
   const selected = await client.query(
     `select item.kind,version.profile_json
@@ -91,14 +98,13 @@ function json<T>(value: unknown): T {
 }
 
 function unavailable(): never { throw new Error("manual_visual_selection_unavailable"); }
-function stale(): never { throw new Error("manual_visual_selection_stale"); }
 
 function exactIds(rows: any[], key: string, expected: readonly string[]): void {
   if (rows.length !== expected.length
     || rows.some((row, index) => String(row[key]) !== expected[index])) unavailable();
 }
 
-export async function materializeFrozenManualVisualAssets(
+async function materializeFrozenManualVisualAssetsV1(
   client: Queryable,
   scope: ManualVisualSelectionScope,
   raw: FrozenManualVisualSelectionV1,
@@ -204,7 +210,76 @@ export async function materializeFrozenManualVisualAssets(
   return { product, brandStyleImages, avatarStyleImageId };
 }
 
-async function resolveFrozen(
+async function materializeFrozenManualVisualAssetsV2(
+  client: Queryable,
+  scope: ManualVisualSelectionScope,
+  raw: FrozenManualVisualSelectionV2,
+): Promise<MaterializedManualVisualAssets> {
+  const selection = parseFrozenManualVisualSelectionV2(raw);
+  const productOnly = await materializeFrozenManualVisualAssetsV1(client, scope, {
+    contractVersion: "manual-visual-selection-frozen.v1",
+    product: selection.product,
+    stylePreset: null,
+    avatar: null,
+  });
+  const brandStyleImages: FrozenStyleImageV2[] = [];
+  if (selection.preset) {
+    const referenceIds = selection.preset.designStyle.referenceItemIds;
+    const references = await client.query(
+      `select requested.id reference_item_id,item.title,artifact.public_url storage_url,
+              artifact.path storage_path,lower(artifact.mime_type) mime_type,artifact.checksum
+         from unnest($1::uuid[]) with ordinality requested(id,position)
+         join reference_items item on item.id=requested.id and item.workspace_id=$2 and item.brand_id=$3
+          and item.archived_at is null and item.storage_artifact_id is not null
+         join storage_artifacts artifact on artifact.id=item.storage_artifact_id
+          and artifact.workspace_id=item.workspace_id and artifact.brand_id=item.brand_id
+          and artifact.deleted_at is null and artifact.public_url is not null and artifact.path is not null
+          and artifact.checksum ~ '^[0-9a-f]{64}$'
+          and lower(artifact.mime_type) in ('image/png','image/jpeg','image/webp')
+        order by requested.position`,
+      [referenceIds, scope.workspaceId, scope.brandId],
+    );
+    exactIds(references.rows, "reference_item_id", referenceIds);
+    brandStyleImages.push(...references.rows.map((reference) => ({
+      referenceItemId: String(reference.reference_item_id),
+      description: [String(reference.title ?? "").trim(), selection.preset!.name].filter(Boolean).join(" — "),
+      tags: ["design-style"], storageUrl: String(reference.storage_url), storagePath: String(reference.storage_path),
+      mimeType: String(reference.mime_type) as "image/png" | "image/jpeg" | "image/webp",
+      checksum: String(reference.checksum),
+    })));
+    if (selection.preset.avatar) {
+      const avatar = selection.preset.avatar;
+      const images = await client.query(
+        `select id,position,is_representative,storage_url,storage_path,lower(mime_type) mime_type,checksum
+           from brand_avatar_images where id=any($1::uuid[]) and avatar_id=$2
+            and workspace_id=$3 and brand_id=$4 order by position`,
+        [avatar.imageAssetIds, avatar.avatarId, scope.workspaceId, scope.brandId],
+      );
+      exactIds(images.rows, "id", avatar.imageAssetIds);
+      brandStyleImages.push(...images.rows.map((image) => ({
+        referenceItemId: String(image.id), description: [avatar.name, avatar.description].filter(Boolean).join(" — "),
+        tags: ["avatar"], storageUrl: String(image.storage_url), storagePath: String(image.storage_path),
+        mimeType: String(image.mime_type) as "image/png" | "image/jpeg" | "image/webp", checksum: String(image.checksum),
+      })));
+      const representative = images.rows.filter((image) => image.is_representative === true);
+      if (representative.length !== 1) unavailable();
+      return { product: productOnly.product, brandStyleImages, avatarStyleImageId: String(representative[0].id) };
+    }
+  }
+  return { product: productOnly.product, brandStyleImages, avatarStyleImageId: null };
+}
+
+export async function materializeFrozenManualVisualAssets(
+  client: Queryable,
+  scope: ManualVisualSelectionScope,
+  raw: FrozenManualVisualSelection,
+): Promise<MaterializedManualVisualAssets> {
+  return raw.contractVersion === "manual-visual-selection-frozen.v1"
+    ? materializeFrozenManualVisualAssetsV1(client, scope, raw)
+    : materializeFrozenManualVisualAssetsV2(client, scope, raw);
+}
+
+async function resolveFrozenV1(
   client: Queryable,
   scope: ManualVisualSelectionScope,
   raw: ManualVisualSelectionV1,
@@ -261,106 +336,100 @@ async function resolveFrozen(
     };
   }
 
-  let stylePreset: FrozenManualVisualSelectionV1["stylePreset"] = null;
-  if (selection.stylePreset) {
-    const selected = await client.query(
-      `select id,revision,name,description,visual_tokens_json,status
-         from brand_style_presets
-        where id=$1 and workspace_id=$2 and brand_id=$3`,
-      [selection.stylePreset.presetId, scope.workspaceId, scope.brandId],
-    );
-    const row = selected.rows[0];
-    if (!row || row.status !== "active") unavailable();
-    if (Number(row.revision) !== selection.stylePreset.revision) stale();
-    const references = await client.query(
-      `select link.reference_item_id,(item.id is not null) available
-         from brand_style_preset_references link
-         left join reference_items item
-           on item.id=link.reference_item_id and item.workspace_id=link.workspace_id
-          and item.brand_id=link.brand_id and item.archived_at is null
-        where link.preset_id=$1 and link.workspace_id=$2 and link.brand_id=$3
-        order by link.position`,
-      [selection.stylePreset.presetId, scope.workspaceId, scope.brandId],
-    );
-    if (references.rows.some((reference) => reference.available !== true)) unavailable();
-    const confirmed = await client.query(
-      `select revision,status from brand_style_presets
-        where id=$1 and workspace_id=$2 and brand_id=$3`,
-      [selection.stylePreset.presetId, scope.workspaceId, scope.brandId],
-    );
-    const confirmedRow = confirmed.rows[0];
-    if (!confirmedRow || confirmedRow.status !== "active") unavailable();
-    if (Number(confirmedRow.revision) !== selection.stylePreset.revision) stale();
-    stylePreset = {
-      presetId: selection.stylePreset.presetId,
-      revision: selection.stylePreset.revision,
-      name: String(row.name),
-      description: String(row.description ?? ""),
-      visualTokens: json(row.visual_tokens_json),
-      referenceItemIds: references.rows.map((reference) => String(reference.reference_item_id)),
-    };
-  }
-
-  let avatar: FrozenManualVisualSelectionV1["avatar"] = null;
-  if (selection.avatar) {
-    const selected = await client.query(
-      `select id,revision,name,description,status from brand_avatars
-        where id=$1 and workspace_id=$2 and brand_id=$3`,
-      [selection.avatar.avatarId, scope.workspaceId, scope.brandId],
-    );
-    const row = selected.rows[0];
-    if (!row || row.status !== "active") unavailable();
-    if (Number(row.revision) !== selection.avatar.revision) stale();
-    const images = await client.query(
-      `select id,position,is_representative,checksum,mime_type,storage_path
-         from brand_avatar_images
-        where avatar_id=$1 and workspace_id=$2 and brand_id=$3
-        order by position`,
-      [selection.avatar.avatarId, scope.workspaceId, scope.brandId],
-    );
-    const confirmed = await client.query(
-      `select revision,status from brand_avatars
-        where id=$1 and workspace_id=$2 and brand_id=$3`,
-      [selection.avatar.avatarId, scope.workspaceId, scope.brandId],
-    );
-    const confirmedRow = confirmed.rows[0];
-    if (!confirmedRow || confirmedRow.status !== "active") unavailable();
-    if (Number(confirmedRow.revision) !== selection.avatar.revision) stale();
-    const avatarObject = {
-      avatarId: selection.avatar.avatarId,
-      revision: selection.avatar.revision,
-      name: String(row.name),
-      description: String(row.description ?? ""),
-      images: images.rows.map((image) => ({
-        id: String(image.id), position: Number(image.position), representative: Boolean(image.is_representative),
-        checksum: String(image.checksum), mimeType: String(image.mime_type), storagePath: String(image.storage_path),
-      })),
-    };
-    avatar = {
-      avatarId: selection.avatar.avatarId,
-      revision: selection.avatar.revision,
-      name: avatarObject.name,
-      description: avatarObject.description,
-      imageAssetIds: avatarObject.images.map(({ id }) => id),
-      objectSha256: createHash("sha256").update(canonicalProposalJson(avatarObject)).digest("hex"),
-    };
-  }
   try {
     return parseFrozenManualVisualSelectionV1({
       contractVersion: "manual-visual-selection-frozen.v1",
       product,
-      stylePreset,
-      avatar,
+      stylePreset: null,
+      avatar: null,
     });
   } catch { return unavailable(); }
+}
+
+async function resolveFrozenV2(
+  client: Queryable,
+  scope: ManualVisualSelectionScope,
+  raw: ManualVisualSelectionV2,
+): Promise<FrozenManualVisualSelectionV2> {
+  const selection = parseManualVisualSelectionV2(raw);
+  const productOnly = await resolveFrozenV1(client, scope, {
+    contractVersion: "manual-visual-selection.v1",
+    product: selection.product,
+    stylePreset: null,
+    avatar: null,
+  });
+  let preset: FrozenManualVisualSelectionV2["preset"] = null;
+  if (selection.preset) {
+    const selected = await client.query(
+      `select preset.id,preset.revision,preset.name,preset.design_style_id,preset.avatar_id,
+              style.revision style_revision,style.analysis_status,style.analysis_json
+         from brand_style_presets preset
+         join brand_design_styles style on style.id=preset.design_style_id
+          and style.workspace_id=preset.workspace_id and style.brand_id=preset.brand_id
+        where preset.id=$1 and preset.workspace_id=$2 and preset.brand_id=$3 and preset.status='active'
+        for update of preset,style`,
+      [selection.preset.presetId, scope.workspaceId, scope.brandId],
+    );
+    const row = selected.rows[0];
+    if (!row) throw new Error("visual_preset_not_usable");
+    if (Number(row.revision) !== selection.preset.revision) throw new Error("visual_preset_revision_stale");
+    if (row.analysis_status !== "ready" || !row.analysis_json) throw new Error("visual_preset_not_usable");
+    const references = await client.query(
+      `select reference_item_id from brand_design_style_references
+        where design_style_id=$1 and workspace_id=$2 and brand_id=$3 order by position`,
+      [row.design_style_id, scope.workspaceId, scope.brandId],
+    );
+    if (references.rows.length < 1) throw new Error("visual_preset_not_usable");
+    let avatar: NonNullable<FrozenManualVisualSelectionV2["preset"]>["avatar"] = null;
+    if (row.avatar_id) {
+      const selectedAvatar = await client.query(
+        `select id,revision,name,description,status from brand_avatars
+          where id=$1 and workspace_id=$2 and brand_id=$3 for update`,
+        [row.avatar_id, scope.workspaceId, scope.brandId],
+      );
+      const avatarRow = selectedAvatar.rows[0];
+      if (!avatarRow || avatarRow.status !== "active") throw new Error("visual_preset_not_usable");
+      const images = await client.query(
+        `select id from brand_avatar_images where avatar_id=$1 and workspace_id=$2 and brand_id=$3 order by position`,
+        [row.avatar_id, scope.workspaceId, scope.brandId],
+      );
+      if (images.rows.length < 1) throw new Error("visual_preset_not_usable");
+      avatar = {
+        avatarId: String(avatarRow.id), revision: Number(avatarRow.revision), name: String(avatarRow.name),
+        description: String(avatarRow.description ?? ""), imageAssetIds: images.rows.map((image) => String(image.id)),
+      };
+    }
+    preset = {
+      presetId: selection.preset.presetId, revision: selection.preset.revision, name: String(row.name),
+      designStyle: {
+        designStyleId: String(row.design_style_id), revision: Number(row.style_revision),
+        analysis: json(row.analysis_json), referenceItemIds: references.rows.map((reference) => String(reference.reference_item_id)),
+      },
+      avatar,
+    };
+  }
+  try {
+    return parseFrozenManualVisualSelectionV2({
+      contractVersion: "manual-visual-selection-frozen.v2", product: productOnly.product, preset,
+    });
+  } catch { return unavailable(); }
+}
+
+async function resolveFrozen(
+  client: Queryable,
+  scope: ManualVisualSelectionScope,
+  selection: ManualVisualSelection,
+): Promise<FrozenManualVisualSelection> {
+  if (selection.contractVersion === "manual-visual-selection.v1") unavailable();
+  return resolveFrozenV2(client, scope, selection);
 }
 
 export async function saveManualVisualSelection(
   client: Queryable,
   scope: ManualVisualSelectionScope,
-  raw: ManualVisualSelectionV1,
-): Promise<ManualVisualSelectionV1> {
-  const selection = parseManualVisualSelectionV1(raw);
+  raw: ManualVisualSelectionV2,
+): Promise<ManualVisualSelectionV2> {
+  const selection = parseManualVisualSelectionV2(raw);
   await resolveFrozen(client, scope, selection);
   const selectionSha256 = proposalSha256(selection);
   const saved = await client.query(
@@ -382,12 +451,12 @@ export async function saveManualVisualSelection(
      returning selection_json,selection_sha256,frozen_json,frozen_sha256`,
     [scope.generationId, scope.workspaceId, scope.brandId, selection.contractVersion,
       selection.product?.productServiceId ?? null, selection.product?.versionId ?? null,
-      selection.stylePreset?.presetId ?? null, selection.stylePreset?.revision ?? null,
-      selection.avatar?.avatarId ?? null, selection.avatar?.revision ?? null,
+      selection.preset?.presetId ?? null, selection.preset?.revision ?? null,
+      null, null,
       JSON.stringify(selection), selectionSha256],
   );
   if (Number(saved.rowCount ?? 0) !== 1) throw new Error("manual_visual_selection_locked");
-  return parseManualVisualSelectionV1(json(saved.rows[0].selection_json));
+  return parseManualVisualSelectionV2(json(saved.rows[0].selection_json));
 }
 
 export async function prepareManualVisualSelection(
@@ -402,10 +471,10 @@ export async function prepareManualVisualSelection(
   );
   const row = locked.rows[0];
   if (!row) throw new Error("manual_visual_selection_missing");
-  const selection = parseManualVisualSelectionV1(json(row.selection_json));
+  const selection = parseManualVisualSelection(json(row.selection_json));
   if (proposalSha256(selection) !== String(row.selection_sha256)) unavailable();
   if (row.frozen_json !== null && row.frozen_json !== undefined) {
-    const frozen = parseFrozenManualVisualSelectionV1(json(row.frozen_json));
+    const frozen = parseFrozenManualVisualSelection(json(row.frozen_json));
     if (proposalSha256(frozen) !== String(row.frozen_sha256)) unavailable();
     return { frozen, selectionSha256: String(row.selection_sha256), alreadyFrozen: true };
   }
@@ -417,7 +486,7 @@ export async function sealManualVisualSelection(
   client: Queryable,
   scope: ManualVisualSelectionScope,
   prepared: PreparedManualVisualSelection,
-): Promise<FrozenManualVisualSelectionV1> {
+): Promise<FrozenManualVisualSelection> {
   if (prepared.alreadyFrozen) return prepared.frozen;
   const frozen = prepared.frozen;
   const frozenSha256 = proposalSha256(frozen);
@@ -437,6 +506,6 @@ export async function sealManualVisualSelection(
 export async function freezeManualVisualSelection(
   client: Queryable,
   scope: ManualVisualSelectionScope,
-): Promise<FrozenManualVisualSelectionV1> {
+): Promise<FrozenManualVisualSelection> {
   return sealManualVisualSelection(client, scope, await prepareManualVisualSelection(client, scope));
 }

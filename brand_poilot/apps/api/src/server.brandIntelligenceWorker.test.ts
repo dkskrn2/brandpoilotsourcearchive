@@ -23,7 +23,18 @@ const claim = {
 } as BrandAnalysisClaim;
 
 function setup() {
-  const repository = { health: vi.fn(async () => ({ database: "ok" as const })) } as unknown as ApiRepository;
+  const repository = {
+    health: vi.fn(async () => ({ database: "ok" as const })),
+    claimDesignStyleAnalysis: vi.fn(async () => ({
+      jobId: "55555555-5555-4555-8555-555555555555", workspaceId: "workspace-1", brandId: "brand-1",
+      designStyleId: "66666666-6666-4666-8666-666666666666", styleRevision: 1,
+      leaseToken: "77777777-7777-4777-8777-777777777777", leaseExpiresAt: "2099-01-01T00:00:00.000Z",
+      images: [{ referenceItemId: "88888888-8888-4888-8888-888888888888", storageUrl: "https://blob.example/style.png", storagePath: "style.png", mimeType: "image/png", sizeBytes: 4, checksum: "a".repeat(64) }],
+    })),
+    heartbeatDesignStyleAnalysis: vi.fn(async () => true),
+    completeDesignStyleAnalysis: vi.fn(async () => true),
+    failDesignStyleAnalysis: vi.fn(async () => true),
+  } as unknown as ApiRepository;
   const intelligence = {
     getBrandCompanyName: vi.fn(async () => ({ name: "__provisional__:user", state: "provisional" as const })),
     getOpenBrandAnalysis: vi.fn(async () => claim),
@@ -67,7 +78,7 @@ function setup() {
       kakaoAuth: kakaoAuth as never,
       logger: false,
     }),
-    intelligence,
+    intelligence, repository,
   };
 }
 
@@ -170,6 +181,45 @@ describe("brand intelligence worker routes", () => {
     expect(status.json()).not.toHaveProperty("idempotencyKey");
     expect(status.json().errorMessage).toContain("중요 페이지");
     expect(JSON.stringify(status.json())).not.toContain("internal worker detail");
+    await app.close();
+  });
+
+  it("claims and completes design style analysis through the worker-only control plane", async () => {
+    const { app, repository } = setup();
+    const unauthorized = await app.inject({
+      method: "POST", url: "/worker/design-style-analyses/claim",
+      payload: { workerId: "worker-1", leaseSeconds: 120 },
+    });
+    expect(unauthorized.statusCode).toBe(401);
+
+    const claimed = await app.inject({
+      method: "POST", url: "/worker/design-style-analyses/claim", headers,
+      payload: { workerId: "worker-1", leaseSeconds: 120 },
+    });
+    expect(claimed.statusCode).toBe(200);
+    expect(claimed.json()).toMatchObject({ job: { styleRevision: 1, images: [{ mimeType: "image/png" }] } });
+
+    const analysis = {
+      contractVersion: "design-style-analysis.v1",
+      layout: { composition: [], hierarchy: [], spacing: [], alignment: [], recurringModules: [] },
+      typography: { families: [], weightHierarchy: [], scale: [], placement: [] },
+      color: { palette: [], contrast: [], background: [], accentUsage: [] },
+      graphics: { media: [], shapes: [], icons: [], texture: [] },
+      visualCues: { comparison: [], humor: [], practicality: [], empathy: [] },
+      promptGuidance: { use: [], avoid: [] },
+    };
+    const completed = await app.inject({
+      method: "POST", url: "/worker/design-style-analyses/55555555-5555-4555-8555-555555555555/complete", headers,
+      payload: {
+        workerId: "worker-1", leaseToken: "77777777-7777-4777-8777-777777777777",
+        designStyleId: "66666666-6666-4666-8666-666666666666", styleRevision: 1,
+        analysis, analysisSha256: "b".repeat(64),
+      },
+    });
+    expect(completed.statusCode).toBe(200);
+    expect(repository.completeDesignStyleAnalysis).toHaveBeenCalledWith(expect.objectContaining({
+      styleRevision: 1, analysis, analysisSha256: "b".repeat(64),
+    }));
     await app.close();
   });
 

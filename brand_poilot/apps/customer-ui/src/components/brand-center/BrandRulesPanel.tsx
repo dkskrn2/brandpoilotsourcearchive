@@ -7,9 +7,6 @@ type RawRuleFields = {
   exaggerationRules: string;
   allowedCtas: string;
   channelRules: string;
-  colors: string;
-  fonts: string;
-  notes: string;
   autoApprovalConditions: string;
 };
 
@@ -26,9 +23,6 @@ function rawFields(rules: BrandRules): RawRuleFields {
     exaggerationRules: join(rules.exaggerationRules),
     allowedCtas: join(rules.ctaRules.allowed),
     channelRules: JSON.stringify(rules.channelRules, null, 2),
-    colors: join(rules.designRules.colors),
-    fonts: join(rules.designRules.fonts),
-    notes: join(rules.designRules.notes),
     autoApprovalConditions: join(rules.autoApprovalRules.conditions),
   };
 }
@@ -101,12 +95,6 @@ export function BrandRulesPanel({
       exaggerationRules: split(raw.exaggerationRules),
       ctaRules: { ...rules.ctaRules, allowed: split(raw.allowedCtas) },
       channelRules,
-      designRules: {
-        ...rules.designRules,
-        colors: split(raw.colors),
-        fonts: split(raw.fonts),
-        notes: split(raw.notes),
-      },
       autoApprovalRules: {
         ...rules.autoApprovalRules,
         conditions: split(raw.autoApprovalConditions),
@@ -142,9 +130,6 @@ export function BrandRulesPanel({
         <label>허용 CTA<textarea disabled={!editing} value={raw.allowedCtas} onChange={(event) => changeRaw("allowedCtas", event.target.value)} onBlur={commitRaw} /></label>
         <label>채널별 규칙<textarea aria-label="채널별 규칙" aria-invalid={Boolean(channelError)} disabled={!editing} value={raw.channelRules} onChange={(event) => changeRaw("channelRules", event.target.value)} onBlur={commitRaw} /></label>
         {channelError ? <p className="form-hint" role="alert">{channelError}</p> : null}
-        <label>디자인 색상<textarea disabled={!editing} value={raw.colors} onChange={(event) => changeRaw("colors", event.target.value)} onBlur={commitRaw} /></label>
-        <label>디자인 폰트<textarea disabled={!editing} value={raw.fonts} onChange={(event) => changeRaw("fonts", event.target.value)} onBlur={commitRaw} /></label>
-        <label>디자인 메모<textarea disabled={!editing} value={raw.notes} onChange={(event) => changeRaw("notes", event.target.value)} onBlur={commitRaw} /></label>
         <label className="toggle-row">
           <input type="checkbox" disabled={!editing} checked={rules.autoApprovalRules.enabled} onChange={(event) => onChange({ ...rules, autoApprovalRules: { ...rules.autoApprovalRules, enabled: event.target.checked } })} />
           <span>조건 충족 시 검토 승인 제안</span>

@@ -47,7 +47,7 @@ import {
   parseProposalBaseInputSnapshotV2 as parseCanonicalProposalBaseInputSnapshotV2,
   parseContentOrchestrationV2 as parseCanonicalContentOrchestrationV2,
   parseContentGenerationInputV3 as parseCanonicalContentGenerationInputV3,
-  parseBrandRulesContentV1,
+  parseBrandRulesContentV2,
   assertPlannerPromptBinding,
   parseContentPromptBinding,
   type ContentOrchestrationV2 as CanonicalContentOrchestrationV2,
@@ -56,10 +56,11 @@ import {
   type VerifiedGeneratedContentCatalog,
 } from "@brand-pilot/content-contracts";
 import {
-  type FrozenManualVisualSelectionV1,
-  type ManualVisualSelectionV1,
-  parseFrozenManualVisualSelectionV1,
-  parseManualVisualSelectionV1,
+  type FrozenManualVisualSelection,
+  type ManualVisualSelection,
+  type ManualVisualSelectionV2,
+  parseFrozenManualVisualSelection,
+  parseManualVisualSelection,
 } from "@brand-pilot/content-contracts/manual-visual-selection";
 import {
   parseProductVisualSourceSnapshotV1,
@@ -364,10 +365,10 @@ export interface AiContentRepository extends AiContentAttachmentLifecycleReposit
   updateAiContentFinalizationDraft(input: BrandGenerationScope & AuthenticatedBrandScope & {
     draft: ContentFinalizationDraftV2;
   }): Promise<AiContentGenerationRecord>;
-  getAiContentManualVisualSelection(input: BrandGenerationScope): Promise<ManualVisualSelectionV1 | null>;
+  getAiContentManualVisualSelection(input: BrandGenerationScope): Promise<ManualVisualSelection | null>;
   updateAiContentManualVisualSelection(
-    input: BrandGenerationScope & AuthenticatedBrandScope & { selection: ManualVisualSelectionV1 },
-  ): Promise<ManualVisualSelectionV1>;
+    input: BrandGenerationScope & AuthenticatedBrandScope & { selection: ManualVisualSelectionV2 },
+  ): Promise<ManualVisualSelectionV2>;
   startAiContentGenerationV3(
     input: BrandGenerationScope & AuthenticatedBrandScope & ContentGenerationStartV2 & {
       usageDate: string;
@@ -724,7 +725,7 @@ function rebindStoredPlanToGeneration(
   return parseContentPlanResultV2(rebound, finalInput, supplementalResearch);
 }
 
-const EXPECTED_PROPOSAL_CATALOG_SHA256 = "6d983b25c51debb7588650165494f6cceffd1b2a921301e8cb79afb38543c9a9";
+const EXPECTED_PROPOSAL_CATALOG_SHA256 = "065400eafd2521fb096f36b8709da842b91823876c7fca11ba276a8283b7265f";
 const PROPOSAL_MODEL_ID = "gpt-5.6-terra";
 
 function loadProposalCatalog(): VerifiedGeneratedContentCatalog {
@@ -736,11 +737,11 @@ function loadProposalCatalog(): VerifiedGeneratedContentCatalog {
   }
   const catalog = JSON.parse(bytes.toString("utf8")) as VerifiedGeneratedContentCatalog;
   if (
-    catalog.contractSourceHash !== "e607bbb891af3723dc4620a0319382e83ee29006ed547aae620086b9809f248d"
+    catalog.contractSourceHash !== "e3ed513595242c4f79c1e5f50856d7df9ec16f722bb009c14c0fdc927710e727"
     || catalog.proposalContracts.requestVersion !== "content-proposal-request.v2"
     || catalog.proposalContracts.baseInputVersion !== "proposal-base-input.v2"
     || catalog.proposalContracts.outputVersion !== "content-proposal.v2"
-    || catalog.proposalContracts.promptVersion !== "proposal.writer.v4"
+    || catalog.proposalContracts.promptVersion !== "proposal.writer.v5"
     || catalog.proposalContracts.outputSchemaSha256 !== "54bf063cf32926874af6b098272df08d41a9e7d7f578ee6560debe44428cf5f3"
     || catalog.researchEvidence.version !== "research-evidence.v1"
   ) {
@@ -2116,7 +2117,7 @@ async function loadAiContentFixedInputSource(input: {
   }
 
   let rules: Record<string, unknown>;
-  let canonicalRules: ReturnType<typeof parseBrandRulesContentV1>;
+  let canonicalRules: ReturnType<typeof parseBrandRulesContentV2>;
   let styleImages: Awaited<ReturnType<AiContentSnapshotRepository["loadApprovedStyleImages"]>>;
   if (brandContextAuthority !== null) {
     if (finalization.avatarStyleImageId !== null) {
@@ -2128,7 +2129,7 @@ async function loadAiContentFixedInputSource(input: {
       status: "provisional",
       rules_json: brandContextAuthority.brandRules.content,
     };
-    canonicalRules = parseBrandRulesContentV1(brandContextAuthority.brandRules.content);
+    canonicalRules = parseBrandRulesContentV2(brandContextAuthority.brandRules.content);
     styleImages = [];
   } else {
     const rulesResult = await client.query(
@@ -2144,44 +2145,11 @@ async function loadAiContentFixedInputSource(input: {
     if (rulesResult.rows.length !== 1) throw new Error("ai_content_brand_rules_required");
     rules = rulesResult.rows[0] as Record<string, unknown>;
     try {
-      canonicalRules = parseBrandRulesContentV1(rules.rules_json);
+      canonicalRules = parseBrandRulesContentV2(rules.rules_json);
     } catch {
       throw new Error("ai_content_brand_rules_required");
     }
-    const styleResult = await client.query(
-      `select item.id reference_item_id,style.image->>'description' description,
-              style.image->'tags' tags,artifact.public_url storage_url,artifact.path storage_path,
-              lower(artifact.mime_type) mime_type,artifact.checksum
-         from jsonb_array_elements(coalesce($3::jsonb #> '{designRules,referenceImages}','[]'::jsonb))
-              with ordinality style(image,position)
-         join reference_items item
-           on item.id::text=style.image->>'referenceItemId'
-          and item.workspace_id=$1 and item.brand_id=$2 and item.kind='upload' and item.archived_at is null
-         join storage_artifacts artifact
-           on artifact.id=item.storage_artifact_id and artifact.workspace_id=item.workspace_id
-          and artifact.brand_id=item.brand_id and artifact.deleted_at is null
-          and artifact.public_url is not null and artifact.path is not null
-          and artifact.checksum ~ '^[0-9a-f]{64}$'
-          and lower(artifact.mime_type) in ('image/png','image/jpeg','image/webp')
-        order by style.position`,
-      [scope.workspaceId, scope.brandId, JSON.stringify(canonicalRules)],
-    );
-    const configuredStyleCount = canonicalRules.designRules.referenceImages.length;
-    if (styleResult.rows.length !== configuredStyleCount) {
-      throw new Error("ai_content_brand_style_required");
-    }
-    styleImages = configuredStyleCount === 0
-      ? []
-      : await snapshots.loadApprovedStyleImages({
-        workspaceId: scope.workspaceId,
-        brandId: scope.brandId,
-      }, client);
-    if (styleImages.length !== styleResult.rows.length
-      || styleImages.some((image, index) => (
-        image.referenceItemId !== String(styleResult.rows[index]?.reference_item_id ?? "")
-      ))) {
-      throw new Error("ai_content_brand_style_required");
-    }
+    styleImages = [];
   }
 
   const attachmentResult = finalization.attachmentIds.length === 0
@@ -2397,7 +2365,7 @@ async function startAiContentGenerationV3Transaction(input: {
       throw new Error("ai_content_finalization_changed");
     }
     const preparedVisualSelection = await prepareManualVisualSelection(client, command);
-    const frozenVisualSelection: FrozenManualVisualSelectionV1 = preparedVisualSelection.frozen;
+    const frozenVisualSelection: FrozenManualVisualSelection = preparedVisualSelection.frozen;
     const productVisualSourceSnapshot = await loadFrozenProductVisualSourceSnapshot(
       client,
       command,
@@ -3005,11 +2973,10 @@ export function createAiContentRepository(pool: Pool, options: AiContentReposito
             attachmentIds: [],
           },
         };
-        const initialVisualSelection: ManualVisualSelectionV1 = {
-          contractVersion: "manual-visual-selection.v1",
+        const initialVisualSelection: ManualVisualSelectionV2 = {
+          contractVersion: "manual-visual-selection.v2",
           product: null,
-          stylePreset: null,
-          avatar: null,
+          preset: null,
         };
         const selectionIdentity = `proposal-v2:${proposalBatchId}:${proposalId}:${input.idempotencyKey}`;
         if (proposal.generation_id) {
@@ -3245,7 +3212,7 @@ export function createAiContentRepository(pool: Pool, options: AiContentReposito
         [input.generationId, input.workspaceId, input.brandId],
       );
       if (!result.rowCount) return null;
-      return parseManualVisualSelectionV1(result.rows[0].selection_json);
+      return parseManualVisualSelection(result.rows[0].selection_json);
     },
 
     async updateAiContentManualVisualSelection(input) {
@@ -4062,12 +4029,12 @@ export function createAiContentRepository(pool: Pool, options: AiContentReposito
         }
         let parentInput: ReturnType<typeof parseCanonicalContentGenerationInputV3>;
         let parentBinding: ReturnType<typeof parseContentPromptBinding>;
-        let parentManualVisualSelection: FrozenManualVisualSelectionV1;
+        let parentManualVisualSelection: FrozenManualVisualSelection;
         let parentProductVisualSourceSnapshot: ProductVisualSourceSnapshotV1 | null;
         try {
           parentInput = parseCanonicalContentGenerationInputV3(parent.input_json);
           parentBinding = parseContentPromptBinding(parent.binding_json);
-          parentManualVisualSelection = parseFrozenManualVisualSelectionV1(parent.manual_visual_selection);
+          parentManualVisualSelection = parseFrozenManualVisualSelection(parent.manual_visual_selection);
           parentProductVisualSourceSnapshot = optionalProductVisualSourceSnapshot(
             object(parent.parent_job_payload).productVisualSourceSnapshot,
           );
@@ -4149,10 +4116,10 @@ export function createAiContentRepository(pool: Pool, options: AiContentReposito
         const replay = existing.rows[0] as Record<string, unknown> | undefined;
         if (replay) {
           let replayInput: ReturnType<typeof parseCanonicalContentGenerationInputV3>;
-          let replayManualVisualSelection: FrozenManualVisualSelectionV1;
+          let replayManualVisualSelection: FrozenManualVisualSelection;
           try {
             replayInput = parseCanonicalContentGenerationInputV3(replay.input_json);
-            replayManualVisualSelection = parseFrozenManualVisualSelectionV1(replay.manual_visual_selection);
+            replayManualVisualSelection = parseFrozenManualVisualSelection(replay.manual_visual_selection);
             const replayBinding = parseContentPromptBinding(replay.binding_json);
             assertPlannerPromptBinding(replayInput, replayBinding);
           } catch {

@@ -121,10 +121,9 @@ describe.skipIf(process.env.RUN_POSTGRES_INTEGRATION !== "true")(
         generationId: ids.generation,
       };
       await expect(saveManualVisualSelection(application, scope, {
-        contractVersion: "manual-visual-selection.v1",
+        contractVersion: "manual-visual-selection.v2",
         product: { productServiceId: ids.product, versionId: ids.version },
-        stylePreset: null,
-        avatar: null,
+        preset: null,
       })).resolves.toMatchObject({
         product: { productServiceId: ids.product, versionId: ids.version },
       });

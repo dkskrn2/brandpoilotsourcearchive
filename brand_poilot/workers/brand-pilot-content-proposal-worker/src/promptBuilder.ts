@@ -1,6 +1,7 @@
 import {
   type ContentProposalCompositionJob,
 } from "./contracts.js";
+import { editorialStrategyPromptRules } from "./editorialStrategyCatalog.js";
 
 function safeJson(value: unknown): string {
   return JSON.stringify(value)
@@ -22,7 +23,7 @@ function buildV2Prompt(job: ContentProposalCompositionJob): string {
   const socialEditorialRules = snapshot.outputSettings.outputFormat !== "blog"
     ? [
         "카드뉴스·릴스 구성안을 쓰기 전에 각 안마다 독자 또는 고객 상황, 끝까지 보았을 때 얻는 구체적인 이해·발견·판단·가치, 지금 볼 이유, 가장 강한 변화·수치·대조·사례·과정·문제·제품 판단을 내부적으로 검토하라.",
-        "검토한 재료에 맞는 전개 방식을 내부적으로 선택하라. 변화·데이터·사례·문제 해결·비교·튜토리얼·오해 교정·제품 판단·브랜드 사례 흐름을 사용할 수 있지만 새 출력 필드나 고정 장면 공식으로 만들지 마라.",
+        ...editorialStrategyPromptRules(),
         "선택한 전개 방식에 필요한 Editorial Point와 순서를 먼저 정한 뒤 기존 outline을 작성하라.",
         "세 안은 독자·고객 상황, 끝까지 볼 가치, 시작점, 중심 사실·Evidence, 전개 방식 또는 마지막 판단 중 하나 이상이 실질적으로 달라야 한다.",
         "title, hook, oneLineIntent, keyMessage는 기존 의미를 유지하고 일부 내용이 자연스럽게 겹칠 수 있다. 다만 네 필드가 같은 내용을 표현만 바꿔 반복하지 마라.",

@@ -16,7 +16,7 @@ const HASH = "a".repeat(64);
 it("uses the revised editorial-quality proposal prompt version", async () => {
   const artifacts = await generateArtifactSet();
   const catalog = JSON.parse(artifacts.get("content-catalog.json")!);
-  expect(catalog.proposalContracts.promptVersion).toBe("proposal.writer.v4");
+  expect(catalog.proposalContracts.promptVersion).toBe("proposal.writer.v5");
 });
 
 function bindingFor(

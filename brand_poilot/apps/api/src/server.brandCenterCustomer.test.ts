@@ -262,10 +262,8 @@ describe("brand center customer routes", () => {
     await conflict.app.close();
   });
 
-  it("maps invalid style reference ownership to a stable client error", async () => {
-    const saveRuleDraft = vi.fn(async () => {
-      throw new Error("brand_style_reference_invalid");
-    });
+  it("rejects legacy design rules before saving a new rules draft", async () => {
+    const saveRuleDraft = vi.fn();
     const { app } = setup({ saveRuleDraft });
 
     const response = await app.inject({
@@ -294,7 +292,8 @@ describe("brand center customer routes", () => {
     });
 
     expect(response.statusCode).toBe(400);
-    expect(response.json()).toEqual({ error: "brand_style_reference_invalid" });
+    expect(response.json()).toEqual({ error: "brand_core_validation_failed", field: "rules" });
+    expect(saveRuleDraft).not.toHaveBeenCalled();
     await app.close();
   });
 
@@ -322,6 +321,41 @@ describe("brand center customer routes", () => {
       { workspaceId, brandId, actorUserId: userId, versionId: version().id },
       { expectedUpdatedAt: version().updatedAt },
     );
+    await app.close();
+  });
+
+  it("exposes analyzed design styles and combined presets", async () => {
+    const styleId = "55555555-5555-4555-8555-555555555555";
+    const presetId = "66666666-6666-4666-8666-666666666666";
+    const listDesignStyles = vi.fn(async () => []);
+    const createVisualPreset = vi.fn(async () => ({
+      id: presetId, workspaceId, brandId, name: "비교형", designStyleId: styleId,
+      avatarId: null, revision: 1, isDefault: false,
+      usability: { usable: false as const, reason: "style_analyzing" as const },
+      createdAt: "2026-08-27T00:00:00.000Z", updatedAt: "2026-08-27T00:00:00.000Z",
+    }));
+    const { app } = setup({ listDesignStyles, createVisualPreset });
+
+    const styles = await app.inject({
+      method: "GET", url: `/brands/${brandId}/design-styles`, headers: auth,
+    });
+    expect(styles.statusCode).toBe(200);
+    expect(listDesignStyles).toHaveBeenCalledWith({ workspaceId, brandId });
+
+    const created = await app.inject({
+      method: "POST", url: `/brands/${brandId}/visual-presets`, headers: auth,
+      payload: {
+        contractVersion: "visual-preset-input.v1", name: "비교형",
+        designStyleId: styleId, avatarId: null, isDefault: false,
+      },
+    });
+    expect(created.statusCode).toBe(201);
+    expect(created.json().usability).toEqual({ usable: false, reason: "style_analyzing" });
+    expect(createVisualPreset).toHaveBeenCalledWith(
+      { workspaceId, brandId, actorUserId: userId },
+      expect.objectContaining({ designStyleId: styleId, avatarId: null, isDefault: false }),
+    );
+
     await app.close();
   });
 });

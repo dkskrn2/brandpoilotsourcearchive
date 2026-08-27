@@ -8,6 +8,7 @@ import test from "node:test";
 import {
   CARD_REEL_EDITORIAL_PROMPT_QUALITY_PROFILE,
   CARD_MANUSCRIPT_VISUAL_SESSION_PROFILE,
+  DESIGN_STYLE_PRESET_EDITORIAL_CUTOVER_PROFILE,
   FAQ_UTTERANCE_MATCHING_PROFILE,
   MANUAL_BRAND_VISUAL_ASSETS_PROFILE,
   SERVER_COMPONENTS,
@@ -19,6 +20,53 @@ const enabled = (impact) => Object.entries(impact.components)
   .filter(([, value]) => value)
   .map(([key]) => key)
   .sort();
+
+test("design style and editorial cutover selects only the eight changed runtime components", () => {
+  const impact = classifyChangedPaths([
+    "brand_poilot/apps/api/src/designStyleRepository.ts",
+    "brand_poilot/apps/customer-ui/src/components/brand-center/DesignStylePanel.tsx",
+    "brand_poilot/db/migrations/093_design_style_analysis_visual_presets.sql",
+    "brand_poilot/db/migrations/094_ai_content_prompt_lineage_v5.sql",
+    "brand_poilot/packages/brand-pilot-content-contracts/src/designStyle.ts",
+    "brand_poilot/package-lock.json",
+    "brand_poilot/workers/brand-pilot-brand-intelligence-worker/src/styleAnalysisWorker.ts",
+    "brand_poilot/workers/brand-pilot-content-proposal-worker/src/editorialStrategyCatalog.ts",
+    "brand_poilot/workers/brand-pilot-card-news-worker/src/promptBuilder.ts",
+    "brand_poilot/workers/brand-pilot-reel-worker/src/promptBuilder.ts",
+    "brand_poilot/workers/brand-pilot-blog-worker/src/promptBuilder.ts",
+    "brand_poilot/workers/brand-pilot-image-worker/src/aiContentManualAssetPromptV2Common.ts",
+    "brand_poilot/scripts/migrationRunner.mjs",
+    "brand_poilot/scripts/repository-contract.test.mjs",
+    "brand_poilot/docs/superpowers/plans/2026-08-27-design-style-analysis-and-visual-presets.md",
+  ], { profile: DESIGN_STYLE_PRESET_EDITORIAL_CUTOVER_PROFILE });
+
+  assert.deepEqual(enabled(impact), [
+    "api",
+    "blogWorker",
+    "brandIntelligenceWorker",
+    "cardNewsWorker",
+    "contentProposalWorker",
+    "customerUi",
+    "imageWorker",
+    "reelWorker",
+  ]);
+  assert.equal(impact.migrationChanged, true);
+  assert.equal(impact.productionDeployAllowed, false);
+  assert.equal(impact.verifiedScope, true);
+  assert.deepEqual(impact.unknownPaths, []);
+});
+
+test("design style and editorial cutover rejects unrelated runtime paths", () => {
+  const path = "brand_poilot/workers/brand-pilot-dm-worker/src/worker.ts";
+  const impact = classifyChangedPaths([path], {
+    profile: DESIGN_STYLE_PRESET_EDITORIAL_CUTOVER_PROFILE,
+  });
+
+  assert.deepEqual(enabled(impact), []);
+  assert.equal(impact.productionDeployAllowed, false);
+  assert.equal(impact.verifiedScope, false);
+  assert.deepEqual(impact.unknownPaths, [path]);
+});
 
 test("classifies UI, API, and one worker without widening unrelated components", () => {
   assert.deepEqual(enabled(classifyChangedPaths(["brand_poilot/apps/customer-ui/src/App.tsx"])), ["customerUi"]);

@@ -21,6 +21,7 @@ const SCHEMA_FILENAMES = [
   "content-prompt-binding-v1.schema.json",
   "content-proposal-request-v2.schema.json",
   "content-proposal-v2.schema.json",
+  "design-style-analysis-v1.schema.json",
   "image-generation-package-v1.schema.json",
   "proposal-base-input-v2.schema.json",
   "proposal-input-v2.schema.json",

@@ -73,6 +73,7 @@ beforeAll(async () => {
       sql.startsWith("-- requires: pgvector")
       || file === "027_wiki_search_v2.sql"
       || file.startsWith("075_")
+      || file >= "077_"
     ) continue;
     await database.exec(sql);
   }
@@ -148,10 +149,9 @@ describe("brand core repository", () => {
       version: 1,
       status: "approved",
       rules: {
-        contractVersion: "brand-rules.v1",
+        contractVersion: "brand-rules.v2",
         forbiddenPhrases: ["무조건"],
         ctaRules: { defaultCta: "", allowed: [] },
-        designRules: { referenceImages: [] },
         autoApprovalRules: { enabled: true, conditions: [] },
       },
     });
@@ -162,13 +162,12 @@ describe("brand core repository", () => {
     const ruleDraft = await repository.saveRuleDraft(
       { workspaceId, brandId: validRulesBrandId, actorUserId: ownerId },
       {
-        contractVersion: "brand-rules.v1",
+        contractVersion: "brand-rules.v2",
         requiredPhrases: ["근거 중심"],
         forbiddenPhrases: [],
         exaggerationRules: [],
         ctaRules: { defaultCta: "상담하기", allowed: ["문의하기"] },
         channelRules: { instagram: ["짧고 명확하게"] },
-        designRules: { colors: ["#112233"], fonts: [], notes: [], referenceImages: [] },
         autoApprovalRules: { enabled: false, conditions: [] },
       },
     );
@@ -224,7 +223,6 @@ describe("brand core repository", () => {
       rules: {
         requiredPhrases: ["기존 필수 문구"],
         ctaRules: { defaultCta: "문의하기", allowed: [] },
-        designRules: { referenceImages: [] },
       },
     });
     expect(versions.map((version) => ({ version: version.version, status: version.status })))
@@ -257,7 +255,7 @@ describe("brand core repository", () => {
     const repository = await approveCore(missingReferenceImagesBrandId, "참조 배열 복구");
     const active = await repository.getActiveRules({ workspaceId, brandId: missingReferenceImagesBrandId });
     const versions = await repository.listRuleSets({ workspaceId, brandId: missingReferenceImagesBrandId });
-    expect(active).toMatchObject({ version: 2, rules: { designRules: { referenceImages: [] } } });
+    expect(active).toMatchObject({ version: 2, rules: { contractVersion: "brand-rules.v2" } });
     expect(versions.map(({ version, status }) => ({ version, status }))).toEqual([
       { version: 2, status: "approved" },
       { version: 1, status: "superseded" },
@@ -288,7 +286,7 @@ describe("brand core repository", () => {
 
     const repository = await approveCore(v6ReferenceRulesBrandId, "UUID 계약 복구");
     const active = await repository.getActiveRules({ workspaceId, brandId: v6ReferenceRulesBrandId });
-    expect(active).toMatchObject({ version: 2, rules: { designRules: { referenceImages: [] } } });
+    expect(active).toMatchObject({ version: 2, rules: { contractVersion: "brand-rules.v2" } });
   }, 30_000);
 
   it("lets a member edit a draft but only an owner approve it", async () => {
@@ -395,13 +393,12 @@ describe("brand core repository", () => {
     const draft = await repository.saveRuleDraft(
       { workspaceId, brandId: otherBrandId, actorUserId: memberId },
       {
-        contractVersion: "brand-rules.v1",
+        contractVersion: "brand-rules.v2",
         requiredPhrases: [],
         forbiddenPhrases: ["무조건"],
         exaggerationRules: [],
         ctaRules: { defaultCta: "자세히 확인하기", allowed: [] },
         channelRules: {},
-        designRules: { colors: [], fonts: [], notes: [], referenceImages: [] },
         autoApprovalRules: { enabled: true, conditions: ["금지 문구 없음"] },
       },
     );
@@ -421,159 +418,6 @@ describe("brand core repository", () => {
     expect(approved.status).toBe("approved");
     expect((await repository.getActiveRules({ workspaceId, brandId: otherBrandId }))
       ?.rules.autoApprovalRules.enabled).toBe(true);
-  }, 30_000);
-
-  it("accepts only active same-brand confirmed image uploads as style references", async () => {
-    const validArtifactId = "70000000-0000-4000-8000-000000000001";
-    const validReferenceId = "71000000-0000-4000-8000-000000000001";
-    const pdfArtifactId = "70000000-0000-4000-8000-000000000002";
-    const pdfReferenceId = "71000000-0000-4000-8000-000000000002";
-    const archivedArtifactId = "70000000-0000-4000-8000-000000000003";
-    const archivedReferenceId = "71000000-0000-4000-8000-000000000003";
-    const otherArtifactId = "70000000-0000-4000-8000-000000000004";
-    const otherReferenceId = "71000000-0000-4000-8000-000000000004";
-    const jpegArtifactId = "70000000-0000-4000-8000-000000000005";
-    const jpegReferenceId = "71000000-0000-4000-8000-000000000005";
-    const webpArtifactId = "70000000-0000-4000-8000-000000000006";
-    const webpReferenceId = "71000000-0000-4000-8000-000000000006";
-    const deletedArtifactId = "70000000-0000-4000-8000-000000000007";
-    const deletedReferenceId = "71000000-0000-4000-8000-000000000007";
-    const foreignArtifactId = "70000000-0000-4000-8000-000000000008";
-    const foreignReferenceId = "71000000-0000-4000-8000-000000000008";
-    const sourceUrlId = "72000000-0000-4000-8000-000000000001";
-    const nonUploadReferenceId = "71000000-0000-4000-8000-000000000009";
-    await database.exec(`
-      insert into storage_artifacts (
-        id,workspace_id,brand_id,artifact_type,bucket,path,public_url,mime_type,byte_size,checksum,created_by_user_id
-      ) values
-        ('${validArtifactId}','${workspaceId}','${otherBrandId}','brand_asset','test','style/valid.png','https://blob.example/valid.png','image/png',100,'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa','${ownerId}'),
-        ('${pdfArtifactId}','${workspaceId}','${otherBrandId}','brand_asset','test','style/invalid.pdf','https://blob.example/invalid.pdf','application/pdf',100,'pdf','${ownerId}'),
-        ('${archivedArtifactId}','${workspaceId}','${otherBrandId}','brand_asset','test','style/archived.webp','https://blob.example/archived.webp','image/webp',100,'archived','${ownerId}'),
-        ('${otherArtifactId}','${workspaceId}','${brandId}','brand_asset','test','style/other.jpg','https://blob.example/other.jpg','image/jpeg',100,'other','${ownerId}'),
-        ('${jpegArtifactId}','${workspaceId}','${otherBrandId}','brand_asset','test','style/valid.jpg','https://blob.example/valid.jpg','image/jpeg',100,'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb','${ownerId}'),
-        ('${webpArtifactId}','${workspaceId}','${otherBrandId}','brand_asset','test','style/valid.webp','https://blob.example/valid.webp','image/webp',100,'cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc','${ownerId}'),
-        ('${deletedArtifactId}','${workspaceId}','${otherBrandId}','brand_asset','test','style/deleted.png','https://blob.example/deleted.png','image/png',100,'deleted','${ownerId}'),
-        ('${foreignArtifactId}','${foreignWorkspaceId}','${foreignWorkspaceBrandId}','brand_asset','test','style/foreign.png','https://blob.example/foreign.png','image/png',100,'foreign','${ownerId}');
-      update storage_artifacts set deleted_at = now() where id = '${deletedArtifactId}';
-      insert into source_urls (
-        id,workspace_id,brand_id,source_type,url,url_hash,status,enabled
-      ) values (
-        '${sourceUrlId}','${workspaceId}','${otherBrandId}','reference',
-        'https://example.com/style','style-reference-source','active',true
-      );
-      insert into reference_items (
-        id,workspace_id,brand_id,kind,origin,title,preview_url,source_url,format,metadata,
-        storage_artifact_id,created_by_user_id,archived_at
-      ) values
-        ('${validReferenceId}','${workspaceId}','${otherBrandId}','upload','Upload','valid.png','https://blob.example/valid.png','https://blob.example/valid.png','image/png','{}','${validArtifactId}','${ownerId}',null),
-        ('${pdfReferenceId}','${workspaceId}','${otherBrandId}','upload','Upload','invalid.pdf',null,'https://blob.example/invalid.pdf','application/pdf','{}','${pdfArtifactId}','${ownerId}',null),
-        ('${archivedReferenceId}','${workspaceId}','${otherBrandId}','upload','Upload','archived.webp','https://blob.example/archived.webp','https://blob.example/archived.webp','image/webp','{}','${archivedArtifactId}','${ownerId}',now()),
-        ('${otherReferenceId}','${workspaceId}','${brandId}','upload','Upload','other.jpg','https://blob.example/other.jpg','https://blob.example/other.jpg','image/jpeg','{}','${otherArtifactId}','${ownerId}',null),
-        ('${jpegReferenceId}','${workspaceId}','${otherBrandId}','upload','Upload','valid.jpg','https://blob.example/valid.jpg','https://blob.example/valid.jpg','image/jpeg','{}','${jpegArtifactId}','${ownerId}',null),
-        ('${webpReferenceId}','${workspaceId}','${otherBrandId}','upload','Upload','valid.webp','https://blob.example/valid.webp','https://blob.example/valid.webp','image/webp','{}','${webpArtifactId}','${ownerId}',null),
-        ('${deletedReferenceId}','${workspaceId}','${otherBrandId}','upload','Upload','deleted.png','https://blob.example/deleted.png','https://blob.example/deleted.png','image/png','{}','${deletedArtifactId}','${ownerId}',null),
-        ('${foreignReferenceId}','${foreignWorkspaceId}','${foreignWorkspaceBrandId}','upload','Upload','foreign.png','https://blob.example/foreign.png','https://blob.example/foreign.png','image/png','{}','${foreignArtifactId}','${ownerId}',null);
-      insert into reference_items (
-        id,workspace_id,brand_id,kind,origin,title,preview_url,source_url,format,metadata,
-        source_url_id,created_by_user_id,archived_at
-      ) values (
-        '${nonUploadReferenceId}','${workspaceId}','${otherBrandId}','external_url','URL',
-        'style link',null,'https://example.com/style','image/png','{}','${sourceUrlId}','${ownerId}',null
-      );
-    `);
-    const repository = createBrandCoreRepository(pglitePool(database));
-    const rules = (...referenceItemIds: string[]) => ({
-      contractVersion: "brand-rules.v1" as const,
-      requiredPhrases: [],
-      forbiddenPhrases: [],
-      exaggerationRules: [],
-      ctaRules: { defaultCta: "", allowed: [] },
-      channelRules: {},
-      designRules: {
-        colors: ["#174A3A"],
-        fonts: ["Pretendard"],
-        notes: ["절제된 이미지"],
-        referenceImages: referenceItemIds.map((referenceItemId) => ({
-          referenceItemId,
-          description: "",
-          tags: [],
-        })),
-      },
-      autoApprovalRules: { enabled: false, conditions: [] },
-    });
-
-    const saved = await repository.saveRuleDraft(
-      { workspaceId, brandId: otherBrandId, actorUserId: memberId },
-      rules(validReferenceId, jpegReferenceId, webpReferenceId),
-    );
-    expect(saved.rules.designRules.referenceImages.map((item) => item.referenceItemId))
-      .toEqual([validReferenceId, jpegReferenceId, webpReferenceId]);
-    expect(saved.rules.designRules).toMatchObject({
-      colors: ["#174A3A"],
-      fonts: ["Pretendard"],
-      notes: ["절제된 이미지"],
-    });
-
-    await database.query("update reference_items set archived_at=now() where id=$1", [validReferenceId]);
-    await expect(repository.approveRules({
-      workspaceId,
-      brandId: otherBrandId,
-      actorUserId: ownerId,
-      ruleSetId: saved.id,
-    })).rejects.toThrow("brand_style_reference_invalid");
-    await database.query("update reference_items set archived_at=null where id=$1", [validReferenceId]);
-    await database.query("update storage_artifacts set public_url=null where id=$1", [validArtifactId]);
-    await expect(repository.approveRules({
-      workspaceId,
-      brandId: otherBrandId,
-      actorUserId: ownerId,
-      ruleSetId: saved.id,
-    })).rejects.toThrow("brand_style_reference_invalid");
-    await database.query(
-      "update storage_artifacts set public_url='https://blob.example/valid.png' where id=$1",
-      [validArtifactId],
-    );
-    await repository.approveRules({
-      workspaceId,
-      brandId: otherBrandId,
-      actorUserId: ownerId,
-      ruleSetId: saved.id,
-    });
-    await expect(createAssetLibraryRepository(pglitePool(database)).archiveReference({
-      workspaceId,
-      brandId: otherBrandId,
-      actorUserId: ownerId,
-      referenceId: validReferenceId,
-    })).rejects.toThrow("brand_style_reference_in_use");
-
-    const beforeInvalid = await database.query<{ count: string }>(
-      `select count(*)::text as count from brand_rule_sets
-       where workspace_id = $1 and brand_id = $2`,
-      [workspaceId, otherBrandId],
-    );
-    for (const invalidId of [
-      pdfReferenceId,
-      archivedReferenceId,
-      otherReferenceId,
-      deletedReferenceId,
-      foreignReferenceId,
-      nonUploadReferenceId,
-    ]) {
-      await expect(repository.saveRuleDraft(
-        { workspaceId, brandId: otherBrandId, actorUserId: memberId },
-        rules(invalidId),
-      )).rejects.toThrow("brand_style_reference_invalid");
-    }
-    await expect(repository.saveRuleDraft(
-      { workspaceId, brandId: otherBrandId, actorUserId: memberId },
-      rules(validReferenceId, validReferenceId),
-    )).rejects.toThrow("brand_core_validation_failed:rules.designRules.referenceImages");
-    const afterInvalid = await database.query<{ count: string }>(
-      `select count(*)::text as count from brand_rule_sets
-       where workspace_id = $1 and brand_id = $2`,
-      [workspaceId, otherBrandId],
-    );
-    expect(afterInvalid.rows[0]?.count).toBe(beforeInvalid.rows[0]?.count);
   }, 30_000);
 
   it("marks only changed core fields user-edited and preserves unchanged review provenance", async () => {

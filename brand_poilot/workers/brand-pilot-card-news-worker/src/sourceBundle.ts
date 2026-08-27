@@ -1,5 +1,5 @@
 import type { ContentGenerationInputV3 } from "@brand-pilot/content-contracts";
-import type { FrozenManualVisualSelectionV1 } from "@brand-pilot/content-contracts/manual-visual-selection";
+import type { FrozenManualVisualSelection } from "@brand-pilot/content-contracts/manual-visual-selection";
 import {
   projectManualEditorialProductFacts,
   projectManualEditorialVisualInputs,
@@ -36,7 +36,7 @@ function projectSubjectReferences(input: ContentGenerationInputV3) {
     .map(({ title, sourceUrl, text }) => ({ title, sourceUrl, text }));
 }
 
-export function buildCardDeckSourceBundle(input: ContentGenerationInputV3, selection: FrozenManualVisualSelectionV1) {
+export function buildCardDeckSourceBundle(input: ContentGenerationInputV3, selection: FrozenManualVisualSelection) {
   return {
     intent: {
       contentInstruction: input.contentInstruction,

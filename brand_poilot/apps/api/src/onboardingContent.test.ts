@@ -74,7 +74,7 @@ describe("buildProvisionalBrandContext", () => {
       detailedCategory: "콘텐츠 마케팅",
     });
     expect(prepared.brandRules.content.autoApprovalRules.enabled).toBe(false);
-    expect(prepared.brandRules.content.designRules.referenceImages).toEqual([]);
+    expect(Object.hasOwn(prepared.brandRules.content, "designRules")).toBe(false);
     expect(prepared.authority).toEqual({
       kind: "onboarding_provisional",
       analysisId,

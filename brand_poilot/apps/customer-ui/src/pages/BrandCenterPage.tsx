@@ -8,8 +8,9 @@ import { BrandCoreReviewPanel } from "../components/brand-center/BrandCoreReview
 import { BrandRulesPanel } from "../components/brand-center/BrandRulesPanel";
 import { KnowledgeCategoryEditorPanel } from "../components/brand-center/KnowledgeCategoryEditorPanel";
 import { ProductServiceLibraryPanel } from "../components/brand-center/ProductServiceLibraryPanel";
-import { StyleReferenceImageBoard } from "../components/brand-center/StyleReferenceImageBoard";
-import { BrandStylePresetPanel } from "../components/brand-center/BrandStylePresetPanel";
+import { DesignStylePanel } from "../components/brand-center/DesignStylePanel";
+import { AvatarLibraryPanel } from "../components/brand-center/AvatarLibraryPanel";
+import { VisualPresetPanel } from "../components/brand-center/VisualPresetPanel";
 import { brandCenterGateway } from "../features/brand-center/brandCenterGateway";
 import { brandIntelligenceGateway } from "../features/brand-intelligence/brandIntelligenceGateway";
 import type {
@@ -51,18 +52,12 @@ const brandTabs: Array<{ id: BrandCenterTab; label: string }> = [
 ];
 
 const emptyRules = (): BrandRules => ({
-  contractVersion: "brand-rules.v1",
+  contractVersion: "brand-rules.v2",
   requiredPhrases: [],
   forbiddenPhrases: [],
   exaggerationRules: [],
   ctaRules: { defaultCta: "", allowed: [] },
   channelRules: {},
-  designRules: {
-    colors: [],
-    fonts: [],
-    notes: [],
-    referenceImages: [],
-  },
   autoApprovalRules: { enabled: false, conditions: [] },
 });
 
@@ -706,20 +701,6 @@ export function BrandCenterPage() {
     navigate("/onboarding/brand-intelligence?from=brand-center");
   }
 
-  async function saveStyle(rules: BrandRules) {
-    const saved = await brandCenterGateway.saveRuleDraft(DEMO_BRAND_ID, rules);
-    setRulesWorkspace((current) => ({
-      active: current?.active ?? null,
-      draft: saved,
-      versions: [
-        saved,
-        ...(current?.versions ?? []).filter((item) => item.id !== saved.id),
-      ],
-    }));
-    setDraftRules(structuredClone(saved.rules));
-    setChildDirty(false);
-  }
-
   if (loading) return <PageSkeleton label="브랜드 센터를 불러오는 중입니다." />;
 
   return (
@@ -909,24 +890,11 @@ export function BrandCenterPage() {
             onDirtyChange={setProductDirty}
           />
         ) : null}
-        {tab === "style" && rulesLoadError ? (
-          <section className="panel">
-            <div className="panel-body brand-center-empty">
-              <h2>스타일 정보를 불러올 수 없습니다</h2>
-              <p>운영 규칙을 다시 불러온 뒤 디자인 스타일을 수정해 주세요.</p>
-            </div>
-          </section>
-        ) : null}
-        {tab === "style" && !rulesLoadError ? (
+        {tab === "style" ? (
           <>
-            <BrandStylePresetPanel brandId={DEMO_BRAND_ID} gateway={libraryGateway} />
-            <StyleReferenceImageBoard
-              brandId={DEMO_BRAND_ID}
-              gateway={libraryGateway}
-              rules={visibleRules}
-              onSave={saveStyle}
-              onDirtyChange={setChildDirty}
-            />
+            <DesignStylePanel brandId={DEMO_BRAND_ID} gateway={libraryGateway} />
+            <AvatarLibraryPanel brandId={DEMO_BRAND_ID} gateway={libraryGateway} showDefaultControl={false} />
+            <VisualPresetPanel brandId={DEMO_BRAND_ID} gateway={libraryGateway} />
           </>
         ) : null}
       </div>

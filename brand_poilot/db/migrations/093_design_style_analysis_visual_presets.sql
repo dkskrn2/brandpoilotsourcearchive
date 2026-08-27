@@ -28,7 +28,9 @@ begin
     from manual_ai_content_visual_selections selection
    where selection.contract_version='manual-visual-selection.v1'
      and selection.frozen_json is null;
-  raise notice 'unfrozen_manual_visual_selection_v1_drafts:%', unfrozen_v1_draft_count;
+  if unfrozen_v1_draft_count > 0 then
+    raise exception 'unfrozen_manual_visual_selection_v1_drafts:%', unfrozen_v1_draft_count;
+  end if;
 end;
 $$;
 
@@ -131,6 +133,12 @@ create table brand_design_style_analysis_jobs (
 create index brand_design_style_analysis_jobs_claim_idx
   on brand_design_style_analysis_jobs(available_at,created_at)
   where status='queued';
+
+alter table worker_resource_leases
+  drop constraint if exists worker_resource_leases_workload_check;
+alter table worker_resource_leases
+  add constraint worker_resource_leases_workload_check
+  check (workload_type in ('dm','wiki','content','onboarding','faq','design_style_analysis'));
 
 create trigger brand_design_styles_set_updated_at
 before update on brand_design_styles
@@ -238,9 +246,12 @@ begin
     return;
   end if;
   select bootstrap.schema_owner_role_name,bootstrap.application_role_name
-    into strict schema_owner_role_name,application_role_name
+    into schema_owner_role_name,application_role_name
     from public.ai_content_bootstrap_state bootstrap
    where bootstrap.singleton;
+  if schema_owner_role_name is null or application_role_name is null then
+    return;
+  end if;
 
   foreach target_relation in array array[
     'brand_design_styles',

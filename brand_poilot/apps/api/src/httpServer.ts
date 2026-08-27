@@ -1,6 +1,6 @@
 import cors from "@fastify/cors";
 import { createHash, createHmac, randomUUID, timingSafeEqual } from "node:crypto";
-import { parseManualVisualSelectionV1 } from "@brand-pilot/content-contracts/manual-visual-selection";
+import { parseManualVisualSelectionV2 } from "@brand-pilot/content-contracts/manual-visual-selection";
 import Fastify, { LogController, type FastifyReply } from "fastify";
 import rawBody from "fastify-raw-body";
 import type { FastifyLoggerOptions } from "fastify/types/logger";
@@ -214,7 +214,7 @@ const instagramLoginStateCookie = "bp_instagram_login_state";
 const instagramLoginBindingCookie = "bp_instagram_login_binding";
 const instagramTrendStateCookie = "bp_instagram_trend_state";
 const uuidPattern = /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i;
-const workerResourceWorkloads = new Set(["dm", "wiki", "content", "onboarding", "faq"]);
+const workerResourceWorkloads = new Set(["dm", "wiki", "content", "onboarding", "faq", "design_style_analysis"]);
 const outputFormatByWorkerSlug = {
   card_news: "card_news",
   blog: "blog",
@@ -1118,6 +1118,11 @@ export function createServer(
       reply.code(400).send({ error: message });
       return;
     }
+    if (message.startsWith("design_style_analysis_")
+      && (message.endsWith("_invalid") || message.endsWith("_required") || message.endsWith("_mismatch"))) {
+      reply.code(400).send({ error: message });
+      return;
+    }
     if (message === "manual_visual_selection_missing"
       || message === "manual_visual_selection_unavailable") {
       reply.code(404).send({ error: message });
@@ -1125,7 +1130,9 @@ export function createServer(
     }
     if (message === "manual_visual_selection_stale"
       || message === "manual_visual_selection_locked"
-      || message === "manual_visual_selection_conflict") {
+      || message === "manual_visual_selection_conflict"
+      || message === "visual_preset_revision_stale"
+      || message === "visual_preset_not_usable") {
       reply.code(409).send({ error: message });
       return;
     }
@@ -1141,7 +1148,12 @@ export function createServer(
       });
       return;
     }
-    if (message === "brand_style_reference_invalid") {
+    if (message === "brand_style_reference_invalid"
+      || message === "design_style_input_invalid"
+      || message === "visual_preset_input_invalid"
+      || message === "design_style_reference_invalid"
+      || message === "design_style_revision_required"
+      || message === "visual_preset_revision_required") {
       reply.code(400).send({ error: message });
       return;
     }
@@ -1161,7 +1173,6 @@ export function createServer(
       || message.startsWith("reference_filter_invalid:")
       || message.startsWith("reference_brand_validation_failed:")
       || message.startsWith("asset_upload_validation_failed:")
-      || message.startsWith("brand_style_preset_validation_failed:")
       || message.startsWith("manual_product_images_validation_failed:")) {
       const separator = message.indexOf(":");
       reply.code(400).send({ error: message.slice(0, separator), field: message.slice(separator + 1) });
@@ -1179,19 +1190,21 @@ export function createServer(
       reply.code(502).send({ error: message });
       return;
     }
-    if (message === "brand_style_preset_version_required") {
-      reply.code(400).send({ error: message });
-      return;
-    }
-    if (message === "brand_style_preset_version_conflict") {
+    if (message === "design_style_revision_stale" || message === "design_style_retry_unavailable"
+      || message === "avatar_unavailable") {
       reply.code(409).send({ error: message });
       return;
     }
-    if (message === "brand_style_preset_admin_required" || message === "brand_style_preset_access_forbidden") {
+    if (message === "design_style_admin_required" || message === "design_style_access_forbidden") {
       reply.code(403).send({ error: message });
       return;
     }
-    if (message === "brand_style_preset_not_configured") {
+    if (message === "design_style_not_found" || message === "visual_preset_not_found") {
+      reply.code(404).send({ error: message });
+      return;
+    }
+    if (message === "design_style_not_configured" || message === "visual_preset_not_configured"
+      || message === "design_style_repository_not_configured") {
       reply.code(503).send({ error: message });
       return;
     }
@@ -3707,7 +3720,7 @@ export function createServer(
       ...aiContentScope(request, request.params.brandId),
       generationId: parseAiContentGenerationId(request.params.generationId),
       actorUserId: requiredAiContentActorUserId(request),
-      selection: parseManualVisualSelectionV1(request.body),
+      selection: parseManualVisualSelectionV2(request.body),
     }),
   );
 
@@ -4464,6 +4477,108 @@ export function createServer(
     }
     return true;
   }
+
+  app.post<{ Body: Record<string, unknown> }>(
+    "/worker/design-style-analyses/claim",
+    async (request, reply) => {
+      if (!authenticateAiContentWorker(request.headers.authorization, reply)) return;
+      if (typeof repository.claimDesignStyleAnalysis !== "function") {
+        throw new Error("design_style_repository_not_configured");
+      }
+      const body = request.body ?? {};
+      assertExactAiContentWorkerBody(body, ["workerId", "leaseSeconds"], "design_style_analysis_claim_invalid");
+      const workerId = requiredAiContentField(body.workerId, "design_style_analysis_worker_id_required", 200);
+      const leaseSeconds = Number(body.leaseSeconds);
+      if (!Number.isSafeInteger(leaseSeconds) || leaseSeconds < 30 || leaseSeconds > 600) {
+        throw new Error("design_style_analysis_lease_seconds_invalid");
+      }
+      return { job: await repository.claimDesignStyleAnalysis(workerId, leaseSeconds) };
+    },
+  );
+
+  app.post<{ Params: { jobId: string }; Body: Record<string, unknown> }>(
+    "/worker/design-style-analyses/:jobId/heartbeat",
+    async (request, reply) => {
+      if (!authenticateAiContentWorker(request.headers.authorization, reply)) return;
+      if (typeof repository.heartbeatDesignStyleAnalysis !== "function") {
+        throw new Error("design_style_repository_not_configured");
+      }
+      const body = request.body ?? {};
+      assertExactAiContentWorkerBody(body, ["workerId", "leaseToken", "leaseSeconds"], "design_style_analysis_heartbeat_invalid");
+      const leaseSeconds = Number(body.leaseSeconds);
+      if (!Number.isSafeInteger(leaseSeconds) || leaseSeconds < 30 || leaseSeconds > 600) {
+        throw new Error("design_style_analysis_lease_seconds_invalid");
+      }
+      const alive = await repository.heartbeatDesignStyleAnalysis({
+        jobId: parseAiContentUuid(request.params.jobId, "design_style_analysis_job_id_invalid"),
+        workerId: requiredAiContentField(body.workerId, "design_style_analysis_worker_id_required", 200),
+        leaseToken: parseAiContentUuid(body.leaseToken, "design_style_analysis_lease_token_invalid"),
+        leaseSeconds,
+      });
+      if (!alive) {
+        reply.code(409);
+        return { error: "design_style_analysis_lease_invalid" };
+      }
+      return { ok: true };
+    },
+  );
+
+  app.post<{ Params: { jobId: string }; Body: Record<string, unknown> }>(
+    "/worker/design-style-analyses/:jobId/complete",
+    async (request, reply) => {
+      if (!authenticateAiContentWorker(request.headers.authorization, reply)) return;
+      if (typeof repository.completeDesignStyleAnalysis !== "function") {
+        throw new Error("design_style_repository_not_configured");
+      }
+      const body = request.body ?? {};
+      assertExactAiContentWorkerBody(body, ["workerId", "leaseToken", "designStyleId", "styleRevision", "analysis", "analysisSha256"], "design_style_analysis_completion_invalid");
+      const analysisSha256 = requiredAiContentField(body.analysisSha256, "design_style_analysis_sha256_invalid", 64).toLowerCase();
+      if (!/^[0-9a-f]{64}$/.test(analysisSha256) || !Number.isSafeInteger(body.styleRevision) || Number(body.styleRevision) < 1) {
+        throw new Error("design_style_analysis_completion_invalid");
+      }
+      const completed = await repository.completeDesignStyleAnalysis({
+        jobId: parseAiContentUuid(request.params.jobId, "design_style_analysis_job_id_invalid"),
+        workerId: requiredAiContentField(body.workerId, "design_style_analysis_worker_id_required", 200),
+        leaseToken: parseAiContentUuid(body.leaseToken, "design_style_analysis_lease_token_invalid"),
+        designStyleId: parseAiContentUuid(body.designStyleId, "design_style_id_invalid"),
+        styleRevision: Number(body.styleRevision),
+        analysis: body.analysis,
+        analysisSha256,
+      });
+      if (!completed) {
+        reply.code(409);
+        return { error: "design_style_analysis_lease_invalid" };
+      }
+      return { ok: true };
+    },
+  );
+
+  app.post<{ Params: { jobId: string }; Body: Record<string, unknown> }>(
+    "/worker/design-style-analyses/:jobId/fail",
+    async (request, reply) => {
+      if (!authenticateAiContentWorker(request.headers.authorization, reply)) return;
+      if (typeof repository.failDesignStyleAnalysis !== "function") {
+        throw new Error("design_style_repository_not_configured");
+      }
+      const body = request.body ?? {};
+      assertExactAiContentWorkerBody(body, ["workerId", "leaseToken", "errorCode", "retryable"], "design_style_analysis_failure_invalid");
+      if (typeof body.retryable !== "boolean") throw new Error("design_style_analysis_failure_invalid");
+      const errorCode = requiredAiContentField(body.errorCode, "design_style_analysis_error_code_invalid", 120);
+      if (!/^[a-z0-9_]+$/.test(errorCode)) throw new Error("design_style_analysis_error_code_invalid");
+      const failed = await repository.failDesignStyleAnalysis({
+        jobId: parseAiContentUuid(request.params.jobId, "design_style_analysis_job_id_invalid"),
+        workerId: requiredAiContentField(body.workerId, "design_style_analysis_worker_id_required", 200),
+        leaseToken: parseAiContentUuid(body.leaseToken, "design_style_analysis_lease_token_invalid"),
+        errorCode,
+        retryable: body.retryable,
+      });
+      if (!failed) {
+        reply.code(409);
+        return { error: "design_style_analysis_lease_invalid" };
+      }
+      return { ok: true };
+    },
+  );
 
   app.post<{ Body: Record<string, unknown> }>(
     "/worker/product-image-import-jobs/claim",
@@ -5614,7 +5729,7 @@ export function createServer(
     const lease = await repository.acquireWorkerResourceLease(
       "codex_cli",
       request.body.workerId.trim(),
-      request.body.workload as "dm" | "wiki" | "content" | "onboarding" | "faq",
+      request.body.workload as "dm" | "wiki" | "content" | "onboarding" | "faq" | "design_style_analysis",
     );
     if (!lease) {
       reply.code(204);

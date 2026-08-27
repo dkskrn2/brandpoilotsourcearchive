@@ -1,10 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import type {
-  Avatar,
-  BrandStylePreset,
   LibraryGateway,
   ProductServiceImageAsset,
+  VisualPreset,
 } from "../../features/libraries/libraryGateway";
 import { libraryGateway } from "../../features/libraries/libraryGateway";
 import { PUBLISH_CALENDAR_USAGE_CHANGED_EVENT } from "../../features/publishing/publishCalendar";
@@ -104,7 +103,7 @@ function validationMessage(error: unknown) {
 type ContentLibraries = Pick<LibraryGateway, "listProductServices">;
 type ChannelCapabilityGateway = ReturnType<typeof createChannelCapabilityGateway>;
 type ReferenceTrendGateway = Pick<typeof api, "searchInstagramTrends" | "saveInstagramTrendSource">;
-type StyleAssetGateway = Pick<LibraryGateway, "listStylePresets" | "listAvatars" | "listProductImages">;
+type StyleAssetGateway = Pick<LibraryGateway, "listVisualPresets" | "listProductImages">;
 
 function requestRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value)
@@ -190,11 +189,9 @@ export function ContentProposalFlow({
   const [selectedProposal, setSelectedProposal] = useState<ContentProposalRecord | ContentProposalRecordV2 | null>(null);
   const [selectedReferences, setSelectedReferences] = useState<ContentReferenceSelectionV2[]>([]);
   const [selectedGenerationId, setSelectedGenerationId] = useState<string | null>(null);
-  const [stylePresets, setStylePresets] = useState<BrandStylePreset[]>([]);
-  const [avatars, setAvatars] = useState<Avatar[]>([]);
+  const [visualPresets, setVisualPresets] = useState<VisualPreset[]>([]);
   const [productImages, setProductImages] = useState<ProductServiceImageAsset[]>([]);
-  const [selectedStylePresetId, setSelectedStylePresetId] = useState<string | null>(null);
-  const [selectedAvatarId, setSelectedAvatarId] = useState<string | null>(null);
+  const [selectedPresetId, setSelectedPresetId] = useState<string | null>(null);
   const [userImageInstruction, setUserImageInstruction] = useState("");
   const [attachments, setAttachments] = useState<GenerationAttachment[]>([]);
   const [styleLoadError, setStyleLoadError] = useState<string | null>(null);
@@ -333,11 +330,9 @@ export function ContentProposalFlow({
     setSelectedProposal(null);
     setSelectedReferences([]);
     setSelectedGenerationId(null);
-    setStylePresets([]);
-    setAvatars([]);
+    setVisualPresets([]);
     setProductImages([]);
-    setSelectedStylePresetId(null);
-    setSelectedAvatarId(null);
+    setSelectedPresetId(null);
     setUserImageInstruction("");
     setAttachments([]);
     setStyleLoadError(null);
@@ -513,31 +508,23 @@ export function ContentProposalFlow({
     setStyleLoadError(null);
     try {
       const approvedProduct = products.find((item) => item.id === selectedProductId && isApprovedActiveProduct(item));
-      const [loadedPresets, loadedAvatars, loadedProductImages] = await Promise.all([
-        assetGateway.listStylePresets(requestedBrandId),
-        assetGateway.listAvatars(requestedBrandId),
+      const [loadedPresets, loadedProductImages] = await Promise.all([
+        assetGateway.listVisualPresets(requestedBrandId),
         approvedProduct?.activeVersion
           ? assetGateway.listProductImages(requestedBrandId, approvedProduct.id, approvedProduct.activeVersion.id)
           : Promise.resolve([]),
       ]);
       if (activeBrandId.current !== requestedBrandId) return;
-      const activePresets = loadedPresets.filter((preset) => preset.status === "active");
-      const activeAvatars = loadedAvatars.filter((avatar) => avatar.status === "active");
-      setStylePresets(activePresets);
-      setAvatars(activeAvatars);
+      setVisualPresets(loadedPresets);
       setProductImages(loadedProductImages);
-      setSelectedStylePresetId((current) => activePresets.some(({ id }) => id === current)
-        ? current : activePresets.find(({ isDefault }) => isDefault)?.id ?? null);
-      setSelectedAvatarId((current) => activeAvatars.some(({ id }) => id === current)
-        ? current : activeAvatars.find(({ isDefault }) => isDefault)?.id ?? null);
+      setSelectedPresetId((current) => loadedPresets.some(({ id, usability }) => id === current && usability.usable)
+        ? current : loadedPresets.find(({ isDefault, usability }) => isDefault && usability.usable)?.id ?? null);
     } catch {
       if (activeBrandId.current !== requestedBrandId) return;
-      setStylePresets([]);
-      setAvatars([]);
+      setVisualPresets([]);
       setProductImages([]);
-      setSelectedStylePresetId(null);
-      setSelectedAvatarId(null);
-      setStyleLoadError("브랜드 제품·스타일·아바타를 불러오지 못했습니다. 다시 시도해 주세요.");
+      setSelectedPresetId(null);
+      setStyleLoadError("브랜드 제품과 프리셋을 불러오지 못했습니다. 다시 시도해 주세요.");
     } finally {
       if (activeBrandId.current === requestedBrandId) setLoadingAssets(false);
     }
@@ -568,11 +555,9 @@ export function ContentProposalFlow({
         setLoadingAssets(false);
         return;
       }
-      setStylePresets([]);
-      setAvatars([]);
+      setVisualPresets([]);
       setProductImages([]);
-      setSelectedStylePresetId(null);
-      setSelectedAvatarId(null);
+      setSelectedPresetId(null);
       setUserImageInstruction("");
       setAttachments([]);
       await loadManualVisualAssets(requestedBrandId);
@@ -606,18 +591,16 @@ export function ContentProposalFlow({
       const attachmentIds = attachments
         .filter((attachment) => finalAttachmentRoles.has(attachment.role))
         .map((attachment) => attachment.id);
-      const selectedPreset = stylePresets.find(({ id }) => id === selectedStylePresetId) ?? null;
-      const selectedAvatar = avatars.find(({ id }) => id === selectedAvatarId) ?? null;
+      const selectedPreset = visualPresets.find(({ id, usability }) => id === selectedPresetId && usability.usable) ?? null;
       const approvedProduct = family === "marketing"
         ? products.find((item) => item.id === selectedProductId && isApprovedActiveProduct(item)) ?? null
         : null;
       const manualVisualSelection = {
-        contractVersion: "manual-visual-selection.v1" as const,
+        contractVersion: "manual-visual-selection.v2" as const,
         product: approvedProduct?.activeVersion
           ? { productServiceId: approvedProduct.id, versionId: approvedProduct.activeVersion.id }
           : null,
-        stylePreset: selectedPreset ? { presetId: selectedPreset.id, revision: selectedPreset.revision } : null,
-        avatar: selectedAvatar ? { avatarId: selectedAvatar.id, revision: selectedAvatar.revision } : null,
+        preset: selectedPreset ? { presetId: selectedPreset.id, revision: selectedPreset.revision } : null,
       };
       const finalizationDraft = {
         contractVersion: "content-finalization-draft.v2",
@@ -775,10 +758,8 @@ export function ContentProposalFlow({
         {selectedProposal ? <ManualVisualSelectionStep
           product={family === "marketing" ? selectedProduct ?? null : null}
           productImages={productImages}
-          stylePresets={stylePresets}
-          avatars={avatars}
-          selectedStylePresetId={selectedStylePresetId}
-          selectedAvatarId={selectedAvatarId}
+          visualPresets={visualPresets}
+          selectedPresetId={selectedPresetId}
           userImageInstruction={userImageInstruction}
           loading={loadingAssets}
           loadError={styleLoadError}
@@ -796,8 +777,7 @@ export function ContentProposalFlow({
             disabled={submitting || !selectedGenerationId}
             onChange={setAttachments}
           />}
-          onStylePresetChange={setSelectedStylePresetId}
-          onAvatarChange={setSelectedAvatarId}
+          onPresetChange={setSelectedPresetId}
           onUserImageInstructionChange={setUserImageInstruction}
           onRetry={() => void loadManualVisualAssets()}
           onGenerate={() => void generate()}

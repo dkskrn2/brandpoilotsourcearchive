@@ -1,4 +1,4 @@
-export type WorkerResourceWorkload = "onboarding";
+export type WorkerResourceWorkload = "onboarding" | "design_style_analysis";
 
 export interface WorkerResourceLease {
   id: string;

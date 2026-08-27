@@ -5,18 +5,12 @@ import { BrandRulesPanel } from "./BrandRulesPanel";
 import type { BrandRules } from "../../features/brand-center/types";
 
 const rules: BrandRules = {
-  contractVersion: "brand-rules.v1",
+  contractVersion: "brand-rules.v2",
   requiredPhrases: ["첫 문구"],
   forbiddenPhrases: [],
   exaggerationRules: [],
   ctaRules: { defaultCta: "", allowed: [] },
   channelRules: {},
-  designRules: {
-    colors: [],
-    fonts: [],
-    notes: [],
-    referenceImages: [],
-  },
   autoApprovalRules: { enabled: false, conditions: [] },
 };
 

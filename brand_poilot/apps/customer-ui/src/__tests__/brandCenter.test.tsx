@@ -71,22 +71,12 @@ const activeRules = {
   version: 1,
   status: "approved" as const,
   rules: {
-    contractVersion: "brand-rules.v1" as const,
+    contractVersion: "brand-rules.v2" as const,
     requiredPhrases: [],
     forbiddenPhrases: [],
     exaggerationRules: [],
     ctaRules: { defaultCta: "", allowed: [] },
     channelRules: {},
-    designRules: {
-      colors: ["#174A3A", "#F4EFE5"],
-      fonts: ["명확한 산세리프 중심"],
-      notes: ["절제된 제품 중심 이미지"],
-      referenceImages: [{
-        referenceItemId: "11111111-1111-4111-8111-111111111111",
-        description: "차분한 자연광",
-        tags: ["제품", "차분함"],
-      }],
-    },
     autoApprovalRules: { enabled: false, conditions: [] },
   },
   approvedAt: "2026-07-26T00:00:00.000Z",
@@ -326,6 +316,14 @@ async function renderPage(
     uploadReferenceFile: vi.fn(),
     cancelReferenceUpload: vi.fn(),
     listAvatars: vi.fn(async () => []),
+    listDesignStyles: vi.fn(async () => []),
+    createDesignStyle: vi.fn(),
+    updateDesignStyle: vi.fn(),
+    retryDesignStyle: vi.fn(),
+    listVisualPresets: vi.fn(async () => []),
+    createVisualPreset: vi.fn(),
+    updateVisualPreset: vi.fn(),
+    setDefaultVisualPreset: vi.fn(),
     createAvatar: vi.fn(),
     updateAvatar: vi.fn(),
     uploadAvatarImage: vi.fn(),
@@ -562,35 +560,19 @@ describe("BrandCenterPage", () => {
     expect(screen.queryByText(/근거 \d+개 확인/)).not.toBeInTheDocument();
   });
 
-  it("uses reference images instead of the avatar library as the customer-facing style panel", async () => {
-    const { gateway, libraryApi } = await renderPage();
+  it("renders design style, avatar, and preset management in that order", async () => {
+    const { libraryApi } = await renderPage();
     await userEvent.click(await screen.findByRole("tab", { name: "스타일" }));
-    expect(await screen.findByRole("heading", { name: "디자인 스타일" })).toBeInTheDocument();
-    expect(await screen.findByRole("img", { name: "차분한 자연광" }))
-      .toHaveAttribute("src", "https://blob.example/calm-product.png");
-    expect(screen.queryByText("모델·아바타")).not.toBeInTheDocument();
-    expect(libraryApi.listAvatars).not.toHaveBeenCalled();
-
-    await userEvent.click(screen.getByRole("button", { name: "스타일 이미지 수정" }));
-    const description = screen.getByRole("textbox", { name: "이미지 설명" });
-    await userEvent.clear(description);
-    await userEvent.type(description, "밝고 선명한 자연광");
-    await userEvent.click(screen.getByRole("button", { name: "변경사항 저장" }));
-
-    await waitFor(() => expect(gateway.saveRuleDraft).toHaveBeenCalledWith(
-      "brand-1",
-      expect.objectContaining({
-        designRules: expect.objectContaining({
-          colors: ["#174A3A", "#F4EFE5"],
-          referenceImages: [{
-            referenceItemId: "11111111-1111-4111-8111-111111111111",
-            description: "밝고 선명한 자연광",
-            tags: ["제품", "차분함"],
-          }],
-        }),
-      }),
-    ));
-    expect(await screen.findByText("디자인 스타일을 저장했습니다.")).toBeInTheDocument();
+    const design = await screen.findByRole("heading", { name: "디자인 스타일" });
+    const avatar = screen.getByRole("heading", { name: "모델·아바타" });
+    const preset = screen.getByRole("heading", { name: "프리셋" });
+    expect(design.compareDocumentPosition(avatar) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(avatar.compareDocumentPosition(preset) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(screen.getByLabelText("참고 이미지")).toHaveAttribute("multiple");
+    expect(screen.queryByLabelText("대표 색상")).not.toBeInTheDocument();
+    expect(libraryApi.listAvatars).toHaveBeenCalledWith("brand-1");
+    expect(libraryApi.listDesignStyles).toHaveBeenCalledWith("brand-1");
+    expect(libraryApi.listVisualPresets).toHaveBeenCalledWith("brand-1");
   });
 
   it("loads real FAQ items and requires explicit edit and save", async () => {
@@ -1025,8 +1007,9 @@ describe("BrandCenterPage", () => {
     expect(screen.getByRole("button", { name: "운영 규칙" })).toBeDisabled();
     await userEvent.click(screen.getByRole("tab", { name: "스타일" }));
     expect(screen.queryByRole("button", { name: "스타일 이미지 수정" })).not.toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: "스타일 정보를 불러올 수 없습니다" }))
-      .toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "디자인 스타일" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "모델·아바타" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "프리셋" })).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "운영 규칙 다시 시도" }));
     await waitFor(() => expect(getRules).toHaveBeenCalledTimes(2));
     await userEvent.click(screen.getByRole("tab", { name: "브랜드 코어" }));

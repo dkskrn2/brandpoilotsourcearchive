@@ -11,11 +11,11 @@ import {
   type BrandEvidenceItem,
   type BrandFieldReview,
   type BrandReviewState,
-  type BrandRulesV1,
+  type BrandRulesV2,
 } from "./brandCoreContracts.js";
 import {
   ensureActiveApprovedBrandRules,
-  normalizeBrandRulesV1,
+  normalizeBrandRulesV2,
 } from "./brandRulesReadiness.js";
 
 export interface BrandScope {
@@ -43,7 +43,7 @@ export interface BrandRuleSet extends BrandScope {
   id: string;
   version: number;
   status: "draft" | "approved" | "superseded";
-  rules: BrandRulesV1;
+  rules: BrandRulesV2;
   createdBy: "analysis_confirm" | "user" | "migration";
   createdByUserId: string | null;
   approvedByUserId: string | null;
@@ -89,7 +89,7 @@ export interface BrandCoreRepository {
   listRuleSets(scope: BrandScope): Promise<BrandRuleSet[]>;
   saveRuleDraft(
     scope: BrandScope & { actorUserId: string },
-    input: BrandRulesV1,
+    input: BrandRulesV2,
   ): Promise<BrandRuleSet>;
   approveRules(
     scope: BrandScope & { actorUserId: string; ruleSetId: string },
@@ -171,7 +171,7 @@ function mapHistoricalRule(row: Record<string, unknown>): BrandRuleSet {
   } catch {
     return mapRule({
       ...row,
-      rules_json: normalizeBrandRulesV1(json(row.rules_json, {}), {
+      rules_json: normalizeBrandRulesV2(json(row.rules_json, {}), {
         forbiddenTerms: [],
         defaultCta: "",
         autoApprovalEnabled: false,
@@ -215,35 +215,6 @@ async function requireMember(
   if (approval && !["owner", "admin"].includes(String(member.rows[0]?.role))) {
     throw new Error("brand_core_approval_forbidden");
   }
-}
-
-async function requireValidStyleReferences(
-  client: Pick<PoolClient, "query">,
-  scope: BrandScope,
-  rules: BrandRulesV1,
-): Promise<void> {
-  const referenceIds = rules.designRules.referenceImages.map((image) => image.referenceItemId);
-  if (referenceIds.length === 0) return;
-  const result = await client.query(
-    `select item.id
-       from reference_items item
-       join storage_artifacts artifact
-         on artifact.id = item.storage_artifact_id
-        and artifact.workspace_id = item.workspace_id
-        and artifact.brand_id = item.brand_id
-      where item.workspace_id = $1
-        and item.brand_id = $2
-        and item.id = any($3::uuid[])
-        and item.kind = 'upload'
-        and item.archived_at is null
-        and artifact.deleted_at is null
-        and artifact.public_url is not null
-        and artifact.path is not null
-        and artifact.checksum ~ '^[0-9a-f]{64}$'
-        and lower(artifact.mime_type) in ('image/png','image/jpeg','image/webp')`,
-    [scope.workspaceId, scope.brandId, referenceIds],
-  );
-  if (result.rowCount !== referenceIds.length) throw new Error("brand_style_reference_invalid");
 }
 
 function initialReviewState(): BrandReviewState {
@@ -606,7 +577,6 @@ export function createBrandCoreRepository(pool: Pool): BrandCoreRepository {
           [scope.workspaceId, scope.brandId],
         );
         if (!profile.rowCount) throw new Error("brand_not_found");
-        await requireValidStyleReferences(client, scope, rules);
         const inserted = await client.query(
           `insert into brand_rule_sets (
              workspace_id, brand_id, version, status, rules_json, created_by, created_by_user_id
@@ -638,7 +608,6 @@ export function createBrandCoreRepository(pool: Pool): BrandCoreRepository {
         if (!current.rowCount) throw new Error("brand_rules_not_found");
         const target = mapRule(current.rows[0] as Record<string, unknown>);
         const targetRules = parseBrandRules(target.rules);
-        await requireValidStyleReferences(client, scope, targetRules);
         if (target.status === "approved") return target;
         if (target.status !== "draft") throw new Error("brand_rules_not_draft");
         await client.query(

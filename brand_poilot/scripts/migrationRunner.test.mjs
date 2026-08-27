@@ -4620,6 +4620,7 @@ test("an installation applied through 064 has every later migration pending", as
       "091_ai_content_prompt_lineage_v4.sql",
       "092_publish_calendar_weekly_schedule.sql",
       "093_design_style_analysis_visual_presets.sql",
+      "094_ai_content_prompt_lineage_v5.sql",
     ],
   );
 });
@@ -4837,6 +4838,21 @@ test("design style analysis schema 093 follows weekly schedule 092 deterministic
   );
 });
 
+test("proposal prompt lineage 094 follows design style schema 093 deterministically", async () => {
+  const loaded = await migrationRunner.loadMigrations();
+  const ids = loaded.map(({ id }) => id);
+  const migration094Index = ids.indexOf("094_ai_content_prompt_lineage_v5.sql");
+
+  assert.equal(
+    migration094Index,
+    ids.indexOf("093_design_style_analysis_visual_presets.sql") + 1,
+  );
+  assert.equal(
+    loaded[migration094Index].checksum,
+    migrationRunner.post075SchemaMigrationChecksums["094_ai_content_prompt_lineage_v5.sql"],
+  );
+});
+
 const post076SchemaMigrationIdsForTests = [
   "077_content_suggestion_batches.sql",
   "078_faq_utterance_matching.sql",
@@ -4855,6 +4871,7 @@ const post076SchemaMigrationIdsForTests = [
   "091_ai_content_prompt_lineage_v4.sql",
   "092_publish_calendar_weekly_schedule.sql",
   "093_design_style_analysis_visual_presets.sql",
+  "094_ai_content_prompt_lineage_v5.sql",
 ];
 
 test("post-075 data migrations are a closed DML-only contract", async () => {

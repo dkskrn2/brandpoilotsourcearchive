@@ -110,6 +110,7 @@ export const fullSourceMigrationIds = Object.freeze([
   "091_ai_content_prompt_lineage_v4.sql",
   "092_publish_calendar_weekly_schedule.sql",
   "093_design_style_analysis_visual_presets.sql",
+  "094_ai_content_prompt_lineage_v5.sql",
 ]);
 const legacyTriggerSearchPathMigrationId = "073a_legacy_trigger_function_search_path.sql";
 export const legacyTriggerSearchPathMigrationChecksum =
@@ -140,6 +141,7 @@ const post075SchemaMigrationIds = Object.freeze([
   "091_ai_content_prompt_lineage_v4.sql",
   "092_publish_calendar_weekly_schedule.sql",
   "093_design_style_analysis_visual_presets.sql",
+  "094_ai_content_prompt_lineage_v5.sql",
 ]);
 export const post075SchemaMigrationChecksums = Object.freeze({
   "077_content_suggestion_batches.sql": "3b178464c5ae5c4e220428e0752ab3e79a2ca06b5b2b23f1e89c34e983e63f76",
@@ -158,7 +160,8 @@ export const post075SchemaMigrationChecksums = Object.freeze({
   "090_existing_brand_free_subscriptions.sql": "8134f35d21f72f7418b5502bb5cfb10c8f296f147788bcd8b539d6d930588552",
   "091_ai_content_prompt_lineage_v4.sql": "05696c55ee959cd80ef7cdf30fcb07e93e0579da515042ebd8e8aafb9cde5e10",
   "092_publish_calendar_weekly_schedule.sql": "c1bf905666ce4dabac137c0522fa0dc0300f574eda6d1e9648283f00b2af4d2b",
-  "093_design_style_analysis_visual_presets.sql": "59c752b1b4bbb56626baa694a2875b2c0f13d0f4ae336ef737d6ecf75536929c",
+  "093_design_style_analysis_visual_presets.sql": "3f41cbbb74e804afb6db8a6bbd66b206ae01d7eb73df7a5a9419ef5d41c1daf1",
+  "094_ai_content_prompt_lineage_v5.sql": "5745c3a84f40aeb4742309d939361973ade53b383b846cd4242f6db727791e59",
 });
 const post075DeferredMigrationIds = Object.freeze([
   ...post075DataMigrationIds,

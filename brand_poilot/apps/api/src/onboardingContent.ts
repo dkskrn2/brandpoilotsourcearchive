@@ -4,7 +4,7 @@ import type {
   ContentOrchestrationV2,
   ProposalBaseInputSnapshotV2,
 } from "@brand-pilot/content-contracts";
-import { parseBrandRulesContentV1, parseProposalBaseInputSnapshotV2 } from "@brand-pilot/content-contracts";
+import { parseBrandRulesContentV2, parseProposalBaseInputSnapshotV2 } from "@brand-pilot/content-contracts";
 import {
   parseContentSuggestionCategoryCode,
   parseStoredContentSuggestionSources,
@@ -76,7 +76,7 @@ export function parseOnboardingProposalAuthority(value: unknown): OnboardingProp
     if (Object.keys(rules).length !== ruleKeys.length
       || Object.keys(rules).some((key) => !ruleKeys.includes(key))
       || rules.version !== 1) throw new Error();
-    const content = parseBrandRulesContentV1(rules.content);
+    const content = parseBrandRulesContentV2(rules.content);
     if (typeof rules.contentSha256 !== "string"
       || !/^[0-9a-f]{64}$/.test(rules.contentSha256)
       || rules.contentSha256 !== proposalSha256(content)) throw new Error();
@@ -291,7 +291,7 @@ export function buildProvisionalBrandContext(input: {
     coreAppeal: clipped(input.suggestion.contentBrief, 4_000),
   };
   const content = {
-    contractVersion: "brand-rules.v1" as const,
+    contractVersion: "brand-rules.v2" as const,
     requiredPhrases: [],
     forbiddenPhrases: [],
     exaggerationRules: ["확인되지 않은 수치, 최상급 표현, 효능을 단정하지 않습니다."],
@@ -299,7 +299,6 @@ export function buildProvisionalBrandContext(input: {
     channelRules: {
       instagram: ["짧고 명확한 문장을 사용합니다.", "출처로 확인할 수 있는 사실을 우선합니다."],
     },
-    designRules: { colors: [], fonts: [], notes: [], referenceImages: [] },
     autoApprovalRules: { enabled: false, conditions: [] },
   };
   const brandRules: ApprovedBrandRulesSnapshotV1 = {

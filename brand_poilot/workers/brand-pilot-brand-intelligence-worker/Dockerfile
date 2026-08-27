@@ -30,6 +30,7 @@ COPY --from=build --chown=node:node /app/workers/brand-pilot-brand-intelligence-
 COPY --from=build --chown=node:node /app/workers/brand-pilot-brand-intelligence-worker/dist ./workers/brand-pilot-brand-intelligence-worker/dist
 COPY --from=build --chown=node:node /app/workers/brand-pilot-brand-intelligence-worker/scripts/codex-output.mjs ./workers/brand-pilot-brand-intelligence-worker/scripts/codex-output.mjs
 COPY --from=build --chown=node:node /app/workers/brand-pilot-brand-intelligence-worker/scripts/run-codex-brand-intelligence.mjs ./workers/brand-pilot-brand-intelligence-worker/scripts/run-codex-brand-intelligence.mjs
+COPY --from=build --chown=node:node /app/workers/brand-pilot-brand-intelligence-worker/scripts/run-codex-style-analysis.mjs ./workers/brand-pilot-brand-intelligence-worker/scripts/run-codex-style-analysis.mjs
 COPY --from=build --chown=node:node /app/workers/brand-pilot-brand-intelligence-worker/.agents/skills/brand-intelligence/SKILL.md ./workers/brand-pilot-brand-intelligence-worker/.agents/skills/brand-intelligence/SKILL.md
 RUN node node_modules/playwright/cli.js install --with-deps chromium \
     && chmod -R a+rX /ms-playwright \

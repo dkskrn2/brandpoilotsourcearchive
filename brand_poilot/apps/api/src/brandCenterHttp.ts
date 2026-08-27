@@ -38,7 +38,7 @@ import {
   validateAssetLibraryUpload,
   type AssetLibraryUploadKind,
 } from "./assetLibraryUpload.js";
-import { parseBrandStylePresetInput } from "./manualVisualAssetsContracts.js";
+import { parseDesignStyleInput, parseVisualPresetInput } from "./designStyleContracts.js";
 
 interface BrandCenterRouteOptions {
   repository: ApiRepository;
@@ -483,24 +483,70 @@ export function registerBrandCenterRoutes(
     },
   );
 
-  app.get<{ Params: { brandId: string }; Querystring: { include?: string } }>(
-    "/brands/:brandId/style-presets",
+  app.get<{ Params: { brandId: string } }>(
+    "/brands/:brandId/design-styles",
     async (request) => {
-      if (!repository.listBrandStylePresets) throw new Error("brand_style_preset_not_configured");
-      return repository.listBrandStylePresets(
-        options.scope(request, request.params.brandId),
-        request.query.include?.split(",").includes("archived") ?? false,
-      );
+      if (!repository.listDesignStyles) throw new Error("design_style_not_configured");
+      return repository.listDesignStyles(options.scope(request, request.params.brandId));
     },
   );
 
   app.post<{ Params: { brandId: string }; Body: unknown }>(
-    "/brands/:brandId/style-presets",
+    "/brands/:brandId/design-styles",
     async (request, reply) => {
-      if (!repository.createBrandStylePreset) throw new Error("brand_style_preset_not_configured");
-      const created = await repository.createBrandStylePreset(
+      if (!repository.createDesignStyle) throw new Error("design_style_not_configured");
+      const created = await repository.createDesignStyle(
         { ...options.scope(request, request.params.brandId), actorUserId: requireActor(options, request) },
-        parseBrandStylePresetInput(request.body),
+        parseDesignStyleInput(request.body),
+      );
+      reply.code(201);
+      return created;
+    },
+  );
+
+  app.patch<{ Params: { brandId: string; styleId: string }; Body: unknown }>(
+    "/brands/:brandId/design-styles/:styleId",
+    async (request) => {
+      if (!repository.updateDesignStyle) throw new Error("design_style_not_configured");
+      const revisionHeader = request.headers["if-match"];
+      const revision = Number(typeof revisionHeader === "string" ? revisionHeader.replace(/^W\//, "").replaceAll('"', "") : NaN);
+      if (!Number.isSafeInteger(revision) || revision < 1) throw new Error("design_style_revision_required");
+      return repository.updateDesignStyle(
+        {
+          ...options.scope(request, request.params.brandId), actorUserId: requireActor(options, request),
+          styleId: request.params.styleId, expectedRevision: revision,
+        },
+        parseDesignStyleInput(request.body),
+      );
+    },
+  );
+
+  app.post<{ Params: { brandId: string; styleId: string } }>(
+    "/brands/:brandId/design-styles/:styleId/retry",
+    async (request) => {
+      if (!repository.retryDesignStyleAnalysis) throw new Error("design_style_not_configured");
+      return repository.retryDesignStyleAnalysis({
+        ...options.scope(request, request.params.brandId), actorUserId: requireActor(options, request),
+        styleId: request.params.styleId,
+      });
+    },
+  );
+
+  app.get<{ Params: { brandId: string } }>(
+    "/brands/:brandId/visual-presets",
+    async (request) => {
+      if (!repository.listVisualPresets) throw new Error("visual_preset_not_configured");
+      return repository.listVisualPresets(options.scope(request, request.params.brandId));
+    },
+  );
+
+  app.post<{ Params: { brandId: string }; Body: unknown }>(
+    "/brands/:brandId/visual-presets",
+    async (request, reply) => {
+      if (!repository.createVisualPreset) throw new Error("visual_preset_not_configured");
+      const created = await repository.createVisualPreset(
+        { ...options.scope(request, request.params.brandId), actorUserId: requireActor(options, request) },
+        parseVisualPresetInput(request.body),
       );
       reply.code(201);
       return created;
@@ -508,43 +554,21 @@ export function registerBrandCenterRoutes(
   );
 
   app.patch<{ Params: { brandId: string; presetId: string }; Body: unknown }>(
-    "/brands/:brandId/style-presets/:presetId",
+    "/brands/:brandId/visual-presets/:presetId",
     async (request) => {
-      if (!repository.updateBrandStylePreset) throw new Error("brand_style_preset_not_configured");
+      if (!repository.updateVisualPreset) throw new Error("visual_preset_not_configured");
       const revisionHeader = request.headers["if-match"];
       const revision = Number(typeof revisionHeader === "string" ? revisionHeader.replace(/^W\//, "").replaceAll('"', "") : NaN);
-      if (!Number.isSafeInteger(revision) || revision < 1) throw new Error("brand_style_preset_version_required");
-      return repository.updateBrandStylePreset(
-        {
-          ...options.scope(request, request.params.brandId), actorUserId: requireActor(options, request),
-          presetId: request.params.presetId, expectedRevision: revision,
-        },
-        parseBrandStylePresetInput(request.body),
-      );
+      if (!Number.isSafeInteger(revision) || revision < 1) throw new Error("visual_preset_revision_required");
+      return repository.updateVisualPreset({ ...options.scope(request, request.params.brandId), actorUserId: requireActor(options, request), presetId: request.params.presetId, expectedRevision: revision }, parseVisualPresetInput(request.body));
     },
   );
 
   app.post<{ Params: { brandId: string; presetId: string } }>(
-    "/brands/:brandId/style-presets/:presetId/default",
+    "/brands/:brandId/visual-presets/:presetId/default",
     async (request) => {
-      if (!repository.setDefaultBrandStylePreset) throw new Error("brand_style_preset_not_configured");
-      return repository.setDefaultBrandStylePreset({
-        ...options.scope(request, request.params.brandId), actorUserId: requireActor(options, request),
-        presetId: request.params.presetId,
-      });
-    },
-  );
-
-  app.delete<{ Params: { brandId: string; presetId: string } }>(
-    "/brands/:brandId/style-presets/:presetId",
-    async (request, reply) => {
-      if (!repository.archiveBrandStylePreset) throw new Error("brand_style_preset_not_configured");
-      await repository.archiveBrandStylePreset({
-        ...options.scope(request, request.params.brandId), actorUserId: requireActor(options, request),
-        presetId: request.params.presetId,
-      });
-      reply.code(204);
-      return reply.send();
+      if (!repository.setDefaultVisualPreset) throw new Error("visual_preset_not_configured");
+      return repository.setDefaultVisualPreset({ ...options.scope(request, request.params.brandId), actorUserId: requireActor(options, request), presetId: request.params.presetId });
     },
   );
 

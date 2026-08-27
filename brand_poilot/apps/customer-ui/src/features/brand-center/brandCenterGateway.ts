@@ -29,37 +29,20 @@ function stringArray(value: unknown): string[] {
 
 function parseRules(value: unknown): BrandRules {
   const source = record(value);
-  if (source.contractVersion !== "brand-rules.v1") invalidRulesResponse();
+  if (source.contractVersion !== "brand-rules.v2") invalidRulesResponse();
   const cta = record(source.ctaRules);
   if (typeof cta.defaultCta !== "string") invalidRulesResponse();
   const channels = record(source.channelRules);
   const channelRules = Object.fromEntries(Object.entries(channels).map(([channel, rules]) => [channel, stringArray(rules)]));
-  const design = record(source.designRules);
-  if (!Array.isArray(design.referenceImages)) invalidRulesResponse();
-  const referenceImages = design.referenceImages.map((value) => {
-    const image = record(value);
-    if (typeof image.referenceItemId !== "string" || typeof image.description !== "string") invalidRulesResponse();
-    return {
-      referenceItemId: image.referenceItemId,
-      description: image.description,
-      tags: stringArray(image.tags),
-    };
-  });
   const approval = record(source.autoApprovalRules);
   if (typeof approval.enabled !== "boolean") invalidRulesResponse();
   return {
-    contractVersion: "brand-rules.v1",
+    contractVersion: "brand-rules.v2",
     requiredPhrases: stringArray(source.requiredPhrases),
     forbiddenPhrases: stringArray(source.forbiddenPhrases),
     exaggerationRules: stringArray(source.exaggerationRules),
     ctaRules: { defaultCta: cta.defaultCta, allowed: stringArray(cta.allowed) },
     channelRules,
-    designRules: {
-      colors: stringArray(design.colors),
-      fonts: stringArray(design.fonts),
-      notes: stringArray(design.notes),
-      referenceImages,
-    },
     autoApprovalRules: { enabled: approval.enabled, conditions: stringArray(approval.conditions) },
   };
 }

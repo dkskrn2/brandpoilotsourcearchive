@@ -1,8 +1,7 @@
 import type {
-  Avatar,
-  BrandStylePreset,
   ProductServiceImageAsset,
   ProductServiceItem,
+  VisualPreset,
 } from "../../features/libraries/libraryGateway";
 import { Alert } from "../ui/Alert";
 import { InlineSpinner } from "../ui/LoadingState";
@@ -10,10 +9,8 @@ import { InlineSpinner } from "../ui/LoadingState";
 interface Props {
   product: ProductServiceItem | null;
   productImages: ProductServiceImageAsset[];
-  stylePresets: BrandStylePreset[];
-  avatars: Avatar[];
-  selectedStylePresetId: string | null;
-  selectedAvatarId: string | null;
+  visualPresets: VisualPreset[];
+  selectedPresetId: string | null;
   userImageInstruction: string;
   loading: boolean;
   loadError: string | null;
@@ -22,8 +19,7 @@ interface Props {
   selectedProposalTitle: string;
   attachmentCount: number;
   attachmentUploader: React.ReactNode;
-  onStylePresetChange(value: string | null): void;
-  onAvatarChange(value: string | null): void;
+  onPresetChange(value: string | null): void;
   onUserImageInstructionChange(value: string): void;
   onRetry(): void;
   onGenerate(): void;
@@ -43,7 +39,7 @@ export function ManualVisualSelectionStep(props: Props) {
     {props.loadError ? <Alert title="브랜드 자료를 불러오지 못했습니다" variant="warn">
       {props.loadError}<button className="button" type="button" onClick={props.onRetry}>다시 시도</button>
     </Alert> : null}
-    {props.loading ? <InlineSpinner label="브랜드 제품·스타일·아바타 불러오는 중" /> : <div className="manual-visual-grid">
+    {props.loading ? <InlineSpinner label="브랜드 제품과 프리셋 불러오는 중" /> : <div className="manual-visual-grid">
       <section className="manual-visual-card" aria-label="선택 제품·서비스">
         <p className="eyebrow">제품·서비스</p>
         <h3>{profile?.name ?? "선택한 제품·서비스 없음"}</h3>
@@ -59,21 +55,11 @@ export function ManualVisualSelectionStep(props: Props) {
       </section>
 
       <fieldset className="manual-visual-card" disabled={choicesDisabled}>
-        <legend>브랜드 스타일</legend>
-        <label><input type="radio" name="manual-style-preset" checked={props.selectedStylePresetId === null} onChange={() => props.onStylePresetChange(null)} />스타일 사용 안 함</label>
-        {props.stylePresets.map((preset) => <label key={preset.id} className={preset.id === props.selectedStylePresetId ? "is-selected" : ""}>
-          <input type="radio" name="manual-style-preset" checked={preset.id === props.selectedStylePresetId} onChange={() => props.onStylePresetChange(preset.id)} />
-          <span><strong>{preset.name}</strong>{preset.isDefault ? <small> 기본</small> : null}<small>{preset.description}</small><small>{[...preset.visualTokens.colors, ...preset.visualTokens.fonts].join(" · ")}</small></span>
-        </label>)}
-      </fieldset>
-
-      <fieldset className="manual-visual-card" disabled={choicesDisabled}>
-        <legend>아바타</legend>
-        <label><input type="radio" name="manual-avatar" checked={props.selectedAvatarId === null} onChange={() => props.onAvatarChange(null)} />아바타 사용 안 함</label>
-        {props.avatars.map((avatar) => <label key={avatar.id} className={avatar.id === props.selectedAvatarId ? "is-selected" : ""}>
-          <input type="radio" name="manual-avatar" checked={avatar.id === props.selectedAvatarId} onChange={() => props.onAvatarChange(avatar.id)} />
-          {avatar.images.find((image) => image.representative) ? <img src={avatar.images.find((image) => image.representative)!.storageUrl} alt="" /> : null}
-          <span><strong>{avatar.name}</strong>{avatar.isDefault ? <small> 기본</small> : null}<small>{avatar.description}</small></span>
+        <legend>프리셋</legend>
+        <label><input type="radio" name="manual-visual-preset" checked={props.selectedPresetId === null} onChange={() => props.onPresetChange(null)} />프리셋 사용 안 함</label>
+        {props.visualPresets.map((preset) => <label key={preset.id} className={preset.id === props.selectedPresetId ? "is-selected" : ""} aria-disabled={!preset.usability.usable}>
+          <input type="radio" name="manual-visual-preset" disabled={!preset.usability.usable} checked={preset.id === props.selectedPresetId} onChange={() => props.onPresetChange(preset.id)} />
+          <span><strong>{preset.name}</strong>{preset.isDefault ? <small> 기본</small> : null}<small>{preset.usability.usable ? "사용 가능" : preset.usability.reason === "style_analyzing" ? "스타일 분석 중" : preset.usability.reason === "style_analysis_failed" ? "스타일 분석 실패" : "아바타 사용 불가"}</small></span>
         </label>)}
       </fieldset>
     </div>}

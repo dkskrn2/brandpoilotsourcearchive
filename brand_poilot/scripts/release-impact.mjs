@@ -22,6 +22,7 @@ export const CARD_MANUSCRIPT_VISUAL_SESSION_PROFILE = "card-manuscript-visual-se
 export const CARD_REEL_EDITORIAL_PROMPT_QUALITY_PROFILE = "card-reel-editorial-prompt-quality";
 export const FAQ_UTTERANCE_MATCHING_PROFILE = "faq-utterance-matching";
 export const MANUAL_BRAND_VISUAL_ASSETS_PROFILE = "manual-brand-visual-assets";
+export const DESIGN_STYLE_PRESET_EDITORIAL_CUTOVER_PROFILE = "design-style-preset-editorial-cutover";
 const AI_CONTENT_CUTOVER_SERVER_COMPONENTS = Object.freeze([
   "api",
   "contentProposalWorker",
@@ -648,12 +649,74 @@ function classifyManualBrandVisualAssetsPath(path, components) {
   return { known: false };
 }
 
+function classifyDesignStylePresetEditorialCutoverPath(path, components) {
+  if (path.startsWith("docs/") || path.endsWith(".md")) {
+    return { known: true, documentation: true };
+  }
+  if (path.startsWith("apps/api/")) {
+    components.api = true;
+    return { known: true };
+  }
+  if (path.startsWith("apps/customer-ui/")) {
+    components.customerUi = true;
+    return { known: true };
+  }
+  if (path === "package-lock.json") {
+    components.brandIntelligenceWorker = true;
+    return { known: true };
+  }
+  if (path === "db/migrations/093_design_style_analysis_visual_presets.sql"
+    || path === "db/migrations/094_ai_content_prompt_lineage_v5.sql") {
+    components.api = true;
+    return { known: true, migration: true };
+  }
+  if (path.startsWith("packages/brand-pilot-content-contracts/")) {
+    for (const component of [
+      "api",
+      "contentProposalWorker",
+      "brandIntelligenceWorker",
+      "imageWorker",
+      "cardNewsWorker",
+      "blogWorker",
+      "reelWorker",
+    ]) components[component] = true;
+    return { known: true };
+  }
+  const worker = [
+    ["workers/brand-pilot-content-proposal-worker/", "contentProposalWorker"],
+    ["workers/brand-pilot-brand-intelligence-worker/", "brandIntelligenceWorker"],
+    ["workers/brand-pilot-image-worker/", "imageWorker"],
+    ["workers/brand-pilot-card-news-worker/", "cardNewsWorker"],
+    ["workers/brand-pilot-blog-worker/", "blogWorker"],
+    ["workers/brand-pilot-reel-worker/", "reelWorker"],
+  ].find(([prefix]) => path.startsWith(prefix));
+  if (worker) {
+    components[worker[1]] = true;
+    return { known: true };
+  }
+  if (path === "scripts/migrationRunner.mjs") {
+    components.api = true;
+    return { known: true, migration: true, deployBundle: true };
+  }
+  if (path === "scripts/migrationRunner.test.mjs"
+    || path === "scripts/repository-contract.test.mjs"
+    || path === "scripts/deployment-contract.test.mjs"
+    || path === "scripts/release-impact.test.mjs") {
+    return { known: true };
+  }
+  if (path === "scripts/release-impact.mjs") {
+    return { known: true, deployBundle: true };
+  }
+  return { known: false };
+}
+
 export function classifyChangedPaths(values, options = {}) {
   const profile = options.profile ?? "default";
   if (!["default", AI_CONTENT_THREE_FORMAT_CUTOVER_PROFILE, STRUCTURED_SOCIAL_RENDER_SEMANTICS_PROFILE,
     CARD_MANUSCRIPT_VISUAL_SESSION_PROFILE, CARD_REEL_EDITORIAL_PROMPT_QUALITY_PROFILE,
     FAQ_UTTERANCE_MATCHING_PROFILE,
-    MANUAL_BRAND_VISUAL_ASSETS_PROFILE].includes(profile)) {
+    MANUAL_BRAND_VISUAL_ASSETS_PROFILE,
+    DESIGN_STYLE_PRESET_EDITORIAL_CUTOVER_PROFILE].includes(profile)) {
     throw new Error("release_impact_profile_invalid");
   }
   const originalPaths = [...new Set(values.map((value) => String(value ?? "").trim()).filter(Boolean))];
@@ -678,7 +741,8 @@ export function classifyChangedPaths(values, options = {}) {
     || profile === CARD_MANUSCRIPT_VISUAL_SESSION_PROFILE
     || profile === CARD_REEL_EDITORIAL_PROMPT_QUALITY_PROFILE
     || profile === FAQ_UTTERANCE_MATCHING_PROFILE
-    || profile === MANUAL_BRAND_VISUAL_ASSETS_PROFILE) {
+    || profile === MANUAL_BRAND_VISUAL_ASSETS_PROFILE
+    || profile === DESIGN_STYLE_PRESET_EDITORIAL_CUTOVER_PROFILE) {
     for (let index = 0; index < paths.length; index += 1) {
       const path = paths[index];
       const originalPath = originalPaths[index] ?? path;
@@ -692,7 +756,9 @@ export function classifyChangedPaths(values, options = {}) {
               ? classifyCardReelEditorialPromptQualityPath(path, components)
               : profile === FAQ_UTTERANCE_MATCHING_PROFILE
                 ? classifyFaqUtteranceMatchingPath(path, components)
-                : classifyManualBrandVisualAssetsPath(path, components);
+                : profile === MANUAL_BRAND_VISUAL_ASSETS_PROFILE
+                  ? classifyManualBrandVisualAssetsPath(path, components)
+                  : classifyDesignStylePresetEditorialCutoverPath(path, components);
       if (result.documentation) continue;
       nonDocumentationChange = true;
       if (result.migration) migrationChanged = true;

@@ -1,5 +1,5 @@
 import type { ContentGenerationInputV3 } from "@brand-pilot/content-contracts";
-import type { FrozenManualVisualSelectionV1 } from "@brand-pilot/content-contracts/manual-visual-selection";
+import type { FrozenManualVisualSelection } from "@brand-pilot/content-contracts/manual-visual-selection";
 import {
   projectManualEditorialProductFacts,
   projectManualEditorialVisualInputs,
@@ -17,7 +17,7 @@ function safePromptJson(value: unknown): string {
   });
 }
 
-function creativeContext(input: ContentGenerationInputV3, selection: FrozenManualVisualSelectionV1) {
+function creativeContext(input: ContentGenerationInputV3, selection: FrozenManualVisualSelection) {
   const rules = input.brandRules.content;
   const selectedReferenceIds = input.subject.kind === "reference"
     ? new Set(input.subject.referenceIds)
@@ -82,11 +82,6 @@ function creativeContext(input: ContentGenerationInputV3, selection: FrozenManua
       exaggerationRules: rules.exaggerationRules,
       ctaRules: rules.ctaRules,
       channelRules: rules.channelRules,
-      designRules: {
-        colors: rules.designRules.colors,
-        fonts: rules.designRules.fonts,
-        notes: rules.designRules.notes,
-      },
     },
     subject,
     subjectReferences,
@@ -109,7 +104,7 @@ function creativeContext(input: ContentGenerationInputV3, selection: FrozenManua
 
 export function buildReelPlanPrompt(
   input: ContentGenerationInputV3,
-  manualVisualSelection: FrozenManualVisualSelectionV1,
+  manualVisualSelection: FrozenManualVisualSelection,
   repairError?: string,
 ): string {
   if (input.outputSettings.outputFormat !== "reel") throw new Error("reel_input_invalid");

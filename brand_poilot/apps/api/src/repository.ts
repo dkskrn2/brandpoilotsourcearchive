@@ -41,7 +41,8 @@ import { createBrandIntelligenceProvider } from "./brandIntelligenceProvider.js"
 import { createBrandCoreRepository } from "./brandCoreRepository.js";
 import { createProductLibraryRepository } from "./productLibraryRepository.js";
 import { createAssetLibraryRepository } from "./assetLibraryRepository.js";
-import { createManualVisualAssetsRepository } from "./manualVisualAssetsRepository.js";
+import { createProductServiceImageAssetsRepository } from "./productServiceImageAssetsRepository.js";
+import { createDesignStyleRepository } from "./designStyleRepository.js";
 import { createProductImageImportRepository } from "./productImageImportRepository.js";
 import { createFaqSuggestionRepository } from "./faqSuggestionRepository.js";
 import { effectiveFaqAliases } from "./faqUtterancePolicy.js";
@@ -1462,7 +1463,8 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
   const brandCore = createBrandCoreRepository(pool);
   const productLibrary = createProductLibraryRepository(pool);
   const assetLibrary = createAssetLibraryRepository(pool);
-  const manualVisualAssets = createManualVisualAssetsRepository(pool);
+  const productServiceImages = createProductServiceImageAssetsRepository(pool);
+  const designStyles = createDesignStyleRepository(pool);
   const productImageImports = createProductImageImportRepository(aiContentPool);
   const faqSuggestions = createFaqSuggestionRepository(pool);
   const faqMatching: FaqMatchingRuntimePolicy = options.faqMatching ?? {
@@ -2246,6 +2248,7 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
     ...brandCore,
     ...productLibrary,
     ...assetLibrary,
+    ...productServiceImages,
     ...instagramReferenceArchiveRepository,
     searchMetaAdLibrary: metaAdLibraryRepository.search,
     findMetaAdLibraryCache: metaAdLibraryRepository.findCache,
@@ -2253,7 +2256,7 @@ export function createRepository(pool: Pool, options: RepositoryOptions = {}): A
     saveMetaAdLibraryAd: metaAdLibraryRepository.save,
     removeMetaAdLibraryAd: metaAdLibraryRepository.remove,
     runSavedMetaAdPageRefreshes: metaAdLibraryRepository.runSavedPageRefreshes,
-    ...manualVisualAssets,
+    ...designStyles,
     ...productImageImports,
     ...faqSuggestions,
     ...instagramTrendRepository,

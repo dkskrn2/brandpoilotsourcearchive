@@ -2,6 +2,10 @@ import type {
   BrandEvidenceSourceType,
   BrandIntelligenceResultV1,
 } from "./brandIntelligenceContracts.js";
+import {
+  parseBrandRulesContentV2,
+  type BrandRulesContentV2,
+} from "@brand-pilot/content-contracts";
 
 export interface BrandCoreV1 {
   contractVersion: "brand-core.v1";
@@ -24,25 +28,7 @@ export interface BrandCoreV1 {
   };
 }
 
-export interface BrandRulesV1 {
-  contractVersion: "brand-rules.v1";
-  requiredPhrases: string[];
-  forbiddenPhrases: string[];
-  exaggerationRules: string[];
-  ctaRules: { defaultCta: string; allowed: string[] };
-  channelRules: Record<string, string[]>;
-  designRules: {
-    colors: string[];
-    fonts: string[];
-    notes: string[];
-    referenceImages: Array<{
-      referenceItemId: string;
-      description: string;
-      tags: string[];
-    }>;
-  };
-  autoApprovalRules: { enabled: boolean; conditions: string[] };
-}
+export type BrandRulesV2 = BrandRulesContentV2;
 
 export type BrandCoreFieldPath =
   | "summary.oneLine"
@@ -355,100 +341,9 @@ export function transitionBrandReviewState(
   return next;
 }
 
-export function parseBrandRules(value: unknown): BrandRulesV1 {
-  const source = strictObject(value, [
-    "contractVersion",
-    "requiredPhrases",
-    "forbiddenPhrases",
-    "exaggerationRules",
-    "ctaRules",
-    "channelRules",
-    "designRules",
-    "autoApprovalRules",
-  ], "rules");
-  if (source.contractVersion !== "brand-rules.v1") invalid("rules.contractVersion");
-  const ctaRules = strictObject(source.ctaRules, ["defaultCta", "allowed"], "rules.ctaRules");
-  const channelRules = object(source.channelRules, "rules.channelRules");
-  if (Object.keys(channelRules).length > 20) invalid("rules.channelRules");
-  const parsedChannelRules: Record<string, string[]> = {};
-  for (const [channel, rules] of Object.entries(channelRules)) {
-    const normalizedChannel = text(channel, "rules.channelRules", { max: 50 });
-    parsedChannelRules[normalizedChannel] = stringList(rules, `rules.channelRules.${channel}`, {
-      allowEmpty: true,
-    });
-  }
-  const designRules = strictObject(source.designRules, [
-    "colors",
-    "fonts",
-    "notes",
-    "referenceImages",
-  ], "rules.designRules");
-  const autoApprovalRules = strictObject(
-    source.autoApprovalRules,
-    ["enabled", "conditions"],
-    "rules.autoApprovalRules",
-  );
-  if (typeof autoApprovalRules.enabled !== "boolean") invalid("rules.autoApprovalRules.enabled");
-  return {
-    contractVersion: "brand-rules.v1",
-    requiredPhrases: stringList(source.requiredPhrases, "rules.requiredPhrases", { allowEmpty: true }),
-    forbiddenPhrases: stringList(source.forbiddenPhrases, "rules.forbiddenPhrases", { allowEmpty: true }),
-    exaggerationRules: stringList(source.exaggerationRules, "rules.exaggerationRules", {
-      allowEmpty: true,
-    }),
-    ctaRules: {
-      defaultCta: text(ctaRules.defaultCta, "rules.ctaRules.defaultCta", {
-        max: 500,
-        allowEmpty: true,
-      }),
-      allowed: stringList(ctaRules.allowed, "rules.ctaRules.allowed", { allowEmpty: true }),
-    },
-    channelRules: parsedChannelRules,
-    designRules: (() => {
-      const rawReferenceImages = designRules.referenceImages ?? [];
-      if (!Array.isArray(rawReferenceImages) || rawReferenceImages.length > 5) {
-        invalid("rules.designRules.referenceImages");
-      }
-      const seenIds = new Set<string>();
-      const referenceImages = rawReferenceImages.map((rawImage, index) => {
-        const path = `rules.designRules.referenceImages[${index}]`;
-        const image = strictObject(
-          rawImage,
-          ["referenceItemId", "description", "tags"],
-          path,
-        );
-        const referenceItemId = text(image.referenceItemId, `${path}.referenceItemId`, { max: 36 });
-        if (!UUID_PATTERN.test(referenceItemId) || seenIds.has(referenceItemId)) {
-          invalid("rules.designRules.referenceImages");
-        }
-        seenIds.add(referenceItemId);
-        return {
-          referenceItemId,
-          description: text(image.description, `${path}.description`, {
-            max: 240,
-            allowEmpty: true,
-          }),
-          tags: stringList(image.tags, `${path}.tags`, {
-            maxItems: 10,
-            maxLength: 40,
-            allowEmpty: true,
-          }),
-        };
-      });
-      return {
-        colors: stringList(designRules.colors, "rules.designRules.colors", { allowEmpty: true }),
-        fonts: stringList(designRules.fonts, "rules.designRules.fonts", { allowEmpty: true }),
-        notes: stringList(designRules.notes, "rules.designRules.notes", { allowEmpty: true }),
-        referenceImages,
-      };
-    })(),
-    autoApprovalRules: {
-      enabled: autoApprovalRules.enabled,
-      conditions: stringList(autoApprovalRules.conditions, "rules.autoApprovalRules.conditions", {
-        allowEmpty: true,
-      }),
-    },
-  };
+export function parseBrandRules(value: unknown): BrandRulesV2 {
+  try { return parseBrandRulesContentV2(value); }
+  catch { invalid("rules"); }
 }
 
 function analysisFieldToCorePath(field: string): BrandCoreFieldPath | null {

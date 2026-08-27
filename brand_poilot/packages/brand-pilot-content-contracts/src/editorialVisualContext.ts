@@ -1,5 +1,5 @@
 import type { ContentGenerationInputV3 } from "./generation.js";
-import type { FrozenManualVisualSelectionV1 } from "./manualVisualSelection.js";
+import type { FrozenManualVisualSelection } from "./manualVisualSelection.js";
 
 export function projectEditorialProductFacts(input: ContentGenerationInputV3) {
   if (input.product === null) return null;
@@ -28,7 +28,7 @@ export function projectEditorialVisualInputs(input: ContentGenerationInputV3) {
   };
 }
 
-export function projectManualEditorialProductFacts(selection: FrozenManualVisualSelectionV1) {
+export function projectManualEditorialProductFacts(selection: FrozenManualVisualSelection) {
   if (selection.product === null) return null;
   return {
     kind: selection.product.kind,
@@ -44,12 +44,21 @@ export function projectManualEditorialProductFacts(selection: FrozenManualVisual
 
 export function projectManualEditorialVisualInputs(
   input: ContentGenerationInputV3,
-  selection: FrozenManualVisualSelectionV1,
+  selection: FrozenManualVisualSelection,
 ) {
-  return {
+  const shared = {
     explicitUserDirection: input.userImageInstruction,
-    stylePreset: selection.stylePreset,
-    avatar: selection.avatar,
     attachments: (input.references.attachments ?? []).map(({ id, role, fileName }) => ({ id, role, fileName })),
+  };
+  if (selection.contractVersion === "manual-visual-selection-frozen.v1") {
+    return { ...shared, stylePreset: selection.stylePreset, avatar: selection.avatar };
+  }
+  return {
+    ...shared,
+    visualPreset: selection.preset ? {
+      name: selection.preset.name,
+      designStyle: selection.preset.designStyle.analysis,
+      hasAvatar: selection.preset.avatar !== null,
+    } : null,
   };
 }

@@ -1,5 +1,5 @@
 import type { ContentGenerationInputV3 } from "@brand-pilot/content-contracts";
-import type { FrozenManualVisualSelectionV1 } from "@brand-pilot/content-contracts/manual-visual-selection";
+import type { FrozenManualVisualSelection } from "@brand-pilot/content-contracts/manual-visual-selection";
 import type { AiContentJob } from "./contracts.js";
 import { buildCardDeckSourceBundle } from "./sourceBundle.js";
 
@@ -18,7 +18,7 @@ function safePromptJson(value: unknown): string {
 export function buildCardNewsPlanPrompt(
   job: AiContentJob,
   input: ContentGenerationInputV3,
-  manualVisualSelection: FrozenManualVisualSelectionV1,
+  manualVisualSelection: FrozenManualVisualSelection,
   repairError?: string,
 ): string {
   if (job.generationId !== input.generationId) throw new Error("content_generation_input_generation_mismatch");

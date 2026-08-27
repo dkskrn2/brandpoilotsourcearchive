@@ -1,6 +1,6 @@
 import type { BlogJob } from "./contracts.js";
 import type { ContentGenerationInputV3, ResearchEvidenceSnapshotV1 } from "@brand-pilot/content-contracts";
-import type { FrozenManualVisualSelectionV1 } from "@brand-pilot/content-contracts/manual-visual-selection";
+import type { FrozenManualVisualSelection } from "@brand-pilot/content-contracts/manual-visual-selection";
 import {
   projectManualEditorialProductFacts,
   projectManualEditorialVisualInputs,
@@ -26,7 +26,7 @@ function projectEvidence(items: ContentGenerationInputV3["researchEvidence"]["it
 
 function creativeContext(
   input: ContentGenerationInputV3,
-  selection: FrozenManualVisualSelectionV1,
+  selection: FrozenManualVisualSelection,
   supplementalResearch: ResearchEvidenceSnapshotV1 | null,
 ) {
   const rules = input.brandRules.content;
@@ -47,11 +47,6 @@ function creativeContext(
       exaggerationRules: rules.exaggerationRules,
       ctaRules: rules.ctaRules,
       channelRules: rules.channelRules,
-      designRules: {
-        colors: rules.designRules.colors,
-        fonts: rules.designRules.fonts,
-        notes: rules.designRules.notes,
-      },
     },
     subject: input.subject.kind === "topic_url"
       ? {
@@ -93,7 +88,7 @@ function creativeContext(
 export function buildBlogPlanPrompt(
   _job: BlogJob,
   input: ContentGenerationInputV3,
-  manualVisualSelection: FrozenManualVisualSelectionV1,
+  manualVisualSelection: FrozenManualVisualSelection,
   supplementalResearch: ResearchEvidenceSnapshotV1 | null,
   repairErrors?: string[],
 ) {
@@ -140,7 +135,7 @@ export function buildBlogPlanPrompt(
     "상투적인 '오늘은 알아보겠습니다', '도움이 되었기를 바랍니다' 표현과 동일한 문장 구조 반복을 피하세요.",
     "출처 없는 수치나 최신 사실을 단정하지 마세요. 실제 사용한 fixedEvidence와 supplementalEvidence만 claim 근처 a[data-evidence-id] 링크와 하단 section[data-references=\"true\"]에 동일 집합으로 표시하세요. href에는 동결된 정확한 HTTP(S) 근거 URL을 그대로 사용하고, URL을 변경하거나 HTTP를 HTTPS로 업그레이드하지 마세요.",
     "제품 사실은 productFacts 안에서만 사용하세요. 검색 근거로 제품 기능, 성능, 가격, 강점이나 한계를 추가하거나 추론하지 마세요.",
-    "rules의 requiredPhrases, forbiddenPhrases, exaggerationRules, ctaRules, channelRules, designRules를 글과 이미지 지시에 적용하세요.",
+    "rules의 requiredPhrases, forbiddenPhrases, exaggerationRules, ctaRules, channelRules를 글에 적용하세요. visualInputs의 디자인 스타일 분석은 이미지 구성에만 사용하고 사실 근거로 사용하지 마세요.",
     "이미지가 실제 이해를 높일 때만 전체 0~5개를 선택하세요. 대표 이미지는 필수가 아닙니다. 이미지가 없으면 imageDraft는 null이고 asset://를 쓰지 마세요.",
     "이미지가 있으면 imageDraft.assets를 1~5개 만들고 index를 1부터 연속으로 지정하세요. HTML에는 asset://01부터 마지막 번호까지 정확히 한 번씩 순서대로 관련 img src에 넣으세요.",
     "각 이미지 draft의 evidenceIds는 content.usedEvidenceIds 안에서만, productImageAssetIds는 productFacts.images의 assetId 안에서만 선택하세요. 첨부 이미지 사용 여부는 여기서 선택하지 않습니다.",

@@ -19,6 +19,11 @@ import { buildEvidenceBatches } from "./documentPipeline.js";
 import { prepareBrandEvidence } from "./evidencePreparer.js";
 import { ACTIVE_PIPELINE_MS } from "./limits.js";
 import { BrandIntelligenceContractError, parseBrandIntelligenceResult } from "./result.js";
+import {
+  processStyleAnalysisJob,
+  type StyleAnalysisRunner,
+} from "./styleAnalysisWorker.js";
+import type { StyleAnalysisClient } from "./styleAnalysisContracts.js";
 
 export interface BrandIntelligenceRunner {
   run(
@@ -376,18 +381,19 @@ export async function processBrandIntelligenceJob({
 }
 
 export async function runBrandIntelligenceOnce({
-  client, runner, workerId, leaseSeconds, pollMs = 5_000,
+  client, runner, styleRunner, workerId, leaseSeconds, pollMs = 5_000,
   wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
 }: {
-  client: BrandIntelligenceWorkerClient;
+  client: BrandIntelligenceWorkerClient & Partial<StyleAnalysisClient>;
   runner: BrandIntelligenceRunner;
+  styleRunner?: StyleAnalysisRunner;
   workerId: string;
   leaseSeconds: number;
   pollMs?: number;
   wait?: (ms: number) => Promise<unknown>;
 }) {
   await client.cleanup();
-  const result = await withFailClosedResourceLease({
+  const brandResult = await withFailClosedResourceLease({
     client,
     workerId,
     workload: "onboarding",
@@ -402,10 +408,29 @@ export async function runBrandIntelligenceOnce({
       signal,
     });
   });
-  if (result.status === "idle") {
+  if (brandResult.status !== "idle") return brandResult;
+  const styleResult = styleRunner && client.claimStyleAnalysis
+    ? await withFailClosedResourceLease({
+        client,
+        workerId,
+        workload: "design_style_analysis",
+      }, async (signal) => {
+        const job = await client.claimStyleAnalysis!(workerId, leaseSeconds);
+        if (!job) return { status: "idle" as const };
+        return processStyleAnalysisJob({
+          client: client as BrandIntelligenceWorkerClient & StyleAnalysisClient,
+          runner: styleRunner,
+          job,
+          workerId,
+          leaseSeconds,
+          signal,
+        });
+      })
+    : { status: "idle" as const };
+  if (styleResult.status === "idle") {
     await wait(pollMs);
   }
-  return result;
+  return styleResult;
 }
 
 export async function runBrandIntelligenceWatchIteration<T>({

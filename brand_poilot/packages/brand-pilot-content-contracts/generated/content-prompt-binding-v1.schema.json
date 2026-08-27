@@ -134,7 +134,7 @@
       "type": "string"
     },
     "proposalPromptVersion": {
-      "const": "proposal.writer.v4",
+      "const": "proposal.writer.v5",
       "type": "string"
     },
     "proposalRequestVersion": {

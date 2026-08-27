@@ -9,7 +9,6 @@ const userId = "33333333-3333-4333-8333-333333333333";
 const avatarId = "44444444-4444-4444-8444-444444444444";
 const referenceId = "55555555-5555-4555-8555-555555555555";
 const sessionId = "66666666-6666-4666-8666-666666666666";
-const presetId = "77777777-7777-4777-8777-777777777777";
 const productId = "88888888-8888-4888-8888-888888888888";
 const versionId = "99999999-9999-4999-8999-999999999999";
 const uploadBytes = Buffer.alloc(100, 7);
@@ -84,11 +83,6 @@ function setup(overrides: Partial<ApiRepository> = {}) {
     listReferenceChannels: vi.fn(async () => []),
     resolveReferenceChannel: vi.fn(async () => ({ id: referenceId })),
     listReferenceChannelMedia: vi.fn(async () => ({ items: [], total: 0, refreshedAt: null, cacheState: "pending" as const })),
-    listBrandStylePresets: vi.fn(async () => []),
-    createBrandStylePreset: vi.fn(async (_scope, input) => ({ id: presetId, revision: 1, ...input })),
-    updateBrandStylePreset: vi.fn(async (_scope, input) => ({ id: presetId, revision: 2, ...input })),
-    setDefaultBrandStylePreset: vi.fn(async () => ({ id: presetId, revision: 2, isDefault: true })),
-    archiveBrandStylePreset: vi.fn(async () => undefined),
     listProductServiceImageAssets: vi.fn(async () => []),
     confirmProductServiceImageAsset: vi.fn(async (_scope, upload) => ({
       id: referenceId, workspaceId, brandId, productServiceId: productId, versionId,
@@ -140,35 +134,6 @@ function setup(overrides: Partial<ApiRepository> = {}) {
 }
 
 describe("asset library customer routes", () => {
-  it("manages closed named style presets with explicit revision CAS", async () => {
-    const { app, repository } = setup();
-    const payload = {
-      contractVersion: "brand-style-preset.v1",
-      name: "Editorial Red",
-      description: "Newsroom hierarchy",
-      visualTokens: { colors: ["#ff0000"], fonts: ["Pretendard"], notes: ["Red emphasis"] },
-      referenceItemIds: [referenceId],
-      isDefault: true,
-    };
-    expect((await app.inject({ method: "GET", url: `/brands/${brandId}/style-presets`, headers: auth })).statusCode).toBe(200);
-    expect((await app.inject({ method: "POST", url: `/brands/${brandId}/style-presets`, headers: auth, payload })).statusCode).toBe(201);
-    expect((await app.inject({
-      method: "PATCH", url: `/brands/${brandId}/style-presets/${presetId}`,
-      headers: { ...auth, "if-match": '"1"' }, payload: { ...payload, name: "Updated" },
-    })).statusCode).toBe(200);
-    expect((await app.inject({
-      method: "PATCH", url: `/brands/${brandId}/style-presets/${presetId}`, headers: auth, payload,
-    })).statusCode).toBe(400);
-    expect((await app.inject({ method: "POST", url: `/brands/${brandId}/style-presets/${presetId}/default`, headers: auth })).statusCode).toBe(200);
-    expect((await app.inject({ method: "DELETE", url: `/brands/${brandId}/style-presets/${presetId}`, headers: auth })).statusCode).toBe(204);
-    expect(repository.createBrandStylePreset).toHaveBeenCalledWith({ workspaceId, brandId, actorUserId: userId }, payload);
-    expect(repository.updateBrandStylePreset).toHaveBeenCalledWith(
-      { workspaceId, brandId, actorUserId: userId, presetId, expectedRevision: 1 },
-      { ...payload, name: "Updated" },
-    );
-    await app.close();
-  });
-
   it("issues, confirms, lists and deletes a scoped optional product image", async () => {
     const productPath = `brands/${brandId}/asset-library/products/${productId}/${sessionId}/${checksum}-face.webp`;
     const productUrl = `https://store.blob.vercel-storage.com/${productPath}`;

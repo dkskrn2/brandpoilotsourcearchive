@@ -3,6 +3,7 @@ import type {
   BrandIntelligenceResult,
   BrandIntelligenceWorkerClient,
 } from "./contracts.js";
+import { parseStyleAnalysisJob, type StyleAnalysisClient } from "./styleAnalysisContracts.js";
 
 export class BrandIntelligenceApiError extends Error {
   readonly retryable: boolean;
@@ -25,7 +26,7 @@ export function createClient(
   token: string,
   fetchImpl: typeof fetch = fetch,
   timeoutMs = 300_000,
-): BrandIntelligenceWorkerClient {
+): BrandIntelligenceWorkerClient & StyleAnalysisClient {
   const base = apiUrl.replace(/\/+$/, "");
 
   async function request(
@@ -142,6 +143,26 @@ export function createClient(
     async fail(job, input) {
       await request(`/worker/brand-analyses/${job.id}/fail`, {
         workerId: job.leasedBy, leaseToken: job.leaseToken, ...input,
+      });
+    },
+    async claimStyleAnalysis(workerId, leaseSeconds) {
+      const payload = await request("/worker/design-style-analyses/claim", { workerId, leaseSeconds });
+      return payload.job === null ? null : parseStyleAnalysisJob(payload.job);
+    },
+    async heartbeatStyleAnalysis(job, workerId, leaseSeconds) {
+      await request(`/worker/design-style-analyses/${job.jobId}/heartbeat`, {
+        workerId, leaseToken: job.leaseToken, leaseSeconds,
+      }, Math.min(timeoutMs, LEASE_BOUND_REQUEST_TIMEOUT_MS));
+    },
+    async completeStyleAnalysis(job, workerId, analysis, analysisSha256) {
+      await request(`/worker/design-style-analyses/${job.jobId}/complete`, {
+        workerId, leaseToken: job.leaseToken, designStyleId: job.designStyleId,
+        styleRevision: job.styleRevision, analysis, analysisSha256,
+      });
+    },
+    async failStyleAnalysis(job, workerId, errorCode, retryable) {
+      await request(`/worker/design-style-analyses/${job.jobId}/fail`, {
+        workerId, leaseToken: job.leaseToken, errorCode, retryable,
       });
     },
   };

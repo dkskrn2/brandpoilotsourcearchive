@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import {
-  parseBrandRulesContentV1,
+  parseBrandRulesContent,
   type ApprovedBrandRulesSnapshotV1,
 } from "@brand-pilot/content-contracts";
 import type {
@@ -388,7 +388,7 @@ function canonicalJson(value: unknown): string {
 
 function parseBrandRulesSnapshot(value: unknown): ApprovedBrandRulesSnapshotV1 {
   const source = exactObject(value, ["versionId", "version", "content", "contentSha256"]);
-  const content = parseBrandRulesContentV1(source.content);
+  const content = parseBrandRulesContent(source.content);
   const contentSha256 = sha256(source.contentSha256);
   if (typeof source.version !== "number" || !Number.isInteger(source.version) || source.version < 1
     || contentSha256 !== createHash("sha256").update(canonicalJson(content)).digest("hex")) fail();

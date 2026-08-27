@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-import { parseBrandRulesContentV1 } from "@brand-pilot/content-contracts";
 import {
   mapAnalysisToBrandCoreDraft,
   parseBrandCoreForApproval,
@@ -121,169 +120,23 @@ describe("brand evidence and review state", () => {
   });
 });
 
-describe("BrandRulesV1 validation", () => {
-  it("keeps the API canonical parser in parity with the shared immutable snapshot schema", () => {
-    const raw = {
-      contractVersion: "brand-rules.v1",
-      requiredPhrases: [" 정확한 정보 "],
-      forbiddenPhrases: [],
-      exaggerationRules: [],
-      ctaRules: { defaultCta: " 더 알아보기 ", allowed: [] },
-      channelRules: { instagram: [" 짧은 문장 "] },
-      designRules: { colors: [], fonts: [], notes: [] },
-      autoApprovalRules: { enabled: false, conditions: [] },
-    };
-    const canonical = parseBrandRules(raw);
+describe("BrandRulesV2 validation", () => {
+  const rules = {
+    contractVersion: "brand-rules.v2",
+    requiredPhrases: ["정확한 정보"], forbiddenPhrases: [], exaggerationRules: [],
+    ctaRules: { defaultCta: "", allowed: [] }, channelRules: {},
+    autoApprovalRules: { enabled: false, conditions: [] },
+  } as const;
 
-    expect(parseBrandRulesContentV1(canonical)).toEqual(canonical);
-    expect(() => parseBrandRulesContentV1(raw)).toThrow("brand_rules_content_v1_invalid");
-    expect(canonical).toMatchObject({
-      requiredPhrases: ["정확한 정보"],
-      ctaRules: { defaultCta: "더 알아보기" },
-      channelRules: { instagram: ["짧은 문장"] },
-      designRules: { referenceImages: [] },
-    });
+  it("keeps the API parser in parity with the shared V2 schema", () => {
+    expect(parseBrandRules(rules)).toEqual(rules);
   });
 
-  it("keeps review suggestions separate from runtime switches", () => {
-    expect(parseBrandRules({
-      contractVersion: "brand-rules.v1",
-      requiredPhrases: ["브랜드 근거를 바탕으로"],
-      forbiddenPhrases: ["무조건"],
-      exaggerationRules: ["검증할 수 없는 최상급 표현을 사용하지 않습니다."],
-      ctaRules: { defaultCta: "자세히 확인하기", allowed: ["문의하기"] },
-      channelRules: { instagram: ["해시태그는 본문 마지막에 둡니다."] },
-      designRules: { colors: ["#111111"], fonts: ["Pretendard"], notes: [] },
-      autoApprovalRules: { enabled: true, conditions: ["금지 문구가 없습니다."] },
-    }).autoApprovalRules).toEqual({
-      enabled: true,
-      conditions: ["금지 문구가 없습니다."],
-    });
-  });
-
-  it("parses confirmed style reference images and defaults legacy rules", () => {
-    const base = {
-      contractVersion: "brand-rules.v1",
-      requiredPhrases: [],
-      forbiddenPhrases: [],
-      exaggerationRules: [],
-      ctaRules: { defaultCta: "", allowed: [] },
-      channelRules: {},
-      designRules: {
-        colors: ["#174A3A"],
-        fonts: ["Pretendard"],
-        notes: ["절제된 이미지"],
-      },
-      autoApprovalRules: { enabled: false, conditions: [] },
-    };
-    const referenceImages = [
-      "11111111-1111-4111-8111-111111111111",
-      "22222222-2222-4222-8222-222222222222",
-      "33333333-3333-4333-8333-333333333333",
-      "44444444-4444-4444-8444-444444444444",
-      "55555555-5555-4555-8555-555555555555",
-    ].map((referenceItemId, index) => ({
-      referenceItemId,
-      description: index === 0 ? "차분한 자연광" : "",
-      tags: index === 0 ? ["자연광", "여백"] : [],
-    }));
-    expect(parseBrandRules({
-      ...base,
-      designRules: {
-        ...base.designRules,
-        referenceImages,
-      },
-    }).designRules).toEqual({
-      colors: ["#174A3A"],
-      fonts: ["Pretendard"],
-      notes: ["절제된 이미지"],
-      referenceImages,
-    });
-    expect(parseBrandRules(base).designRules).toMatchObject({
-      referenceImages: [],
-    });
-  });
-
-  it("rejects invalid or unbounded style reference images", () => {
-    const base = {
-      contractVersion: "brand-rules.v1",
-      requiredPhrases: [],
-      forbiddenPhrases: [],
-      exaggerationRules: [],
-      ctaRules: { defaultCta: "", allowed: [] },
-      channelRules: {},
-      designRules: { colors: [], fonts: [], notes: [] },
-      autoApprovalRules: { enabled: false, conditions: [] },
-    };
-    const image = (id: string) => ({
-      referenceItemId: id,
-      description: "",
-      tags: [],
-    });
-    const validIds = [
-      "11111111-1111-4111-8111-111111111111",
-      "22222222-2222-4222-8222-222222222222",
-      "33333333-3333-4333-8333-333333333333",
-      "44444444-4444-4444-8444-444444444444",
-      "55555555-5555-4555-8555-555555555555",
-      "66666666-6666-4666-8666-666666666666",
-    ];
-
-    expect(() => parseBrandRules({
-      ...base,
-      designRules: { ...base.designRules, referenceImages: validIds.map(image) },
-    })).toThrow("brand_core_validation_failed:rules.designRules.referenceImages");
-    expect(() => parseBrandRules({
-      ...base,
-      designRules: { ...base.designRules, referenceImages: [image("not-a-uuid")] },
-    })).toThrow("brand_core_validation_failed:rules.designRules.referenceImages");
-    expect(() => parseBrandRules({
-      ...base,
-      designRules: {
-        ...base.designRules,
-        referenceImages: [image(validIds[0]!), image(validIds[0]!)],
-      },
-    })).toThrow("brand_core_validation_failed:rules.designRules.referenceImages");
-    expect(() => parseBrandRules({
-      ...base,
-      designRules: {
-        ...base.designRules,
-        referenceImages: [{
-          ...image(validIds[0]!),
-          description: "x".repeat(241),
-        }],
-      },
-    })).toThrow("brand_core_validation_failed:rules.designRules.referenceImages[0].description");
-    expect(() => parseBrandRules({
-      ...base,
-      designRules: {
-        ...base.designRules,
-        referenceImages: [{
-          ...image(validIds[0]!),
-          tags: Array.from({ length: 11 }, (_, index) => `tag-${index}`),
-        }],
-      },
-    })).toThrow("brand_core_validation_failed:rules.designRules.referenceImages[0].tags");
-    expect(() => parseBrandRules({
-      ...base,
-      designRules: {
-        ...base.designRules,
-        referenceImages: [{
-          ...image(validIds[0]!),
-          tags: ["x".repeat(41)],
-        }],
-      },
-    })).toThrow("brand_core_validation_failed:rules.designRules.referenceImages[0].tags");
-    expect(() => parseBrandRules({
-      ...base,
-      designRules: {
-        ...base.designRules,
-        referenceImages: [{
-          ...image(validIds[0]!),
-          sourceUrl: "https://example.com/not-allowed",
-        }],
-      },
-    })).toThrow("brand_core_validation_failed:rules.designRules.referenceImages[0]");
+  it("rejects the removed designRules field and V1 writes", () => {
+    expect(() => parseBrandRules({ ...rules, designRules: {} }))
+      .toThrow("brand_core_validation_failed:rules");
+    expect(() => parseBrandRules({ ...rules, contractVersion: "brand-rules.v1" }))
+      .toThrow("brand_core_validation_failed:rules");
   });
 });
 

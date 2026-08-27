@@ -1,11 +1,11 @@
-import type { BrandCoreV1, BrandRulesV1 } from "./brandCoreContracts.js";
+import type { BrandCoreV1, BrandRulesV2 } from "./brandCoreContracts.js";
 import type { BrandCoreRepository, BrandScope } from "./brandCoreRepository.js";
 
 export interface ApprovedBrandContext {
   coreVersionId: string;
   rulesVersionId: string | null;
   core: BrandCoreV1;
-  rules: BrandRulesV1 | null;
+  rules: BrandRulesV2 | null;
 }
 
 export function createApprovedBrandContextProvider(repository: BrandCoreRepository) {

@@ -60,21 +60,43 @@ export interface ProductImageImportStatus {
   updatedAt: string;
 }
 
-export interface BrandStylePresetInput {
-  contractVersion: "brand-style-preset.v1";
+export interface DesignStyleInput {
+  contractVersion: "design-style-input.v1";
   name: string;
-  description: string;
-  visualTokens: { colors: string[]; fonts: string[]; notes: string[] };
   referenceItemIds: string[];
-  isDefault: boolean;
 }
 
-export interface BrandStylePreset extends Omit<BrandStylePresetInput, "contractVersion"> {
+export interface DesignStyle extends Omit<DesignStyleInput, "contractVersion"> {
   id: string;
   workspaceId: string;
   brandId: string;
-  status: "active" | "archived";
   revision: number;
+  analysisStatus: "queued" | "processing" | "ready" | "failed";
+  analysisContractVersion: "design-style-analysis.v1" | null;
+  analysis: Record<string, unknown> | null;
+  analysisSha256: string | null;
+  analysisErrorCode: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface VisualPresetInput {
+  contractVersion: "visual-preset-input.v1";
+  name: string;
+  designStyleId: string;
+  avatarId: string | null;
+  isDefault: boolean;
+}
+
+export interface VisualPreset extends Omit<VisualPresetInput, "contractVersion"> {
+  id: string;
+  workspaceId: string;
+  brandId: string;
+  revision: number;
+  usability: {
+    usable: boolean;
+    reason: null | "style_analyzing" | "style_analysis_failed" | "avatar_unavailable";
+  };
   createdAt: string;
   updatedAt: string;
 }
@@ -385,24 +407,37 @@ function validateProductImageFile(file: File) {
 
 export function createLibraryGateway(client: Client = apiClient(), blobPut: typeof putBlob = putBlob) {
   return {
-    listStylePresets(brandId: string) {
-      return client.requestJson<BrandStylePreset[]>(`/brands/${brandId}/style-presets`, { method: "GET" });
+    listDesignStyles(brandId: string) {
+      return client.requestJson<DesignStyle[]>(`/brands/${brandId}/design-styles`, { method: "GET" });
     },
-    createStylePreset(brandId: string, input: BrandStylePresetInput) {
-      return client.requestJson<BrandStylePreset>(`/brands/${brandId}/style-presets`, {
+    createDesignStyle(brandId: string, input: DesignStyleInput) {
+      return client.requestJson<DesignStyle>(`/brands/${brandId}/design-styles`, {
         method: "POST", body: JSON.stringify(input),
       });
     },
-    updateStylePreset(brandId: string, presetId: string, revision: number, input: BrandStylePresetInput) {
-      return client.requestJson<BrandStylePreset>(`/brands/${brandId}/style-presets/${presetId}`, {
+    updateDesignStyle(brandId: string, styleId: string, revision: number, input: DesignStyleInput) {
+      return client.requestJson<DesignStyle>(`/brands/${brandId}/design-styles/${styleId}`, {
         method: "PATCH", headers: { "if-match": `"${revision}"` }, body: JSON.stringify(input),
       });
     },
-    setDefaultStylePreset(brandId: string, presetId: string) {
-      return client.requestJson<BrandStylePreset>(`/brands/${brandId}/style-presets/${presetId}/default`, { method: "POST" });
+    retryDesignStyle(brandId: string, styleId: string) {
+      return client.requestJson<DesignStyle>(`/brands/${brandId}/design-styles/${styleId}/retry`, { method: "POST" });
     },
-    archiveStylePreset(brandId: string, presetId: string) {
-      return client.requestJson<void>(`/brands/${brandId}/style-presets/${presetId}`, { method: "DELETE" });
+    listVisualPresets(brandId: string) {
+      return client.requestJson<VisualPreset[]>(`/brands/${brandId}/visual-presets`, { method: "GET" });
+    },
+    createVisualPreset(brandId: string, input: VisualPresetInput) {
+      return client.requestJson<VisualPreset>(`/brands/${brandId}/visual-presets`, {
+        method: "POST", body: JSON.stringify(input),
+      });
+    },
+    updateVisualPreset(brandId: string, presetId: string, revision: number, input: VisualPresetInput) {
+      return client.requestJson<VisualPreset>(`/brands/${brandId}/visual-presets/${presetId}`, {
+        method: "PATCH", headers: { "if-match": `"${revision}"` }, body: JSON.stringify(input),
+      });
+    },
+    setDefaultVisualPreset(brandId: string, presetId: string) {
+      return client.requestJson<VisualPreset>(`/brands/${brandId}/visual-presets/${presetId}/default`, { method: "POST" });
     },
     listProductImages(brandId: string, productId: string, versionId: string) {
       return client.requestJson<ProductServiceImageAsset[]>(

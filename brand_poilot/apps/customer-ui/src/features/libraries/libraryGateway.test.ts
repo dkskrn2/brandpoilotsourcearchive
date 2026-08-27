@@ -3,31 +3,31 @@ import { ApiRequestError } from "../../lib/apiClient";
 import { classifyLibraryError, createLibraryGateway } from "./libraryGateway";
 
 describe("library gateway", () => {
-  it("uses named style preset and product image endpoints", async () => {
+  it("uses design style, visual preset, and product image endpoints", async () => {
     const requestJson = vi.fn().mockResolvedValue({});
     const gateway = createLibraryGateway({ requestJson } as never);
-    const preset = {
-      contractVersion: "brand-style-preset.v1" as const,
-      name: "Editorial", description: "Clear cards",
-      visualTokens: { colors: ["red"], fonts: ["sans"], notes: ["high contrast"] },
-      referenceItemIds: ["reference-1"], isDefault: true,
-    };
+    const style = { contractVersion: "design-style-input.v1" as const, name: "Editorial", referenceItemIds: ["reference-1"] };
+    const preset = { contractVersion: "visual-preset-input.v1" as const, name: "Editorial + avatar", designStyleId: "style-1", avatarId: null, isDefault: false };
 
-    await gateway.listStylePresets("brand-1");
-    await gateway.createStylePreset("brand-1", preset);
-    await gateway.updateStylePreset("brand-1", "preset-1", 2, preset);
-    await gateway.setDefaultStylePreset("brand-1", "preset-1");
-    await gateway.archiveStylePreset("brand-1", "preset-1");
+    await gateway.listDesignStyles("brand-1");
+    await gateway.createDesignStyle("brand-1", style);
+    await gateway.updateDesignStyle("brand-1", "style-1", 2, style);
+    await gateway.retryDesignStyle("brand-1", "style-1");
+    await gateway.listVisualPresets("brand-1");
+    await gateway.createVisualPreset("brand-1", preset);
+    await gateway.updateVisualPreset("brand-1", "preset-1", 2, preset);
+    await gateway.setDefaultVisualPreset("brand-1", "preset-1");
     await gateway.listProductImages("brand-1", "product-1", "version-1");
 
-    expect(requestJson).toHaveBeenNthCalledWith(1, "/brands/brand-1/style-presets", { method: "GET" });
-    expect(requestJson).toHaveBeenNthCalledWith(2, "/brands/brand-1/style-presets", { method: "POST", body: JSON.stringify(preset) });
-    expect(requestJson).toHaveBeenNthCalledWith(3, "/brands/brand-1/style-presets/preset-1", {
-      method: "PATCH", headers: { "if-match": '"2"' }, body: JSON.stringify(preset),
+    expect(requestJson).toHaveBeenNthCalledWith(1, "/brands/brand-1/design-styles", { method: "GET" });
+    expect(requestJson).toHaveBeenNthCalledWith(2, "/brands/brand-1/design-styles", { method: "POST", body: JSON.stringify(style) });
+    expect(requestJson).toHaveBeenNthCalledWith(3, "/brands/brand-1/design-styles/style-1", {
+      method: "PATCH", headers: { "if-match": '"2"' }, body: JSON.stringify(style),
     });
-    expect(requestJson).toHaveBeenNthCalledWith(4, "/brands/brand-1/style-presets/preset-1/default", { method: "POST" });
-    expect(requestJson).toHaveBeenNthCalledWith(5, "/brands/brand-1/style-presets/preset-1", { method: "DELETE" });
-    expect(requestJson).toHaveBeenNthCalledWith(6, "/brands/brand-1/products/product-1/versions/version-1/images", { method: "GET" });
+    expect(requestJson).toHaveBeenNthCalledWith(4, "/brands/brand-1/design-styles/style-1/retry", { method: "POST" });
+    expect(requestJson).toHaveBeenNthCalledWith(5, "/brands/brand-1/visual-presets", { method: "GET" });
+    expect(requestJson).toHaveBeenNthCalledWith(8, "/brands/brand-1/visual-presets/preset-1/default", { method: "POST" });
+    expect(requestJson).toHaveBeenNthCalledWith(9, "/brands/brand-1/products/product-1/versions/version-1/images", { method: "GET" });
   });
 
   it("stages, confirms, and deletes an optional product image", async () => {

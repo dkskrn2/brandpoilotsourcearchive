@@ -1367,8 +1367,9 @@ export interface ApiRepository
     Partial<WikiManagementRepository>,
     Partial<FaqSuggestionRepository>,
     Partial<import("./assetLibraryRepository.js").AssetLibraryRepository>,
+    Partial<import("./productServiceImageAssetsRepository.js").ProductServiceImageAssetsRepository>,
     Partial<import("./instagramReferenceArchiveRepository.js").InstagramReferenceArchiveRepository>,
-    Partial<import("./manualVisualAssetsRepository.js").ManualVisualAssetsRepository>,
+    Partial<import("./designStyleRepository.js").DesignStyleRepository>,
     Partial<import("./productImageImportRepository.js").ProductImageImportRepository>,
     Partial<import("./aiContentAttachmentRepository.js").AiContentAttachmentLifecycleRepository>,
     Partial<import("./aiContentAttachmentGcRepository.js").AiContentAttachmentGcRepository>,
@@ -1393,8 +1394,8 @@ export interface ApiRepository
     leaseToken: string;
   }): Promise<SubjectAnalysisWorkerLease | null>;
   updateAiContentFinalizationDraft(input: BrandGenerationScope & { actorUserId: string; draft: import("./aiContentContracts.js").ContentFinalizationDraftV2 }): Promise<AiContentGenerationRecord>;
-  getAiContentManualVisualSelection(input: BrandGenerationScope): Promise<import("@brand-pilot/content-contracts/manual-visual-selection").ManualVisualSelectionV1 | null>;
-  updateAiContentManualVisualSelection(input: BrandGenerationScope & { actorUserId: string; selection: import("@brand-pilot/content-contracts/manual-visual-selection").ManualVisualSelectionV1 }): Promise<import("@brand-pilot/content-contracts/manual-visual-selection").ManualVisualSelectionV1>;
+  getAiContentManualVisualSelection(input: BrandGenerationScope): Promise<import("@brand-pilot/content-contracts/manual-visual-selection").ManualVisualSelection | null>;
+  updateAiContentManualVisualSelection(input: BrandGenerationScope & { actorUserId: string; selection: import("@brand-pilot/content-contracts/manual-visual-selection").ManualVisualSelectionV2 }): Promise<import("@brand-pilot/content-contracts/manual-visual-selection").ManualVisualSelectionV2>;
   startAiContentGenerationV3(
     input: BrandGenerationScope & { actorUserId: string; usageDate: string; dailyGenerationLimit: number } & import("./aiContentContracts.js").ContentGenerationStartV2,
     snapshots: import("./aiContentSnapshotRepository.js").AiContentSnapshotRepository,
