@@ -92,7 +92,7 @@ describe("AI content snapshot repository", () => {
       .rejects.toThrow(/^ai_content_brand_rules_required$/);
   });
 
-  it("rejects an unavailable configured style image before proposal research", async () => {
+  it("does not treat legacy Brand Rules style images as proposal dependencies", async () => {
     const queries: string[] = [];
     const repository = createAiContentSnapshotRepository(queryable(async (sql) => {
       queries.push(String(sql));
@@ -111,12 +111,8 @@ describe("AI content snapshot repository", () => {
       return result([]);
     }), blob());
 
-    await expect(repository.assertApprovedBrandRulesAvailable(scope))
-      .rejects.toThrow(/^ai_content_brand_style_required$/);
-    expect(queries).toHaveLength(2);
-    expect(queries[1]).toContain("storage_artifacts");
-    expect(queries[1]).toContain("item.archived_at is null");
-    expect(queries[1]).toContain("artifact.deleted_at is null");
+    await expect(repository.assertApprovedBrandRulesAvailable(scope)).resolves.toBeUndefined();
+    expect(queries).toHaveLength(1);
   });
 
   it("loads exactly the current approved core fields without Wiki or FAQ SQL", async () => {
@@ -381,36 +377,12 @@ describe("AI content snapshot repository", () => {
     expect(service.freezeOwnedImage).not.toHaveBeenCalled();
   });
 
-  it("loads approved Brand Rules reference images and snapshots only registered owned uploads", async () => {
+  it("does not load style images from approved Brand Rules", async () => {
     const service = blob();
-    const database = queryable(async (sql) => {
-      expect(String(sql)).toContain("active_brand_rule_set_id");
-      expect(String(sql)).toContain("designRules");
-      return result([{
-        reference_item_id: ids.style,
-        description: "  Soft daylight ",
-        tags: [" warm ", " editorial "],
-        storage_path: "styles/soft.png",
-        mime_type: "image/png",
-        checksum: "d".repeat(64),
-      }]);
-    });
+    const database = queryable(async () => { throw new Error("unexpected_query"); });
 
     await expect(createAiContentSnapshotRepository(database, service).loadApprovedStyleImages(scope))
-      .resolves.toEqual([{
-        referenceItemId: ids.style,
-        description: "Soft daylight",
-        tags: ["warm", "editorial"],
-        storageUrl: "https://blob.example/frozen/styles/soft.png",
-        storagePath: "frozen/styles/soft.png",
-        mimeType: "image/png",
-        checksum: "d".repeat(64),
-      }]);
-    expect(service.freezeOwnedImage).toHaveBeenCalledWith({
-      brandId: scope.brandId,
-      sourceStoragePath: "styles/soft.png",
-      mimeType: "image/png",
-      expectedChecksum: "d".repeat(64),
-    });
+      .resolves.toEqual([]);
+    expect(service.freezeOwnedImage).not.toHaveBeenCalled();
   });
 });

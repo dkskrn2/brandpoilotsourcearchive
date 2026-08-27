@@ -2731,6 +2731,7 @@ test("CI publishing verifies release tooling plus only affected workspaces", () 
   for (const command of [
     "node --test scripts/release-impact.test.mjs",
     "node --test scripts/assemble-release-manifest.test.mjs",
+    "node --test scripts/manual-visual-assets-contract.test.mjs",
     "npm run test:contract",
     "shellcheck --exclude=SC1091,SC2016,SC2034,SC2317 deploy/scripts/*.sh",
     "npm run test:deployment",
@@ -2739,6 +2740,9 @@ test("CI publishing verifies release tooling plus only affected workspaces", () 
   }
   assert.match(verifyJob, /if: fromJSON\(needs\.impact\.outputs\.components\)\.api[\s\S]*npm run pretest --workspace @brand-pilot\/api[\s\S]*npm exec --workspace @brand-pilot\/api -- vitest run[\s\S]*src\/server\.contentProposalWorker\.test\.ts[\s\S]*--maxWorkers=4/);
   for (const testFile of [
+    "src/aiContentManualVisualSelection.test.ts",
+    "src/designStyleContracts.test.ts",
+    "src/designStyleRepository.pglite.test.ts",
     "src/publishCalendarIdempotency.test.ts",
     "src/publishCalendarRepository.test.ts",
     "src/publishCalendarProvisioning.pglite.test.ts",
@@ -2748,6 +2752,8 @@ test("CI publishing verifies release tooling plus only affected workspaces", () 
     "src/publishItemsRepository.pglite.test.ts",
     "src/publishItemState.test.ts",
     "src/publishSchedule.test.ts",
+    "src/server.brandCenterCustomer.test.ts",
+    "src/server.brandIntelligenceWorker.test.ts",
   ]) {
     assert.ok(verifyJob.includes(testFile), `API verify job missing ${testFile}`);
   }
@@ -2766,6 +2772,8 @@ test("CI publishing verifies release tooling plus only affected workspaces", () 
     "AI_CONTENT_074_ENFORCE_BENCHMARK=false node --test scripts/ai-content-074.postgres.integration.test.mjs",
     "npm exec --workspace @brand-pilot/api -- vitest run src/publishCalendarMigration086.postgres.integration.test.ts",
     "npm exec --workspace @brand-pilot/api -- vitest run src/publishCalendarMigration092.postgres.integration.test.ts",
+    "npm exec --workspace @brand-pilot/api -- vitest run src/aiContentPromptVersionMigration094.postgres.integration.test.ts",
+    "RUN_POSTGRES_INTEGRATION=true npm exec --workspace @brand-pilot/api -- vitest run src/designStyleRepository.postgres.integration.test.ts --maxWorkers=1",
   ]) {
     assert.ok(verifyJob.includes(command), `migration verify job missing ${command}`);
   }

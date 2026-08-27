@@ -40,12 +40,14 @@ async function spawnRunner(command: string, args: string[], timeoutMs: number, s
 
 export function createCodexStyleAnalysisRunner({
   timeoutMs = 300_000,
+  downloadTimeoutMs = 30_000,
   runtimeRoot = path.join(tmpdir(), "brand-pilot-design-style-analysis"),
   scriptPath = path.join(packageRoot, "scripts", "run-codex-style-analysis.mjs"),
   schemaPath = path.resolve(packageRoot, "../../packages/brand-pilot-content-contracts/generated/design-style-analysis-v1.schema.json"),
   fetchImpl = fetch,
 }: {
   timeoutMs?: number;
+  downloadTimeoutMs?: number;
   runtimeRoot?: string;
   scriptPath?: string;
   schemaPath?: string;
@@ -58,9 +60,20 @@ export function createCodexStyleAnalysisRunner({
       try {
         const imagePaths: string[] = [];
         for (const [index, image] of job.images.entries()) {
-          const response = await fetchImpl(image.storageUrl, { signal });
-          if (!response.ok) throw new Error("design_style_image_download_failed");
-          const bytes = Buffer.from(await response.arrayBuffer());
+          const downloadTimeout = AbortSignal.timeout(downloadTimeoutMs);
+          const downloadSignal = signal ? AbortSignal.any([signal, downloadTimeout]) : downloadTimeout;
+          let response: Response;
+          let bytes: Buffer;
+          try {
+            response = await fetchImpl(image.storageUrl, { signal: downloadSignal });
+            if (!response.ok) throw new Error("design_style_image_download_failed");
+            bytes = Buffer.from(await response.arrayBuffer());
+          } catch (error) {
+            if (downloadTimeout.aborted && !signal?.aborted) {
+              throw new Error("design_style_image_download_timeout");
+            }
+            throw error;
+          }
           if (bytes.length !== image.sizeBytes || bytes.length > 5 * 1024 * 1024) {
             throw new Error("design_style_image_size_mismatch");
           }
@@ -98,9 +111,13 @@ export async function processStyleAnalysisJob(input: {
   const controller = new AbortController();
   const forwardAbort = () => controller.abort(input.signal?.reason);
   if (input.signal?.aborted) forwardAbort(); else input.signal?.addEventListener("abort", forwardAbort, { once: true });
+  let heartbeatInFlight = false;
   const heartbeat = setInterval(() => {
+    if (heartbeatInFlight || controller.signal.aborted) return;
+    heartbeatInFlight = true;
     void input.client.heartbeatStyleAnalysis(input.job, input.workerId, input.leaseSeconds)
-      .catch((error) => controller.abort(error));
+      .catch((error) => controller.abort(error))
+      .finally(() => { heartbeatInFlight = false; });
   }, input.heartbeatMs ?? 3_000);
   try {
     const analysis = await input.runner.run(input.job, controller.signal);

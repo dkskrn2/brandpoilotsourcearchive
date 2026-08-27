@@ -127,13 +127,12 @@ function manualCommand() {
 
 function onboardingAuthority(): OnboardingProposalAuthority {
   const content = {
-    contractVersion: "brand-rules.v1" as const,
+    contractVersion: "brand-rules.v2" as const,
     requiredPhrases: [],
     forbiddenPhrases: [],
     exaggerationRules: ["단정 금지"],
     ctaRules: { defaultCta: "확인해 주세요.", allowed: [] },
     channelRules: { instagram: ["사실 우선"] },
-    designRules: { colors: [], fonts: [], notes: [], referenceImages: [] },
     autoApprovalRules: { enabled: false, conditions: [] },
   };
   return {

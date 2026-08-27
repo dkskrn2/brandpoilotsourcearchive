@@ -6,6 +6,7 @@ import { loadMigrations, validatePost075SchemaMigration } from "./migrationRunne
 
 const migrationPath = "db/migrations/082_manual_brand_visual_assets.sql";
 const writeFenceRepairPath = "db/migrations/083_manual_visual_selection_write_fence_invoker.sql";
+const designStyleMigrationPath = "db/migrations/093_design_style_analysis_visual_presets.sql";
 
 async function migrationSql() {
   return readFile(migrationPath, "utf8").catch(() => "");
@@ -13,6 +14,10 @@ async function migrationSql() {
 
 async function writeFenceRepairSql() {
   return readFile(writeFenceRepairPath, "utf8").catch(() => "");
+}
+
+async function designStyleMigrationSql() {
+  return readFile(designStyleMigrationPath, "utf8").catch(() => "");
 }
 
 test("migration 082 defines tenant-owned named style presets and immutable manual selections", async () => {
@@ -52,14 +57,25 @@ test("migration 082 extends product assets for verified new uploads without rewr
 });
 
 test("new manual visual relations are protected by application ACL declarations", () => {
-  const relationNames = new Set(applicationRuntimeRelationSecurityCatalog.map((entry) => entry.relationName));
+  const relationGrants = new Map(applicationRuntimeRelationSecurityCatalog.map((entry) => [
+    entry.relationName,
+    entry.privileges,
+  ]));
   for (const relation of [
     "brand_style_presets",
     "brand_style_preset_references",
     "manual_ai_content_visual_selections",
   ]) {
-    assert.equal(relationNames.has(relation), true, `${relation} missing from application ACL catalog`);
+    assert.equal(relationGrants.has(relation), true, `${relation} missing from application ACL catalog`);
   }
+  assert.deepEqual(relationGrants.get("brand_style_preset_references"), ["SELECT"]);
+});
+
+test("migration 093 makes legacy preset references read-only for the application role", async () => {
+  const sql = await designStyleMigrationSql();
+  assert.match(sql, /foreach target_relation[\s\S]*'brand_style_preset_references'[\s\S]*revoke all on table public\.%I from %I/i);
+  assert.match(sql, /grant select on table public\.brand_style_preset_references to %I/i);
+  assert.doesNotMatch(sql, /grant select,insert,update,delete on table public\.brand_style_preset_references/i);
 });
 
 test("migration runner registers 082 after the sealed 081 migration", async () => {
@@ -80,9 +96,13 @@ test("migration 083 makes the manual selection fence use the application role's 
   assert.doesNotMatch(sql, /grant\s+execute\s+on\s+function\s+public\.assert_ai_content_writable/i);
 
   const migrations = await loadMigrations();
-  const migration = migrations.at(-1);
+  const migration = migrations.find(({ id }) => id === "083_manual_visual_selection_write_fence_invoker.sql");
   assert.equal(migration?.id, "083_manual_visual_selection_write_fence_invoker.sql");
   assert.equal(validatePost075SchemaMigration(migration), true);
+  assert.equal(
+    migrations[migrations.indexOf(migration) - 1]?.id,
+    "082_manual_brand_visual_assets.sql",
+  );
 
   const runner = await readFile("scripts/migrationRunner.mjs", "utf8");
   assert.match(runner, /selection_fence_security_definer/);
@@ -91,16 +111,16 @@ test("migration 083 makes the manual selection fence use the application role's 
   assert.match(runner, /sealed\.app_writable_assert_execute !== true/);
 });
 
-test("post-075 schema runner applies pending 083 without replaying applied 077 through 082", async () => {
+test("post-075 schema runner applies 083 and later migrations without replaying applied 077 through 082", async () => {
   const migrations = await loadMigrations();
   const migration083 = migrations.find(({ id }) => id === "083_manual_visual_selection_write_fence_invoker.sql");
   assert.ok(migration083);
   const history = migrations
-    .filter(({ id }) => id !== migration083.id)
+    .filter(({ id }) => id < migration083.id)
     .map(({ id, checksum }) => ({ id, checksum }));
   const calls = [];
   const client = {
-    async query(sql) {
+    async query(sql, values = []) {
       const normalized = sql.replace(/\s+/g, " ").trim();
       calls.push(normalized);
       if (normalized === "select id, checksum from public.schema_migrations order by id asc") return { rows: history };
@@ -126,9 +146,9 @@ test("post-075 schema runner applies pending 083 without replaying applied 077 t
           app_preset_update: true,
           app_preset_delete: true,
           app_reference_select: true,
-          app_reference_insert: true,
-          app_reference_update: true,
-          app_reference_delete: true,
+          app_reference_insert: false,
+          app_reference_update: false,
+          app_reference_delete: false,
           app_selection_select: true,
           app_selection_insert: true,
           app_selection_update: true,
@@ -189,6 +209,7 @@ test("post-075 schema runner applies pending 083 without replaying applied 077 t
           brand_subscription_owner: "content_schema_owner",
           calendar_settings_owner: "content_schema_owner",
           calendar_slot_owner: "content_schema_owner",
+          weekly_schedule_owner: "content_schema_owner",
           app_billing_plan_select: true,
           app_billing_plan_insert: true,
           app_billing_plan_update: true,
@@ -205,16 +226,27 @@ test("post-075 schema runner applies pending 083 without replaying applied 077 t
           app_calendar_slot_insert: true,
           app_calendar_slot_update: true,
           app_calendar_slot_delete: false,
+          app_weekly_schedule_select: true,
+          app_weekly_schedule_insert: true,
+          app_weekly_schedule_update: true,
+          app_weekly_schedule_delete: true,
           public_billing_plan_privilege: false,
           public_brand_subscription_privilege: false,
           public_calendar_settings_privilege: false,
           public_calendar_slot_privilege: false,
+          public_weekly_schedule_privilege: false,
+          weekly_schedule_application_acl_count: 4,
+          weekly_schedule_unexpected_acl_count: 0,
+          weekly_schedule_column_acl_count: 0,
           runtime_columns_valid: true,
+          idempotency_column_valid: true,
           enabled_default_false: true,
           constraint_catalog_valid: true,
+          idempotency_constraint_valid: true,
           index_catalog_valid: true,
+          idempotency_index_catalog_valid: true,
           trigger_catalog_valid: true,
-          write_fence_row_count: 4,
+          write_fence_row_count: 5,
           function_owner_count: 2,
           application_function_execute_count: 2,
           public_function_execute_count: 0,
@@ -222,7 +254,8 @@ test("post-075 schema runner applies pending 083 without replaying applied 077 t
         }] };
       }
       if (normalized.includes("post_075_schema_migration_marker_v1")) {
-        return { rows: [{ id: migration083.id, checksum: migration083.checksum }] };
+        const migration = migrations.find(({ id }) => id === values[0]);
+        return { rows: migration ? [{ id: migration.id, checksum: migration.checksum }] : [] };
       }
       return { rows: [] };
     },
@@ -233,7 +266,7 @@ test("post-075 schema runner applies pending 083 without replaying applied 077 t
     migrations,
     expectedProviderRoleName: "postgres",
   });
-  assert.deepEqual(result.pending, [migration083.id]);
+  assert.deepEqual(result.pending, migrations.filter(({ id }) => id >= migration083.id).map(({ id }) => id));
   assert.equal(calls.some((sql) => sql.includes("alter function public.enforce_manual_visual_selection_write_fence() security invoker")), true);
   assert.equal(calls.some((sql) => sql.includes("create table if not exists brand_style_presets")), false);
   assert.equal(calls.some((sql) => sql.includes("create table content_suggestion_batches")), false);

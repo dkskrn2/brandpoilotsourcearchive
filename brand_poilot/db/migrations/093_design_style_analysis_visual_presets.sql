@@ -259,6 +259,7 @@ begin
   end if;
 
   foreach target_relation in array array[
+    'brand_style_preset_references',
     'brand_design_styles',
     'brand_design_style_references',
     'brand_design_style_analysis_jobs'
@@ -306,6 +307,10 @@ begin
   );
   execute format(
     'grant select,insert,update on table public.brand_design_style_analysis_jobs to %I',
+    application_role_name
+  );
+  execute format(
+    'grant select on table public.brand_style_preset_references to %I',
     application_role_name
   );
 end;

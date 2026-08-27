@@ -15,6 +15,7 @@ import {
 } from "./brandCoreContracts.js";
 import {
   ensureActiveApprovedBrandRules,
+  normalizeBrandRulesV2,
 } from "./brandRulesReadiness.js";
 import { parseCompatibleBrandRulesContentV2 } from "@brand-pilot/content-contracts";
 
@@ -169,9 +170,21 @@ function mapHistoricalRule(row: Record<string, unknown>): BrandRuleSet {
   try {
     return mapRule(row);
   } catch {
+    const stored = json<Record<string, unknown>>(row.rules_json, {});
+    let rules: BrandRulesV2;
+    try {
+      rules = parseCompatibleBrandRulesContentV2(stored);
+    } catch {
+      if (stored.contractVersion !== "brand-rules.v1") throw new Error("brand_rules_content_unsupported");
+      rules = normalizeBrandRulesV2(stored, {
+        forbiddenTerms: [],
+        defaultCta: "",
+        autoApprovalEnabled: false,
+      });
+    }
     return mapRule({
       ...row,
-      rules_json: parseCompatibleBrandRulesContentV2(json(row.rules_json, {})),
+      rules_json: rules,
     });
   }
 }

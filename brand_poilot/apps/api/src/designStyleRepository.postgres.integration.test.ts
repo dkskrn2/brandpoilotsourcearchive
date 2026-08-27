@@ -197,6 +197,36 @@ describe.skipIf(process.env.RUN_POSTGRES_INTEGRATION !== "true")(
       await container?.stop();
     }, 120_000);
 
+    it("keeps legacy style preset references readable but immutable to the application role", async () => {
+      const legacyReferenceId = "c0000000-0000-4000-8000-00000000000c";
+      await admin.query(
+        `insert into brand_style_preset_references(
+           id,workspace_id,brand_id,preset_id,reference_item_id,position
+         ) values($1,$2,$3,$4,$5,1)`,
+        [legacyReferenceId, ids.workspace, ids.brand, ids.firstPreset, ids.reference],
+      );
+
+      await expect(application.query(
+        "select id from brand_style_preset_references where id=$1",
+        [legacyReferenceId],
+      )).resolves.toMatchObject({ rows: [{ id: legacyReferenceId }] });
+
+      await expect(application.query(
+        `insert into brand_style_preset_references(
+           workspace_id,brand_id,preset_id,reference_item_id,position
+         ) values($1,$2,$3,$4,2)`,
+        [ids.workspace, ids.brand, ids.firstPreset, ids.reference],
+      )).rejects.toThrow(/permission denied for table brand_style_preset_references/);
+      await expect(application.query(
+        "update brand_style_preset_references set position=2 where id=$1",
+        [legacyReferenceId],
+      )).rejects.toThrow(/permission denied for table brand_style_preset_references/);
+      await expect(application.query(
+        "delete from brand_style_preset_references where id=$1",
+        [legacyReferenceId],
+      )).rejects.toThrow(/permission denied for table brand_style_preset_references/);
+    });
+
     it("reclaims retryable leases and terminalizes exhausted leases without owner privileges", async () => {
       const privileges = await application.query(`
         select

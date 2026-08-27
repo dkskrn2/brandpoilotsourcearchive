@@ -229,6 +229,7 @@ jobs:
           node --test scripts/release-impact.test.mjs
           node --test scripts/assemble-release-manifest.test.mjs
           node --test scripts/incremental-cicd-contract.test.mjs
+          node --test scripts/manual-visual-assets-contract.test.mjs
           npm run test:contract
           npm run test:deployment
           shellcheck --exclude=SC1091,SC2016,SC2034,SC2317 deploy/scripts/*.sh
@@ -244,6 +245,8 @@ jobs:
           npm exec --workspace @brand-pilot/api -- vitest run src/publishCalendarMigration086.postgres.integration.test.ts
           npm exec --workspace @brand-pilot/api -- vitest run src/aiContentPromptVersionMigration091.postgres.integration.test.ts
           npm exec --workspace @brand-pilot/api -- vitest run src/publishCalendarMigration092.postgres.integration.test.ts
+          npm exec --workspace @brand-pilot/api -- vitest run src/aiContentPromptVersionMigration094.postgres.integration.test.ts
+          RUN_POSTGRES_INTEGRATION=true npm exec --workspace @brand-pilot/api -- vitest run src/designStyleRepository.postgres.integration.test.ts --maxWorkers=1
           echo "migration_approval_required"
       - name: Verify API
         if: fromJSON(needs.impact.outputs.components).api
@@ -258,6 +261,7 @@ jobs:
             src/aiContentGenerationOperations.test.ts \
             src/aiContentMaintenance.test.ts \
             src/aiContentManifest.test.ts \
+            src/aiContentManualVisualSelection.test.ts \
             src/aiContentMigration075.test.ts \
             src/aiContentPlanContracts.test.ts \
             src/aiContentProposalV2Service.test.ts \
@@ -273,6 +277,8 @@ jobs:
             src/aiContentUpload.test.ts \
             src/contentOrchestration.test.ts \
             src/contentProposalJobs.test.ts \
+            src/designStyleContracts.test.ts \
+            src/designStyleRepository.pglite.test.ts \
             src/publishCalendarIdempotency.test.ts \
             src/publishCalendarRepository.test.ts \
             src/publishCalendarProvisioning.pglite.test.ts \
@@ -288,6 +294,8 @@ jobs:
             src/server.aiContentRenderWorker.test.ts \
             src/server.aiContentV2Customer.test.ts \
             src/server.aiContentWorker.test.ts \
+            src/server.brandCenterCustomer.test.ts \
+            src/server.brandIntelligenceWorker.test.ts \
             src/server.contentProposalWorker.test.ts \
             --maxWorkers=4
           npm exec --workspace @brand-pilot/api -- vitest run \

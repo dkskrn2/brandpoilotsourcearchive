@@ -139,8 +139,8 @@ function setup(overrides: SetupOverrides = {}) {
     listAiContentReferenceSeeds,
     updateAiContentFinalizationDraft: vi.fn(async (input) => ({ id: input.generationId, status: "draft" })),
     getAiContentManualVisualSelection: vi.fn(async () => ({
-      contractVersion: "manual-visual-selection.v1" as const,
-      product: null, stylePreset: null, avatar: null,
+      contractVersion: "manual-visual-selection.v2" as const,
+      product: null, preset: null,
     })),
     updateAiContentManualVisualSelection: vi.fn(async (input) => input.selection),
     startAiContentGenerationV3: vi.fn(async (input) => ({ id: input.generationId, status: "queued" })),
@@ -677,10 +677,9 @@ describe("V2 finalization customer boundary", () => {
   it("stores and reads an exact manual visual selection before generation starts", async () => {
     const harness = setup();
     const selection = {
-      contractVersion: "manual-visual-selection.v1" as const,
+      contractVersion: "manual-visual-selection.v2" as const,
       product: null,
-      stylePreset: null,
-      avatar: null,
+      preset: null,
     };
     const put = await harness.app.inject({
       method: "PUT",
@@ -709,8 +708,8 @@ describe("V2 finalization customer boundary", () => {
       url: `/brands/${brandId}/ai-content/generations/${generationId}/visual-selection`,
       headers: auth,
       payload: {
-        contractVersion: "manual-visual-selection.v1",
-        product: null, stylePreset: null, avatar: null, legacyStyleImageIds: [],
+        contractVersion: "manual-visual-selection.v2",
+        product: null, preset: null, legacyStyleImageIds: [],
       },
     });
     expect(response.statusCode).toBe(400);
