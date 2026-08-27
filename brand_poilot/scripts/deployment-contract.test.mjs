@@ -2777,6 +2777,17 @@ test("CI publishing verifies release tooling plus only affected workspaces", () 
   ]) {
     assert.ok(verifyJob.includes(command), `migration verify job missing ${command}`);
   }
+  const contentContractsBuildIndex = verifyJob.indexOf(
+    "npm run build --workspace @brand-pilot/content-contracts",
+  );
+  const designStylePostgresIndex = verifyJob.indexOf(
+    "RUN_POSTGRES_INTEGRATION=true npm exec --workspace @brand-pilot/api -- vitest run src/designStyleRepository.postgres.integration.test.ts --maxWorkers=1",
+  );
+  assert.ok(contentContractsBuildIndex >= 0, "migration verify job must build content contracts");
+  assert.ok(
+    contentContractsBuildIndex < designStylePostgresIndex,
+    "migration verify job must build content contracts before loading the design style repository",
+  );
   assert.doesNotMatch(verifyJob, /ai-content-074\.postgres\.integration\.test\.mjs[^\n]*--test-name-pattern/);
   assert.doesNotMatch(
     verifyJob,

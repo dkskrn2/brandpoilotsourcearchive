@@ -246,6 +246,7 @@ jobs:
           npm exec --workspace @brand-pilot/api -- vitest run src/aiContentPromptVersionMigration091.postgres.integration.test.ts
           npm exec --workspace @brand-pilot/api -- vitest run src/publishCalendarMigration092.postgres.integration.test.ts
           npm exec --workspace @brand-pilot/api -- vitest run src/aiContentPromptVersionMigration094.postgres.integration.test.ts
+          npm run build --workspace @brand-pilot/content-contracts
           RUN_POSTGRES_INTEGRATION=true npm exec --workspace @brand-pilot/api -- vitest run src/designStyleRepository.postgres.integration.test.ts --maxWorkers=1
           echo "migration_approval_required"
       - name: Verify API
